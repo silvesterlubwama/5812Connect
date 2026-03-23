@@ -1,82 +1,111 @@
-# 58:12 Global Connect Uganda CRM — PRD
+# 58:12 Global Connect Uganda CRM — Product Requirements
 
-## Problem Statement
-Full-featured multi-location CRM for 58:12 Global Connect with: Compass system (multi-country, multi-currency), role hierarchy, location-scoped financials with fund distribution, resource management with booking system (1hr buffer), real-time chat with Gemini AI assistant, CSV imports, Google OAuth, dark mode, rate limiting, and modular architecture.
+## Original Problem Statement
+Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make the app production-ready.
 
-## Architecture
-- **Frontend**: React 18 + Tailwind CSS + Shadcn/UI + Recharts
-- **Backend**: FastAPI + Motor (Async MongoDB) + Pydantic + Modular Routers
-- **Auth**: JWT (email/password) + Google OAuth (Emergent Auth)
-- **AI**: Gemini 2.5 Flash (emergentintegrations)
-- **Email**: Resend (transactional notifications)
-- **Real-time**: WebSocket (FastAPI native)
-- **Database**: MongoDB
-- **Security**: Rate limiting (120 req/min), CORS, JWT auth
+## User Personas
+- **Admin/Director**: Full access — manage all members, locations, finance, settings, access control
+- **Coordinator/Manager**: Manage people in their compass, approve requests, run reports
+- **Staff**: Check-in members, manage events, limited access
+- **Parent**: View child info via parent portal
+- **Guest/Visitor**: External, tracked via guest request system
 
-## Key Systems
+## Core Requirements
+1. Compass/Sub-location hierarchy with localized currencies
+2. Member management with roles, groups, departments
+3. Children/parent/family management with child safety features
+4. Event management with check-ins
+5. Financial tracking: donations, expenses, fund distribution
+6. Communications (AI-assisted chat, WhatsApp-style messaging)
+7. Resource/space booking
+8. Task management
+9. Sales & products tracking
+10. Restricted access management with scan in/out
+11. Reporting dashboard with PDF export
+12. Real CSV file upload for bulk importing
+13. Document storage (ID scans) for members
+14. Email notifications (Resend)
+15. WebSocket for live chat
 
-### Location Hierarchy (Compass System)
-Main → Compass (regional, own currency) → Sub-Location (venues, bookable, restricted)
-- Each tracks own: inventory, resources, staff, finances, departments
-- Location Director selected from staff
+## Technical Stack
+- Frontend: React, Tailwind CSS, Shadcn/UI, Recharts
+- Backend: FastAPI, Motor (Async MongoDB), ReportLab (PDFs)
+- Auth: JWT + Google Social Login
+- Storage: Emergent Object Storage (ID document scans)
+- AI: Gemini 2.0 Flash (Communications assistant)
+- Email: Resend
 
-### Role Hierarchy
-Executive Director → Advisor → Director → Manager → Coordinator → Staff → Intern/Volunteer → Parent → Customer
-- Multi-role: Staff can also be Parent/Customer/Donor
-
-### Financial System (Location-Scoped)
-- Per-location financials; Main sees all/breakdown
-- Fund distribution: Main ↔ Compass ↔ Sub-locations
-- Configurable currency; auto-exchange to USD
-
-### Booking System (1-Hour Buffer)
-- Resources and sub-locations can be bookable
-- 1-hour buffer enforced between bookings
-- Staff-only bookable resources
-- Sub-location booking blocks child venue availability
-
-### Communications
-- Pinned rooms: AI Assistant (Gemini) + Announcements (no-reply)
-- Staff conversations (direct, group)
-- WebSocket for real-time updates
-
-### Import System
-- Children + Parents CSV import
-- Staff CSV import
-- Quick bulk member import
-
-## All Pages (Tested ✅)
-Dashboard, Members, Families, Events, Calendar, Tasks, Check-Ins, Financial, Sales/POS, Attendance Analytics, Sales Analytics, Location Analytics, Communications, Outreach, Resources, Locations, Audit Trail, Settings, Login
-
-## Test Results
-- Iteration 1: 98% (initial features)
-- Iteration 2: 100% (mega batch)
-- Iteration 3: 100% (compass overhaul + chat + AI)
-- Iteration 4: 96%/100% (bookings, rate limiting, pinned rooms, WebSocket)
-
-## Latest Updates (2026-03-23)
-- Implemented Resend email notifications with event/fund/approval triggers
-- Added restricted access APIs (resident assignments, staff passes, guest approvals, scan logs)
-- Added reporting endpoints with PDF export
-- WebSocket chat now broadcasts live messages (REST + WS)
-- Fixed /members/pending route conflict
-
-## File Structure
-```
-/app/backend/
-├── server.py (main routes)
-├── deps.py (shared dependencies)
-├── routers/
-│   ├── bookings.py (booking system + buffer)
-│   └── websocket.py (real-time connections)
-└── requirements.txt
-/app/frontend/src/
-├── pages/ (20 page components)
-├── components/ (Layout, ui/)
-├── services/api.js
-└── context/AuthContext.js
-```
+## Key Business Rules
+- Gender: Strictly Male or Female only
+- Department: Selected from available departments at user's location
+- Children/Parents/Guests: No department required, use "programme" instead
+- ID Documents: Required for all users except children (JPG/PNG)
+- Access Control: Scan in/out for restricted spaces (shelters, special needs areas)
 
 ## Credentials
 - Admin: admin@5812uganda.org / Admin@5812
-- Alt: admin@5812global.org / Admin@1234
+- Alt Admin: admin@5812global.org / Admin@1234
+
+## Architecture
+```
+/app/
+├── backend/
+│   ├── server.py (Main FastAPI app)
+│   ├── deps.py (Shared dependencies)
+│   ├── storage.py (Object storage for document uploads)
+│   ├── routers/
+│   │   ├── documents.py (Document upload/list/download)
+│   │   ├── access.py (Restricted access management)
+│   │   ├── reports.py (Reporting & PDF export)
+│   │   ├── notifications.py (Email via Resend)
+│   │   ├── websocket.py (Live chat)
+│   │   └── bookings.py (Resource booking)
+│   └── requirements.txt
+└── frontend/
+    └── src/
+        ├── App.js (Routing)
+        ├── components/Layout.jsx (Navigation)
+        ├── pages/ (All page components)
+        └── services/api.js (API methods)
+```
+
+## What's Implemented (as of 2026-03-23)
+- [x] Full authentication (JWT + Google OAuth)
+- [x] Dashboard with analytics
+- [x] Member management (CRUD, filtering, search)
+- [x] Gender restricted to Male/Female
+- [x] Department dropdown based on location
+- [x] Children/Parents/Guests bypass department
+- [x] Document storage (ID scan upload, JPG/PNG)
+- [x] Families & People management
+- [x] Events with check-ins
+- [x] Calendar view
+- [x] Task management
+- [x] Financial management (donations, expenses, fund transfers)
+- [x] Communications (AI chat, conversations)
+- [x] Resource & space booking
+- [x] Sales & products
+- [x] Restricted Access Control page (residents, staff passes, guest requests, scan in/out)
+- [x] Reports Dashboard with PDF export
+- [x] Real CSV file upload (members, children/parents, staff)
+- [x] Scrollable modals throughout the app
+- [x] Compasses & Locations management
+- [x] Attendance analytics
+- [x] Sales analytics
+- [x] Location stats
+- [x] Audit trail
+- [x] Settings
+- [x] Outreach
+- [x] Notifications (Resend email)
+- [x] WebSocket live chat
+
+## P0 Remaining
+- None
+
+## P1 Remaining  
+- Unified "People" UI with tabs combining all people management + strict RBAC (Directors/Execs vs Managers multi-user bulk edits)
+
+## P2 / Future
+- Consolidate duplicated logic between MembersPage.jsx and PeoplePage.jsx
+- Enhanced RBAC enforcement across all pages
+- Offline/PWA support for field workers
