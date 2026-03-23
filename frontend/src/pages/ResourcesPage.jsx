@@ -1,238 +1,259 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, Plus, Trash2, Calendar, Clock, Edit2, X } from 'lucide-react';
+import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Switch } from '../components/ui/switch';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { resourcesApi } from '../services/api';
+import { Textarea } from '../components/ui/textarea';
+import api from '../services/api';
+import { locationsApi } from '../services/api';
 import { toast } from 'sonner';
 
-const fmt = (n) => n ? `UGX ${(n).toLocaleString()}/hr` : 'Free';
+const RESOURCE_TYPES = [
+  { value: 'venue', label: 'Venue' },
+  { value: 'sports_equipment', label: 'Sports Equipment' },
+  { value: 'media_equipment', label: 'Media Equipment' },
+  { value: 'educational', label: 'Educational Material' },
+  { value: 'consumable', label: 'Consumable Material' },
+  { value: 'room', label: 'Room/Space' },
+];
 
-const typeIcon = { auditorium: '🎭', conference: '📋', hall: '🏛️', equipment: '🎙️', classroom: '📚', vehicle: '🚌' };
-
-const emptyResource = { name: '', type: 'room', capacity: '', description: '', hourly_rate: '' };
-const emptyBooking = { resource_id: '', title: '', booked_by: '', date: new Date().toISOString().split('T')[0], start_time: '09:00', end_time: '11:00', notes: '' };
+const emptyForm = {
+  name: '', type: 'room', category: '', capacity: '', quantity: 1, description: '',
+  location_id: '', hourly_rate: '', is_bookable: true, staff_only: false, is_consumable: false,
+};
 
 export default function ResourcesPage() {
   const [resources, setResources] = useState([]);
-  const [bookings, setBookings] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showResource, setShowResource] = useState(false);
-  const [showBooking, setShowBooking] = useState(false);
-  const [selectedResource, setSelectedResource] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [resForm, setResForm] = useState(emptyResource);
-  const [bookingForm, setBookingForm] = useState(emptyBooking);
+  const [form, setForm] = useState(emptyForm);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [locationFilter, setLocationFilter] = useState('all');
 
-  const fetchAll = async () => {
+  const fetchData = async () => {
     setLoading(true);
     try {
-      const [resRes, bkRes] = await Promise.all([resourcesApi.list(), resourcesApi.bookings()]);
+      const [resRes, locRes] = await Promise.all([
+        api.get('/resources'),
+        locationsApi.list(),
+      ]);
       setResources(resRes.data);
-      setBookings(bkRes.data);
+      setLocations(locRes.data);
     } catch { toast.error('Failed to load resources'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchData(); }, []);
 
-  const getResourceBookings = (resId) => bookings.filter(b => b.resource_id === resId);
-
-  const handleAddResource = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const res = await resourcesApi.create({ ...resForm, capacity: resForm.capacity ? parseInt(resForm.capacity) : null, hourly_rate: resForm.hourly_rate ? parseFloat(resForm.hourly_rate) : null });
-      setResources(prev => [...prev, res.data]);
-      setShowResource(false);
-      setResForm(emptyResource);
-      toast.success('Resource added!');
-    } catch { toast.error('Failed to add resource'); }
-    finally { setSaving(false); }
+  const openAdd = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
+  const openEdit = (r) => {
+    setEditing(r);
+    setForm({
+      name: r.name || '', type: r.type || 'room', category: r.category || '',
+      capacity: r.capacity || '', quantity: r.quantity || 1, description: r.description || '',
+      location_id: r.location_id || '', hourly_rate: r.hourly_rate || '',
+      is_bookable: r.is_bookable !== false, staff_only: r.staff_only || false,
+      is_consumable: r.is_consumable || false,
+    });
+    setShowModal(true);
   };
 
-  const handleBookResource = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await resourcesApi.createBooking(bookingForm);
-      setBookings(prev => [...prev, res.data]);
-      setShowBooking(false);
-      setBookingForm(emptyBooking);
-      toast.success('Resource booked!');
-    } catch { toast.error('Failed to create booking'); }
+      const payload = {
+        ...form,
+        capacity: form.capacity ? parseInt(form.capacity) : null,
+        quantity: parseInt(form.quantity) || 1,
+        hourly_rate: form.hourly_rate ? parseFloat(form.hourly_rate) : null,
+        location_id: form.location_id || null,
+      };
+      if (editing) {
+        await api.put(`/resources/${editing.id}`, payload);
+        setResources(prev => prev.map(r => r.id === editing.id ? { ...r, ...payload } : r));
+        toast.success('Resource updated!');
+      } else {
+        const res = await api.post('/resources', payload);
+        setResources(prev => [...prev, res.data]);
+        toast.success('Resource added!');
+      }
+      setShowModal(false);
+    } catch { toast.error('Failed to save'); }
     finally { setSaving(false); }
   };
 
   const deleteResource = async (id) => {
     if (!window.confirm('Delete this resource?')) return;
-    await resourcesApi.delete(id);
+    await api.delete(`/resources/${id}`);
     setResources(prev => prev.filter(r => r.id !== id));
     toast.success('Deleted');
   };
 
-  const deleteBooking = async (id) => {
-    await resourcesApi.deleteBooking(id);
-    setBookings(prev => prev.filter(b => b.id !== id));
-    toast.success('Booking cancelled');
-  };
+  const getLocationName = (lid) => locations.find(l => l.id === lid)?.name || 'Unassigned';
 
-  const openBooking = (res) => {
-    setBookingForm({ ...emptyBooking, resource_id: res.id });
-    setShowBooking(true);
-  };
+  const filtered = resources.filter(r => {
+    if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+    if (locationFilter !== 'all' && r.location_id !== locationFilter) return false;
+    return true;
+  });
+
+  const byType = RESOURCE_TYPES.map(t => ({ ...t, count: resources.filter(r => r.type === t.value).length }));
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold font-heading">Resources</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{resources.length} resources · {bookings.length} bookings</p>
+          <h1 className="text-2xl font-semibold font-heading" data-testid="resources-title">Resources</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{resources.length} total resources across {locations.length} locations</p>
         </div>
-        <Button className="gap-2" onClick={() => setShowResource(true)} data-testid="add-resource-btn"><Plus size={16} /> Add Resource</Button>
+        <Button className="gap-2" onClick={openAdd} data-testid="add-resource-btn"><Plus size={16} /> Add Resource</Button>
       </div>
 
-      <Tabs defaultValue="resources">
-        <TabsList>
-          <TabsTrigger value="resources">Resources ({resources.length})</TabsTrigger>
-          <TabsTrigger value="bookings">All Bookings ({bookings.length})</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="resources" className="mt-4">
-          {loading ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[1,2,3,4].map(i => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}</div>
-          ) : resources.length > 0 ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {resources.map(res => {
-                const resBks = getResourceBookings(res.id);
-                return (
-                  <Card key={res.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow" data-testid="resource-card">
-                    <CardContent className="p-5">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{typeIcon[res.type] || '🏢'}</span>
-                          <div>
-                            <p className="font-semibold text-sm">{res.name}</p>
-                            <p className="text-xs text-muted-foreground capitalize">{res.type}{res.capacity ? ` · ${res.capacity} cap.` : ''}</p>
-                          </div>
-                        </div>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => deleteResource(res.id)}><Trash2 size={12} /></Button>
-                      </div>
-                      {res.description && <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{res.description}</p>}
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-semibold text-primary">{fmt(res.hourly_rate)}</p>
-                        <p className="text-xs text-muted-foreground">{resBks.length} booking{resBks.length !== 1 ? 's' : ''}</p>
-                      </div>
-                      <Button size="sm" className="w-full mt-3 gap-1.5" variant="outline" onClick={() => openBooking(res)} data-testid="book-resource-btn">
-                        <Calendar size={12} /> Book
-                      </Button>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          ) : <p className="text-center text-sm text-muted-foreground py-16">No resources added yet.</p>}
-        </TabsContent>
-
-        <TabsContent value="bookings" className="mt-4">
-          <Card className="shadow-soft rounded-xl">
-            <CardContent className="p-5">
-              {loading ? <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div> :
-                bookings.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead><tr className="border-b border-border text-left">
-                        <th className="pb-2 font-medium text-muted-foreground">Resource</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Title</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Date</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Time</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Booked By</th>
-                        <th className="pb-2"></th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-border">
-                        {bookings.map(bk => {
-                          const res = resources.find(r => r.id === bk.resource_id);
-                          return (
-                            <tr key={bk.id} className="hover:bg-accent/30" data-testid="booking-row">
-                              <td className="py-2.5 font-medium">{res?.name || bk.resource_id}</td>
-                              <td className="py-2.5">{bk.title}</td>
-                              <td className="py-2.5 text-muted-foreground">{bk.date}</td>
-                              <td className="py-2.5 text-muted-foreground">{bk.start_time} – {bk.end_time}</td>
-                              <td className="py-2.5 text-muted-foreground">{bk.booked_by}</td>
-                              <td className="py-2.5">
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => deleteBooking(bk.id)}><X size={12} /></Button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : <p className="text-sm text-muted-foreground text-center py-10">No bookings yet.</p>}
+      {/* Type Stats */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+        {byType.map(t => (
+          <Card key={t.value} className={`shadow-soft rounded-xl cursor-pointer transition-all ${typeFilter === t.value ? 'ring-2 ring-primary' : ''}`} onClick={() => setTypeFilter(typeFilter === t.value ? 'all' : t.value)}>
+            <CardContent className="p-3 text-center">
+              <p className="text-lg font-bold">{t.count}</p>
+              <p className="text-xs text-muted-foreground">{t.label}</p>
             </CardContent>
           </Card>
-        </TabsContent>
-      </Tabs>
+        ))}
+      </div>
 
-      {/* Add Resource Dialog */}
-      <Dialog open={showResource} onOpenChange={setShowResource}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Add Resource</DialogTitle></DialogHeader>
-          <form onSubmit={handleAddResource} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Name *</Label><Input placeholder="e.g. Main Auditorium" value={resForm.name} onChange={e => setResForm({...resForm, name: e.target.value})} required data-testid="resource-name-input" /></div>
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input className="pl-9 h-8 text-xs" placeholder="Search resources..." value={search} onChange={e => setSearch(e.target.value)} data-testid="resource-search" />
+        </div>
+        <Select value={locationFilter} onValueChange={setLocationFilter}>
+          <SelectTrigger className="w-40 h-8 text-xs"><SelectValue placeholder="All Locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Locations</SelectItem>
+            {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Resources Grid */}
+      {loading ? (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[1,2,3,4,5,6].map(i => <div key={i} className="h-36 bg-muted animate-pulse rounded-xl" />)}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-sm text-muted-foreground">
+          <Package size={40} className="mx-auto mb-3 opacity-30" />
+          {search || typeFilter !== 'all' || locationFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map(r => (
+            <Card key={r.id} className="shadow-soft rounded-xl hover:shadow-md transition-shadow" data-testid="resource-card">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <p className="font-semibold text-sm">{r.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{getLocationName(r.location_id)}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => openEdit(r)}><Edit2 size={12} /></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => deleteResource(r.id)}><Trash2 size={12} /></Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  <Badge variant="outline" className="text-xs capitalize">{RESOURCE_TYPES.find(t => t.value === r.type)?.label || r.type}</Badge>
+                  {r.is_bookable && <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300">Bookable</Badge>}
+                  {r.staff_only && <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300">Staff Only</Badge>}
+                  {!r.is_bookable && <Badge variant="outline" className="text-xs bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300">Not Bookable</Badge>}
+                  {r.is_consumable && <Badge variant="outline" className="text-xs">Consumable</Badge>}
+                </div>
+                {r.description && <p className="text-xs text-muted-foreground line-clamp-2">{r.description}</p>}
+                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                  {r.quantity > 1 && <span>Qty: {r.quantity}</span>}
+                  {r.capacity && <span>Cap: {r.capacity}</span>}
+                  {r.hourly_rate && <span>Rate: {r.hourly_rate}/hr</span>}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Add/Edit Dialog */}
+      <Dialog open={showModal} onOpenChange={setShowModal}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit Resource' : 'Add Resource'}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Name *</Label>
+              <Input placeholder="Resource name" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required data-testid="resource-name-input" />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Type</Label>
-                <Select value={resForm.type} onValueChange={v => setResForm({...resForm, type: v})}>
+                <Select value={form.type} onValueChange={v => setForm({...form, type: v, is_consumable: v === 'consumable'})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="auditorium">Auditorium</SelectItem>
-                    <SelectItem value="conference">Conference</SelectItem>
-                    <SelectItem value="hall">Hall</SelectItem>
-                    <SelectItem value="classroom">Classroom</SelectItem>
-                    <SelectItem value="equipment">Equipment</SelectItem>
-                    <SelectItem value="vehicle">Vehicle</SelectItem>
+                    {RESOURCE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>Capacity</Label><Input type="number" placeholder="100" value={resForm.capacity} onChange={e => setResForm({...resForm, capacity: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Location</Label>
+                <Select value={form.location_id || '_none'} onValueChange={v => setForm({...form, location_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">Unassigned</SelectItem>
+                    {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="space-y-2"><Label>Description</Label><Input placeholder="Brief description" value={resForm.description} onChange={e => setResForm({...resForm, description: e.target.value})} /></div>
-            <div className="space-y-2"><Label>Hourly Rate (UGX, leave blank if free)</Label><Input type="number" placeholder="20000" value={resForm.hourly_rate} onChange={e => setResForm({...resForm, hourly_rate: e.target.value})} /></div>
-            <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowResource(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" disabled={saving} data-testid="save-resource-btn">{saving ? 'Adding...' : 'Add Resource'}</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Book Resource Dialog */}
-      <Dialog open={showBooking} onOpenChange={setShowBooking}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Book Resource</DialogTitle></DialogHeader>
-          <form onSubmit={handleBookResource} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Resource *</Label>
-              <Select value={bookingForm.resource_id} onValueChange={v => setBookingForm({...bookingForm, resource_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Select resource" /></SelectTrigger>
-                <SelectContent>{resources.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2"><Label>Booking Title *</Label><Input placeholder="e.g. Board Meeting" value={bookingForm.title} onChange={e => setBookingForm({...bookingForm, title: e.target.value})} required /></div>
-            <div className="space-y-2"><Label>Booked By</Label><Input placeholder="Your name" value={bookingForm.booked_by} onChange={e => setBookingForm({...bookingForm, booked_by: e.target.value})} /></div>
             <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-2 col-span-3 sm:col-span-1"><Label>Date</Label><Input type="date" value={bookingForm.date} onChange={e => setBookingForm({...bookingForm, date: e.target.value})} /></div>
-              <div className="space-y-2"><Label>Start</Label><Input type="time" value={bookingForm.start_time} onChange={e => setBookingForm({...bookingForm, start_time: e.target.value})} /></div>
-              <div className="space-y-2"><Label>End</Label><Input type="time" value={bookingForm.end_time} onChange={e => setBookingForm({...bookingForm, end_time: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Quantity</Label>
+                <Input type="number" min="1" value={form.quantity} onChange={e => setForm({...form, quantity: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>Capacity</Label>
+                <Input type="number" min="0" placeholder="Optional" value={form.capacity} onChange={e => setForm({...form, capacity: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>Hourly Rate</Label>
+                <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.hourly_rate} onChange={e => setForm({...form, hourly_rate: e.target.value})} />
+              </div>
             </div>
-            <div className="space-y-2"><Label>Notes</Label><Input placeholder="Any special requirements?" value={bookingForm.notes} onChange={e => setBookingForm({...bookingForm, notes: e.target.value})} /></div>
+            <div className="space-y-2"><Label>Description</Label>
+              <Textarea rows={2} placeholder="Describe this resource" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
+            </div>
+            <div className="space-y-3 p-3 border border-border rounded-lg">
+              <div className="flex items-center justify-between">
+                <div><p className="text-sm font-medium">Bookable</p>
+                  <p className="text-xs text-muted-foreground">Can this resource be booked?</p></div>
+                <Switch checked={form.is_bookable} onCheckedChange={v => setForm({...form, is_bookable: v})} data-testid="resource-bookable-toggle" />
+              </div>
+              {form.is_bookable && (
+                <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Staff Only</p>
+                    <p className="text-xs text-muted-foreground">Only staff can book (not public)</p></div>
+                  <Switch checked={form.staff_only} onCheckedChange={v => setForm({...form, staff_only: v})} data-testid="resource-staffonly-toggle" />
+                </div>
+              )}
+            </div>
             <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowBooking(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" disabled={saving || !bookingForm.resource_id} data-testid="confirm-booking-btn">{saving ? 'Booking...' : 'Confirm Booking'}</Button>
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowModal(false)}>Cancel</Button>
+              <Button type="submit" className="flex-1" disabled={saving} data-testid="save-resource-btn">
+                {saving ? 'Saving...' : editing ? 'Update' : 'Add Resource'}
+              </Button>
             </div>
           </form>
         </DialogContent>

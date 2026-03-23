@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Filter, UserCheck, UserX, Mail, Phone, ChevronDown, Eye, Trash2, RefreshCw, Download, Upload, Award, Users } from 'lucide-react';
+import { Search, Plus, Filter, UserCheck, UserX, Mail, Phone, ChevronDown, Eye, Trash2, RefreshCw, Download, Upload, Award, Users, FileUp } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -9,8 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
+import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi } from '../services/api';
+import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi } from '../services/api';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
 
@@ -27,7 +28,7 @@ export default function MembersPage() {
   const [selectedMember, setSelectedMember] = useState(null);
   const [memberDetail, setMemberDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [newMember, setNewMember] = useState({ name: '', email: '', phone: '', national_id: '', role: 'Member', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '' });
+  const [newMember, setNewMember] = useState({ name: '', email: '', phone: '', national_id: '', role: 'Staff', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '', location_id: '', department: '', is_parent: false, is_customer: false, is_donor: false });
   const [savingMember, setSavingMember] = useState(false);
   const [pendingMembers, setPendingMembers] = useState([]);
   const [badges, setBadges] = useState([]);
@@ -37,6 +38,11 @@ export default function MembersPage() {
   const [showBadgeDialog, setShowBadgeDialog] = useState(false);
   const [newBadge, setNewBadge] = useState({ name: '', description: '', color: '#6366f1' });
   const [activeTab, setActiveTab] = useState('all');
+  const [showChildImport, setShowChildImport] = useState(false);
+  const [childCsvData, setChildCsvData] = useState('');
+  const [showStaffImport, setShowStaffImport] = useState(false);
+  const [staffCsvData, setStaffCsvData] = useState('');
+  const [allLocations, setAllLocations] = useState([]);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -63,6 +69,7 @@ export default function MembersPage() {
   useEffect(() => {
     approvalsApi.pending().then(r => setPendingMembers(r.data)).catch(() => {});
     badgesApi.list().then(r => setBadges(r.data)).catch(() => {});
+    locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {});
   }, []);
 
   const handleApprove = async (id) => {
@@ -129,6 +136,50 @@ export default function MembersPage() {
       }).catch(() => toast.error('Export failed'));
   };
 
+  const handleChildParentImport = async () => {
+    if (!childCsvData.trim()) return;
+    setImportLoading(true);
+    try {
+      const lines = childCsvData.trim().split('\n');
+      const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+      const rows = lines.slice(1).map(line => {
+        const vals = line.split(',').map(v => v.trim());
+        const row = {};
+        header.forEach((h, i) => { row[h] = vals[i] || ''; });
+        return row;
+      }).filter(r => r.first_name);
+      const res = await importApi.childrenParents(rows);
+      toast.success(`Imported: ${res.data.imported_children} children, ${res.data.imported_parents} parents, ${res.data.imported_families} families`);
+      if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      setShowChildImport(false);
+      setChildCsvData('');
+      fetchMembers();
+    } catch { toast.error('Import failed'); }
+    finally { setImportLoading(false); }
+  };
+
+  const handleStaffImport = async () => {
+    if (!staffCsvData.trim()) return;
+    setImportLoading(true);
+    try {
+      const lines = staffCsvData.trim().split('\n');
+      const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+      const rows = lines.slice(1).map(line => {
+        const vals = line.split(',').map(v => v.trim());
+        const row = {};
+        header.forEach((h, i) => { row[h] = vals[i] || ''; });
+        return row;
+      }).filter(r => r.name);
+      const res = await importApi.staff(rows);
+      toast.success(`Imported ${res.data.imported} staff members!`);
+      if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      setShowStaffImport(false);
+      setStaffCsvData('');
+      fetchMembers();
+    } catch { toast.error('Import failed'); }
+    finally { setImportLoading(false); }
+  };
+
   const handleAddMember = async (e) => {
     e.preventDefault();
     setSavingMember(true);
@@ -191,7 +242,14 @@ export default function MembersPage() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchMembers} className="gap-1.5"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-1.5" data-testid="export-members-btn"><Download size={14} /> CSV</Button>
-          <Button variant="outline" size="sm" onClick={() => setShowBulkImport(true)} className="gap-1.5" data-testid="bulk-import-btn"><Upload size={14} /> Import</Button>
+          <Select onValueChange={v => { if (v === 'bulk') setShowBulkImport(true); else if (v === 'children') setShowChildImport(true); else if (v === 'staff') setShowStaffImport(true); }}>
+            <SelectTrigger className="w-auto h-8 gap-1.5 text-xs"><FileUp size={14} /><span>Import</span></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bulk">Quick Import (CSV)</SelectItem>
+              <SelectItem value="children">Children & Parents CSV</SelectItem>
+              <SelectItem value="staff">Staff CSV</SelectItem>
+            </SelectContent>
+          </Select>
           <Button onClick={() => setShowAddDialog(true)} className="gap-2" data-testid="add-member-btn">
             <Plus size={16} /> Add Member
           </Button>
@@ -268,7 +326,12 @@ export default function MembersPage() {
                   {member.join_date && <div className="flex items-center gap-2"><span className="text-muted-foreground/70">Joined:</span><span>{member.join_date}</span></div>}
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <Badge variant="secondary" className="text-xs">{member.group}</Badge>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <Badge variant="secondary" className="text-xs">{member.group}</Badge>
+                    {member.is_parent && <Badge variant="outline" className="text-xs border-purple-300 text-purple-600">Parent</Badge>}
+                    {member.is_customer && <Badge variant="outline" className="text-xs border-green-300 text-green-600">Customer</Badge>}
+                    {member.is_donor && <Badge variant="outline" className="text-xs border-amber-300 text-amber-600">Donor</Badge>}
+                  </div>
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => viewMember(member)}>
                       <Eye size={13} />
@@ -422,6 +485,35 @@ export default function MembersPage() {
                 <Label>Address</Label>
                 <Input placeholder="Physical address" value={newMember.address} onChange={e => setNewMember({...newMember, address: e.target.value})} />
               </div>
+              <div className="space-y-2">
+                <Label>Location</Label>
+                <Select value={newMember.location_id || '_none'} onValueChange={v => setNewMember({...newMember, location_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">Not assigned</SelectItem>
+                    {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Department</Label>
+                <Input placeholder="e.g. Education" value={newMember.department || ''} onChange={e => setNewMember({...newMember, department: e.target.value})} />
+              </div>
+              <div className="col-span-2 space-y-3 p-3 border border-border rounded-lg">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Additional Roles</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm">Also a Parent</p>
+                  <Switch checked={newMember.is_parent} onCheckedChange={v => setNewMember({...newMember, is_parent: v})} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm">Also a Customer</p>
+                  <Switch checked={newMember.is_customer} onCheckedChange={v => setNewMember({...newMember, is_customer: v})} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm">Also a Donor</p>
+                  <Switch checked={newMember.is_donor} onCheckedChange={v => setNewMember({...newMember, is_donor: v})} />
+                </div>
+              </div>
               <div className="space-y-2 col-span-2">
                 <Label>Notes</Label>
                 <Input placeholder="Any notes..." value={newMember.notes} onChange={e => setNewMember({...newMember, notes: e.target.value})} />
@@ -573,6 +665,42 @@ export default function MembersPage() {
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowBadgeDialog(false)}>Cancel</Button>
               <Button className="flex-1" disabled={!newBadge.name} onClick={handleCreateBadge} data-testid="save-badge-btn">Create Badge</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Children + Parents CSV Import */}
+      <Dialog open={showChildImport} onOpenChange={setShowChildImport}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Children & Parents</DialogTitle>
+            <DialogDescription>Paste CSV with header: first_name, last_name, date_of_birth, grade, family_name, fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs</DialogDescription>
+          </DialogHeader>
+          <Textarea rows={8} placeholder={`first_name,last_name,date_of_birth,grade,family_name,fathers_names,fathers_phone,mothers_names,mothers_phone,allergies,medical_notes,special_needs\nJohn,Doe,2015-05-10,3,Doe Family,James Doe,+256700111222,Mary Doe,+256700333444,None,None,None`}
+            value={childCsvData} onChange={e => setChildCsvData(e.target.value)} data-testid="child-import-textarea" />
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setShowChildImport(false)}>Cancel</Button>
+            <Button className="flex-1" disabled={importLoading || !childCsvData.trim()} onClick={handleChildParentImport} data-testid="import-children-btn">
+              {importLoading ? 'Importing...' : 'Import Children & Parents'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Staff CSV Import */}
+      <Dialog open={showStaffImport} onOpenChange={setShowStaffImport}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Staff</DialogTitle>
+            <DialogDescription>Paste CSV with header: name, email, phone, national_id, role, department</DialogDescription>
+          </DialogHeader>
+          <Textarea rows={8} placeholder={`name,email,phone,national_id,role,department\nJane Smith,jane@example.com,+256700111222,CM12345,Staff,Education\nBob Johnson,bob@example.com,+256700333444,CM67890,Coordinator,Operations`}
+            value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} data-testid="staff-import-textarea" />
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setShowStaffImport(false)}>Cancel</Button>
+            <Button className="flex-1" disabled={importLoading || !staffCsvData.trim()} onClick={handleStaffImport} data-testid="import-staff-btn">
+              {importLoading ? 'Importing...' : 'Import Staff'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

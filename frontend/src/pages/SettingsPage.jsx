@@ -163,7 +163,7 @@ export default function SettingsPage() {
                     </Select>
                   </div>
                 </div>
-                <Button type="submit" className="gap-2"><Save size={15} /> Save Changes</Button>
+                <Button type="submit" className="gap-2" disabled={!isAdmin}><Save size={15} /> {isAdmin ? 'Save Changes' : 'Admin Only'}</Button>
               </form>
             </CardContent>
           </Card>

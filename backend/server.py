@@ -68,13 +68,18 @@ class MemberCreate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     national_id: Optional[str] = None
-    role: str = "Member"
+    role: str = "Staff"
     group: Optional[str] = None
     gender: Optional[str] = None
     date_of_birth: Optional[str] = None
     address: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    location_id: Optional[str] = None
+    department: Optional[str] = None
+    is_parent: bool = False
+    is_customer: bool = False
+    is_donor: bool = False
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
@@ -89,6 +94,11 @@ class MemberUpdate(BaseModel):
     address: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    location_id: Optional[str] = None
+    department: Optional[str] = None
+    is_parent: Optional[bool] = None
+    is_customer: Optional[bool] = None
+    is_donor: Optional[bool] = None
 
 class EventCreate(BaseModel):
     title: str
@@ -103,6 +113,8 @@ class EventCreate(BaseModel):
     is_free: bool = True
     price: Optional[float] = None
     venue_id: Optional[str] = None
+    is_recurring: bool = False
+    recurrence_pattern: Optional[str] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -807,19 +819,21 @@ class DonationCreate(BaseModel):
     donor_name: str
     amount: float
     currency: str = "UGX"
-    type: str = "tithe"  # tithe, offering, donation, pledge
+    type: str = "tithe"
     date: Optional[str] = None
     notes: Optional[str] = None
     member_id: Optional[str] = None
+    location_id: Optional[str] = None
 
 class ExpenseCreate(BaseModel):
     title: str
     amount: float
     currency: str = "UGX"
-    category: str = "general"  # salaries, utilities, supplies, maintenance, programs
+    category: str = "general"
     date: Optional[str] = None
     notes: Optional[str] = None
     submitted_by: Optional[str] = None
+    location_id: Optional[str] = None
 
 class ProductCreate(BaseModel):
     name: str
@@ -830,6 +844,7 @@ class ProductCreate(BaseModel):
     category: Optional[str] = None
     sku: Optional[str] = None
     reorder_level: int = 5
+    location_id: Optional[str] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -838,14 +853,16 @@ class ProductUpdate(BaseModel):
     stock: Optional[int] = None
     category: Optional[str] = None
     reorder_level: Optional[int] = None
+    location_id: Optional[str] = None
 
 class SaleCreate(BaseModel):
-    items: List[dict]  # [{product_id, name, qty, unit_price}]
+    items: List[dict]
     customer_name: Optional[str] = "Walk-in Customer"
     customer_phone: Optional[str] = None
     total: float
-    payment_method: str = "cash"  # cash, mobile_money, card
+    payment_method: str = "cash"
     notes: Optional[str] = None
+    location_id: Optional[str] = None
 
 class FamilyCreate(BaseModel):
     family_name: str
@@ -884,20 +901,21 @@ class AuditLogCreate(BaseModel):
 # ========== FINANCIAL ROUTES ==========
 
 @api_router.get("/financial/summary")
-async def financial_summary(current_user: dict = Depends(get_current_user)):
+async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).isoformat()[:7]
+    loc_match = {"location_id": location_id} if location_id else {}
 
     pipeline_donations = [
-        {"$match": {"date": {"$regex": f"^{month_start}"}}},
+        {"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}},
         {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
     ]
     pipeline_expenses = [
-        {"$match": {"date": {"$regex": f"^{month_start}"}}},
+        {"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}},
         {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
     ]
     pipeline_sales = [
-        {"$match": {"created_at": {"$regex": f"^{month_start}"}}},
+        {"$match": {**loc_match, "created_at": {"$regex": f"^{month_start}"}}},
         {"$group": {"_id": None, "total": {"$sum": "$total"}}}
     ]
 
@@ -926,9 +944,49 @@ async def financial_summary(current_user: dict = Depends(get_current_user)):
         "net_balance": total_in - total_out,
     }
 
+@api_router.post("/financial/distribute-funds")
+async def distribute_funds(data: dict, current_user: dict = Depends(get_current_user)):
+    """Distribute funds from one location to another"""
+    from_location_id = data.get("from_location_id")
+    to_location_id = data.get("to_location_id")
+    amount = float(data.get("amount", 0))
+    currency = data.get("currency", "UGX")
+    notes = data.get("notes", "")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be > 0")
+    transfer_id = f"tfr_{str(uuid.uuid4())[:8]}"
+    now = datetime.now(timezone.utc).isoformat()
+    # Create expense at source
+    await db.expenses.insert_one({
+        "id": f"exp_{str(uuid.uuid4())[:8]}", "title": f"Fund transfer to {to_location_id}",
+        "amount": amount, "currency": currency, "category": "transfer",
+        "date": now[:10], "notes": f"Transfer {transfer_id}: {notes}",
+        "location_id": from_location_id, "transfer_id": transfer_id,
+        "created_at": now, "created_by": current_user["id"],
+    })
+    # Create donation at destination
+    await db.donations.insert_one({
+        "id": f"don_{str(uuid.uuid4())[:8]}", "donor_name": "Internal Transfer",
+        "amount": amount, "currency": currency, "type": "transfer",
+        "date": now[:10], "notes": f"Transfer {transfer_id} from {from_location_id}: {notes}",
+        "location_id": to_location_id, "transfer_id": transfer_id,
+        "created_at": now, "created_by": current_user["id"],
+    })
+    await _audit(current_user["id"], "create", "fund_transfer", transfer_id)
+    return {"transfer_id": transfer_id, "amount": amount, "from": from_location_id, "to": to_location_id}
+
 @api_router.get("/financial/donations")
-async def list_donations(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
-    donations = await db.donations.find({}, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
+async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    if date_from or date_to:
+        query["date"] = {}
+        if date_from:
+            query["date"]["$gte"] = date_from
+        if date_to:
+            query["date"]["$lte"] = date_to
+    donations = await db.donations.find(query, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
     return donations
 
 @api_router.post("/financial/donations")
@@ -946,8 +1004,17 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(get
     return doc
 
 @api_router.get("/financial/expenses")
-async def list_expenses(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
-    expenses = await db.expenses.find({}, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
+async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    if date_from or date_to:
+        query["date"] = {}
+        if date_from:
+            query["date"]["$gte"] = date_from
+        if date_to:
+            query["date"]["$lte"] = date_to
+    expenses = await db.expenses.find(query, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
     return expenses
 
 @api_router.post("/financial/expenses")
@@ -1297,18 +1364,34 @@ async def seed_extended():
 class LocationCreate(BaseModel):
     name: str
     code: Optional[str] = None
-    type: str = "branch"
+    type: str = "compass"  # main, compass, sub-location
     parent_id: Optional[str] = None
     address: Optional[str] = None
+    country: Optional[str] = None
+    currency: str = "USD"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    director_id: Optional[str] = None
+    is_venue: bool = False
+    is_bookable: bool = False
+    is_restricted: bool = False
+    departments: Optional[List[str]] = []
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
+    type: Optional[str] = None
+    parent_id: Optional[str] = None
     address: Optional[str] = None
+    country: Optional[str] = None
+    currency: Optional[str] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
+    director_id: Optional[str] = None
+    is_venue: Optional[bool] = None
+    is_bookable: Optional[bool] = None
+    is_restricted: Optional[bool] = None
+    departments: Optional[List[str]] = None
     active: Optional[bool] = None
 
 # ========== NOTIFICATION MODEL ==========
@@ -1334,6 +1417,7 @@ async def create_location(data: LocationCreate, current_user: dict = Depends(get
         **data.model_dump(),
         "active": True,
         "member_count": 0,
+        "staff_ids": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
@@ -1349,6 +1433,43 @@ async def update_location(loc_id: str, data: LocationUpdate, current_user: dict 
     await db.locations.update_one({"id": loc_id}, {"$set": update_data})
     loc = await db.locations.find_one({"id": loc_id}, {"_id": 0})
     return loc
+
+@api_router.get("/locations/{loc_id}/staff")
+async def get_location_staff(loc_id: str, current_user: dict = Depends(get_current_user)):
+    loc = await db.locations.find_one({"id": loc_id}, {"_id": 0})
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    staff_ids = loc.get("staff_ids", [])
+    if not staff_ids:
+        return []
+    staff = await db.members.find({"id": {"$in": staff_ids}}, {"_id": 0}).to_list(100)
+    return staff
+
+@api_router.put("/locations/{loc_id}/assign-staff")
+async def assign_staff_to_location(loc_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    staff_ids = data.get("staff_ids", [])
+    await db.locations.update_one({"id": loc_id}, {"$set": {"staff_ids": staff_ids}})
+    return {"message": "Staff assigned"}
+
+@api_router.put("/locations/{loc_id}/director")
+async def set_location_director(loc_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    director_id = data.get("director_id")
+    await db.locations.update_one({"id": loc_id}, {"$set": {"director_id": director_id}})
+    loc = await db.locations.find_one({"id": loc_id}, {"_id": 0})
+    return loc
+
+@api_router.get("/exchange-rate")
+async def get_exchange_rate(from_currency: str = "UGX", to_currency: str = "USD"):
+    """Simple exchange rate lookup - in production, integrate with a rate API"""
+    rates_to_usd = {
+        "USD": 1.0, "UGX": 0.00027, "KES": 0.0077, "TZS": 0.00039,
+        "RWF": 0.00074, "GBP": 1.27, "EUR": 1.09, "ZAR": 0.055,
+        "NGN": 0.00065, "GHS": 0.063, "ETB": 0.008,
+    }
+    from_rate = rates_to_usd.get(from_currency.upper(), 1.0)
+    to_rate = rates_to_usd.get(to_currency.upper(), 1.0)
+    rate = from_rate / to_rate if to_rate else 1.0
+    return {"from": from_currency, "to": to_currency, "rate": round(rate, 6)}
 
 @api_router.delete("/locations/{loc_id}")
 async def delete_location(loc_id: str, current_user: dict = Depends(get_current_user)):
@@ -1444,6 +1565,106 @@ async def global_search(q: str, current_user: dict = Depends(get_current_user)):
         results.append({"type": "product", "id": p["id"], "title": p["name"], "subtitle": f"UGX {p.get('price', 0):,.0f} · Stock: {p.get('stock', 0)}", "url": "/sales"})
 
     return {"results": results}
+
+
+# ========== CHAT & AI ROUTES ==========
+
+@api_router.get("/chat/conversations")
+async def get_conversations(current_user: dict = Depends(get_current_user)):
+    """List conversations for current user"""
+    convs = await db.conversations.find(
+        {"participants": current_user["id"]}, {"_id": 0}
+    ).sort("updated_at", -1).to_list(100)
+    return convs
+
+@api_router.post("/chat/conversations")
+async def create_conversation(data: dict, current_user: dict = Depends(get_current_user)):
+    """Create a new conversation"""
+    conv_type = data.get("type", "direct")  # direct, group, ai_assistant, announcements
+    participants = data.get("participants", [])
+    name = data.get("name", "")
+    location_id = data.get("location_id")
+    if current_user["id"] not in participants:
+        participants.append(current_user["id"])
+    doc = {
+        "id": f"conv_{str(uuid.uuid4())[:8]}", "type": conv_type, "name": name,
+        "participants": participants, "location_id": location_id,
+        "created_by": current_user["id"], "is_no_reply": data.get("is_no_reply", False),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "last_message": None,
+    }
+    await db.conversations.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/chat/conversations/{conv_id}/messages")
+async def get_messages(conv_id: str, skip: int = 0, limit: int = 50, current_user: dict = Depends(get_current_user)):
+    msgs = await db.chat_messages.find(
+        {"conversation_id": conv_id}, {"_id": 0}
+    ).sort("created_at", 1).skip(skip).limit(limit).to_list(limit)
+    return msgs
+
+@api_router.post("/chat/conversations/{conv_id}/messages")
+async def send_message(conv_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Send a message in a conversation"""
+    text = data.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message text required")
+    msg = {
+        "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+        "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"),
+        "text": text, "type": "text",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.chat_messages.insert_one(msg)
+    msg.pop("_id", None)
+    await db.conversations.update_one(
+        {"id": conv_id},
+        {"$set": {"updated_at": msg["created_at"], "last_message": text[:100]}}
+    )
+    return msg
+
+@api_router.post("/chat/ai-assistant")
+async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current_user)):
+    """AI Assistant powered by Gemini"""
+    from dotenv import load_dotenv
+    load_dotenv()
+    message = data.get("message", "").strip()
+    session_id = data.get("session_id", f"ai_{current_user['id']}")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message required")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="AI not configured")
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=session_id,
+            system_message="You are a helpful AI assistant for 58:12 Global Connect, a multi-location organization. Help staff with questions about processes, scheduling, member management, and general organizational tasks. Keep responses concise and helpful."
+        ).with_model("gemini", "gemini-2.5-flash")
+        user_msg = UserMessage(text=message)
+        response = await chat.send_message(user_msg)
+        # Store in chat_messages for persistence
+        now = datetime.now(timezone.utc).isoformat()
+        await db.chat_messages.insert_one({
+            "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": f"ai_{current_user['id']}",
+            "sender_id": current_user["id"], "sender_name": current_user.get("name"),
+            "text": message, "type": "user", "created_at": now,
+        })
+        await db.chat_messages.insert_one({
+            "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": f"ai_{current_user['id']}",
+            "sender_id": "ai_assistant", "sender_name": "AI Assistant",
+            "text": response, "type": "ai", "created_at": now,
+        })
+        return {"response": response, "session_id": session_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI assistant error: {str(e)}")
+
 
 # ========== EXPORT ROUTES ==========
 
@@ -1582,11 +1803,16 @@ class OutreachSessionCreate(BaseModel):
 
 class ResourceCreate(BaseModel):
     name: str
-    type: str = "room"
+    type: str = "room"  # room, sports_equipment, media_equipment, educational, consumable, venue
+    category: Optional[str] = None
     capacity: Optional[int] = None
+    quantity: int = 1
     description: Optional[str] = None
     location_id: Optional[str] = None
     hourly_rate: Optional[float] = None
+    is_bookable: bool = True
+    staff_only: bool = False
+    is_consumable: bool = False
 
 class ResourceBookingCreate(BaseModel):
     resource_id: str
@@ -1810,6 +2036,117 @@ async def bulk_import_members(file: str = None, members_data: list = None, curre
             errors.append(f"Row {i+1}: {str(e)}")
     await _audit(current_user["id"], "create", "bulk_import", f"{imported}_members")
     return {"imported": imported, "errors": errors, "total": len(members_data)}
+
+@api_router.post("/import/children-parents")
+async def import_children_parents(data: dict, current_user: dict = Depends(get_current_user)):
+    """Import children and parents from CSV data.
+    Expected fields per row: first_name, last_name, date_of_birth, grade, family_name,
+    fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs
+    """
+    rows = data.get("rows", [])
+    imported_children = 0
+    imported_parents = 0
+    imported_families = 0
+    errors = []
+    for i, row in enumerate(rows):
+        try:
+            fname = row.get("first_name", "").strip()
+            lname = row.get("last_name", "").strip()
+            if not fname:
+                errors.append(f"Row {i+1}: first_name required")
+                continue
+            child_name = f"{fname} {lname}".strip()
+            family_name = row.get("family_name", lname).strip() or lname
+
+            # Find or create family
+            family = await db.families.find_one({"name": family_name})
+            if not family:
+                family_id = f"fam_{str(uuid.uuid4())[:8]}"
+                family = {"id": family_id, "name": family_name, "members": [], "created_at": datetime.now(timezone.utc).isoformat()}
+                await db.families.insert_one(family)
+                imported_families += 1
+            else:
+                family_id = family["id"]
+
+            # Create child member
+            child_id = f"m_{str(uuid.uuid4())[:8]}"
+            child_doc = {
+                "id": child_id, "name": child_name, "role": "Child", "group": row.get("grade", ""),
+                "date_of_birth": row.get("date_of_birth", ""), "family_id": family_id,
+                "allergies": row.get("allergies", ""), "medical_notes": row.get("medical_notes", ""),
+                "special_needs": row.get("special_needs", ""), "status": "active",
+                "join_date": datetime.now(timezone.utc).date().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.members.insert_one(child_doc)
+            imported_children += 1
+
+            # Create/link father
+            father_name = row.get("fathers_names", "").strip()
+            if father_name:
+                existing_father = await db.members.find_one({"name": father_name, "is_parent": True})
+                if not existing_father:
+                    father_id = f"m_{str(uuid.uuid4())[:8]}"
+                    father_doc = {
+                        "id": father_id, "name": father_name, "phone": row.get("fathers_phone", ""),
+                        "role": "Parent", "is_parent": True, "gender": "male", "family_id": family_id,
+                        "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await db.members.insert_one(father_doc)
+                    imported_parents += 1
+
+            # Create/link mother
+            mother_name = row.get("mothers_names", "").strip()
+            if mother_name:
+                existing_mother = await db.members.find_one({"name": mother_name, "is_parent": True})
+                if not existing_mother:
+                    mother_id = f"m_{str(uuid.uuid4())[:8]}"
+                    mother_doc = {
+                        "id": mother_id, "name": mother_name, "phone": row.get("mothers_phone", ""),
+                        "role": "Parent", "is_parent": True, "gender": "female", "family_id": family_id,
+                        "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await db.members.insert_one(mother_doc)
+                    imported_parents += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)}")
+    await _audit(current_user["id"], "create", "csv_import", f"{imported_children}_children_{imported_parents}_parents")
+    return {"imported_children": imported_children, "imported_parents": imported_parents, "imported_families": imported_families, "errors": errors}
+
+@api_router.post("/import/staff")
+async def import_staff(data: dict, current_user: dict = Depends(get_current_user)):
+    """Import staff from CSV. Fields: name, email, phone, national_id, role, department"""
+    rows = data.get("rows", [])
+    imported = 0
+    errors = []
+    for i, row in enumerate(rows):
+        try:
+            name = row.get("name", "").strip()
+            if not name:
+                errors.append(f"Row {i+1}: name required")
+                continue
+            email = row.get("email", "").strip().lower()
+            if email:
+                existing = await db.members.find_one({"email": email})
+                if existing:
+                    errors.append(f"Row {i+1}: Email {email} already exists")
+                    continue
+            doc = {
+                "id": f"m_{str(uuid.uuid4())[:8]}", "name": name, "email": email,
+                "phone": row.get("phone", ""), "national_id": row.get("national_id", ""),
+                "role": row.get("role", "Staff"), "department": row.get("department", ""),
+                "group": "", "gender": "", "status": "active",
+                "join_date": datetime.now(timezone.utc).date().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.members.insert_one(doc)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)}")
+    await _audit(current_user["id"], "create", "staff_import", f"{imported}_staff")
+    return {"imported": imported, "errors": errors, "total": len(rows)}
 
 # ========== ANALYTICS ROUTES ==========
 
@@ -2060,10 +2397,10 @@ async def startup():
     try:
         if await db.locations.count_documents({}) == 0:
             locations = [
-                {"id": "loc_001", "name": "58:12 Global Centre (Main)", "code": "MAIN", "type": "main", "parent_id": None, "address": "Plot 12, Kampala Road, Kampala", "contact_name": "Admin User", "contact_phone": "+256 800 5812", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-                {"id": "loc_002", "name": "Entebbe Branch", "code": "ETB", "type": "branch", "parent_id": "loc_001", "address": "15 Airport Road, Entebbe", "contact_name": "Francis Tumwesigye", "contact_phone": "+256 712 678901", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-                {"id": "loc_003", "name": "Jinja Chapter", "code": "JNJ", "type": "branch", "parent_id": "loc_001", "address": "8 Owen Falls Road, Jinja", "contact_name": "Grace Akello", "contact_phone": "+256 756 789012", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-                {"id": "loc_004", "name": "Kampala East Cell", "code": "KPE", "type": "sub-location", "parent_id": "loc_001", "address": "Nakawa Division, Kampala", "contact_name": "David Kiggundu", "contact_phone": "+256 706 456789", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_001", "name": "58:12 Global Centre (Main)", "code": "MAIN", "type": "main", "parent_id": None, "address": "Plot 12, Kampala Road, Kampala", "country": "Uganda", "currency": "UGX", "contact_name": "Admin User", "contact_phone": "+256 800 5812", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Administration", "Finance", "Operations"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_002", "name": "Entebbe Compass", "code": "ETB", "type": "compass", "parent_id": "loc_001", "address": "15 Airport Road, Entebbe", "country": "Uganda", "currency": "UGX", "contact_name": "Francis Tumwesigye", "contact_phone": "+256 712 678901", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Youth", "Education"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_003", "name": "Jinja Compass", "code": "JNJ", "type": "compass", "parent_id": "loc_001", "address": "8 Owen Falls Road, Jinja", "country": "Uganda", "currency": "UGX", "contact_name": "Grace Akello", "contact_phone": "+256 756 789012", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Community", "Sports"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_004", "name": "Kampala East", "code": "KPE", "type": "sub-location", "parent_id": "loc_001", "address": "Nakawa Division, Kampala", "country": "Uganda", "currency": "UGX", "contact_name": "David Kiggundu", "contact_phone": "+256 706 456789", "active": True, "member_count": 0, "is_venue": True, "is_bookable": True, "is_restricted": False, "departments": [], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
             ]
             await db.locations.insert_many(locations)
         if await db.notifications.count_documents({}) == 0:

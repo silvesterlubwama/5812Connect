@@ -96,11 +96,12 @@ export const kioskApi = {
 
 // ---- FINANCIAL ----
 export const financialApi = {
-  summary: () => api.get('/financial/summary'),
+  summary: (location_id) => api.get('/financial/summary', { params: location_id ? { location_id } : {} }),
   donations: (params) => api.get('/financial/donations', { params }),
   createDonation: (data) => api.post('/financial/donations', data),
   expenses: (params) => api.get('/financial/expenses', { params }),
   createExpense: (data) => api.post('/financial/expenses', data),
+  distributeFunds: (data) => api.post('/financial/distribute-funds', data),
 };
 
 // ---- PRODUCTS & SALES ----
@@ -140,6 +141,13 @@ export const locationsApi = {
   create: (data) => api.post('/locations', data),
   update: (id, data) => api.put(`/locations/${id}`, data),
   delete: (id) => api.delete(`/locations/${id}`),
+  getStaff: (id) => api.get(`/locations/${id}/staff`),
+  assignStaff: (id, staff_ids) => api.put(`/locations/${id}/assign-staff`, { staff_ids }),
+  setDirector: (id, director_id) => api.put(`/locations/${id}/director`, { director_id }),
+};
+
+export const exchangeApi = {
+  getRate: (from, to) => api.get('/exchange-rate', { params: { from_currency: from, to_currency: to } }),
 };
 
 // ---- NOTIFICATIONS ----
@@ -221,6 +229,11 @@ export const approvalsApi = {
   bulkImport: (data) => api.post('/members/bulk-import', { members_data: data }),
 };
 
+export const importApi = {
+  childrenParents: (rows) => api.post('/import/children-parents', { rows }),
+  staff: (rows) => api.post('/import/staff', { rows }),
+};
+
 // ---- ANALYTICS ----
 export const analyticsApi = {
   attendance: () => api.get('/analytics/attendance'),
@@ -245,4 +258,12 @@ export const parentApi = {
 export const appSettingsApi = {
   get: () => api.get('/app-settings'),
   update: (data) => api.put('/app-settings', data),
+};
+
+export const chatApi = {
+  conversations: () => api.get('/chat/conversations'),
+  createConversation: (data) => api.post('/chat/conversations', data),
+  messages: (convId, params) => api.get(`/chat/conversations/${convId}/messages`, { params }),
+  sendMessage: (convId, text) => api.post(`/chat/conversations/${convId}/messages`, { text }),
+  aiAssistant: (message, session_id) => api.post('/chat/ai-assistant', { message, session_id }),
 };

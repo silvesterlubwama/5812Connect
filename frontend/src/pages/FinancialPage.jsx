@@ -8,12 +8,10 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { financialApi, financialExtrasApi, exportApi } from '../services/api';
+import { financialApi, financialExtrasApi, exportApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-
-const fmt = (n) => `UGX ${(n || 0).toLocaleString()}`;
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 const SummaryCard = ({ title, value, sub, icon: Icon, color, loading }) => (
   <Card className="shadow-soft rounded-xl">
@@ -62,7 +60,14 @@ export default function FinancialPage() {
   const [cashflowMonths, setCashflowMonths] = useState(6);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [allLocations, setAllLocations] = useState([]);
+  const [showDistribute, setShowDistribute] = useState(false);
+  const [distForm, setDistForm] = useState({ from_location_id: '', to_location_id: '', amount: '', currency: 'UGX', notes: '' });
   const today = new Date().toISOString().split('T')[0];
+
+  const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
+  const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '' }));
   const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '' }));
 
@@ -70,9 +75,9 @@ export default function FinancialPage() {
     setLoading(true);
     try {
       const [sumRes, donRes, expRes, cfRes] = await Promise.all([
-        financialApi.summary(),
-        financialApi.donations({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined }),
-        financialApi.expenses({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined }),
+        financialApi.summary(locationFilter || undefined),
+        financialApi.donations({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined, location_id: locationFilter || undefined }),
+        financialApi.expenses({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined, location_id: locationFilter || undefined }),
         financialExtrasApi.cashflow(cashflowMonths),
       ]);
       setSummary(sumRes.data);
@@ -83,8 +88,9 @@ export default function FinancialPage() {
     finally { setLoading(false); }
   };
 
+  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths]);
+  useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const handleAddDonation = async (e) => {
     e.preventDefault();
@@ -138,7 +144,15 @@ export default function FinancialPage() {
           <h1 className="text-2xl font-semibold font-heading">Financial Management</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Track donations, expenses, and cashflow</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)}>
+            <SelectTrigger className="w-44 h-8 text-xs" data-testid="financial-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_all">All Locations</SelectItem>
+              {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => setShowDistribute(true)} className="gap-1.5" data-testid="distribute-funds-btn"><DollarSign size={14} /> Transfer</Button>
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="financial-refresh"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-2" data-testid="financial-export">
             <Download size={14} /> Export CSV
@@ -377,6 +391,57 @@ export default function FinancialPage() {
               <Button type="submit" className="flex-1" disabled={saving} data-testid="save-expense-btn">{saving ? 'Saving...' : 'Save Expense'}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Fund Distribution Dialog */}
+      <Dialog open={showDistribute} onOpenChange={setShowDistribute}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Distribute Funds</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>From Location *</Label>
+              <Select value={distForm.from_location_id || '_none'} onValueChange={v => setDistForm({...distForm, from_location_id: v === '_none' ? '' : v})}>
+                <SelectTrigger data-testid="dist-from-select"><SelectValue placeholder="Select source" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">Select...</SelectItem>
+                  {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name} ({l.currency})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label>To Location *</Label>
+              <Select value={distForm.to_location_id || '_none'} onValueChange={v => setDistForm({...distForm, to_location_id: v === '_none' ? '' : v})}>
+                <SelectTrigger data-testid="dist-to-select"><SelectValue placeholder="Select destination" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">Select...</SelectItem>
+                  {allLocations.filter(l => l.id !== distForm.from_location_id).map(l => <SelectItem key={l.id} value={l.id}>{l.name} ({l.currency})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Amount *</Label>
+                <Input type="number" min="0" step="0.01" placeholder="0.00" value={distForm.amount} onChange={e => setDistForm({...distForm, amount: e.target.value})} data-testid="dist-amount" />
+              </div>
+              <div className="space-y-2"><Label>Currency</Label>
+                <Input value={distForm.currency} onChange={e => setDistForm({...distForm, currency: e.target.value})} />
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Notes</Label>
+              <Input placeholder="Transfer reason" value={distForm.notes} onChange={e => setDistForm({...distForm, notes: e.target.value})} />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowDistribute(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!distForm.from_location_id || !distForm.to_location_id || !distForm.amount} data-testid="dist-submit-btn"
+                onClick={async () => {
+                  try {
+                    await financialApi.distributeFunds({...distForm, amount: parseFloat(distForm.amount)});
+                    toast.success('Funds distributed!');
+                    setShowDistribute(false);
+                    setDistForm({ from_location_id: '', to_location_id: '', amount: '', currency: 'UGX', notes: '' });
+                    fetchAll();
+                  } catch { toast.error('Transfer failed'); }
+                }}>Transfer Funds</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

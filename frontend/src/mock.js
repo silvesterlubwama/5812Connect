@@ -76,4 +76,4 @@ export const MOCK_ACTIVITY = [
 ];
 
 export const MOCK_GROUPS = ['Youth', 'Women', 'Leadership', 'Volunteers', 'Admin', 'Children', 'Seniors', 'Choir'];
-export const MOCK_ROLES = ['Member', 'Staff', 'Volunteer', 'Leader', 'Admin', 'Parent'];
+export const MOCK_ROLES = ['Executive Director', 'Advisor', 'Director', 'Manager', 'Coordinator', 'Staff', 'Intern', 'Volunteer', 'Parent', 'Customer'];
