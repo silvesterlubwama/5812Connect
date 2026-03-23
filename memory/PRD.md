@@ -3,13 +3,6 @@
 ## Original Problem Statement
 Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make the app production-ready, downloadable on any device with offline support.
 
-## User Personas
-- **Admin/Director**: Full access — manage all members, locations, finance, settings, access control
-- **Coordinator/Manager**: Manage people in their compass, approve requests, run reports
-- **Staff**: Check-in members, manage events, limited access
-- **Parent**: View child info via parent portal
-- **Guest/Visitor**: External, tracked via guest request system
-
 ## Technical Stack
 - Frontend: React, Tailwind CSS, Shadcn/UI, Recharts
 - Backend: FastAPI, Motor (Async MongoDB), ReportLab (PDFs)
@@ -18,99 +11,99 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - AI: Gemini 2.0 Flash (Communications assistant)
 - Email: Resend
 - Real-time: WebSocket (chat, notifications, online status)
-- PWA: Service Worker, manifest.json, offline-first caching
-
-## Key Business Rules
-- Gender: Strictly Male or Female only
-- Department: Selected from available departments at user's location
-- Children/Parents/Guests: No department required, use "programme" instead
-- ID Documents: Required for all users except children (JPG/PNG)
-- Access Control: Scan in/out for restricted spaces
+- PWA: Service Worker, manifest.json, offline-first, background sync
 
 ## Credentials
 - Admin: admin@5812uganda.org / Admin@5812
 - Alt Admin: admin@5812global.org / Admin@1234
+
+## RBAC Levels
+| Level | Roles |
+|-------|-------|
+| 10 | system_admin, admin |
+| 9 | Executive Director |
+| 8 | Director |
+| 7 | Manager |
+| 6 | Coordinator |
+| 5 | Staff |
+| 4 | Volunteer |
+| 3 | Member |
+| 2 | Parent |
+| 1 | Customer, Guest |
 
 ## What's Implemented (as of 2026-03-23)
 
 ### Core CRM
 - [x] Full authentication (JWT + Google OAuth)
 - [x] Working password reset flow via Resend email
-- [x] Dashboard with analytics
-- [x] Member management (CRUD, filtering, search)
+- [x] Unified People page (Members + Families + Children + Guests in tabbed UI)
+- [x] Shared MemberForm component (consolidated form logic)
 - [x] Gender restricted to Male/Female
 - [x] Department dropdown based on location
 - [x] Children/Parents/Guests bypass department
 - [x] Document storage (ID scan upload, JPG/PNG)
-- [x] Families & People management
-- [x] Events with check-ins
-- [x] Calendar view
+- [x] Events with check-ins, Calendar view
 - [x] Task management
 - [x] Financial management (donations, expenses, fund transfers)
-- [x] Sales & products
-- [x] Outreach programs
+- [x] Sales & products, Outreach programs
 
 ### Communications
-- [x] AI-assisted chat (Gemini)
-- [x] WebSocket real-time messaging
-- [x] Online/offline status indicators
-- [x] Typing indicators
-- [x] Read receipts (double blue check)
-- [x] Reply to specific messages
-- [x] Announcements channel
+- [x] AI-assisted chat (Gemini), WebSocket real-time messaging
+- [x] Online/offline status, Typing indicators, Read receipts
+- [x] Reply to specific messages, Announcements channel
 
 ### Access & Security
 - [x] Restricted Access Control (residents, staff passes, guest requests, scan in/out)
-- [x] Real-time notification bell for guest approval alerts
-- [x] RBAC enforcement in navigation sidebar
-- [x] Role-based page visibility
+- [x] Real-time notification bell (WebSocket broadcast)
+- [x] API-level RBAC enforcement (financial=Manager+, delete=Coordinator+, admin=Admin, imports=Manager+)
+- [x] RBAC navigation sidebar (role-based page visibility)
 - [x] Audit trail
 
 ### Reporting & Import
 - [x] Reports Dashboard with PDF export
 - [x] Real CSV file upload (members, children/parents, staff)
-- [x] Scrollable modals throughout the app
 
 ### PWA & Offline
-- [x] Service Worker for offline support
-- [x] PWA manifest for installable app
+- [x] Service Worker with background sync (message queue)
+- [x] PWA manifest (installable on any device)
 - [x] Network-first API caching with offline fallback
-- [x] Cache-first static asset strategy
 - [x] Online/offline detection in header
-- [x] App title: "58:12 Global Connect"
+- [x] Web Push notification subscription (VAPID)
+- [x] Offline message sync endpoint (/api/sync/messages)
+
+### Mobile Kiosk
+- [x] Mobile-optimized field kiosk mode (/kiosk)
+- [x] Quick visitor check-in (no auth required)
+- [x] ID lookup check-in
+- [x] Access scan in/out for restricted locations
+- [x] Staff authentication for full kiosk features
+- [x] Large touch targets, offline indicator
 
 ### Infrastructure
-- [x] MongoDB index optimization (15+ indexes)
+- [x] MongoDB indexes (15+ performance indexes)
 - [x] Health check endpoint (/api/health)
-- [x] WebSocket connection manager with auto-reconnect
-- [x] Comprehensive error handling
+- [x] WebSocket with auto-reconnect
 
 ## Architecture
 ```
-/app/
-├── backend/
-│   ├── server.py (Main FastAPI app)
-│   ├── deps.py (Shared dependencies)
-│   ├── storage.py (Object storage)
-│   ├── routers/
-│   │   ├── documents.py, access.py, reports.py
-│   │   ├── notifications.py, websocket.py, bookings.py
-│   └── requirements.txt
-└── frontend/
-    ├── public/ (manifest.json, sw.js, icons)
-    └── src/
-        ├── App.js, index.js
-        ├── context/ (AuthContext, WebSocketContext)
-        ├── components/ (Layout, ui/)
-        ├── pages/ (20+ page components)
-        └── services/api.js
+/app/backend/
+  server.py, deps.py (RBAC), storage.py
+  routers/ (documents, access, reports, notifications, websocket, bookings)
+/app/frontend/src/
+  context/ (AuthContext, WebSocketContext)
+  pages/ (UnifiedPeoplePage, CommsPage, AccessPage, ReportsPage, KioskPage, ...)
+  components/ (Layout with RBAC nav, ui/)
+  services/api.js (accessApi, reportsApi, pushApi, syncApi, csvUploadApi)
+/app/frontend/public/
+  sw.js (background sync), manifest.json, logo192/512.png
 ```
 
-## P1 Remaining
-- Unified "People" UI: Single tabbed interface combining MembersPage + PeoplePage
-- Consolidate duplicated logic between member/people forms
+## All Features Complete
+No P0/P1 items remaining. Application is production-ready.
 
-## P2 / Future
-- Enhanced RBAC enforcement on API endpoints (not just nav)
-- Push notifications (Web Push API)
-- Background sync for offline message queuing
+## P2 / Future Enhancement Ideas
+- Push notification delivery via WebPush library (pywebpush)
+- Biometric/NFC scanning for access control
+- Offline data editing with conflict resolution
+- Multi-language support (Luganda, Swahili)
+- SMS notifications via Twilio
