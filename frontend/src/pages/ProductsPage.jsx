@@ -42,6 +42,7 @@ export default function ProductsPage() {
   const [productSearch, setProductSearch] = useState('');
   const [lastReceipt, setLastReceipt] = useState(null);
   const [showReceipt, setShowReceipt] = useState(false);
+  const [customers, setCustomers] = useState([]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -49,6 +50,16 @@ export default function ProductsPage() {
       const [prodRes, salesRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 50 })]);
       setProducts(prodRes.data);
       setSales(salesRes.data);
+      // Derive customer list from sales
+      const custMap = {};
+      salesRes.data.forEach(s => {
+        const name = s.customer_name || 'Walk-in Customer';
+        if (!custMap[name]) custMap[name] = { name, total_spent: 0, transactions: 0, last_purchase: s.created_at };
+        custMap[name].total_spent += s.total || 0;
+        custMap[name].transactions += 1;
+        if (s.created_at > (custMap[name].last_purchase || '')) custMap[name].last_purchase = s.created_at;
+      });
+      setCustomers(Object.values(custMap).sort((a, b) => b.total_spent - a.total_spent));
     } catch { toast.error('Failed to load data'); }
     finally { setLoading(false); }
   };
@@ -145,6 +156,7 @@ export default function ProductsPage() {
           <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
           <TabsTrigger value="history" data-testid="tab-history">Sales History</TabsTrigger>
+          <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
         </TabsList>
 
         {/* ---- POS TAB ---- */}
@@ -343,6 +355,41 @@ export default function ProductsPage() {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground text-center py-12">No sales recorded yet.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ---- CUSTOMERS TAB ---- */}
+        <TabsContent value="customers" className="mt-4">
+          <Card className="shadow-soft rounded-xl">
+            <CardHeader className="py-4 px-5"><CardTitle className="text-base font-semibold">Customer Directory</CardTitle></CardHeader>
+            <CardContent className="px-5 pb-5">
+              {loading ? (
+                <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
+              ) : customers.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="text-left border-b border-border">
+                      <th className="pb-2 font-medium text-muted-foreground">Customer</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Total Spent</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Transactions</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Last Purchase</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-border">
+                      {customers.map((c, i) => (
+                        <tr key={i} className="hover:bg-accent/30 transition-colors" data-testid="customer-row">
+                          <td className="py-3 font-medium">{c.name}</td>
+                          <td className="py-3 text-primary font-semibold">{fmt(c.total_spent)}</td>
+                          <td className="py-3 text-muted-foreground">{c.transactions}</td>
+                          <td className="py-3 text-muted-foreground text-xs">{c.last_purchase?.slice(0, 10)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-12">No customer data yet. Complete a sale to see customers here.</p>
               )}
             </CardContent>
           </Card>

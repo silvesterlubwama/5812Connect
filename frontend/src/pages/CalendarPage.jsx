@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Download } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Download, Repeat } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { eventsApi, exportApi } from '../services/api';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -20,6 +24,13 @@ export default function CalendarPage() {
   const [current, setCurrent] = useState({ month: today.getMonth(), year: today.getFullYear() });
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showRecurring, setShowRecurring] = useState(false);
+  const [recurForm, setRecurForm] = useState({
+    title: '', type: 'service', location: '', time: '09:00',
+    recurrence: 'weekly', day_of_week: '0', start_date: today.toISOString().split('T')[0],
+    weeks: 12,
+  });
+  const [creatingRecurring, setCreatingRecurring] = useState(false);
 
   useEffect(() => {
     eventsApi.list()
@@ -64,6 +75,42 @@ export default function CalendarPage() {
       }).catch(() => toast.error('Export failed'));
   };
 
+  const handleCreateRecurring = async (e) => {
+    e.preventDefault();
+    setCreatingRecurring(true);
+    try {
+      const startDate = new Date(recurForm.start_date);
+      const created = [];
+      for (let i = 0; i < recurForm.weeks; i++) {
+        const eventDate = new Date(startDate);
+        if (recurForm.recurrence === 'weekly') {
+          eventDate.setDate(startDate.getDate() + i * 7);
+        } else if (recurForm.recurrence === 'biweekly') {
+          eventDate.setDate(startDate.getDate() + i * 14);
+        } else {
+          eventDate.setMonth(startDate.getMonth() + i);
+        }
+        const dateStr = eventDate.toISOString().split('T')[0];
+        const res = await eventsApi.create({
+          title: recurForm.title,
+          type: recurForm.type,
+          location: recurForm.location,
+          time: recurForm.time,
+          date: dateStr,
+          status: 'upcoming',
+          capacity: 100,
+          is_recurring: true,
+          recurrence_pattern: recurForm.recurrence,
+        });
+        created.push(res.data);
+      }
+      setEvents(prev => [...prev, ...created]);
+      setShowRecurring(false);
+      toast.success(`Created ${created.length} recurring events!`);
+    } catch { toast.error('Failed to create recurring events'); }
+    finally { setCreatingRecurring(false); }
+  };
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
@@ -77,6 +124,7 @@ export default function CalendarPage() {
           <Button variant="outline" size="icon" onClick={next}><ChevronRight size={16} /></Button>
           <Button variant="outline" size="sm" onClick={() => setCurrent({ month: today.getMonth(), year: today.getFullYear() })}>Today</Button>
           <Button size="sm" className="gap-1.5" asChild><Link to="/events"><Plus size={14} />New Event</Link></Button>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRecurring(true)} data-testid="recurring-events-btn"><Repeat size={14} />Recurring</Button>
         </div>
       </div>
 
@@ -152,6 +200,59 @@ export default function CalendarPage() {
           </div>
         )}
       </div>
+
+      {/* Recurring Events Dialog */}
+      <Dialog open={showRecurring} onOpenChange={setShowRecurring}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Create Recurring Events</DialogTitle></DialogHeader>
+          <form onSubmit={handleCreateRecurring} className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Event Title *</Label>
+              <Input placeholder="e.g. Sunday Service" value={recurForm.title} onChange={e => setRecurForm({...recurForm, title: e.target.value})} required data-testid="recurring-title-input" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Type</Label>
+                <Select value={recurForm.type} onValueChange={v => setRecurForm({...recurForm, type: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="service">Service</SelectItem>
+                    <SelectItem value="meeting">Meeting</SelectItem>
+                    <SelectItem value="conference">Conference</SelectItem>
+                    <SelectItem value="community">Community</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Time</Label>
+                <Input type="time" value={recurForm.time} onChange={e => setRecurForm({...recurForm, time: e.target.value})} />
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Location</Label>
+              <Input placeholder="Where will it be?" value={recurForm.location} onChange={e => setRecurForm({...recurForm, location: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Recurrence</Label>
+                <Select value={recurForm.recurrence} onValueChange={v => setRecurForm({...recurForm, recurrence: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Occurrences</Label>
+                <Input type="number" min={1} max={52} value={recurForm.weeks} onChange={e => setRecurForm({...recurForm, weeks: parseInt(e.target.value) || 1})} />
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Start Date</Label>
+              <Input type="date" value={recurForm.start_date} onChange={e => setRecurForm({...recurForm, start_date: e.target.value})} />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowRecurring(false)}>Cancel</Button>
+              <Button type="submit" className="flex-1" disabled={creatingRecurring} data-testid="create-recurring-btn">{creatingRecurring ? 'Creating...' : 'Create Events'}</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

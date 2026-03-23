@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Filter, UserCheck, UserX, Mail, Phone, ChevronDown, Eye, Trash2, RefreshCw, Download } from 'lucide-react';
+import { Search, Plus, Filter, UserCheck, UserX, Mail, Phone, ChevronDown, Eye, Trash2, RefreshCw, Download, Upload, Award, Users } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -8,8 +8,9 @@ import { Avatar, AvatarFallback } from '../components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { membersApi, checkinsApi } from '../services/api';
+import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi } from '../services/api';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
 
@@ -28,6 +29,14 @@ export default function MembersPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [newMember, setNewMember] = useState({ name: '', email: '', phone: '', national_id: '', role: 'Member', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '' });
   const [savingMember, setSavingMember] = useState(false);
+  const [pendingMembers, setPendingMembers] = useState([]);
+  const [badges, setBadges] = useState([]);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkData, setBulkData] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [showBadgeDialog, setShowBadgeDialog] = useState(false);
+  const [newBadge, setNewBadge] = useState({ name: '', description: '', color: '#6366f1' });
+  const [activeTab, setActiveTab] = useState('all');
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -50,6 +59,75 @@ export default function MembersPage() {
     const timer = setTimeout(fetchMembers, 300);
     return () => clearTimeout(timer);
   }, [fetchMembers]);
+
+  useEffect(() => {
+    approvalsApi.pending().then(r => setPendingMembers(r.data)).catch(() => {});
+    badgesApi.list().then(r => setBadges(r.data)).catch(() => {});
+  }, []);
+
+  const handleApprove = async (id) => {
+    try {
+      await approvalsApi.approve(id);
+      setPendingMembers(prev => prev.filter(m => m.id !== id));
+      toast.success('Member approved');
+      fetchMembers();
+    } catch { toast.error('Failed to approve'); }
+  };
+
+  const handleReject = async (id) => {
+    try {
+      await approvalsApi.reject(id);
+      setPendingMembers(prev => prev.filter(m => m.id !== id));
+      toast.success('Member rejected');
+    } catch { toast.error('Failed to reject'); }
+  };
+
+  const handleBulkImport = async () => {
+    if (!bulkData.trim()) return;
+    setImportLoading(true);
+    try {
+      const lines = bulkData.trim().split('\n').map(l => {
+        const [name, email, phone, group] = l.split(',').map(s => s.trim());
+        return { name, email, phone, group: group || 'Youth', role: 'Member' };
+      }).filter(m => m.name);
+      const res = await approvalsApi.bulkImport(lines);
+      toast.success(`Imported ${res.data.imported || lines.length} members!`);
+      setShowBulkImport(false);
+      setBulkData('');
+      fetchMembers();
+    } catch { toast.error('Import failed'); }
+    finally { setImportLoading(false); }
+  };
+
+  const handleCreateBadge = async () => {
+    try {
+      const res = await badgesApi.create(newBadge);
+      setBadges(prev => [...prev, res.data]);
+      setShowBadgeDialog(false);
+      setNewBadge({ name: '', description: '', color: '#6366f1' });
+      toast.success('Badge created!');
+    } catch { toast.error('Failed to create badge'); }
+  };
+
+  const handleDeleteBadge = async (id) => {
+    if (!window.confirm('Delete this badge?')) return;
+    await badgesApi.delete(id);
+    setBadges(prev => prev.filter(b => b.id !== id));
+    toast.success('Badge deleted');
+  };
+
+  const downloadCSV = () => {
+    const token = localStorage.getItem('5812_token');
+    const url = exportApi.members();
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'members.csv';
+        link.click();
+      }).catch(() => toast.error('Export failed'));
+  };
 
   const handleAddMember = async (e) => {
     e.preventDefault();
@@ -108,15 +186,27 @@ export default function MembersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold font-heading">Members</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{total} total · {members.filter(m => m.status === 'active').length} active</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{total} total · {members.filter(m => m.status === 'active').length} active{pendingMembers.length > 0 ? ` · ${pendingMembers.length} pending` : ''}</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchMembers} className="gap-1.5"><RefreshCw size={14} /></Button>
-          <Button onClick={() => setShowAddDialog(true)} className="gap-2">
+          <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-1.5" data-testid="export-members-btn"><Download size={14} /> CSV</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowBulkImport(true)} className="gap-1.5" data-testid="bulk-import-btn"><Upload size={14} /> Import</Button>
+          <Button onClick={() => setShowAddDialog(true)} className="gap-2" data-testid="add-member-btn">
             <Plus size={16} /> Add Member
           </Button>
         </div>
       </div>
+
+      {/* Page Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="all" data-testid="tab-all-members">All Members</TabsTrigger>
+          <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingMembers.length > 0 && <Badge variant="destructive" className="ml-1.5 h-5 text-xs px-1.5">{pendingMembers.length}</Badge>}</TabsTrigger>
+          <TabsTrigger value="badges" data-testid="tab-badges">Badges ({badges.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="all" className="mt-4 space-y-4">
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -204,6 +294,76 @@ export default function MembersPage() {
           <Button variant="outline" className="mt-4" onClick={() => setShowAddDialog(true)}>Add your first member</Button>
         </div>
       )}
+        </TabsContent>
+
+        {/* Approvals Tab */}
+        <TabsContent value="approvals" className="mt-4">
+          {pendingMembers.length === 0 ? (
+            <div className="text-center py-16 text-sm text-muted-foreground">
+              <UserCheck size={40} className="mx-auto mb-3 opacity-30" />
+              No pending approval requests.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {pendingMembers.map(m => (
+                <Card key={m.id} className="shadow-soft rounded-xl" data-testid="pending-member-card">
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className="bg-amber-100 text-amber-700 text-sm font-semibold">{initials(m.name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold">{m.name}</p>
+                      <p className="text-xs text-muted-foreground">{m.email || m.phone || 'No contact info'}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" className="text-green-600 border-green-300 hover:bg-green-50" onClick={() => handleApprove(m.id)} data-testid="approve-btn">
+                        <UserCheck size={14} className="mr-1" /> Approve
+                      </Button>
+                      <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50" onClick={() => handleReject(m.id)} data-testid="reject-btn">
+                        <UserX size={14} className="mr-1" /> Reject
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Badges Tab */}
+        <TabsContent value="badges" className="mt-4">
+          <div className="flex justify-end mb-4">
+            <Button size="sm" className="gap-2" onClick={() => setShowBadgeDialog(true)} data-testid="create-badge-btn">
+              <Plus size={14} /> Create Badge
+            </Button>
+          </div>
+          {badges.length === 0 ? (
+            <div className="text-center py-16 text-sm text-muted-foreground">
+              <Award size={40} className="mx-auto mb-3 opacity-30" />
+              No badges created yet.
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {badges.map(b => (
+                <Card key={b.id} className="shadow-soft rounded-xl" data-testid="badge-card">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="h-10 w-10 rounded-full flex items-center justify-center" style={{ backgroundColor: b.color + '20', color: b.color }}>
+                        <Award size={20} />
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteBadge(b.id)}>
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
+                    <p className="font-semibold text-sm">{b.name}</p>
+                    {b.description && <p className="text-xs text-muted-foreground mt-1">{b.description}</p>}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
       {/* Add Member Dialog */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
@@ -369,6 +529,51 @@ export default function MembersPage() {
               </Tabs>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Import Dialog */}
+      <Dialog open={showBulkImport} onOpenChange={setShowBulkImport}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Bulk Import Members</DialogTitle>
+            <DialogDescription>Paste CSV data: name, email, phone, group (one per line)</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            rows={8}
+            placeholder={`John Doe, john@email.com, +256700111222, Youth\nJane Smith, jane@email.com, +256700333444, Women`}
+            value={bulkData}
+            onChange={e => setBulkData(e.target.value)}
+            data-testid="bulk-import-textarea"
+          />
+          <div className="flex gap-3 pt-2">
+            <Button type="button" variant="outline" className="flex-1" onClick={() => setShowBulkImport(false)}>Cancel</Button>
+            <Button className="flex-1" disabled={importLoading || !bulkData.trim()} onClick={handleBulkImport} data-testid="import-btn">
+              {importLoading ? 'Importing...' : 'Import Members'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Badge Dialog */}
+      <Dialog open={showBadgeDialog} onOpenChange={setShowBadgeDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Create Badge</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Badge Name *</Label>
+              <Input placeholder="e.g. Faithful Volunteer" value={newBadge.name} onChange={e => setNewBadge({...newBadge, name: e.target.value})} data-testid="badge-name-input" />
+            </div>
+            <div className="space-y-2"><Label>Description</Label>
+              <Input placeholder="What this badge represents" value={newBadge.description} onChange={e => setNewBadge({...newBadge, description: e.target.value})} />
+            </div>
+            <div className="space-y-2"><Label>Color</Label>
+              <Input type="color" value={newBadge.color} onChange={e => setNewBadge({...newBadge, color: e.target.value})} className="h-10 w-20 p-1" />
+            </div>
+            <div className="flex gap-3">
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowBadgeDialog(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!newBadge.name} onClick={handleCreateBadge} data-testid="save-badge-btn">Create Badge</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

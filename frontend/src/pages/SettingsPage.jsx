@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X } from 'lucide-react';
+import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -9,10 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { venuesApi, authApi } from '../services/api';
+import { venuesApi, authApi, appSettingsApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
 export default function SettingsPage() {
+  const { user } = useAuth();
+  const isAdmin = ['admin', 'system_admin'].includes(user?.role);
   const [orgSettings, setOrgSettings] = useState({
     orgName: '58:12 Global Connect',
     orgEmail: 'info@5812global.org',
@@ -31,13 +34,27 @@ export default function SettingsPage() {
   const [newVenue, setNewVenue] = useState({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true });
   const [passwords, setPasswords] = useState({ current: '', new_: '', confirm: '' });
   const [savingPass, setSavingPass] = useState(false);
+  const [appSettings, setAppSettings] = useState({ registration_open: true, default_role: 'member', maintenance_mode: false });
+  const [savingAdmin, setSavingAdmin] = useState(false);
 
   useEffect(() => {
     venuesApi.list()
       .then(res => setVenues(res.data))
       .catch(() => {})
       .finally(() => setLoadingVenues(false));
-  }, []);
+    if (isAdmin) {
+      appSettingsApi.get().then(r => setAppSettings(prev => ({ ...prev, ...r.data }))).catch(() => {});
+    }
+  }, [isAdmin]);
+
+  const handleSaveAppSettings = async () => {
+    setSavingAdmin(true);
+    try {
+      await appSettingsApi.update(appSettings);
+      toast.success('Admin settings saved!');
+    } catch { toast.error('Failed to save settings'); }
+    finally { setSavingAdmin(false); }
+  };
 
   const handleSaveOrg = (e) => {
     e.preventDefault();
@@ -93,11 +110,12 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="organization">
-        <TabsList className="w-full sm:w-auto grid grid-cols-4 sm:flex">
+        <TabsList className="w-full sm:w-auto grid grid-cols-5 sm:flex">
           <TabsTrigger value="organization" className="gap-1.5 text-xs sm:text-sm"><Building size={13} />Organization</TabsTrigger>
           <TabsTrigger value="venues" className="gap-1.5 text-xs sm:text-sm"><Building size={13} />Venues</TabsTrigger>
           <TabsTrigger value="notifications" className="gap-1.5 text-xs sm:text-sm"><Bell size={13} />Notifications</TabsTrigger>
           <TabsTrigger value="security" className="gap-1.5 text-xs sm:text-sm"><Shield size={13} />Security</TabsTrigger>
+          {isAdmin && <TabsTrigger value="admin" className="gap-1.5 text-xs sm:text-sm"><Wrench size={13} />Admin</TabsTrigger>}
         </TabsList>
 
         {/* Organization */}
@@ -311,6 +329,48 @@ export default function SettingsPage() {
             </Card>
           </div>
         </TabsContent>
+
+        {/* Admin */}
+        {isAdmin && (
+          <TabsContent value="admin" className="mt-6">
+            <Card className="shadow-soft rounded-xl">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-base">Application Settings</CardTitle>
+                <CardDescription>System-wide configuration (admin only)</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+                  <div>
+                    <p className="text-sm font-medium">Open Registration</p>
+                    <p className="text-xs text-muted-foreground">Allow new users to self-register</p>
+                  </div>
+                  <Switch checked={appSettings.registration_open} onCheckedChange={v => setAppSettings({...appSettings, registration_open: v})} data-testid="registration-toggle" />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+                  <div>
+                    <p className="text-sm font-medium">Maintenance Mode</p>
+                    <p className="text-xs text-muted-foreground">Show maintenance page to non-admin users</p>
+                  </div>
+                  <Switch checked={appSettings.maintenance_mode} onCheckedChange={v => setAppSettings({...appSettings, maintenance_mode: v})} data-testid="maintenance-toggle" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Default User Role</Label>
+                  <Select value={appSettings.default_role} onValueChange={v => setAppSettings({...appSettings, default_role: v})}>
+                    <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="member">Member</SelectItem>
+                      <SelectItem value="volunteer">Volunteer</SelectItem>
+                      <SelectItem value="staff">Staff</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button onClick={handleSaveAppSettings} disabled={savingAdmin} className="gap-2" data-testid="save-admin-settings-btn">
+                  <Save size={15} /> {savingAdmin ? 'Saving...' : 'Save Admin Settings'}
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

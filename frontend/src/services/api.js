@@ -174,3 +174,75 @@ export const exportApi = {
   events: () => `${BACKEND_URL}/api/export/events`,
   ical: () => `${BACKEND_URL}/api/export/events.ics`,
 };
+
+// ---- OUTREACH ----
+export const outreachApi = {
+  programs: (params) => api.get('/outreach/programs', { params }),
+  createProgram: (data) => api.post('/outreach/programs', data),
+  updateProgram: (id, data) => api.put(`/outreach/programs/${id}`, data),
+  deleteProgram: (id) => api.delete(`/outreach/programs/${id}`),
+  sessions: (params) => api.get('/outreach/sessions', { params }),
+  createSession: (data) => api.post('/outreach/sessions', data),
+};
+
+// ---- RESOURCES ----
+export const resourcesApi = {
+  list: () => api.get('/resources'),
+  create: (data) => api.post('/resources', data),
+  update: (id, data) => api.put(`/resources/${id}`, data),
+  delete: (id) => api.delete(`/resources/${id}`),
+  bookings: (params) => api.get('/resources/bookings', { params }),
+  createBooking: (data) => api.post('/resources/bookings', data),
+  deleteBooking: (id) => api.delete(`/resources/bookings/${id}`),
+};
+
+// ---- ANNOUNCEMENTS ----
+export const announcementsApi = {
+  list: () => api.get('/announcements'),
+  create: (data) => api.post('/announcements', data),
+  delete: (id) => api.delete(`/announcements/${id}`),
+  togglePin: (id) => api.put(`/announcements/${id}/pin`),
+};
+
+// ---- BADGES ----
+export const badgesApi = {
+  list: () => api.get('/badges'),
+  create: (data) => api.post('/badges', data),
+  delete: (id) => api.delete(`/badges/${id}`),
+  issueTo: (memberId, badgeId) => api.post(`/members/${memberId}/issue-badge?badge_id=${badgeId}`),
+  memberBadges: (memberId) => api.get(`/members/${memberId}/badges`),
+};
+
+// ---- MEMBER APPROVALS ----
+export const approvalsApi = {
+  pending: () => api.get('/members/pending'),
+  approve: (id) => api.put(`/members/${id}/approve`),
+  reject: (id) => api.put(`/members/${id}/reject`),
+  bulkImport: (data) => api.post('/members/bulk-import', { members_data: data }),
+};
+
+// ---- ANALYTICS ----
+export const analyticsApi = {
+  attendance: () => api.get('/analytics/attendance'),
+  sales: () => api.get('/analytics/sales'),
+  locations: () => api.get('/analytics/locations'),
+};
+
+// ---- FINANCIAL EXTRAS ----
+export const financialExtrasApi = {
+  cashflow: (months) => api.get('/financial/cashflow', { params: { months } }),
+  getBalance: () => api.get('/financial/balance'),
+  setBalance: (opening_balance) => api.put('/financial/balance', null, { params: { opening_balance } }),
+};
+
+// ---- PARENT ----
+export const parentApi = {
+  children: () => api.get('/parent/children'),
+  dashboard: () => api.get('/parent/dashboard'),
+};
+
+// ---- APP SETTINGS ----
+export const appSettingsApi = {
+  get: () => api.get('/app-settings'),
+  update: (data) => api.put('/app-settings', data),
+};

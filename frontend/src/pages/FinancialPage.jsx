@@ -8,9 +8,10 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { financialApi, exportApi } from '../services/api';
+import { financialApi, financialExtrasApi, exportApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 const fmt = (n) => `UGX ${(n || 0).toLocaleString()}`;
 
@@ -57,6 +58,10 @@ export default function FinancialPage() {
   const [showDonation, setShowDonation] = useState(false);
   const [showExpense, setShowExpense] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cashflowData, setCashflowData] = useState([]);
+  const [cashflowMonths, setCashflowMonths] = useState(6);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const today = new Date().toISOString().split('T')[0];
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '' }));
   const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '' }));
@@ -64,19 +69,22 @@ export default function FinancialPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [sumRes, donRes, expRes] = await Promise.all([
+      const [sumRes, donRes, expRes, cfRes] = await Promise.all([
         financialApi.summary(),
-        financialApi.donations({ limit: 50 }),
-        financialApi.expenses({ limit: 50 }),
+        financialApi.donations({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined }),
+        financialApi.expenses({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined }),
+        financialExtrasApi.cashflow(cashflowMonths),
       ]);
       setSummary(sumRes.data);
       setDonations(donRes.data);
       setExpenses(expRes.data);
+      setCashflowData(cfRes.data?.monthly || []);
     } catch { toast.error('Failed to load financial data'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths]);
 
   const handleAddDonation = async (e) => {
     e.preventDefault();
@@ -151,6 +159,53 @@ export default function FinancialPage() {
           loading={loading}
         />
       </div>
+
+      {/* Date Range Filter */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
+          <Input type="date" className="h-8 w-auto text-xs" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="date-from" />
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
+          <Input type="date" className="h-8 w-auto text-xs" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="date-to" />
+        </div>
+        {(dateFrom || dateTo) && (
+          <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear</Button>
+        )}
+      </div>
+
+      {/* Cashflow Chart */}
+      <Card className="shadow-soft rounded-xl">
+        <CardHeader className="flex flex-row items-center justify-between pb-2 pt-4 px-5">
+          <CardTitle className="text-base font-semibold">Cashflow Overview</CardTitle>
+          <Select value={String(cashflowMonths)} onValueChange={v => setCashflowMonths(parseInt(v))}>
+            <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="3">3 months</SelectItem>
+              <SelectItem value="6">6 months</SelectItem>
+              <SelectItem value="12">12 months</SelectItem>
+            </SelectContent>
+          </Select>
+        </CardHeader>
+        <CardContent className="px-5 pb-5">
+          {loading ? <div className="h-52 bg-muted animate-pulse rounded" /> : (
+            cashflowData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={cashflowData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${(v/1000).toFixed(0)}K`} />
+                  <Tooltip formatter={v => [fmt(v)]} contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="inflow" name="Income" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="outflow" name="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <p className="text-sm text-muted-foreground text-center py-12">No cashflow data yet. Add donations and expenses to see trends.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="donations">
         <TabsList>

@@ -5,7 +5,8 @@ import {
   LayoutDashboard, Users, Calendar, CheckSquare, CalendarDays,
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
-  User, ExternalLink, CheckCheck
+  User, ExternalLink, CheckCheck, BarChart3, Megaphone,
+  Globe, Building2, TrendingUp, Sun, Moon
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -37,6 +38,9 @@ const NAV_SECTIONS = [
       { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
       { to: '/tasks', icon: CheckSquare, label: 'Tasks' },
       { to: '/check-ins', icon: UserCheck, label: 'Check-Ins' },
+      { to: '/outreach', icon: Globe, label: 'Outreach' },
+      { to: '/comms', icon: Megaphone, label: 'Communications' },
+      { to: '/resources', icon: Building2, label: 'Resources' },
     ]
   },
   {
@@ -44,6 +48,14 @@ const NAV_SECTIONS = [
     items: [
       { to: '/financial', icon: DollarSign, label: 'Financial' },
       { to: '/sales', icon: ShoppingCart, label: 'Sales & Products' },
+    ]
+  },
+  {
+    label: 'Analytics',
+    items: [
+      { to: '/attendance', icon: UserCheck, label: 'Attendance' },
+      { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics' },
+      { to: '/location-analytics', icon: BarChart3, label: 'Location Stats' },
     ]
   },
   {
@@ -70,8 +82,25 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('5812_dark_mode') === 'true' || document.documentElement.classList.contains('dark');
+    }
+    return false;
+  });
   const searchRef = useRef(null);
   const searchTimeout = useRef(null);
+
+  const toggleDarkMode = () => {
+    const next = !darkMode;
+    setDarkMode(next);
+    localStorage.setItem('5812_dark_mode', String(next));
+    document.documentElement.classList.toggle('dark', next);
+  };
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, []);
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
@@ -236,6 +265,11 @@ export default function Layout() {
           </button>
 
           <div className="flex-1" />
+
+          {/* Dark Mode Toggle */}
+          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={toggleDarkMode} data-testid="dark-mode-toggle">
+            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+          </Button>
 
           {/* Notifications Bell */}
           <DropdownMenu open={notifOpen} onOpenChange={(v) => { if (v) handleNotifOpen(); else setNotifOpen(v); }}>

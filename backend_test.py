@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 # Configuration
-BASE_URL = "https://uganda-crm-build.preview.emergentagent.com/api"
+BASE_URL = "https://crm-uganda-prod.preview.emergentagent.com/api"
 ADMIN_EMAIL = "admin@5812global.org"
 ADMIN_PASSWORD = "Admin@1234"
 

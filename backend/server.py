@@ -273,6 +273,58 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 async def logout():
     return {"message": "Logged out successfully"}
 
+@api_router.post("/auth/google-session")
+async def google_auth_session(data: dict):
+    """Exchange Emergent Google Auth session_id for a JWT token"""
+    import httpx
+    session_id = data.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": session_id},
+                timeout=10.0,
+            )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid Google session")
+        google_data = resp.json()
+        email = google_data.get("email", "").lower()
+        name = google_data.get("name", "")
+        picture = google_data.get("picture", "")
+        if not email:
+            raise HTTPException(status_code=400, detail="No email from Google")
+        # Find or create user
+        existing = await db.users.find_one({"email": email}, {"_id": 0})
+        if existing:
+            user_id = existing["id"]
+            if picture and not existing.get("picture"):
+                await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
+        else:
+            user_id = str(uuid.uuid4())
+            new_user = {
+                "id": user_id,
+                "name": name,
+                "email": email,
+                "phone": None,
+                "national_id": None,
+                "password_hash": hash_password(str(uuid.uuid4())),
+                "role": "volunteer",
+                "status": "active",
+                "picture": picture,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.users.insert_one(new_user)
+        token = create_token(user_id)
+        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+        return {"token": token, "user": user}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Google auth error: {e}")
+        raise HTTPException(status_code=500, detail="Google authentication failed")
+
 
 # ========== MEMBERS ==========
 
@@ -1504,6 +1556,435 @@ async def seed_locations_and_notifications():
         ]
         await db.notifications.insert_many(notifications)
     return {"message": "Locations and notifications seeded"}
+
+
+# ========== OUTREACH MODELS ==========
+
+class OutreachProgramCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: str = "community"
+    status: str = "active"
+    location: Optional[str] = None
+    start_date: Optional[str] = None
+    target: Optional[int] = None
+
+class OutreachSessionCreate(BaseModel):
+    program_id: str
+    date: str
+    time: Optional[str] = None
+    location: Optional[str] = None
+    attendees: int = 0
+    notes: Optional[str] = None
+    led_by: Optional[str] = None
+
+# ========== RESOURCE MODELS ==========
+
+class ResourceCreate(BaseModel):
+    name: str
+    type: str = "room"
+    capacity: Optional[int] = None
+    description: Optional[str] = None
+    location_id: Optional[str] = None
+    hourly_rate: Optional[float] = None
+
+class ResourceBookingCreate(BaseModel):
+    resource_id: str
+    title: str
+    booked_by: Optional[str] = None
+    date: str
+    start_time: str
+    end_time: str
+    notes: Optional[str] = None
+
+# ========== ANNOUNCEMENT MODELS ==========
+
+class AnnouncementCreate(BaseModel):
+    title: str
+    content: str
+    type: str = "general"
+    target_role: Optional[str] = None
+    pinned: bool = False
+    expires_at: Optional[str] = None
+
+# ========== BADGE MODELS ==========
+
+class BadgeCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: str = "#6366f1"
+    icon: str = "award"
+    criteria: Optional[str] = None
+
+# ========== OUTREACH ROUTES ==========
+
+@api_router.get("/outreach/programs")
+async def list_outreach_programs(current_user: dict = Depends(get_current_user)):
+    programs = await db.outreach_programs.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return programs
+
+@api_router.post("/outreach/programs")
+async def create_outreach_program(data: OutreachProgramCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"op_{str(uuid.uuid4())[:8]}", **data.model_dump(), "sessions_count": 0, "total_reached": 0, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.outreach_programs.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "outreach_program", doc["id"])
+    return doc
+
+@api_router.put("/outreach/programs/{prog_id}")
+async def update_outreach_program(prog_id: str, data: OutreachProgramCreate, current_user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    await db.outreach_programs.update_one({"id": prog_id}, {"$set": update})
+    return await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
+
+@api_router.delete("/outreach/programs/{prog_id}")
+async def delete_outreach_program(prog_id: str, current_user: dict = Depends(get_current_user)):
+    await db.outreach_programs.delete_one({"id": prog_id})
+    return {"message": "Deleted"}
+
+@api_router.get("/outreach/sessions")
+async def list_outreach_sessions(program_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {"program_id": program_id} if program_id else {}
+    sessions = await db.outreach_sessions.find(query, {"_id": 0}).sort("date", -1).to_list(500)
+    return sessions
+
+@api_router.post("/outreach/sessions")
+async def create_outreach_session(data: OutreachSessionCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"os_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.outreach_sessions.insert_one(doc)
+    doc.pop("_id", None)
+    await db.outreach_programs.update_one({"id": data.program_id}, {"$inc": {"sessions_count": 1, "total_reached": data.attendees}})
+    return doc
+
+# ========== RESOURCE ROUTES ==========
+
+@api_router.get("/resources")
+async def list_resources(current_user: dict = Depends(get_current_user)):
+    resources = await db.resources.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    return resources
+
+@api_router.post("/resources")
+async def create_resource(data: ResourceCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"res_{str(uuid.uuid4())[:8]}", **data.model_dump(), "available": True, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.resources.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "resource", doc["id"])
+    return doc
+
+@api_router.put("/resources/{res_id}")
+async def update_resource(res_id: str, data: ResourceCreate, current_user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    await db.resources.update_one({"id": res_id}, {"$set": update})
+    return await db.resources.find_one({"id": res_id}, {"_id": 0})
+
+@api_router.delete("/resources/{res_id}")
+async def delete_resource(res_id: str, current_user: dict = Depends(get_current_user)):
+    await db.resources.delete_one({"id": res_id})
+    return {"message": "Deleted"}
+
+@api_router.get("/resources/bookings")
+async def list_resource_bookings(resource_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {"resource_id": resource_id} if resource_id else {}
+    bookings = await db.resource_bookings.find(query, {"_id": 0}).sort("date", 1).to_list(500)
+    return bookings
+
+@api_router.post("/resources/bookings")
+async def create_resource_booking(data: ResourceBookingCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"rb_{str(uuid.uuid4())[:8]}", **data.model_dump(), "status": "confirmed", "booked_by": data.booked_by or current_user.get("name", "Unknown"), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.resource_bookings.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/resources/bookings/{booking_id}")
+async def delete_resource_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
+    await db.resource_bookings.delete_one({"id": booking_id})
+    return {"message": "Deleted"}
+
+# ========== ANNOUNCEMENT ROUTES ==========
+
+@api_router.get("/announcements")
+async def list_announcements(current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role", "volunteer")
+    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    announcements = await db.announcements.find(query, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).to_list(100)
+    return announcements
+
+@api_router.post("/announcements")
+async def create_announcement(data: AnnouncementCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"ann_{str(uuid.uuid4())[:8]}", **data.model_dump(), "author_name": current_user.get("name", "Admin"), "author_role": current_user.get("role", "admin"), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.announcements.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "announcement", doc["id"])
+    return doc
+
+@api_router.delete("/announcements/{ann_id}")
+async def delete_announcement(ann_id: str, current_user: dict = Depends(get_current_user)):
+    await db.announcements.delete_one({"id": ann_id})
+    return {"message": "Deleted"}
+
+@api_router.put("/announcements/{ann_id}/pin")
+async def toggle_announcement_pin(ann_id: str, current_user: dict = Depends(get_current_user)):
+    ann = await db.announcements.find_one({"id": ann_id}, {"_id": 0})
+    if ann:
+        await db.announcements.update_one({"id": ann_id}, {"$set": {"pinned": not ann.get("pinned", False)}})
+    return {"message": "Updated"}
+
+# ========== BADGE ROUTES ==========
+
+@api_router.get("/badges")
+async def list_badges(current_user: dict = Depends(get_current_user)):
+    badges = await db.badges.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    return badges
+
+@api_router.post("/badges")
+async def create_badge(data: BadgeCreate, current_user: dict = Depends(get_current_user)):
+    doc = {"id": f"bdg_{str(uuid.uuid4())[:8]}", **data.model_dump(), "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.badges.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/badges/{badge_id}")
+async def delete_badge(badge_id: str, current_user: dict = Depends(get_current_user)):
+    await db.badges.delete_one({"id": badge_id})
+    return {"message": "Deleted"}
+
+@api_router.post("/members/{member_id}/issue-badge")
+async def issue_badge_to_member(member_id: str, badge_id: str = Query(...), current_user: dict = Depends(get_current_user)):
+    badge = await db.badges.find_one({"id": badge_id}, {"_id": 0})
+    if not badge:
+        raise HTTPException(status_code=404, detail="Badge not found")
+    issued = {"badge_id": badge_id, "badge_name": badge["name"], "badge_color": badge.get("color", "#6366f1"), "issued_at": datetime.now(timezone.utc).isoformat(), "issued_by": current_user["id"]}
+    await db.members.update_one({"id": member_id}, {"$push": {"badges": issued}})
+    await db.badges.update_one({"id": badge_id}, {"$inc": {"issued_count": 1}})
+    await _audit(current_user["id"], "create", "badge_issue", f"{member_id}:{badge_id}")
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    return member
+
+@api_router.get("/members/{member_id}/badges")
+async def get_member_badges(member_id: str, current_user: dict = Depends(get_current_user)):
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member.get("badges", [])
+
+# ========== MEMBER APPROVALS & BULK IMPORT ==========
+
+@api_router.get("/members/pending")
+async def list_pending_members(current_user: dict = Depends(get_current_user)):
+    members = await db.members.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return {"members": members, "total": len(members)}
+
+@api_router.put("/members/{member_id}/approve")
+async def approve_member(member_id: str, current_user: dict = Depends(get_current_user)):
+    await db.members.update_one({"id": member_id}, {"$set": {"status": "active", "approved_at": datetime.now(timezone.utc).isoformat(), "approved_by": current_user["id"]}})
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    await _audit(current_user["id"], "update", "member_approval", member_id)
+    return member
+
+@api_router.put("/members/{member_id}/reject")
+async def reject_member(member_id: str, current_user: dict = Depends(get_current_user)):
+    await db.members.update_one({"id": member_id}, {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat(), "rejected_by": current_user["id"]}})
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    await _audit(current_user["id"], "update", "member_rejection", member_id)
+    return member
+
+@api_router.post("/members/bulk-import")
+async def bulk_import_members(file: str = None, members_data: list = None, current_user: dict = Depends(get_current_user)):
+    if not members_data:
+        return {"imported": 0, "errors": []}
+    imported = 0
+    errors = []
+    for i, row in enumerate(members_data):
+        try:
+            if not row.get("name"):
+                errors.append(f"Row {i+1}: Name is required")
+                continue
+            existing = await db.members.find_one({"email": row.get("email", "")})
+            if existing and row.get("email"):
+                errors.append(f"Row {i+1}: Email {row['email']} already exists")
+                continue
+            doc = {"id": f"m_{str(uuid.uuid4())[:8]}", "name": row.get("name", ""), "email": row.get("email", ""), "phone": row.get("phone", ""), "national_id": row.get("national_id", ""), "role": row.get("role", "Member"), "group": row.get("group", "General"), "gender": row.get("gender", ""), "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(), "location_id": row.get("location_id"), "created_at": datetime.now(timezone.utc).isoformat()}
+            await db.members.insert_one(doc)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)}")
+    await _audit(current_user["id"], "create", "bulk_import", f"{imported}_members")
+    return {"imported": imported, "errors": errors, "total": len(members_data)}
+
+# ========== ANALYTICS ROUTES ==========
+
+@api_router.get("/analytics/attendance")
+async def attendance_analytics(current_user: dict = Depends(get_current_user)):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    weekly_data = []
+    for i in range(11, -1, -1):
+        week_start = (now - timedelta(weeks=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = week_start + timedelta(days=7)
+        count = await db.checkins.count_documents({"check_in_time": {"$gte": week_start.isoformat(), "$lt": week_end.isoformat()}})
+        weekly_data.append({"week": week_start.strftime("W%V"), "date": week_start.strftime("%b %d"), "checkins": count})
+    recent = await db.checkins.find({}, {"_id": 0, "id": 1, "member_name": 1, "event_name": 1, "check_in_time": 1, "method": 1}).sort("check_in_time", -1).limit(10).to_list(10)
+    total_today = await db.checkins.count_documents({"check_in_time": {"$gte": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()}})
+    total_week = weekly_data[-1]["checkins"] if weekly_data else 0
+    total_month = await db.checkins.count_documents({"check_in_time": {"$gte": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()}})
+    return {"weekly_data": weekly_data, "recent": recent, "total_today": total_today, "total_week": total_week, "total_month": total_month}
+
+@api_router.get("/analytics/sales")
+async def sales_analytics(current_user: dict = Depends(get_current_user)):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    monthly_data = []
+    for i in range(5, -1, -1):
+        month_dt = now.replace(day=1) - timedelta(days=i * 28)
+        month_start = month_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_dt.month == 12:
+            month_end = month_dt.replace(year=month_dt.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            month_end = month_dt.replace(month=month_dt.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        sales = await db.sales.find({"created_at": {"$gte": month_start.isoformat(), "$lt": month_end.isoformat()}}, {"_id": 0, "total": 1}).to_list(5000)
+        revenue = sum(s.get("total", 0) for s in sales)
+        monthly_data.append({"month": month_dt.strftime("%b %Y"), "revenue": revenue, "transactions": len(sales)})
+    all_sales = await db.sales.find({}, {"_id": 0, "items": 1, "total": 1, "payment_method": 1}).to_list(5000)
+    product_totals = {}
+    payment_totals = {}
+    for s in all_sales:
+        method = s.get("payment_method", "cash")
+        payment_totals[method] = payment_totals.get(method, 0) + s.get("total", 0)
+        for item in s.get("items", []):
+            name = item.get("name", "Unknown")
+            product_totals[name] = product_totals.get(name, 0) + item.get("unit_price", 0) * item.get("qty", 0)
+    top_products = sorted([{"name": k, "revenue": v} for k, v in product_totals.items()], key=lambda x: x["revenue"], reverse=True)[:8]
+    payment_breakdown = [{"name": k.replace("_", " ").title(), "value": v} for k, v in payment_totals.items()]
+    total_revenue = sum(s.get("total", 0) for s in all_sales)
+    return {"monthly_data": monthly_data, "top_products": top_products, "payment_breakdown": payment_breakdown, "total_revenue": total_revenue, "total_transactions": len(all_sales)}
+
+@api_router.get("/analytics/locations")
+async def location_analytics(current_user: dict = Depends(get_current_user)):
+    locations = await db.locations.find({}, {"_id": 0}).to_list(200)
+    result = []
+    for loc in locations:
+        member_count = await db.members.count_documents({"location_id": loc["id"]})
+        checkin_count = await db.checkins.count_documents({"location_id": loc["id"]})
+        event_count = await db.events.count_documents({"location_id": loc["id"]})
+        result.append({**loc, "member_count": member_count, "checkin_count": checkin_count, "event_count": event_count})
+    total_members = await db.members.count_documents({})
+    return {"locations": result, "total_members": total_members}
+
+# ========== FINANCIAL: CASHFLOW & BALANCE ==========
+
+@api_router.get("/financial/cashflow")
+async def financial_cashflow(months: int = 6, current_user: dict = Depends(get_current_user)):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    monthly = []
+    for i in range(months - 1, -1, -1):
+        month_dt = now.replace(day=1) - timedelta(days=i * 28)
+        month_start = month_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+        if month_dt.month == 12:
+            month_end = month_dt.replace(year=month_dt.year + 1, month=1, day=1).isoformat()
+        else:
+            month_end = month_dt.replace(month=month_dt.month + 1, day=1).isoformat()
+        donations = await db.donations.find({"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}, {"_id": 0, "amount": 1}).to_list(5000)
+        expenses_list = await db.expenses.find({"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}, {"_id": 0, "amount": 1}).to_list(5000)
+        sales = await db.sales.find({"created_at": {"$gte": month_start, "$lt": month_end}}, {"_id": 0, "total": 1}).to_list(5000)
+        inflow = sum(d.get("amount", 0) for d in donations) + sum(s.get("total", 0) for s in sales)
+        outflow = sum(e.get("amount", 0) for e in expenses_list)
+        monthly.append({"month": month_dt.strftime("%b"), "inflow": inflow, "outflow": outflow, "net": inflow - outflow})
+    return {"monthly": monthly}
+
+@api_router.get("/financial/balance")
+async def get_financial_balance(current_user: dict = Depends(get_current_user)):
+    doc = await db.financial_settings.find_one({}, {"_id": 0})
+    if not doc:
+        return {"opening_balance": 0, "current_balance": 0, "set_at": None}
+    return doc
+
+@api_router.put("/financial/balance")
+async def set_financial_balance(opening_balance: float, current_user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    await db.financial_settings.update_one({}, {"$set": {"opening_balance": opening_balance, "set_at": now, "set_by": current_user["id"]}}, upsert=True)
+    return {"opening_balance": opening_balance, "set_at": now}
+
+# ========== PARENT DASHBOARD ==========
+
+@api_router.get("/parent/children")
+async def get_parent_children(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    user_email = current_user.get("email", "")
+    children = await db.children.find({"$or": [{"parent_id": user_id}, {"parent_email": user_email}]}, {"_id": 0}).to_list(50)
+    enriched = []
+    for child in children:
+        last_checkin = await db.checkins.find_one({"member_id": child.get("id", ""), "member_name": child.get("name", "")}, {"_id": 0, "check_in_time": 1, "event_name": 1}, sort=[("check_in_time", -1)])
+        enriched.append({**child, "last_checkin": last_checkin})
+    return enriched
+
+@api_router.get("/parent/dashboard")
+async def parent_dashboard(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    user_email = current_user.get("email", "")
+    children = await db.children.find({"$or": [{"parent_id": user_id}, {"parent_email": user_email}]}, {"_id": 0}).to_list(50)
+    upcoming_events = await db.events.find({"status": "upcoming", "is_public": True}, {"_id": 0, "id": 1, "title": 1, "date": 1, "time": 1, "location": 1, "type": 1}).sort("date", 1).limit(5).to_list(5)
+    return {"children": children, "children_count": len(children), "checked_in_count": 0, "upcoming_events": upcoming_events}
+
+# ========== DARK MODE / APP SETTINGS ==========
+
+@api_router.get("/app-settings")
+async def get_app_settings(current_user: dict = Depends(get_current_user)):
+    doc = await db.app_settings.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    return doc or {"user_id": current_user["id"], "dark_mode": False, "language": "en"}
+
+@api_router.put("/app-settings")
+async def update_app_settings(settings: dict, current_user: dict = Depends(get_current_user)):
+    settings.pop("_id", None)
+    settings["user_id"] = current_user["id"]
+    await db.app_settings.update_one({"user_id": current_user["id"]}, {"$set": settings}, upsert=True)
+    return settings
+
+# ========== SEED NEW COLLECTIONS ==========
+
+@api_router.post("/seed-all")
+async def seed_all_data():
+    seeded = []
+    if await db.outreach_programs.count_documents({}) == 0:
+        programs = [
+            {"id": "op_001", "name": "Community Health Drive", "description": "Free medical check-ups and health education in Kampala slums.", "category": "health", "status": "active", "location": "Katwe, Kampala", "start_date": "2026-01-15", "target": 500, "sessions_count": 3, "total_reached": 142, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "op_002", "name": "School Outreach Program", "description": "Bible studies and character formation in local schools.", "category": "education", "status": "active", "location": "Entebbe Municipality", "start_date": "2025-09-01", "target": 200, "sessions_count": 8, "total_reached": 316, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "op_003", "name": "Widows & Orphans Support", "description": "Monthly food distribution and counselling for vulnerable families.", "category": "welfare", "status": "active", "location": "Multiple Locations", "start_date": "2025-06-01", "target": 100, "sessions_count": 5, "total_reached": 89, "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.outreach_programs.insert_many(programs)
+        sessions = [
+            {"id": "os_001", "program_id": "op_001", "date": "2026-03-10", "time": "09:00", "location": "Katwe Health Centre", "attendees": 47, "notes": "Distributed 47 medicine packs. 3 referrals to Mulago.", "led_by": "Dr. Auma Florence", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "os_002", "program_id": "op_002", "date": "2026-03-14", "time": "14:00", "location": "Entebbe Primary School", "attendees": 85, "notes": "Session on integrity and purpose. Very engaged students.", "led_by": "Pastor Amos", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.outreach_sessions.insert_many(sessions)
+        seeded.append("outreach")
+    if await db.resources.count_documents({}) == 0:
+        resources = [
+            {"id": "res_001", "name": "Main Auditorium", "type": "auditorium", "capacity": 400, "description": "Main worship hall with stage, PA system, and projectors.", "location_id": "loc_001", "hourly_rate": 50000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "res_002", "name": "Conference Room A", "type": "conference", "capacity": 30, "description": "Air-conditioned with whiteboard and AV equipment.", "location_id": "loc_001", "hourly_rate": 20000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "res_003", "name": "Youth Hall", "type": "hall", "capacity": 150, "description": "Multi-purpose hall for youth programs and events.", "location_id": "loc_001", "hourly_rate": 30000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "res_004", "name": "PA System (Mobile)", "type": "equipment", "capacity": None, "description": "Portable PA system with 2 wireless microphones.", "location_id": "loc_001", "hourly_rate": 15000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.resources.insert_many(resources)
+        seeded.append("resources")
+    if await db.announcements.count_documents({}) == 0:
+        announcements = [
+            {"id": "ann_001", "title": "Welcome to March 2026!", "content": "This month we launch our Community Health Drive with a goal of reaching 500 people. All staff are invited to join the orientation on Monday at 9 AM.", "type": "general", "target_role": None, "pinned": True, "author_name": "System Administrator", "author_role": "admin", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "ann_002", "title": "Staff Meeting — This Friday", "content": "Mandatory all-staff meeting this Friday at 3 PM in the Main Conference Room. Agenda: Q1 Review, Budget planning, and outreach assignments.", "type": "urgent", "target_role": "admin", "pinned": False, "author_name": "System Administrator", "author_role": "admin", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "ann_003", "title": "Easter Events Planning", "content": "Planning for Easter Week (April 13-20) begins now. Event coordinators, please submit your event proposals by March 28.", "type": "ministry", "target_role": None, "pinned": False, "author_name": "System Administrator", "author_role": "admin", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.announcements.insert_many(announcements)
+        seeded.append("announcements")
+    if await db.badges.count_documents({}) == 0:
+        badges = [
+            {"id": "bdg_001", "name": "Faithful Servant", "description": "Awarded for 1+ year of consistent volunteering.", "color": "#f59e0b", "icon": "star", "criteria": "12+ months active service", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "bdg_002", "name": "Prayer Warrior", "description": "Regular participant in prayer meetings.", "color": "#6366f1", "icon": "heart", "criteria": "30+ prayer sessions attended", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "bdg_003", "name": "Outreach Champion", "description": "Led or participated in 5+ outreach sessions.", "color": "#10b981", "icon": "award", "criteria": "5+ outreach sessions", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "bdg_004", "name": "New Believer", "description": "Recently joined the faith community.", "color": "#3b82f6", "icon": "user-plus", "criteria": "First 90 days", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.badges.insert_many(badges)
+        seeded.append("badges")
+    return {"seeded": seeded, "message": "Seed complete"}
 
 
 app.include_router(api_router)

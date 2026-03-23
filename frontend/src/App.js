@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Toaster } from './components/ui/sonner';
 import './App.css';
@@ -21,6 +21,13 @@ import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
 import AuditPage from './pages/AuditPage';
 import LocationsPage from './pages/LocationsPage';
+import AttendancePage from './pages/AttendancePage';
+import SalesAnalyticsPage from './pages/SalesAnalyticsPage';
+import LocationAnalyticsPage from './pages/LocationAnalyticsPage';
+import CommsPage from './pages/CommsPage';
+import OutreachPage from './pages/OutreachPage';
+import ResourcesPage from './pages/ResourcesPage';
+import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
 
 const ProtectedRoute = ({ children }) => {
@@ -35,6 +42,11 @@ const ProtectedRoute = ({ children }) => {
 };
 
 function AppRoutes() {
+  const location = useLocation();
+  // Check URL fragment for session_id from Google Auth callback
+  if (location.hash?.includes('session_id=')) {
+    return <AuthCallback />;
+  }
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
@@ -56,6 +68,12 @@ function AppRoutes() {
         <Route path="people" element={<PeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="locations" element={<LocationsPage />} />
+        <Route path="attendance" element={<AttendancePage />} />
+        <Route path="sales-analytics" element={<SalesAnalyticsPage />} />
+        <Route path="location-analytics" element={<LocationAnalyticsPage />} />
+        <Route path="comms" element={<CommsPage />} />
+        <Route path="outreach" element={<OutreachPage />} />
+        <Route path="resources" element={<ResourcesPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
