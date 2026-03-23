@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 # Configuration
-BASE_URL = "https://reports-dashboard-7.preview.emergentagent.com/api"
+BASE_URL = "https://people-mgmt-hub.preview.emergentagent.com/api"
 ADMIN_EMAIL = "admin@5812global.org"
 ADMIN_PASSWORD = "Admin@1234"
 

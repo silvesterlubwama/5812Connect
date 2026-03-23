@@ -28,7 +28,7 @@ export default function MembersPage() {
   const [selectedMember, setSelectedMember] = useState(null);
   const [memberDetail, setMemberDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [newMember, setNewMember] = useState({ name: '', email: '', phone: '', national_id: '', role: 'Staff', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '', location_id: '', department: '', is_parent: false, is_customer: false, is_donor: false });
+  const [newMember, setNewMember] = useState({ name: '', email: '', phone: '', national_id: '', role: 'Staff', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '', location_id: '', department: '', program: '', is_parent: false, is_customer: false, is_donor: false });
   const [savingMember, setSavingMember] = useState(false);
   const [pendingMembers, setPendingMembers] = useState([]);
   const [badges, setBadges] = useState([]);
@@ -43,6 +43,12 @@ export default function MembersPage() {
   const [showStaffImport, setShowStaffImport] = useState(false);
   const [staffCsvData, setStaffCsvData] = useState('');
   const [allLocations, setAllLocations] = useState([]);
+  const [memberDocuments, setMemberDocuments] = useState([]);
+  const [docFile, setDocFile] = useState(null);
+  const [docType, setDocType] = useState('id_scan');
+  const [docLabel, setDocLabel] = useState('');
+  const [docLoading, setDocLoading] = useState(false);
+  const [docUploading, setDocUploading] = useState(false);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -71,6 +77,14 @@ export default function MembersPage() {
     badgesApi.list().then(r => setBadges(r.data)).catch(() => {});
     locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {});
   }, []);
+
+  const selectedLocation = allLocations.find(l => l.id === newMember.location_id);
+  const departmentOptions = selectedLocation
+    ? (selectedLocation.departments?.length ? selectedLocation.departments : [selectedLocation.name])
+    : [];
+  const primaryProgramRole = ['Parent', 'Customer', 'Guest', 'Child'].includes(newMember.role);
+  const showProgramField = primaryProgramRole || newMember.is_parent;
+  const showDepartmentField = !primaryProgramRole;
 
   const handleApprove = async (id) => {
     try {
@@ -180,6 +194,77 @@ export default function MembersPage() {
     finally { setImportLoading(false); }
   };
 
+  const fetchDocuments = async (memberId) => {
+    setDocLoading(true);
+    try {
+      const res = await membersApi.documents(memberId);
+      setMemberDocuments(res.data);
+    } catch {
+      setMemberDocuments([]);
+    } finally {
+      setDocLoading(false);
+    }
+  };
+
+  const handleUploadDocument = async () => {
+    if (!docFile || !selectedMember) return;
+    setDocUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', docFile);
+      formData.append('doc_type', docType);
+      if (docLabel) formData.append('label', docLabel);
+      const res = await membersApi.uploadDocument(selectedMember.id, formData);
+      setMemberDocuments(prev => [res.data, ...prev]);
+      setDocFile(null);
+      setDocLabel('');
+      toast.success('Document uploaded');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Upload failed');
+    } finally {
+      setDocUploading(false);
+    }
+  };
+
+  const handleDownloadDocument = async (doc) => {
+    try {
+      const res = await membersApi.downloadDocument(doc.id);
+      const blobUrl = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = doc.original_filename || 'document';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch {
+      toast.error('Download failed');
+    }
+  };
+
+  const handleArchiveDocument = async (docId) => {
+    try {
+      await membersApi.archiveDocument(docId);
+      setMemberDocuments(prev => prev.filter(d => d.id !== docId));
+      toast.success('Document archived');
+    } catch {
+      toast.error('Archive failed');
+    }
+  };
+
+  const handleLocationChange = (value) => {
+    const locationId = value === '_none' ? '' : value;
+    const location = allLocations.find(l => l.id === locationId);
+    let nextDepartment = showDepartmentField ? (newMember.department || '') : '';
+    if (location && showDepartmentField) {
+      const allowedDepartments = location.departments?.length ? location.departments : [location.name];
+      if (!allowedDepartments.includes(nextDepartment)) {
+        nextDepartment = location.type === 'sub-location' ? location.name : '';
+      }
+    } else if (!location) {
+      nextDepartment = '';
+    }
+    setNewMember({ ...newMember, location_id: locationId, department: nextDepartment });
+  };
+
   const handleAddMember = async (e) => {
     e.preventDefault();
     setSavingMember(true);
@@ -187,7 +272,7 @@ export default function MembersPage() {
       const res = await membersApi.create(newMember);
       setMembers(prev => [res.data, ...prev]);
       setShowAddDialog(false);
-      setNewMember({ name: '', email: '', phone: '', national_id: '', role: 'Member', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '' });
+      setNewMember({ name: '', email: '', phone: '', national_id: '', role: 'Member', group: 'Youth', gender: 'male', date_of_birth: '', address: '', notes: '', location_id: '', department: '', program: '', is_parent: false, is_customer: false, is_donor: false });
       toast.success(`Member "${res.data.name}" added!`);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to add member');
@@ -229,6 +314,7 @@ export default function MembersPage() {
     } finally {
       setLoadingDetail(false);
     }
+    fetchDocuments(member.id);
   };
 
   return (
@@ -240,10 +326,10 @@ export default function MembersPage() {
           <p className="text-sm text-muted-foreground mt-0.5">{total} total · {members.filter(m => m.status === 'active').length} active{pendingMembers.length > 0 ? ` · ${pendingMembers.length} pending` : ''}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={fetchMembers} className="gap-1.5"><RefreshCw size={14} /></Button>
+          <Button variant="outline" size="sm" onClick={fetchMembers} className="gap-1.5" data-testid="refresh-members-btn"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-1.5" data-testid="export-members-btn"><Download size={14} /> CSV</Button>
           <Select onValueChange={v => { if (v === 'bulk') setShowBulkImport(true); else if (v === 'children') setShowChildImport(true); else if (v === 'staff') setShowStaffImport(true); }}>
-            <SelectTrigger className="w-auto h-8 gap-1.5 text-xs"><FileUp size={14} /><span>Import</span></SelectTrigger>
+            <SelectTrigger className="w-auto h-8 gap-1.5 text-xs" data-testid="members-import-select"><FileUp size={14} /><span>Import</span></SelectTrigger>
             <SelectContent>
               <SelectItem value="bulk">Quick Import (CSV)</SelectItem>
               <SelectItem value="children">Children & Parents CSV</SelectItem>
@@ -270,10 +356,10 @@ export default function MembersPage() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="Search name, email, phone, ID..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+          <Input placeholder="Search name, email, phone, ID..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} data-testid="member-search-input" />
         </div>
         <Select value={filterGroup} onValueChange={setFilterGroup}>
-          <SelectTrigger className="w-full sm:w-40">
+          <SelectTrigger className="w-full sm:w-40" data-testid="member-group-filter-select">
             <Filter size={14} className="mr-1.5 text-muted-foreground shrink-0" />
             <SelectValue placeholder="Group" />
           </SelectTrigger>
@@ -283,7 +369,7 @@ export default function MembersPage() {
           </SelectContent>
         </Select>
         <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="w-full sm:w-36">
+          <SelectTrigger className="w-full sm:w-36" data-testid="member-status-filter-select">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -304,7 +390,7 @@ export default function MembersPage() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {members.map(member => (
-            <Card key={member.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow">
+            <Card key={member.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow" data-testid={`member-card-${member.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-start gap-3 mb-3">
                   <Avatar className="h-10 w-10">
@@ -313,33 +399,33 @@ export default function MembersPage() {
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{member.name}</p>
-                    <p className="text-xs text-muted-foreground">{member.role}</p>
+                    <p className="text-sm font-semibold truncate" data-testid={`member-name-${member.id}`}>{member.name}</p>
+                    <p className="text-xs text-muted-foreground" data-testid={`member-role-${member.id}`}>{member.role}</p>
                   </div>
-                  <Badge variant={member.status === 'active' ? 'outline' : 'secondary'} className={`text-xs shrink-0 ${member.status === 'active' ? 'border-green-500 text-green-600' : ''}`}>
+                  <Badge variant={member.status === 'active' ? 'outline' : 'secondary'} className={`text-xs shrink-0 ${member.status === 'active' ? 'border-green-500 text-green-600' : ''}`} data-testid={`member-status-${member.id}`}>
                     {member.status}
                   </Badge>
                 </div>
                 <div className="space-y-1.5 text-xs text-muted-foreground mb-3">
-                  {member.email && <div className="flex items-center gap-2"><Mail size={12} /><span className="truncate">{member.email}</span></div>}
-                  {member.phone && <div className="flex items-center gap-2"><Phone size={12} /><span>{member.phone}</span></div>}
-                  {member.join_date && <div className="flex items-center gap-2"><span className="text-muted-foreground/70">Joined:</span><span>{member.join_date}</span></div>}
+                  {member.email && <div className="flex items-center gap-2" data-testid={`member-email-${member.id}`}><Mail size={12} /><span className="truncate">{member.email}</span></div>}
+                  {member.phone && <div className="flex items-center gap-2" data-testid={`member-phone-${member.id}`}><Phone size={12} /><span>{member.phone}</span></div>}
+                  {member.join_date && <div className="flex items-center gap-2" data-testid={`member-join-date-${member.id}`}><span className="text-muted-foreground/70">Joined:</span><span>{member.join_date}</span></div>}
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <div className="flex items-center gap-1 flex-wrap">
-                    <Badge variant="secondary" className="text-xs">{member.group}</Badge>
-                    {member.is_parent && <Badge variant="outline" className="text-xs border-purple-300 text-purple-600">Parent</Badge>}
-                    {member.is_customer && <Badge variant="outline" className="text-xs border-green-300 text-green-600">Customer</Badge>}
-                    {member.is_donor && <Badge variant="outline" className="text-xs border-amber-300 text-amber-600">Donor</Badge>}
+                    <Badge variant="secondary" className="text-xs" data-testid={`member-group-${member.id}`}>{member.group}</Badge>
+                    {member.is_parent && <Badge variant="outline" className="text-xs border-purple-300 text-purple-600" data-testid={`member-flag-parent-${member.id}`}>Parent</Badge>}
+                    {member.is_customer && <Badge variant="outline" className="text-xs border-green-300 text-green-600" data-testid={`member-flag-customer-${member.id}`}>Customer</Badge>}
+                    {member.is_donor && <Badge variant="outline" className="text-xs border-amber-300 text-amber-600" data-testid={`member-flag-donor-${member.id}`}>Donor</Badge>}
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => viewMember(member)}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => viewMember(member)} data-testid={`view-member-${member.id}`}>
                       <Eye size={13} />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleStatus(member)}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleStatus(member)} data-testid={`toggle-member-${member.id}`}>
                       {member.status === 'active' ? <UserX size={13} className="text-muted-foreground" /> : <UserCheck size={13} className="text-green-600" />}
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteMember(member)}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteMember(member)} data-testid={`delete-member-${member.id}`}>
                       <Trash2 size={13} />
                     </Button>
                   </div>
@@ -354,7 +440,7 @@ export default function MembersPage() {
         <div className="text-center py-16 text-muted-foreground">
           <Users size={40} className="mx-auto mb-3 opacity-30" />
           <p>No members found</p>
-          <Button variant="outline" className="mt-4" onClick={() => setShowAddDialog(true)}>Add your first member</Button>
+          <Button variant="outline" className="mt-4" onClick={() => setShowAddDialog(true)} data-testid="add-first-member-btn">Add your first member</Button>
         </div>
       )}
         </TabsContent>
@@ -414,7 +500,7 @@ export default function MembersPage() {
                       <div className="h-10 w-10 rounded-full flex items-center justify-center" style={{ backgroundColor: b.color + '20', color: b.color }}>
                         <Award size={20} />
                       </div>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteBadge(b.id)}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteBadge(b.id)} data-testid={`delete-badge-${b.id}`}>
                         <Trash2 size={12} />
                       </Button>
                     </div>
@@ -430,7 +516,7 @@ export default function MembersPage() {
 
       {/* Add Member Dialog */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add New Member</DialogTitle>
           </DialogHeader>
@@ -438,85 +524,101 @@ export default function MembersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2 col-span-2">
                 <Label>Full Name *</Label>
-                <Input placeholder="Full name" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} required />
+                <Input placeholder="Full name" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} required data-testid="member-name-input" />
               </div>
               <div className="space-y-2">
                 <Label>Email</Label>
-                <Input type="email" placeholder="email@example.com" value={newMember.email} onChange={e => setNewMember({...newMember, email: e.target.value})} />
+                <Input type="email" placeholder="email@example.com" value={newMember.email} onChange={e => setNewMember({...newMember, email: e.target.value})} data-testid="member-email-input" />
               </div>
               <div className="space-y-2">
                 <Label>Phone</Label>
-                <Input placeholder="+256 700 000000" value={newMember.phone} onChange={e => setNewMember({...newMember, phone: e.target.value})} />
+                <Input placeholder="+256 700 000000" value={newMember.phone} onChange={e => setNewMember({...newMember, phone: e.target.value})} data-testid="member-phone-input" />
               </div>
               <div className="space-y-2 col-span-2">
                 <Label>National ID</Label>
-                <Input placeholder="CM000000000XXXX" value={newMember.national_id} onChange={e => setNewMember({...newMember, national_id: e.target.value})} />
+                <Input placeholder="CM000000000XXXX" value={newMember.national_id} onChange={e => setNewMember({...newMember, national_id: e.target.value})} data-testid="member-national-id-input" />
               </div>
               <div className="space-y-2">
                 <Label>Role</Label>
-                <Select value={newMember.role} onValueChange={v => setNewMember({...newMember, role: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Select value={newMember.role} onValueChange={v => {
+                  const isPrimaryProgramRole = ['Parent', 'Customer', 'Guest', 'Child'].includes(v);
+                  setNewMember({ ...newMember, role: v, department: isPrimaryProgramRole ? '' : newMember.department });
+                }}>
+                  <SelectTrigger data-testid="member-role-select"><SelectValue /></SelectTrigger>
                   <SelectContent>{MOCK_ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Group</Label>
                 <Select value={newMember.group} onValueChange={v => setNewMember({...newMember, group: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid="member-group-select"><SelectValue /></SelectTrigger>
                   <SelectContent>{MOCK_GROUPS.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Gender</Label>
                 <Select value={newMember.gender} onValueChange={v => setNewMember({...newMember, gender: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid="member-gender-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="male">Male</SelectItem>
                     <SelectItem value="female">Female</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Date of Birth</Label>
-                <Input type="date" value={newMember.date_of_birth} onChange={e => setNewMember({...newMember, date_of_birth: e.target.value})} />
+                <Input type="date" value={newMember.date_of_birth} onChange={e => setNewMember({...newMember, date_of_birth: e.target.value})} data-testid="member-dob-input" />
               </div>
               <div className="space-y-2 col-span-2">
                 <Label>Address</Label>
-                <Input placeholder="Physical address" value={newMember.address} onChange={e => setNewMember({...newMember, address: e.target.value})} />
+                <Input placeholder="Physical address" value={newMember.address} onChange={e => setNewMember({...newMember, address: e.target.value})} data-testid="member-address-input" />
               </div>
               <div className="space-y-2">
                 <Label>Location</Label>
-                <Select value={newMember.location_id || '_none'} onValueChange={v => setNewMember({...newMember, location_id: v === '_none' ? '' : v})}>
-                  <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
+                <Select value={newMember.location_id || '_none'} onValueChange={handleLocationChange}>
+                  <SelectTrigger data-testid="member-location-select"><SelectValue placeholder="Select location" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="_none">Not assigned</SelectItem>
                     {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Department</Label>
-                <Input placeholder="e.g. Education" value={newMember.department || ''} onChange={e => setNewMember({...newMember, department: e.target.value})} />
-              </div>
+              {showProgramField && (
+                <div className="space-y-2">
+                  <Label>Program</Label>
+                  <Input placeholder="e.g. Outreach Programme" value={newMember.program || ''} onChange={e => setNewMember({ ...newMember, program: e.target.value })} data-testid="member-program-input" />
+                </div>
+              )}
+              {showDepartmentField && (
+                <div className="space-y-2">
+                  <Label>Department</Label>
+                  <Select value={newMember.department || '_none'} onValueChange={v => setNewMember({ ...newMember, department: v === '_none' ? '' : v })}>
+                    <SelectTrigger data-testid="member-department-select"><SelectValue placeholder="Select department" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">No department</SelectItem>
+                      {departmentOptions.map(dep => <SelectItem key={dep} value={dep}>{dep}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="col-span-2 space-y-3 p-3 border border-border rounded-lg">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Additional Roles</p>
                 <div className="flex items-center justify-between">
                   <p className="text-sm">Also a Parent</p>
-                  <Switch checked={newMember.is_parent} onCheckedChange={v => setNewMember({...newMember, is_parent: v})} />
+                  <Switch checked={newMember.is_parent} onCheckedChange={v => setNewMember({ ...newMember, is_parent: v })} data-testid="member-is-parent-switch" />
                 </div>
                 <div className="flex items-center justify-between">
                   <p className="text-sm">Also a Customer</p>
-                  <Switch checked={newMember.is_customer} onCheckedChange={v => setNewMember({...newMember, is_customer: v})} />
+                  <Switch checked={newMember.is_customer} onCheckedChange={v => setNewMember({ ...newMember, is_customer: v })} data-testid="member-is-customer-switch" />
                 </div>
                 <div className="flex items-center justify-between">
                   <p className="text-sm">Also a Donor</p>
-                  <Switch checked={newMember.is_donor} onCheckedChange={v => setNewMember({...newMember, is_donor: v})} />
+                  <Switch checked={newMember.is_donor} onCheckedChange={v => setNewMember({ ...newMember, is_donor: v })} data-testid="member-is-donor-switch" />
                 </div>
               </div>
               <div className="space-y-2 col-span-2">
                 <Label>Notes</Label>
-                <Input placeholder="Any notes..." value={newMember.notes} onChange={e => setNewMember({...newMember, notes: e.target.value})} />
+                <Input placeholder="Any notes..." value={newMember.notes} onChange={e => setNewMember({...newMember, notes: e.target.value})} data-testid="member-notes-input" />
               </div>
             </div>
             <div className="flex gap-3 pt-2">
@@ -530,8 +632,8 @@ export default function MembersPage() {
       </Dialog>
 
       {/* Member Detail Dialog */}
-      <Dialog open={!!selectedMember} onOpenChange={() => { setSelectedMember(null); setMemberDetail(null); }}>
-        <DialogContent className="max-w-2xl">
+      <Dialog open={!!selectedMember} onOpenChange={() => { setSelectedMember(null); setMemberDetail(null); setMemberDocuments([]); setDocFile(null); setDocLabel(''); setDocType('id_scan'); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Member Profile</DialogTitle>
           </DialogHeader>
@@ -543,8 +645,9 @@ export default function MembersPage() {
             <div className="mt-2">
               <Tabs defaultValue="info">
                 <TabsList>
-                  <TabsTrigger value="info">Profile Info</TabsTrigger>
-                  <TabsTrigger value="checkins">Check-In History ({memberDetail.checkin_history?.length ?? 0})</TabsTrigger>
+                  <TabsTrigger value="info" data-testid="member-profile-tab">Profile Info</TabsTrigger>
+                  <TabsTrigger value="checkins" data-testid="member-checkins-tab">Check-In History ({memberDetail.checkin_history?.length ?? 0})</TabsTrigger>
+                  <TabsTrigger value="documents" data-testid="member-documents-tab">Documents ({memberDocuments.length})</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="info" className="mt-4">
@@ -572,6 +675,8 @@ export default function MembersPage() {
                       { label: 'Phone', value: memberDetail.phone },
                       { label: 'National ID', value: memberDetail.national_id },
                       { label: 'Gender', value: memberDetail.gender },
+                      { label: 'Department', value: memberDetail.department },
+                      { label: 'Program', value: memberDetail.program },
                       { label: 'Date of Birth', value: memberDetail.date_of_birth },
                       { label: 'Join Date', value: memberDetail.join_date },
                       { label: 'Address', value: memberDetail.address, full: true },
@@ -601,6 +706,70 @@ export default function MembersPage() {
                   </div>
                 </TabsContent>
 
+                <TabsContent value="documents" className="mt-4">
+                  <div className="space-y-4">
+                    <div className="p-4 border border-border rounded-lg space-y-3" data-testid="member-documents-upload-card">
+                      <div>
+                        <p className="text-sm font-semibold">Upload Document</p>
+                        <p className="text-xs text-muted-foreground">ID scans required for all except children. JPG/PNG only.</p>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label>Document Type</Label>
+                          <Select value={docType} onValueChange={setDocType}>
+                            <SelectTrigger data-testid="doc-type-select"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="id_scan">ID Scan</SelectItem>
+                              <SelectItem value="contract">Contract</SelectItem>
+                              <SelectItem value="certificate">Certificate</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Label</Label>
+                          <Input value={docLabel} onChange={e => setDocLabel(e.target.value)} placeholder="Optional label" data-testid="doc-label-input" />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label>Document File (JPG/PNG)</Label>
+                          <Input type="file" accept=".jpg,.jpeg,.png" onChange={e => setDocFile(e.target.files?.[0] || null)} data-testid="doc-file-input" />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <Button onClick={handleUploadDocument} disabled={!docFile || docUploading} data-testid="upload-document-btn">
+                          {docUploading ? 'Uploading...' : 'Upload Document'}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-semibold mb-2">Documents</p>
+                      {docLoading ? (
+                        <div className="space-y-2">
+                          {[1, 2].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}
+                        </div>
+                      ) : memberDocuments.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-6" data-testid="no-documents-text">No documents uploaded yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {memberDocuments.map(doc => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 rounded-lg border border-border" data-testid={`member-document-${doc.id}`}>
+                              <div>
+                                <p className="text-sm font-medium">{doc.label || doc.doc_type}</p>
+                                <p className="text-xs text-muted-foreground">{doc.original_filename} · {new Date(doc.created_at).toLocaleString()}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline" onClick={() => handleDownloadDocument(doc)} data-testid={`doc-download-${doc.id}`}>Download</Button>
+                                <Button size="sm" variant="ghost" onClick={() => handleArchiveDocument(doc.id)} data-testid={`doc-archive-${doc.id}`}>Archive</Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </TabsContent>
+
                 <TabsContent value="checkins" className="mt-4">
                   {(memberDetail.checkin_history ?? []).length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">No check-in history</p>
@@ -626,7 +795,7 @@ export default function MembersPage() {
 
       {/* Bulk Import Dialog */}
       <Dialog open={showBulkImport} onOpenChange={setShowBulkImport}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bulk Import Members</DialogTitle>
             <DialogDescription>Paste CSV data: name, email, phone, group (one per line)</DialogDescription>
@@ -649,7 +818,7 @@ export default function MembersPage() {
 
       {/* Create Badge Dialog */}
       <Dialog open={showBadgeDialog} onOpenChange={setShowBadgeDialog}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Create Badge</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Badge Name *</Label>
@@ -671,7 +840,7 @@ export default function MembersPage() {
 
       {/* Children + Parents CSV Import */}
       <Dialog open={showChildImport} onOpenChange={setShowChildImport}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Children & Parents</DialogTitle>
             <DialogDescription>Paste CSV with header: first_name, last_name, date_of_birth, grade, family_name, fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs</DialogDescription>
@@ -689,7 +858,7 @@ export default function MembersPage() {
 
       {/* Staff CSV Import */}
       <Dialog open={showStaffImport} onOpenChange={setShowStaffImport}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Staff</DialogTitle>
             <DialogDescription>Paste CSV with header: name, email, phone, national_id, role, department</DialogDescription>

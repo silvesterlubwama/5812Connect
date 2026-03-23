@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 import csv
 import io
 from dotenv import load_dotenv
+from storage import init_storage
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -114,6 +115,7 @@ class MemberCreate(BaseModel):
     notes: Optional[str] = None
     location_id: Optional[str] = None
     department: Optional[str] = None
+    program: Optional[str] = None
     is_parent: bool = False
     is_customer: bool = False
     is_donor: bool = False
@@ -133,6 +135,7 @@ class MemberUpdate(BaseModel):
     notes: Optional[str] = None
     location_id: Optional[str] = None
     department: Optional[str] = None
+    program: Optional[str] = None
     is_parent: Optional[bool] = None
     is_customer: Optional[bool] = None
     is_donor: Optional[bool] = None
@@ -267,6 +270,33 @@ async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(
         return user
     except:
         return None
+
+
+def normalize_gender(value: Optional[str]) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    gender = value.lower()
+    if gender not in ("male", "female"):
+        raise HTTPException(status_code=400, detail="Gender must be male or female")
+    return gender
+
+
+async def resolve_department(location_id: Optional[str], department: Optional[str]) -> Optional[str]:
+    if not location_id:
+        return department
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "type": 1, "departments": 1})
+    if not loc:
+        return department
+    available = loc.get("departments") or []
+    if department:
+        if department in available:
+            return department
+        if loc.get("type") == "sub-location" and department == loc.get("name"):
+            return department
+        raise HTTPException(status_code=400, detail="Department must match selected location")
+    if loc.get("type") == "sub-location":
+        return loc.get("name")
+    return department
 
 
 # ========== AUTH ROUTES ==========
@@ -408,10 +438,13 @@ async def list_members(
 
 @api_router.post("/members")
 async def create_member(data: MemberCreate, current_user: dict = Depends(get_current_user)):
+    payload = data.model_dump()
+    payload["gender"] = normalize_gender(payload.get("gender"))
+    payload["department"] = await resolve_department(payload.get("location_id"), payload.get("department"))
     member_id = f"mem_{str(uuid.uuid4())[:8]}"
     member = {
         "id": member_id,
-        **data.model_dump(),
+        **payload,
         "status": "active",
         "join_date": datetime.now(timezone.utc).isoformat().split("T")[0],
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -439,11 +472,18 @@ async def get_member(member_id: str, current_user: dict = Depends(get_current_us
 
 @api_router.put("/members/{member_id}")
 async def update_member(member_id: str, data: MemberUpdate, current_user: dict = Depends(get_current_user)):
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.members.update_one({"id": member_id}, {"$set": update_data})
-    if result.matched_count == 0:
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    if "gender" in update_data:
+        update_data["gender"] = normalize_gender(update_data["gender"])
+    if "department" in update_data or "location_id" in update_data:
+        location_id = update_data.get("location_id", member.get("location_id"))
+        department = update_data.get("department", member.get("department"))
+        update_data["department"] = await resolve_department(location_id, department)
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.members.update_one({"id": member_id}, {"$set": update_data})
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     return member
 
@@ -2443,11 +2483,13 @@ try:
     from routers.notifications import router as notifications_router
     from routers.access import router as access_router
     from routers.reports import router as reports_router
+    from routers.documents import router as documents_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
     app.include_router(access_router)
     app.include_router(reports_router)
+    app.include_router(documents_router)
     logger.info("Modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -2464,6 +2506,11 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    try:
+        init_storage()
+        logger.info("Storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
     # Auto-seed on startup if DB is empty
     user_count = await db.users.count_documents({})
     if user_count == 0:

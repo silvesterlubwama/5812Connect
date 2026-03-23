@@ -40,6 +40,11 @@ export const membersApi = {
   create: (data) => api.post('/members', data),
   update: (id, data) => api.put(`/members/${id}`, data),
   delete: (id) => api.delete(`/members/${id}`),
+  documents: (id) => api.get(`/members/${id}/documents`),
+  latestIdScan: (id) => api.get(`/members/${id}/documents/id-scan`),
+  uploadDocument: (id, formData) => api.post(`/members/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  downloadDocument: (docId) => api.get(`/documents/${docId}/download`, { responseType: 'blob' }),
+  archiveDocument: (docId) => api.put(`/documents/${docId}/archive`),
 };
 
 // ---- EVENTS ----
