@@ -104,8 +104,67 @@ export const WebSocketProvider = ({ children }) => {
     return () => clearInterval(interval);
   }, [send]);
 
+  // Queue message for offline sync via service worker
+  const queueOfflineMessage = useCallback((payload) => {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      const token = localStorage.getItem('token') || '';
+      navigator.serviceWorker.controller.postMessage({ type: 'queue-message', payload, token });
+    }
+  }, []);
+
+  // Send chat message with offline fallback
+  const sendChatMessageWithFallback = useCallback((conversationId, text, senderName, replyTo) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      sendChatMessage(conversationId, text, senderName, replyTo);
+    } else {
+      // Queue for background sync
+      queueOfflineMessage({ conversation_id: conversationId, text, reply_to: replyTo || null, id: `offline_${Date.now()}`, created_at: new Date().toISOString() });
+    }
+  }, [sendChatMessage, queueOfflineMessage]);
+
+  // Subscribe to push notifications
+  const subscribePush = useCallback(async () => {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        const keyRes = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/push/vapid-key`);
+        if (!keyRes.ok) return;
+        const { publicKey } = await keyRes.json();
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: publicKey,
+        }).catch(() => null);
+      }
+      if (sub) {
+        const token = localStorage.getItem('token');
+        if (token) {
+          await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/push/subscribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ subscription: sub.toJSON() }),
+          });
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Listen for background sync completion
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      const handler = (event) => {
+        if (event.data?.type === 'sync-complete') {
+          // Refresh messages
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handler);
+      return () => navigator.serviceWorker.removeEventListener('message', handler);
+    }
+  }, []);
+
   return (
-    <WebSocketContext.Provider value={{ onlineUsers, typingUsers, send, sendTyping, sendChatMessage, sendReadReceipt, addListener }}>
+    <WebSocketContext.Provider value={{ onlineUsers, typingUsers, send, sendTyping, sendChatMessage: sendChatMessageWithFallback, sendReadReceipt, addListener, subscribePush, queueOfflineMessage }}>
       {children}
     </WebSocketContext.Provider>
   );
@@ -113,6 +172,6 @@ export const WebSocketProvider = ({ children }) => {
 
 export const useWebSocket = () => {
   const ctx = useContext(WebSocketContext);
-  if (!ctx) return { onlineUsers: [], typingUsers: {}, send: () => {}, sendTyping: () => {}, sendChatMessage: () => {}, sendReadReceipt: () => {}, addListener: () => () => {} };
+  if (!ctx) return { onlineUsers: [], typingUsers: {}, send: () => {}, sendTyping: () => {}, sendChatMessage: () => {}, sendReadReceipt: () => {}, addListener: () => () => {}, subscribePush: () => {}, queueOfflineMessage: () => {} };
   return ctx;
 };

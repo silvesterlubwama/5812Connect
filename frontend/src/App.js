@@ -12,6 +12,7 @@ import KioskPage from './pages/KioskPage';
 import PublicBookingsPage from './pages/PublicBookingsPage';
 import DashboardPage from './pages/DashboardPage';
 import MembersPage from './pages/MembersPage';
+import UnifiedPeoplePage from './pages/UnifiedPeoplePage';
 import EventsPage from './pages/EventsPage';
 import TasksPage from './pages/TasksPage';
 import CalendarPage from './pages/CalendarPage';
@@ -60,7 +61,7 @@ function AppRoutes() {
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="members" element={<MembersPage />} />
+        <Route path="members" element={<UnifiedPeoplePage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="calendar" element={<CalendarPage />} />
@@ -68,7 +69,7 @@ function AppRoutes() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="financial" element={<FinancialPage />} />
         <Route path="sales" element={<ProductsPage />} />
-        <Route path="people" element={<PeoplePage />} />
+        <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="locations" element={<LocationsPage />} />
         <Route path="attendance" element={<AttendancePage />} />

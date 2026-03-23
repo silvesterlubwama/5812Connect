@@ -65,3 +65,36 @@ async def _audit(user_id: str, action: str, resource_type: str, resource_id: str
         "resource_type": resource_type, "resource_id": resource_id,
         "details": details, "timestamp": datetime.now(timezone.utc).isoformat(),
     })
+
+
+# ---- RBAC HELPERS ----
+
+ROLE_LEVELS = {
+    "system_admin": 10, "admin": 10,
+    "Executive Director": 9, "Director": 8,
+    "Manager": 7, "Coordinator": 6,
+    "Staff": 5, "Volunteer": 4,
+    "Member": 3, "Parent": 2,
+    "Customer": 1, "Guest": 1,
+}
+
+def get_role_level(role: str) -> int:
+    return ROLE_LEVELS.get(role, 0)
+
+
+def require_role(min_level: int):
+    """Dependency factory: raises 403 if user role < min_level"""
+    async def checker(current_user: dict = Depends(get_current_user)):
+        level = get_role_level(current_user.get("role", ""))
+        if level < min_level:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return checker
+
+
+# Convenience shortcuts
+require_admin = require_role(10)      # system_admin, admin
+require_director = require_role(8)    # Director+
+require_manager = require_role(7)     # Manager+
+require_coordinator = require_role(6) # Coordinator+
+require_staff = require_role(5)       # Staff+

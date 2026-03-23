@@ -28,8 +28,7 @@ const NAV_SECTIONS = [
   {
     label: 'People',
     items: [
-      { to: '/members', icon: Users, label: 'Members' },
-      { to: '/people', icon: Heart, label: 'Families & People' },
+      { to: '/members', icon: Users, label: 'People' },
     ]
   },
   {

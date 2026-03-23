@@ -310,3 +310,15 @@ export const csvUploadApi = {
   uploadChildrenParents: (formData) => api.post('/import/csv/children-parents', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   uploadStaff: (formData) => api.post('/import/csv/staff', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
 };
+
+// ---- PUSH NOTIFICATIONS ----
+export const pushApi = {
+  vapidKey: () => api.get('/push/vapid-key'),
+  subscribe: (subscription) => api.post('/push/subscribe', { subscription }),
+  unsubscribe: () => api.delete('/push/subscribe'),
+};
+
+// ---- OFFLINE SYNC ----
+export const syncApi = {
+  messages: (messages) => api.post('/sync/messages', { messages }),
+};

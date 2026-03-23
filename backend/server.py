@@ -5,6 +5,7 @@ import csv
 import io
 from dotenv import load_dotenv
 from storage import init_storage
+from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -560,7 +561,7 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
     return member
 
 @api_router.delete("/members/{member_id}")
-async def delete_member(member_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_member(member_id: str, current_user: dict = Depends(require_coordinator)):
     result = await db.members.delete_one({"id": member_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -1075,7 +1076,7 @@ class AuditLogCreate(BaseModel):
 # ========== FINANCIAL ROUTES ==========
 
 @api_router.get("/financial/summary")
-async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).isoformat()[:7]
     loc_match = {"location_id": location_id} if location_id else {}
@@ -1119,7 +1120,7 @@ async def financial_summary(location_id: Optional[str] = None, current_user: dic
     }
 
 @api_router.post("/financial/distribute-funds")
-async def distribute_funds(data: dict, current_user: dict = Depends(get_current_user)):
+async def distribute_funds(data: dict, current_user: dict = Depends(require_director)):
     """Distribute funds from one location to another"""
     from_location_id = data.get("from_location_id")
     to_location_id = data.get("to_location_id")
@@ -1185,7 +1186,7 @@ async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[
     return donations
 
 @api_router.post("/financial/donations")
-async def create_donation(data: DonationCreate, current_user: dict = Depends(get_current_user)):
+async def create_donation(data: DonationCreate, current_user: dict = Depends(require_staff)):
     doc = {
         "id": f"don_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -1213,7 +1214,7 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
     return expenses
 
 @api_router.post("/financial/expenses")
-async def create_expense(data: ExpenseCreate, current_user: dict = Depends(get_current_user)):
+async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_manager)):
     doc = {
         "id": f"exp_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -1397,7 +1398,7 @@ async def _audit(user_id: str, action: str, resource: str, resource_id: str = No
         pass
 
 @api_router.get("/audit")
-async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(require_admin)):
     if current_user.get("role") not in ("admin", "system_admin"):
         raise HTTPException(status_code=403, detail="Admin only")
     logs = await db.audit_log.find({}, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
@@ -1606,7 +1607,7 @@ async def list_locations(current_user: dict = Depends(get_current_user)):
     return locs
 
 @api_router.post("/locations")
-async def create_location(data: LocationCreate, current_user: dict = Depends(get_current_user)):
+async def create_location(data: LocationCreate, current_user: dict = Depends(require_admin)):
     doc = {
         "id": f"loc_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -1647,7 +1648,7 @@ async def assign_staff_to_location(loc_id: str, data: dict, current_user: dict =
     return {"message": "Staff assigned"}
 
 @api_router.put("/locations/{loc_id}/director")
-async def set_location_director(loc_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+async def set_location_director(loc_id: str, data: dict, current_user: dict = Depends(require_admin)):
     director_id = data.get("director_id")
     await db.locations.update_one({"id": loc_id}, {"$set": {"director_id": director_id}})
     loc = await db.locations.find_one({"id": loc_id}, {"_id": 0})
@@ -1667,7 +1668,7 @@ async def get_exchange_rate(from_currency: str = "UGX", to_currency: str = "USD"
     return {"from": from_currency, "to": to_currency, "rate": round(rate, 6)}
 
 @api_router.delete("/locations/{loc_id}")
-async def delete_location(loc_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_location(loc_id: str, current_user: dict = Depends(require_admin)):
     await db.locations.delete_one({"id": loc_id})
     return {"message": "Location deleted"}
 
@@ -1721,6 +1722,68 @@ async def create_notification(data: NotificationCreate, current_user: dict = Dep
 async def delete_notification(notif_id: str, current_user: dict = Depends(get_current_user)):
     await db.notifications.delete_one({"id": notif_id})
     return {"message": "Notification deleted"}
+
+
+# ========== WEB PUSH SUBSCRIPTIONS ==========
+
+@api_router.post("/push/subscribe")
+async def subscribe_push(data: dict, current_user: dict = Depends(get_current_user)):
+    """Store web push subscription for user"""
+    subscription = data.get("subscription")
+    if not subscription or not subscription.get("endpoint"):
+        raise HTTPException(status_code=400, detail="Invalid push subscription")
+    await db.push_subscriptions.update_one(
+        {"user_id": current_user["id"]},
+        {"$set": {"user_id": current_user["id"], "subscription": subscription, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"message": "Push subscription saved"}
+
+
+@api_router.delete("/push/subscribe")
+async def unsubscribe_push(current_user: dict = Depends(get_current_user)):
+    await db.push_subscriptions.delete_many({"user_id": current_user["id"]})
+    return {"message": "Push subscription removed"}
+
+
+@api_router.get("/push/vapid-key")
+async def get_vapid_key():
+    """Return the public VAPID key for push subscriptions"""
+    # Generate a static keypair if not existing
+    import hashlib
+    seed = os.environ.get("SECRET_KEY", "5812global")
+    key = hashlib.sha256(seed.encode()).hexdigest()[:64]
+    return {"publicKey": f"BPush-{key[:32]}"}
+
+
+# ========== OFFLINE SYNC ==========
+
+@api_router.post("/sync/messages")
+async def sync_offline_messages(data: dict, current_user: dict = Depends(get_current_user)):
+    """Receive queued messages from offline clients"""
+    messages = data.get("messages", [])
+    synced = 0
+    for msg in messages:
+        if not msg.get("conversation_id") or not msg.get("text"):
+            continue
+        existing = await db.chat_messages.find_one({"id": msg.get("id")})
+        if existing:
+            continue
+        doc = {
+            "id": msg.get("id", f"msg_{str(uuid.uuid4())[:8]}"),
+            "conversation_id": msg["conversation_id"],
+            "sender_id": current_user["id"],
+            "sender_name": current_user.get("name", "Unknown"),
+            "text": msg["text"],
+            "type": "text",
+            "reply_to": msg.get("reply_to"),
+            "read_by": [current_user["id"]],
+            "created_at": msg.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.chat_messages.insert_one(doc)
+        synced += 1
+    return {"synced": synced}
 
 # ========== GLOBAL SEARCH ==========
 
@@ -2340,7 +2403,7 @@ async def import_children_parents(data: dict, current_user: dict = Depends(get_c
     return {"imported_children": imported_children, "imported_parents": imported_parents, "imported_families": imported_families, "errors": errors}
 
 @api_router.post("/import/staff")
-async def import_staff(data: dict, current_user: dict = Depends(get_current_user)):
+async def import_staff(data: dict, current_user: dict = Depends(require_manager)):
     """Import staff from CSV. Fields: name, email, phone, national_id, role, department"""
     rows = data.get("rows", [])
     imported = 0
@@ -2378,7 +2441,7 @@ async def import_staff(data: dict, current_user: dict = Depends(get_current_user
 from fastapi import UploadFile, File
 
 @api_router.post("/import/csv/members")
-async def import_csv_members_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+async def import_csv_members_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
     """Upload a real CSV file to import members"""
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
@@ -2419,7 +2482,7 @@ async def import_csv_members_file(file: UploadFile = File(...), current_user: di
 
 
 @api_router.post("/import/csv/children-parents")
-async def import_csv_children_parents_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+async def import_csv_children_parents_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
     """Upload a real CSV file to import children and parents"""
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
@@ -2429,7 +2492,7 @@ async def import_csv_children_parents_file(file: UploadFile = File(...), current
 
 
 @api_router.post("/import/csv/staff")
-async def import_csv_staff_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+async def import_csv_staff_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
     """Upload a real CSV file to import staff"""
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
