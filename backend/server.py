@@ -39,6 +39,12 @@ except Exception as e:
 app = FastAPI(title="58:12 Global Connect API")
 api_router = APIRouter(prefix="/api")
 
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "service": "58:12 Global Connect CRM"}
+
+
 # Rate limiting middleware
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, requests_per_minute: int = 120):
