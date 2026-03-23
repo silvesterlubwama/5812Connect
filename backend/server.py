@@ -5,9 +5,14 @@ import csv
 import io
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import time
+from collections import defaultdict
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Dict
@@ -26,6 +31,32 @@ db = client[os.environ.get('DB_NAME', '5812global')]
 
 app = FastAPI(title="58:12 Global Connect API")
 api_router = APIRouter(prefix="/api")
+
+# Rate limiting middleware
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, requests_per_minute: int = 120):
+        super().__init__(app)
+        self.requests_per_minute = requests_per_minute
+        self.request_counts: Dict[str, list] = defaultdict(list)
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for WebSocket upgrades
+        if request.headers.get("upgrade") == "websocket":
+            return await call_next(request)
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        window = now - 60
+        self.request_counts[client_ip] = [t for t in self.request_counts[client_ip] if t > window]
+        if len(self.request_counts[client_ip]) >= self.requests_per_minute:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Try again in a minute."}
+            )
+        self.request_counts[client_ip].append(now)
+        response = await call_next(request)
+        return response
+
+app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 
 # Auth setup
 SECRET_KEY = os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production')
@@ -2323,6 +2354,16 @@ async def seed_all_data():
         seeded.append("badges")
     return {"seeded": seeded, "message": "Seed complete"}
 
+
+# Include modular routers
+try:
+    from routers.bookings import router as bookings_router
+    from routers.websocket import router as ws_router
+    app.include_router(bookings_router)
+    app.include_router(ws_router)
+    logger.info("Modular routers loaded")
+except Exception as e:
+    logger.warning(f"Router loading: {e}")
 
 app.include_router(api_router)
 

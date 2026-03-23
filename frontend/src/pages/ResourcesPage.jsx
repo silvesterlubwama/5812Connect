@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle } from 'lucide-react';
+import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle, CalendarDays } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
 import api from '../services/api';
-import { locationsApi } from '../services/api';
+import { locationsApi, bookingsApi } from '../services/api';
 import { toast } from 'sonner';
 
 const RESOURCE_TYPES = [
@@ -39,6 +39,11 @@ export default function ResourcesPage() {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [locationFilter, setLocationFilter] = useState('all');
+  const [showBooking, setShowBooking] = useState(false);
+  const [bookingResource, setBookingResource] = useState(null);
+  const [bookingForm, setBookingForm] = useState({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
+  const [bookings, setBookings] = useState([]);
+  const [mainTab, setMainTab] = useState('resources');
 
   const fetchData = async () => {
     setLoading(true);
@@ -54,6 +59,15 @@ export default function ResourcesPage() {
   };
 
   useEffect(() => { fetchData(); }, []);
+
+  const fetchBookings = async () => {
+    try {
+      const res = await bookingsApi.list({});
+      setBookings(res.data || []);
+    } catch {}
+  };
+
+  useEffect(() => { fetchBookings(); }, []);
 
   const openAdd = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
   const openEdit = (r) => {
@@ -169,6 +183,9 @@ export default function ResourcesPage() {
                     <p className="text-xs text-muted-foreground mt-0.5">{getLocationName(r.location_id)}</p>
                   </div>
                   <div className="flex gap-1">
+                    {r.is_bookable && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-primary" title="Book" onClick={() => { setBookingResource(r); setShowBooking(true); }} data-testid="book-resource-btn"><CalendarDays size={12} /></Button>
+                    )}
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => openEdit(r)}><Edit2 size={12} /></Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => deleteResource(r.id)}><Trash2 size={12} /></Button>
                   </div>
@@ -256,6 +273,53 @@ export default function ResourcesPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Booking Dialog */}
+      <Dialog open={showBooking} onOpenChange={setShowBooking}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Book: {bookingResource?.name}</DialogTitle>
+            <DialogDescription>1-hour buffer is enforced between bookings</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Booking Title *</Label>
+              <Input placeholder="e.g. Team meeting" value={bookingForm.title} onChange={e => setBookingForm({...bookingForm, title: e.target.value})} data-testid="booking-title-input" />
+            </div>
+            <div className="space-y-2"><Label>Date *</Label>
+              <Input type="date" value={bookingForm.date} onChange={e => setBookingForm({...bookingForm, date: e.target.value})} data-testid="booking-date-input" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Start Time</Label>
+                <Input type="time" value={bookingForm.start_time} onChange={e => setBookingForm({...bookingForm, start_time: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>End Time</Label>
+                <Input type="time" value={bookingForm.end_time} onChange={e => setBookingForm({...bookingForm, end_time: e.target.value})} />
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Notes</Label>
+              <Input placeholder="Additional details" value={bookingForm.notes} onChange={e => setBookingForm({...bookingForm, notes: e.target.value})} />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBooking(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!bookingForm.title || !bookingForm.date} data-testid="confirm-booking-btn" onClick={async () => {
+                try {
+                  await bookingsApi.create({
+                    resource_id: bookingResource?.id,
+                    location_id: bookingResource?.location_id,
+                    ...bookingForm,
+                  });
+                  toast.success('Booked!');
+                  setShowBooking(false);
+                  setBookingForm({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
+                  fetchBookings();
+                } catch (err) {
+                  toast.error(err.response?.data?.detail || 'Booking failed');
+                }
+              }}>Confirm Booking</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

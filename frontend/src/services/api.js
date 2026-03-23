@@ -267,3 +267,10 @@ export const chatApi = {
   sendMessage: (convId, text) => api.post(`/chat/conversations/${convId}/messages`, { text }),
   aiAssistant: (message, session_id) => api.post('/chat/ai-assistant', { message, session_id }),
 };
+
+export const bookingsApi = {
+  list: (params) => api.get('/bookings', { params }),
+  create: (data) => api.post('/bookings', data),
+  update: (id, data) => api.put(`/bookings/${id}`, data),
+  cancel: (id) => api.delete(`/bookings/${id}`),
+};

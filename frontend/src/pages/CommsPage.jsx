@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash } from 'lucide-react';
+import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -9,28 +9,29 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { chatApi, membersApi, locationsApi } from '../services/api';
+import { chatApi, membersApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 
+// Static pinned rooms
+const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon: 'bot' };
+const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
+
 export default function CommsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('chat');
   const [conversations, setConversations] = useState([]);
-  const [selectedConv, setSelectedConv] = useState(null);
+  const [selectedRoom, setSelectedRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // AI Assistant state
+  // AI state
   const [aiMessages, setAiMessages] = useState([]);
-  const [aiInput, setAiInput] = useState('');
-  const [aiSending, setAiSending] = useState(false);
   const [aiSessionId] = useState(() => `ai_${user?.id || 'anon'}_${Date.now()}`);
 
   // Announcements
@@ -44,7 +45,7 @@ export default function CommsPage() {
   const [convForm, setConvForm] = useState({ name: '', participants: [], type: 'direct' });
 
   const messagesEndRef = useRef(null);
-  const aiEndRef = useRef(null);
+  const scrollToBottom = () => setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
 
   const fetchConversations = useCallback(async () => {
     try {
@@ -75,53 +76,54 @@ export default function CommsPage() {
     load();
   }, [fetchConversations, user?.id]);
 
-  const selectConversation = async (conv) => {
-    setSelectedConv(conv);
+  const selectRoom = async (room) => {
+    setSelectedRoom(room);
+    if (room.id === '__ai__') return; // AI messages managed in-memory
+    if (room.id === '__announcements__') return; // announcements already loaded
     try {
-      const res = await chatApi.messages(conv.id);
+      const res = await chatApi.messages(room.id);
       setMessages(res.data || []);
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      scrollToBottom();
     } catch { toast.error('Failed to load messages'); }
   };
 
   const handleSend = async () => {
-    if (!newMsg.trim() || !selectedConv) return;
+    if (!newMsg.trim() || !selectedRoom) return;
+
+    // AI Assistant
+    if (selectedRoom.id === '__ai__') {
+      const userText = newMsg;
+      setAiMessages(prev => [...prev, { role: 'user', text: userText }]);
+      setNewMsg('');
+      setSending(true);
+      scrollToBottom();
+      try {
+        const res = await chatApi.aiAssistant(userText, aiSessionId);
+        setAiMessages(prev => [...prev, { role: 'assistant', text: res.data.response }]);
+        scrollToBottom();
+      } catch {
+        setAiMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error. Please try again.' }]);
+      }
+      setSending(false);
+      return;
+    }
+
+    // Announcements
+    if (selectedRoom.id === '__announcements__') {
+      setShowNewAnnouncement(true);
+      return;
+    }
+
+    // Normal chat
     setSending(true);
     try {
-      const res = await chatApi.sendMessage(selectedConv.id, newMsg);
+      const res = await chatApi.sendMessage(selectedRoom.id, newMsg);
       setMessages(prev => [...prev, res.data]);
       setNewMsg('');
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      scrollToBottom();
+      fetchConversations(); // update last_message in sidebar
     } catch { toast.error('Failed to send'); }
     finally { setSending(false); }
-  };
-
-  const handleAiSend = async () => {
-    if (!aiInput.trim()) return;
-    const userMsg = aiInput;
-    setAiMessages(prev => [...prev, { role: 'user', text: userMsg }]);
-    setAiInput('');
-    setAiSending(true);
-    try {
-      const res = await chatApi.aiAssistant(userMsg, aiSessionId);
-      setAiMessages(prev => [...prev, { role: 'assistant', text: res.data.response }]);
-      setTimeout(() => aiEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-    } catch {
-      setAiMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error. Please try again.' }]);
-    }
-    finally { setAiSending(false); }
-  };
-
-  const handleCreateConv = async () => {
-    try {
-      const res = await chatApi.createConversation(convForm);
-      setConversations(prev => [res.data, ...prev]);
-      setShowNewConv(false);
-      setConvForm({ name: '', participants: [], type: 'direct' });
-      setSelectedConv(res.data);
-      setMessages([]);
-      toast.success('Conversation created');
-    } catch { toast.error('Failed to create conversation'); }
   };
 
   const handlePostAnnouncement = async (e) => {
@@ -135,210 +137,259 @@ export default function CommsPage() {
     } catch { toast.error('Failed to post announcement'); }
   };
 
-  const isAdmin = ['admin', 'system_admin'].includes(user?.role);
+  const handleCreateConv = async () => {
+    try {
+      const res = await chatApi.createConversation(convForm);
+      setConversations(prev => [res.data, ...prev]);
+      setShowNewConv(false);
+      setConvForm({ name: '', participants: [], type: 'direct' });
+      selectRoom(res.data);
+      toast.success('Conversation created');
+    } catch { toast.error('Failed to create conversation'); }
+  };
+
+  const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(user?.role);
+  const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  // Render the right pane content based on selected room
+  const renderMessages = () => {
+    if (!selectedRoom) {
+      return (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="text-center">
+            <MessageSquare size={48} className="mx-auto mb-4 opacity-20" />
+            <p className="text-sm font-medium">Select a conversation</p>
+            <p className="text-xs mt-1">Choose a chat room or start a new conversation</p>
+          </div>
+        </div>
+      );
+    }
+
+    // AI Room
+    if (selectedRoom.id === '__ai__') {
+      return (
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {aiMessages.length === 0 && (
+            <div className="text-center py-12 text-sm text-muted-foreground">
+              <Bot size={40} className="mx-auto mb-3 opacity-20" />
+              <p className="font-medium">AI Assistant</p>
+              <p className="text-xs mt-1 mb-4">Powered by Gemini — ask anything about your organization</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {['How do I add a new member?', 'Help me plan an event', 'Summarize financial status'].map(q => (
+                  <Button key={q} variant="outline" size="sm" className="text-xs h-7" onClick={() => setNewMsg(q)}>{q}</Button>
+                ))}
+              </div>
+            </div>
+          )}
+          {aiMessages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
+                {msg.role === 'assistant' && <p className="text-[10px] font-semibold opacity-60 mb-0.5">AI Assistant</p>}
+                <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+              </div>
+            </div>
+          ))}
+          {sending && (
+            <div className="flex justify-start">
+              <div className="bg-secondary rounded-2xl px-4 py-3">
+                <div className="flex gap-1.5">
+                  <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      );
+    }
+
+    // Announcements Room
+    if (selectedRoom.id === '__announcements__') {
+      return (
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {announcements.length === 0 ? (
+            <div className="text-center py-16 text-sm text-muted-foreground">
+              <Megaphone size={40} className="mx-auto mb-3 opacity-20" />
+              <p>No announcements yet.</p>
+            </div>
+          ) : (
+            announcements.map(a => (
+              <div key={a.id} className="flex justify-start" data-testid="announcement-msg">
+                <div className="max-w-[85%] bg-secondary rounded-2xl px-4 py-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-xs font-bold text-primary">{a.title}</p>
+                    <Badge variant="outline" className="text-[10px] capitalize h-4">{a.type}</Badge>
+                  </div>
+                  <p className="text-sm">{a.content}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">{a.created_at?.slice(0, 10)}</p>
+                </div>
+              </div>
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      );
+    }
+
+    // Normal Chat
+    return (
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.length === 0 && (
+          <div className="text-center py-16 text-sm text-muted-foreground">
+            <MessageSquare size={32} className="mx-auto mb-2 opacity-20" />
+            <p>No messages yet. Say hello!</p>
+          </div>
+        )}
+        {messages.map(msg => (
+          <div key={msg.id} className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[70%] rounded-2xl px-4 py-2 ${msg.sender_id === user?.id ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
+              {msg.sender_id !== user?.id && <p className="text-[10px] font-semibold opacity-70 mb-0.5">{msg.sender_name}</p>}
+              <p className="text-sm">{msg.text}</p>
+              <p className="text-[10px] opacity-50 mt-0.5">{msg.created_at?.slice(11, 16)}</p>
+            </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+    );
+  };
+
+  const getInputPlaceholder = () => {
+    if (!selectedRoom) return '';
+    if (selectedRoom.id === '__ai__') return 'Ask the AI assistant...';
+    if (selectedRoom.id === '__announcements__') return 'Click to post an announcement...';
+    return 'Type a message...';
+  };
+
+  const isInputDisabled = () => {
+    if (!selectedRoom) return true;
+    if (selectedRoom.id === '__announcements__' && !isAdmin) return true;
+    return false;
+  };
 
   return (
     <div className="p-6 h-[calc(100vh-4rem)]">
-      <Tabs value={tab} onValueChange={setTab} className="h-full flex flex-col">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-semibold font-heading" data-testid="comms-title">Communications</h1>
-            <p className="text-sm text-muted-foreground">Chat, AI assistant, and announcements</p>
-          </div>
-          <TabsList>
-            <TabsTrigger value="chat" data-testid="tab-chat"><MessageSquare size={14} className="mr-1" />Chat</TabsTrigger>
-            <TabsTrigger value="ai" data-testid="tab-ai"><Bot size={14} className="mr-1" />AI Assistant</TabsTrigger>
-            <TabsTrigger value="announcements" data-testid="tab-announcements"><Megaphone size={14} className="mr-1" />Announcements</TabsTrigger>
-          </TabsList>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-semibold font-heading" data-testid="comms-title">Communications</h1>
+          <p className="text-sm text-muted-foreground">Chat, AI assistant & announcements</p>
         </div>
+      </div>
 
-        {/* Chat Tab */}
-        <TabsContent value="chat" className="flex-1 min-h-0">
-          <div className="flex h-full gap-4 border border-border rounded-xl overflow-hidden bg-card">
-            {/* Sidebar */}
-            <div className="w-72 border-r border-border flex flex-col shrink-0">
-              <div className="p-3 border-b border-border">
-                <Button className="w-full gap-2" size="sm" onClick={() => setShowNewConv(true)} data-testid="new-conversation-btn">
-                  <Plus size={14} /> New Conversation
-                </Button>
-              </div>
-              <div className="overflow-y-auto flex-1">
-                {loading ? (
-                  <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 bg-muted animate-pulse rounded" />)}</div>
-                ) : conversations.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-8">No conversations yet</p>
-                ) : (
-                  conversations.map(conv => (
-                    <div key={conv.id}
-                      className={`p-3 border-b border-border cursor-pointer hover:bg-accent/50 transition-colors ${selectedConv?.id === conv.id ? 'bg-accent' : ''}`}
-                      onClick={() => selectConversation(conv)} data-testid="conversation-item">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-8 w-8">
-                          <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                            {conv.type === 'group' ? <Users size={12} /> : initials(conv.name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{conv.name || 'Chat'}</p>
-                          <p className="text-xs text-muted-foreground truncate">{conv.last_message || 'No messages'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+      <div className="flex h-[calc(100%-3.5rem)] gap-0 border border-border rounded-xl overflow-hidden bg-card">
+        {/* Sidebar */}
+        <div className="w-72 border-r border-border flex flex-col shrink-0">
+          {/* Search + New */}
+          <div className="p-3 border-b border-border space-y-2">
+            <div className="relative">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-8 h-8 text-xs" placeholder="Search chats..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
-
-            {/* Messages area */}
-            <div className="flex-1 flex flex-col min-w-0">
-              {selectedConv ? (
-                <>
-                  <div className="p-3 border-b border-border flex items-center gap-3">
-                    <Avatar className="h-8 w-8"><AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(selectedConv.name)}</AvatarFallback></Avatar>
-                    <div>
-                      <p className="text-sm font-semibold">{selectedConv.name || 'Chat'}</p>
-                      <p className="text-xs text-muted-foreground">{selectedConv.participants?.length || 0} participants · {selectedConv.type}</p>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {messages.map(msg => (
-                      <div key={msg.id} className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[70%] rounded-2xl px-4 py-2 ${msg.sender_id === user?.id ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
-                          {msg.sender_id !== user?.id && <p className="text-xs font-semibold mb-0.5 opacity-75">{msg.sender_name}</p>}
-                          <p className="text-sm">{msg.text}</p>
-                          <p className="text-[10px] opacity-60 mt-0.5">{msg.created_at?.slice(11, 16)}</p>
-                        </div>
-                      </div>
-                    ))}
-                    <div ref={messagesEndRef} />
-                  </div>
-                  {!selectedConv.is_no_reply && (
-                    <div className="p-3 border-t border-border flex gap-2">
-                      <Input className="flex-1" placeholder="Type a message..." value={newMsg}
-                        onChange={e => setNewMsg(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                        data-testid="chat-input" />
-                      <Button onClick={handleSend} disabled={sending || !newMsg.trim()} data-testid="send-message-btn">
-                        <Send size={16} />
-                      </Button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                  <div className="text-center">
-                    <MessageSquare size={40} className="mx-auto mb-3 opacity-30" />
-                    <p className="text-sm">Select a conversation to start chatting</p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <Button className="w-full gap-2 h-8 text-xs" size="sm" onClick={() => setShowNewConv(true)} data-testid="new-conversation-btn">
+              <Plus size={13} /> New Conversation
+            </Button>
           </div>
-        </TabsContent>
 
-        {/* AI Assistant Tab */}
-        <TabsContent value="ai" className="flex-1 min-h-0">
-          <Card className="h-full flex flex-col shadow-soft rounded-xl overflow-hidden">
-            <CardHeader className="py-3 px-5 border-b border-border">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-primary/10"><Bot size={16} className="text-primary" /></div>
-                <div>
-                  <CardTitle className="text-sm">AI Assistant</CardTitle>
-                  <p className="text-xs text-muted-foreground">Powered by Gemini - ask about processes, members, or tasks</p>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto p-4 space-y-3">
-              {aiMessages.length === 0 && (
-                <div className="text-center py-12 text-sm text-muted-foreground">
-                  <Bot size={40} className="mx-auto mb-3 opacity-30" />
-                  <p>Ask me anything about your organization!</p>
-                  <div className="flex flex-wrap gap-2 justify-center mt-4">
-                    {['How do I add a new member?', 'Help me plan an event', 'Summarize our financial status'].map(q => (
-                      <Button key={q} variant="outline" size="sm" className="text-xs" onClick={() => { setAiInput(q); }}>{q}</Button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {aiMessages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
-                    <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-                  </div>
-                </div>
-              ))}
-              {aiSending && (
-                <div className="flex justify-start">
-                  <div className="bg-secondary rounded-2xl px-4 py-2.5">
-                    <div className="flex gap-1">
-                      <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="h-2 w-2 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div ref={aiEndRef} />
-            </CardContent>
-            <div className="p-3 border-t border-border flex gap-2">
-              <Input className="flex-1" placeholder="Ask the AI assistant..." value={aiInput}
-                onChange={e => setAiInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiSend(); } }}
-                data-testid="ai-input" />
-              <Button onClick={handleAiSend} disabled={aiSending || !aiInput.trim()} data-testid="ai-send-btn">
-                <Send size={16} />
-              </Button>
-            </div>
-          </Card>
-        </TabsContent>
+          {/* Pinned rooms */}
+          <div className="border-b border-border">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Pinned</p>
+            <SidebarItem
+              room={AI_ROOM} selected={selectedRoom?.id === '__ai__'}
+              icon={<Bot size={14} className="text-primary" />}
+              subtitle="Powered by Gemini"
+              onClick={() => selectRoom(AI_ROOM)}
+            />
+            <SidebarItem
+              room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'}
+              icon={<Megaphone size={14} className="text-amber-600" />}
+              subtitle={`${announcements.length} announcements`}
+              badge={announcements.length > 0 ? announcements.length : null}
+              onClick={() => selectRoom(ANNOUNCE_ROOM)}
+            />
+          </div>
 
-        {/* Announcements Tab */}
-        <TabsContent value="announcements" className="flex-1 min-h-0 overflow-y-auto">
-          <div className="space-y-4">
-            {isAdmin && (
-              <div className="flex justify-end">
-                <Button className="gap-2" onClick={() => setShowNewAnnouncement(true)} data-testid="new-announcement-btn">
-                  <Plus size={14} /> Post Announcement
-                </Button>
-              </div>
-            )}
+          {/* Conversations */}
+          <div className="overflow-y-auto flex-1">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Conversations</p>
             {loading ? (
-              <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}</div>
-            ) : announcements.length === 0 ? (
-              <div className="text-center py-16 text-sm text-muted-foreground">
-                <Megaphone size={40} className="mx-auto mb-3 opacity-30" />
-                No announcements yet.
-              </div>
+              <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
+            ) : filteredConvs.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground text-center py-6">No conversations yet</p>
             ) : (
-              announcements.map(a => (
-                <Card key={a.id} className="shadow-soft rounded-xl" data-testid="announcement-card">
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-semibold text-sm">{a.title}</h3>
-                          <Badge variant="outline" className="text-xs capitalize">{a.type}</Badge>
-                          {a.pinned && <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200">Pinned</Badge>}
-                        </div>
-                        <p className="text-sm text-muted-foreground">{a.content}</p>
-                      </div>
-                      <p className="text-xs text-muted-foreground shrink-0 ml-4">{a.created_at?.slice(0, 10)}</p>
-                    </div>
-                  </CardContent>
-                </Card>
+              filteredConvs.map(conv => (
+                <SidebarItem
+                  key={conv.id}
+                  room={conv} selected={selectedRoom?.id === conv.id}
+                  icon={conv.type === 'group' ? <Users size={14} className="text-blue-500" /> : <Hash size={14} className="text-muted-foreground" />}
+                  subtitle={conv.last_message || 'No messages'}
+                  onClick={() => selectRoom(conv)}
+                />
               ))
             )}
           </div>
-        </TabsContent>
-      </Tabs>
+        </div>
+
+        {/* Main chat area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          {selectedRoom && (
+            <div className="p-3 border-b border-border flex items-center gap-3 shrink-0">
+              <div className="p-1.5 rounded-lg bg-secondary">
+                {selectedRoom.id === '__ai__' ? <Bot size={16} className="text-primary" /> :
+                 selectedRoom.id === '__announcements__' ? <Megaphone size={16} className="text-amber-600" /> :
+                 selectedRoom.type === 'group' ? <Users size={16} className="text-blue-500" /> :
+                 <MessageSquare size={16} className="text-muted-foreground" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate">{selectedRoom.name || 'Chat'}</p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedRoom.id === '__ai__' ? 'Gemini AI — ask anything' :
+                   selectedRoom.id === '__announcements__' ? 'No-reply channel' :
+                   `${selectedRoom.participants?.length || 0} participants`}
+                </p>
+              </div>
+              {selectedRoom.id === '__announcements__' && isAdmin && (
+                <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={() => setShowNewAnnouncement(true)} data-testid="post-announcement-btn">
+                  <Plus size={12} /> Post
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* Messages */}
+          {renderMessages()}
+
+          {/* Input */}
+          {selectedRoom && !isInputDisabled() && !(selectedRoom.id === '__announcements__' && !isAdmin) && (
+            <div className="p-3 border-t border-border flex gap-2 shrink-0">
+              <Input className="flex-1" placeholder={getInputPlaceholder()} value={newMsg}
+                onChange={e => setNewMsg(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                onClick={() => { if (selectedRoom.id === '__announcements__') setShowNewAnnouncement(true); }}
+                readOnly={selectedRoom.id === '__announcements__'}
+                data-testid="chat-input" />
+              <Button onClick={handleSend} disabled={sending || (!newMsg.trim() && selectedRoom.id !== '__announcements__')} size="icon" data-testid="send-message-btn">
+                <Send size={16} />
+              </Button>
+            </div>
+          )}
+          {selectedRoom?.id === '__announcements__' && !isAdmin && (
+            <div className="p-3 border-t border-border text-center">
+              <p className="text-xs text-muted-foreground">This is a no-reply announcements channel</p>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* New Conversation Dialog */}
       <Dialog open={showNewConv} onOpenChange={setShowNewConv}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>New Conversation</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Conversation Name</Label>
-              <Input placeholder="e.g. Team Discussion" value={convForm.name} onChange={e => setConvForm({...convForm, name: e.target.value})} data-testid="conv-name-input" />
+            <div className="space-y-2"><Label>Name *</Label>
+              <Input placeholder="e.g. Entebbe Team" value={convForm.name} onChange={e => setConvForm({...convForm, name: e.target.value})} data-testid="conv-name-input" />
             </div>
             <div className="space-y-2"><Label>Type</Label>
               <Select value={convForm.type} onValueChange={v => setConvForm({...convForm, type: v})}>
@@ -346,7 +397,6 @@ export default function CommsPage() {
                 <SelectContent>
                   <SelectItem value="direct">Direct Message</SelectItem>
                   <SelectItem value="group">Group Chat</SelectItem>
-                  <SelectItem value="announcements">Announcements (No Reply)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -380,7 +430,7 @@ export default function CommsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* New Announcement Dialog */}
+      {/* Post Announcement Dialog */}
       <Dialog open={showNewAnnouncement} onOpenChange={setShowNewAnnouncement}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Post Announcement</DialogTitle></DialogHeader>
@@ -403,11 +453,27 @@ export default function CommsPage() {
             </div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowNewAnnouncement(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" data-testid="post-announcement-btn">Post</Button>
+              <Button type="submit" className="flex-1" data-testid="post-announcement-submit">Post</Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function SidebarItem({ room, selected, icon, subtitle, badge, onClick }) {
+  return (
+    <div
+      className={`px-3 py-2.5 cursor-pointer transition-colors flex items-center gap-2.5 hover:bg-accent/50 ${selected ? 'bg-accent' : ''}`}
+      onClick={onClick} data-testid="sidebar-chat-item"
+    >
+      <div className="p-1.5 rounded-lg bg-secondary shrink-0">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{room.name}</p>
+        <p className="text-[11px] text-muted-foreground truncate">{subtitle}</p>
+      </div>
+      {badge && <Badge variant="secondary" className="text-[10px] h-5 px-1.5 shrink-0">{badge}</Badge>}
     </div>
   );
 }
