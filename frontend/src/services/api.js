@@ -93,3 +93,84 @@ export const kioskApi = {
   checkin: (data) => api.post('/kiosk/checkin', data),
   lookup: (identifier) => api.get('/kiosk/lookup', { params: { identifier } }),
 };
+
+// ---- FINANCIAL ----
+export const financialApi = {
+  summary: () => api.get('/financial/summary'),
+  donations: (params) => api.get('/financial/donations', { params }),
+  createDonation: (data) => api.post('/financial/donations', data),
+  expenses: (params) => api.get('/financial/expenses', { params }),
+  createExpense: (data) => api.post('/financial/expenses', data),
+};
+
+// ---- PRODUCTS & SALES ----
+export const productsApi = {
+  list: () => api.get('/products'),
+  create: (data) => api.post('/products', data),
+  update: (id, data) => api.put(`/products/${id}`, data),
+  delete: (id) => api.delete(`/products/${id}`),
+};
+export const salesApi = {
+  list: (params) => api.get('/sales', { params }),
+  create: (data) => api.post('/sales', data),
+};
+
+// ---- FAMILIES ----
+export const familiesApi = {
+  list: (params) => api.get('/families', { params }),
+  create: (data) => api.post('/families', data),
+  update: (id, data) => api.put(`/families/${id}`, data),
+  delete: (id) => api.delete(`/families/${id}`),
+};
+export const childrenApi = {
+  list: (params) => api.get('/children', { params }),
+  create: (data) => api.post('/children', data),
+  update: (id, data) => api.put(`/children/${id}`, data),
+  delete: (id) => api.delete(`/children/${id}`),
+};
+export const guestsApi = {
+  list: (params) => api.get('/guests', { params }),
+  create: (data) => api.post('/guests', data),
+  delete: (id) => api.delete(`/guests/${id}`),
+};
+
+// ---- LOCATIONS ----
+export const locationsApi = {
+  list: () => api.get('/locations'),
+  create: (data) => api.post('/locations', data),
+  update: (id, data) => api.put(`/locations/${id}`, data),
+  delete: (id) => api.delete(`/locations/${id}`),
+};
+
+// ---- NOTIFICATIONS ----
+export const notificationsApi = {
+  list: () => api.get('/notifications'),
+  unreadCount: () => api.get('/notifications/unread-count'),
+  create: (data) => api.post('/notifications', data),
+  markRead: (id) => api.put(`/notifications/${id}/read`),
+  markAllRead: () => api.put('/notifications/read-all'),
+  delete: (id) => api.delete(`/notifications/${id}`),
+};
+
+// ---- SEARCH ----
+export const searchApi = {
+  query: (q) => api.get('/search', { params: { q } }),
+};
+
+// ---- AUDIT ----
+export const auditApi = {
+  list: (params) => api.get('/audit', { params }),
+};
+
+// ---- PEOPLE STATS ----
+export const peopleApi = {
+  stats: () => api.get('/people/stats'),
+};
+
+// ---- EXPORT ----
+export const exportApi = {
+  members: () => `${BACKEND_URL}/api/export/members`,
+  financial: () => `${BACKEND_URL}/api/export/financial`,
+  events: () => `${BACKEND_URL}/api/export/events`,
+  ical: () => `${BACKEND_URL}/api/export/events.ics`,
+};

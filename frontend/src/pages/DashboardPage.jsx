@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, ArrowRight, AlertCircle, RefreshCw } from 'lucide-react';
+import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { dashboardApi, eventsApi, tasksApi } from '../services/api';
+import { dashboardApi, eventsApi, tasksApi, financialApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -52,19 +52,22 @@ export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [events, setEvents] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [financial, setFinancial] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
 
   const fetchAll = async () => {
     setLoadingStats(true);
     try {
-      const [statsRes, eventsRes, tasksRes] = await Promise.all([
+      const [statsRes, eventsRes, tasksRes, finRes] = await Promise.all([
         dashboardApi.stats(),
         eventsApi.list({ status: 'upcoming' }),
         tasksApi.list(),
+        financialApi.summary(),
       ]);
       setStats(statsRes.data);
       setEvents(eventsRes.data.slice(0, 4));
       setTasks(tasksRes.data.filter(t => t.status !== 'done' && t.priority === 'high').slice(0, 4));
+      setFinancial(finRes.data);
     } catch (err) {
       toast.error('Failed to load dashboard data');
     } finally {
@@ -95,6 +98,43 @@ export default function DashboardPage() {
         <StatCard title="Events This Month" value={stats?.events_this_month ?? '—'} sub={`${stats?.upcoming_events ?? 0} upcoming`} icon={Calendar} color="bg-blue-500" loading={loadingStats} />
         <StatCard title="Check-ins Today" value={stats?.checkins_today ?? '—'} sub="Across all venues" icon={UserCheck} color="bg-green-500" loading={loadingStats} />
         <StatCard title="Tasks Overdue" value={stats?.tasks_overdue ?? '—'} sub={`${stats?.new_members_this_month ?? 0} new members`} icon={CheckSquare} color="bg-amber-500" loading={loadingStats} />
+      </div>
+
+      {/* Financial Summary */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card className="shadow-soft rounded-xl">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="p-2.5 rounded-lg bg-green-500"><DollarSign size={18} className="text-white" /></div>
+            <div>
+              <p className="text-xs text-muted-foreground">Monthly Donations</p>
+              {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
+                <p className="text-lg font-bold">UGX {(financial?.monthly_donations || 0).toLocaleString()}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="shadow-soft rounded-xl">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="p-2.5 rounded-lg bg-red-500"><Banknote size={18} className="text-white" /></div>
+            <div>
+              <p className="text-xs text-muted-foreground">Monthly Expenses</p>
+              {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
+                <p className="text-lg font-bold">UGX {(financial?.monthly_expenses || 0).toLocaleString()}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="shadow-soft rounded-xl">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className={`p-2.5 rounded-lg ${(financial?.net_balance || 0) >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}><TrendingUp size={18} className="text-white" /></div>
+            <div>
+              <p className="text-xs text-muted-foreground">Net Balance</p>
+              {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
+                <p className="text-lg font-bold">UGX {(financial?.net_balance || 0).toLocaleString()}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Growth & Quick Actions */}

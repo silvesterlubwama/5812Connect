@@ -1,5 +1,8 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
+import csv
+import io
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1237,6 +1240,272 @@ async def seed_extended():
     return {"message": "Extended seed data added"}
 
 
+# ========== LOCATION MODELS ==========
+
+class LocationCreate(BaseModel):
+    name: str
+    code: Optional[str] = None
+    type: str = "branch"
+    parent_id: Optional[str] = None
+    address: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    address: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    active: Optional[bool] = None
+
+# ========== NOTIFICATION MODEL ==========
+
+class NotificationCreate(BaseModel):
+    title: str
+    message: str
+    type: str = "info"
+    target_role: Optional[str] = None
+    link: Optional[str] = None
+
+# ========== LOCATION ROUTES ==========
+
+@api_router.get("/locations")
+async def list_locations(current_user: dict = Depends(get_current_user)):
+    locs = await db.locations.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    return locs
+
+@api_router.post("/locations")
+async def create_location(data: LocationCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"loc_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "active": True,
+        "member_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.locations.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "location", doc["id"])
+    return doc
+
+@api_router.put("/locations/{loc_id}")
+async def update_location(loc_id: str, data: LocationUpdate, current_user: dict = Depends(get_current_user)):
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.locations.update_one({"id": loc_id}, {"$set": update_data})
+    loc = await db.locations.find_one({"id": loc_id}, {"_id": 0})
+    return loc
+
+@api_router.delete("/locations/{loc_id}")
+async def delete_location(loc_id: str, current_user: dict = Depends(get_current_user)):
+    await db.locations.delete_one({"id": loc_id})
+    return {"message": "Location deleted"}
+
+# ========== NOTIFICATION ROUTES ==========
+
+@api_router.get("/notifications")
+async def list_notifications(current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role", "volunteer")
+    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    notifs = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
+    user_id = current_user["id"]
+    for n in notifs:
+        n["read"] = user_id in n.get("read_by", [])
+    return notifs
+
+@api_router.get("/notifications/unread-count")
+async def unread_notification_count(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    role = current_user.get("role", "volunteer")
+    query = {"$or": [{"target_role": None}, {"target_role": role}], "read_by": {"$ne": user_id}}
+    count = await db.notifications.count_documents(query)
+    return {"count": count}
+
+@api_router.put("/notifications/read-all")
+async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    role = current_user.get("role", "volunteer")
+    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    await db.notifications.update_many(query, {"$addToSet": {"read_by": user_id}})
+    return {"message": "All marked as read"}
+
+@api_router.put("/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: str, current_user: dict = Depends(get_current_user)):
+    await db.notifications.update_one({"id": notif_id}, {"$addToSet": {"read_by": current_user["id"]}})
+    return {"message": "Marked as read"}
+
+@api_router.post("/notifications")
+async def create_notification(data: NotificationCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"notif_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "read_by": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.notifications.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/notifications/{notif_id}")
+async def delete_notification(notif_id: str, current_user: dict = Depends(get_current_user)):
+    await db.notifications.delete_one({"id": notif_id})
+    return {"message": "Notification deleted"}
+
+# ========== GLOBAL SEARCH ==========
+
+@api_router.get("/search")
+async def global_search(q: str, current_user: dict = Depends(get_current_user)):
+    if not q or len(q.strip()) < 2:
+        return {"results": []}
+    pattern = {"$regex": q.strip(), "$options": "i"}
+    results = []
+
+    members = await db.members.find(
+        {"$or": [{"name": pattern}, {"email": pattern}, {"phone": pattern}]},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1}
+    ).limit(5).to_list(5)
+    for m in members:
+        results.append({"type": "member", "id": m["id"], "title": m["name"], "subtitle": m.get("email", m.get("role", "")), "url": "/members"})
+
+    events = await db.events.find(
+        {"$or": [{"title": pattern}, {"location": pattern}]},
+        {"_id": 0, "id": 1, "title": 1, "date": 1, "status": 1}
+    ).limit(5).to_list(5)
+    for e in events:
+        results.append({"type": "event", "id": e["id"], "title": e["title"], "subtitle": e.get("date", ""), "url": "/events"})
+
+    tasks = await db.tasks.find(
+        {"$or": [{"title": pattern}, {"description": pattern}]},
+        {"_id": 0, "id": 1, "title": 1, "status": 1, "priority": 1}
+    ).limit(5).to_list(5)
+    for t in tasks:
+        results.append({"type": "task", "id": t["id"], "title": t["title"], "subtitle": f"{t.get('status', '')} · {t.get('priority', '')}", "url": "/tasks"})
+
+    products = await db.products.find(
+        {"name": pattern},
+        {"_id": 0, "id": 1, "name": 1, "price": 1, "stock": 1}
+    ).limit(3).to_list(3)
+    for p in products:
+        results.append({"type": "product", "id": p["id"], "title": p["name"], "subtitle": f"UGX {p.get('price', 0):,.0f} · Stock: {p.get('stock', 0)}", "url": "/sales"})
+
+    return {"results": results}
+
+# ========== EXPORT ROUTES ==========
+
+@api_router.get("/export/members")
+async def export_members_csv(current_user: dict = Depends(get_current_user)):
+    members = await db.members.find({}, {"_id": 0}).sort("name", 1).to_list(5000)
+    output = io.StringIO()
+    fields = ["id", "name", "email", "phone", "national_id", "role", "group", "gender", "status", "join_date"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for m in members:
+        writer.writerow({k: m.get(k, "") for k in fields})
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=members.csv"})
+
+@api_router.get("/export/financial")
+async def export_financial_csv(current_user: dict = Depends(get_current_user)):
+    donations = await db.donations.find({}, {"_id": 0}).sort("date", -1).to_list(5000)
+    expenses = await db.expenses.find({}, {"_id": 0}).sort("date", -1).to_list(5000)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["=== DONATIONS ==="])
+    writer.writerow(["ID", "Donor", "Amount", "Currency", "Type", "Date"])
+    for d in donations:
+        writer.writerow([d.get("id"), d.get("donor_name"), d.get("amount"), d.get("currency"), d.get("type"), d.get("date")])
+    writer.writerow([])
+    writer.writerow(["=== EXPENSES ==="])
+    writer.writerow(["ID", "Title", "Amount", "Currency", "Category", "Date"])
+    for e in expenses:
+        writer.writerow([e.get("id"), e.get("title"), e.get("amount"), e.get("currency"), e.get("category"), e.get("date")])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=financial.csv"})
+
+@api_router.get("/export/events")
+async def export_events_csv(current_user: dict = Depends(get_current_user)):
+    events = await db.events.find({}, {"_id": 0}).sort("date", -1).to_list(5000)
+    output = io.StringIO()
+    fields = ["id", "title", "type", "date", "time", "location", "capacity", "registered", "status", "is_public"]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for e in events:
+        writer.writerow({k: e.get(k, "") for k in fields})
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=events.csv"})
+
+# ========== ICAL EXPORT ==========
+
+@api_router.get("/export/events.ics")
+async def export_ical(current_user: dict = Depends(get_current_user)):
+    events = await db.events.find({}, {"_id": 0}).sort("date", 1).to_list(500)
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//58:12 Global Connect//CRM//EN",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    ]
+    for e in events:
+        date_str = e.get("date", "")
+        time_str = e.get("time", "00:00")
+        end_time_str = e.get("end_time", time_str)
+        try:
+            dt = datetime.strptime(f"{date_str}T{time_str}", "%Y-%m-%dT%H:%M")
+            dt_end = datetime.strptime(f"{date_str}T{end_time_str}", "%Y-%m-%dT%H:%M")
+            dtstart = dt.strftime("%Y%m%dT%H%M%S")
+            dtend = dt_end.strftime("%Y%m%dT%H%M%S")
+        except Exception:
+            dtstart = date_str.replace("-", "") + "T000000"
+            dtend = dtstart
+        summary = e.get("title", "Event").replace("\\", "\\\\").replace(",", "\\,").replace("\n", "\\n")
+        desc = e.get("description", "").replace("\\", "\\\\").replace(",", "\\,").replace("\n", "\\n")
+        location = e.get("location", "").replace(",", "\\,")
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{e['id']}@5812global.org",
+            f"SUMMARY:{summary}",
+            f"DTSTART:{dtstart}",
+            f"DTEND:{dtend}",
+            f"DESCRIPTION:{desc}",
+            f"LOCATION:{location}",
+            f"STATUS:{'CONFIRMED' if e.get('status') == 'upcoming' else 'COMPLETED'}",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    return StreamingResponse(iter(["\r\n".join(lines)]), media_type="text/calendar",
+                             headers={"Content-Disposition": "attachment; filename=5812global-events.ics"})
+
+# ========== SEED LOCATIONS & NOTIFICATIONS ==========
+
+@api_router.post("/seed-locations")
+async def seed_locations_and_notifications():
+    loc_count = await db.locations.count_documents({})
+    if loc_count == 0:
+        locations = [
+            {"id": "loc_001", "name": "58:12 Global Centre (Main)", "code": "MAIN", "type": "main", "parent_id": None, "address": "Plot 12, Kampala Road, Kampala", "contact_name": "Admin User", "contact_phone": "+256 800 5812", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "loc_002", "name": "Entebbe Branch", "code": "ETB", "type": "branch", "parent_id": "loc_001", "address": "15 Airport Road, Entebbe", "contact_name": "Francis Tumwesigye", "contact_phone": "+256 712 678901", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "loc_003", "name": "Jinja Chapter", "code": "JNJ", "type": "branch", "parent_id": "loc_001", "address": "8 Owen Falls Road, Jinja", "contact_name": "Grace Akello", "contact_phone": "+256 756 789012", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "loc_004", "name": "Kampala East Cell", "code": "KPE", "type": "sub-location", "parent_id": "loc_001", "address": "Nakawa Division, Kampala", "contact_name": "David Kiggundu", "contact_phone": "+256 706 456789", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.locations.insert_many(locations)
+
+    notif_count = await db.notifications.count_documents({})
+    if notif_count == 0:
+        notifications = [
+            {"id": "notif_001", "title": "New Member Approval", "message": "3 new member registrations are pending approval.", "type": "warning", "target_role": "admin", "link": "/members", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "notif_002", "title": "Low Stock Alert", "message": "Coffee and Eggs (Tray) are out of stock. Please reorder.", "type": "error", "target_role": None, "link": "/sales", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "notif_003", "title": "Event Reminder", "message": "Youth Leadership Summit is in 5 days. 13 spots remaining.", "type": "info", "target_role": None, "link": "/events", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "notif_004", "title": "Tasks Overdue", "message": "2 high priority tasks are past due. Review task board.", "type": "warning", "target_role": None, "link": "/tasks", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.notifications.insert_many(notifications)
+    return {"message": "Locations and notifications seeded"}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1278,6 +1547,27 @@ async def startup():
             logger.info("Admin user created: admin@5812global.org / Admin@1234")
         except Exception as e:
             logger.warning(f"Admin creation: {e}")
+
+    # Seed locations and notifications if empty
+    try:
+        if await db.locations.count_documents({}) == 0:
+            locations = [
+                {"id": "loc_001", "name": "58:12 Global Centre (Main)", "code": "MAIN", "type": "main", "parent_id": None, "address": "Plot 12, Kampala Road, Kampala", "contact_name": "Admin User", "contact_phone": "+256 800 5812", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_002", "name": "Entebbe Branch", "code": "ETB", "type": "branch", "parent_id": "loc_001", "address": "15 Airport Road, Entebbe", "contact_name": "Francis Tumwesigye", "contact_phone": "+256 712 678901", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_003", "name": "Jinja Chapter", "code": "JNJ", "type": "branch", "parent_id": "loc_001", "address": "8 Owen Falls Road, Jinja", "contact_name": "Grace Akello", "contact_phone": "+256 756 789012", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "loc_004", "name": "Kampala East Cell", "code": "KPE", "type": "sub-location", "parent_id": "loc_001", "address": "Nakawa Division, Kampala", "contact_name": "David Kiggundu", "contact_phone": "+256 706 456789", "active": True, "member_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
+            ]
+            await db.locations.insert_many(locations)
+        if await db.notifications.count_documents({}) == 0:
+            notifications = [
+                {"id": "notif_001", "title": "New Member Approval", "message": "3 new member registrations are pending approval.", "type": "warning", "target_role": "admin", "link": "/members", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "notif_002", "title": "Low Stock Alert", "message": "Coffee and Eggs (Tray) are out of stock. Please reorder.", "type": "error", "target_role": None, "link": "/sales", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "notif_003", "title": "Event Reminder", "message": "Youth Leadership Summit is in 5 days. 13 spots remaining.", "type": "info", "target_role": None, "link": "/events", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+                {"id": "notif_004", "title": "Tasks Overdue", "message": "2 high priority tasks are past due. Review task board.", "type": "warning", "target_role": None, "link": "/tasks", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
+            ]
+            await db.notifications.insert_many(notifications)
+    except Exception as e:
+        logger.warning(f"Location/notification seeding: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

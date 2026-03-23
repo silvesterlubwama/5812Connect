@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Download } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { eventsApi } from '../services/api';
+import { eventsApi, exportApi } from '../services/api';
 import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -49,11 +50,28 @@ export default function CalendarPage() {
   for (let i = 0; i < firstDay; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
+  const downloadIcal = () => {
+    const token = localStorage.getItem('5812_token');
+    const url = exportApi.ical();
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = '5812global-events.ics';
+        link.click();
+        toast.success('Calendar exported!');
+      }).catch(() => toast.error('Export failed'));
+  };
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold font-heading">Calendar</h1>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-2 hidden sm:flex" onClick={downloadIcal} data-testid="ical-export-btn">
+            <Download size={13} /> Export iCal
+          </Button>
           <Button variant="outline" size="icon" onClick={prev}><ChevronLeft size={16} /></Button>
           <span className="text-sm font-semibold min-w-[150px] text-center">{MONTHS[current.month]} {current.year}</span>
           <Button variant="outline" size="icon" onClick={next}><ChevronRight size={16} /></Button>

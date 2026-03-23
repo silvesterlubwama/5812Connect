@@ -16,6 +16,11 @@ import TasksPage from './pages/TasksPage';
 import CalendarPage from './pages/CalendarPage';
 import CheckInsPage from './pages/CheckInsPage';
 import SettingsPage from './pages/SettingsPage';
+import FinancialPage from './pages/FinancialPage';
+import ProductsPage from './pages/ProductsPage';
+import PeoplePage from './pages/PeoplePage';
+import AuditPage from './pages/AuditPage';
+import LocationsPage from './pages/LocationsPage';
 import Layout from './components/Layout';
 
 const ProtectedRoute = ({ children }) => {
@@ -46,6 +51,11 @@ function AppRoutes() {
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="check-ins" element={<CheckInsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="financial" element={<FinancialPage />} />
+        <Route path="sales" element={<ProductsPage />} />
+        <Route path="people" element={<PeoplePage />} />
+        <Route path="audit" element={<AuditPage />} />
+        <Route path="locations" element={<LocationsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
