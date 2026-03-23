@@ -25,9 +25,15 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', '5812global')]
+mongo_url = os.environ["MONGO_URL"]
+db_name = os.environ["DB_NAME"]
+try:
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[db_name]
+except Exception as e:
+    logging.error(f"MongoDB connection error: {e}")
+    client = None
+    db = None
 
 app = FastAPI(title="58:12 Global Connect API")
 api_router = APIRouter(prefix="/api")
@@ -480,6 +486,26 @@ async def create_event(data: EventCreate, current_user: dict = Depends(get_curre
     }
     await db.events.insert_one(event)
     event.pop("_id", None)
+    try:
+        from routers.notifications import send_bulk_notifications
+        recipient_roles = ["admin", "system_admin", "Executive Director", "Director", "Manager"]
+        recipients = await db.users.find(
+            {"role": {"$in": recipient_roles}, "email": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "email": 1, "name": 1}
+        ).to_list(200)
+        if recipients:
+            await send_bulk_notifications({
+                "recipients": recipients,
+                "type": "event_reminder",
+                "data": {
+                    "event_title": event.get("title"),
+                    "date": event.get("date"),
+                    "time": event.get("time"),
+                    "location": event.get("location"),
+                },
+            })
+    except Exception as e:
+        logger.warning(f"Event notify failed: {e}")
     return event
 
 @api_router.get("/events/{event_id}")
@@ -1004,6 +1030,27 @@ async def distribute_funds(data: dict, current_user: dict = Depends(get_current_
         "created_at": now, "created_by": current_user["id"],
     })
     await _audit(current_user["id"], "create", "fund_transfer", transfer_id)
+    try:
+        from routers.notifications import send_bulk_notifications
+        recipient_roles = ["admin", "system_admin", "Executive Director", "Director", "Manager"]
+        recipients = await db.users.find(
+            {"role": {"$in": recipient_roles}, "email": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "email": 1, "name": 1}
+        ).to_list(200)
+        if recipients:
+            await send_bulk_notifications({
+                "recipients": recipients,
+                "type": "fund_transfer",
+                "data": {
+                    "amount": amount,
+                    "currency": currency,
+                    "from_location": from_location_id,
+                    "to_location": to_location_id,
+                    "notes": notes,
+                },
+            })
+    except Exception as e:
+        logger.warning(f"Fund transfer notify failed: {e}")
     return {"transfer_id": transfer_id, "amount": amount, "from": from_location_id, "to": to_location_id}
 
 @api_router.get("/financial/donations")
@@ -1654,6 +1701,18 @@ async def send_message(conv_id: str, data: dict, current_user: dict = Depends(ge
         {"id": conv_id},
         {"$set": {"updated_at": msg["created_at"], "last_message": text[:100]}}
     )
+    try:
+        from routers.websocket import manager
+        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+        participants = conv.get("participants", []) if conv else []
+        if participants:
+            await manager.send_to_users(participants, {
+                "type": "chat_message",
+                "conversation_id": conv_id,
+                "message": msg,
+            })
+    except Exception as e:
+        logger.warning(f"WebSocket broadcast failed: {e}")
     return msg
 
 @api_router.post("/chat/ai-assistant")
@@ -2036,6 +2095,17 @@ async def approve_member(member_id: str, current_user: dict = Depends(get_curren
     await db.members.update_one({"id": member_id}, {"$set": {"status": "active", "approved_at": datetime.now(timezone.utc).isoformat(), "approved_by": current_user["id"]}})
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     await _audit(current_user["id"], "update", "member_approval", member_id)
+    try:
+        from routers.notifications import send_notification, NotifyRequest
+        if member and member.get("email"):
+            await send_notification(NotifyRequest(
+                type="approval_status",
+                recipient_email=member["email"],
+                recipient_name=member.get("name", ""),
+                data={"member_name": member.get("name", ""), "status": "approved"},
+            ))
+    except Exception as e:
+        logger.warning(f"Member approval notify failed: {e}")
     return member
 
 @api_router.put("/members/{member_id}/reject")
@@ -2043,6 +2113,17 @@ async def reject_member(member_id: str, current_user: dict = Depends(get_current
     await db.members.update_one({"id": member_id}, {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat(), "rejected_by": current_user["id"]}})
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     await _audit(current_user["id"], "update", "member_rejection", member_id)
+    try:
+        from routers.notifications import send_notification, NotifyRequest
+        if member and member.get("email"):
+            await send_notification(NotifyRequest(
+                type="approval_status",
+                recipient_email=member["email"],
+                recipient_name=member.get("name", ""),
+                data={"member_name": member.get("name", ""), "status": "rejected"},
+            ))
+    except Exception as e:
+        logger.warning(f"Member rejection notify failed: {e}")
     return member
 
 @api_router.post("/members/bulk-import")
@@ -2359,8 +2440,14 @@ async def seed_all_data():
 try:
     from routers.bookings import router as bookings_router
     from routers.websocket import router as ws_router
+    from routers.notifications import router as notifications_router
+    from routers.access import router as access_router
+    from routers.reports import router as reports_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
+    app.include_router(notifications_router)
+    app.include_router(access_router)
+    app.include_router(reports_router)
     logger.info("Modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -2457,4 +2544,5 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client:
+        client.close()

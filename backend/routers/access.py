@@ -3,12 +3,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
+import logging
 from deps import db, get_current_user, _audit
 
 router = APIRouter(prefix="/api", tags=["access"])
+logger = logging.getLogger(__name__)
 
 ROLE_HIERARCHY = {
-    "Executive Director": 10, "Advisor": 9, "Director": 8, "Manager": 7,
+    "system_admin": 10, "admin": 10, "Executive Director": 10, "Executive": 10,
+    "Advisor": 9, "Director": 8, "Manager": 7,
     "Coordinator": 6, "Staff": 5, "Intern": 4, "Volunteer": 4,
     "Parent": 2, "Customer": 1, "Child": 0,
 }
@@ -27,6 +30,25 @@ def can_edit_role(editor_role: str, target_role: str) -> bool:
     if editor_level >= 7:  # Manager
         return target_level < editor_level
     return False
+
+
+async def notify_role_level(min_level: int, notification_type: str, data: dict):
+    try:
+        from routers.notifications import send_notification, NotifyRequest
+        users = await db.users.find(
+            {"email": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "email": 1, "name": 1, "role": 1}
+        ).to_list(500)
+        for user in users:
+            if get_role_level(user.get("role", "")) >= min_level:
+                await send_notification(NotifyRequest(
+                    type=notification_type,
+                    recipient_email=user["email"],
+                    recipient_name=user.get("name", ""),
+                    data=data,
+                ))
+    except Exception as e:
+        logger.warning(f"Access notify failed: {e}")
 
 
 # ========== RESIDENT TRACKING ==========
@@ -133,12 +155,14 @@ async def revoke_staff_access(pass_id: str, current_user: dict = Depends(get_cur
 @router.post("/access/guest-requests")
 async def request_guest_visit(data: dict, current_user: dict = Depends(get_current_user)):
     """Submit a guest visit request for a restricted sub-location"""
+    location_id = data.get("location_id")
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
     doc = {
         "id": f"gr_{str(uuid.uuid4())[:8]}",
         "guest_name": data.get("guest_name"),
         "guest_phone": data.get("guest_phone", ""),
         "guest_id_number": data.get("guest_id_number", ""),
-        "location_id": data.get("location_id"),
+        "location_id": location_id,
         "purpose": data.get("purpose", ""),
         "visit_date": data.get("visit_date"),
         "visit_time": data.get("visit_time", ""),
@@ -150,6 +174,13 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
     await db.guest_requests.insert_one(doc)
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "guest_request", doc["id"])
+    await notify_role_level(7, "guest_approval", {
+        "guest_name": doc.get("guest_name", ""),
+        "location_name": loc.get("name") if loc else location_id,
+        "date": doc.get("visit_date", ""),
+        "purpose": doc.get("purpose", ""),
+        "action_url": "/access",
+    })
     return doc
 
 
@@ -174,6 +205,25 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
         {"$set": {"status": "approved", "approved_by": current_user["id"], "approved_at": datetime.now(timezone.utc).isoformat()}}
     )
     await _audit(current_user["id"], "update", "guest_request", request_id, "approved")
+    try:
+        from routers.notifications import send_notification, NotifyRequest
+        req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
+        if req:
+            requester = await db.users.find_one({"id": req.get("requested_by")}, {"_id": 0, "email": 1, "name": 1})
+            if requester and requester.get("email"):
+                loc = await db.locations.find_one({"id": req.get("location_id")}, {"_id": 0, "name": 1})
+                loc_name = loc.get("name") if loc else req.get("location_id")
+                await send_notification(NotifyRequest(
+                    type="custom",
+                    recipient_email=requester["email"],
+                    recipient_name=requester.get("name", ""),
+                    data={
+                        "subject": "Guest Visit Approved",
+                        "message": f"Your guest visit request for {req.get('guest_name', '')} at {loc_name} on {req.get('visit_date', '')} has been approved.",
+                    },
+                ))
+    except Exception as e:
+        logger.warning(f"Guest approval notify failed: {e}")
     return {"message": "Guest visit approved"}
 
 
@@ -185,6 +235,25 @@ async def reject_guest_request(request_id: str, current_user: dict = Depends(get
         {"id": request_id},
         {"$set": {"status": "rejected", "rejected_by": current_user["id"], "rejected_at": datetime.now(timezone.utc).isoformat()}}
     )
+    try:
+        from routers.notifications import send_notification, NotifyRequest
+        req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
+        if req:
+            requester = await db.users.find_one({"id": req.get("requested_by")}, {"_id": 0, "email": 1, "name": 1})
+            if requester and requester.get("email"):
+                loc = await db.locations.find_one({"id": req.get("location_id")}, {"_id": 0, "name": 1})
+                loc_name = loc.get("name") if loc else req.get("location_id")
+                await send_notification(NotifyRequest(
+                    type="custom",
+                    recipient_email=requester["email"],
+                    recipient_name=requester.get("name", ""),
+                    data={
+                        "subject": "Guest Visit Rejected",
+                        "message": f"Your guest visit request for {req.get('guest_name', '')} at {loc_name} on {req.get('visit_date', '')} was rejected.",
+                    },
+                ))
+    except Exception as e:
+        logger.warning(f"Guest rejection notify failed: {e}")
     return {"message": "Guest visit rejected"}
 
 
@@ -196,14 +265,22 @@ async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)
     member_id = data.get("member_id")
     location_id = data.get("location_id")
     action = data.get("action", "in")  # in or out
+    guest_request_id = data.get("guest_request_id")
+    guest_name = data.get("guest_name")
 
     # Verify the person has access
     is_resident = await db.residents.find_one({"member_id": member_id, "location_id": location_id, "status": "active"})
     has_staff_pass = await db.staff_access.find_one({"staff_id": member_id, "location_id": location_id, "status": "active"})
-    is_approved_guest = await db.guest_requests.find_one({
-        "guest_name": {"$exists": True}, "location_id": location_id,
-        "status": "approved", "visit_date": datetime.now(timezone.utc).date().isoformat()
-    })
+    guest_query = {
+        "location_id": location_id,
+        "status": "approved",
+        "visit_date": datetime.now(timezone.utc).date().isoformat(),
+    }
+    if guest_request_id:
+        guest_query["id"] = guest_request_id
+    if guest_name:
+        guest_query["guest_name"] = guest_name
+    is_approved_guest = await db.guest_requests.find_one(guest_query)
 
     if not is_resident and not has_staff_pass and not is_approved_guest:
         raise HTTPException(status_code=403, detail="No access authorization for this restricted location")
@@ -215,6 +292,8 @@ async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)
         "action": action,
         "scanned_by": current_user["id"],
         "access_type": "resident" if is_resident else ("staff" if has_staff_pass else "guest"),
+        "guest_request_id": guest_request_id,
+        "guest_name": guest_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await db.access_scans.insert_one(scan)

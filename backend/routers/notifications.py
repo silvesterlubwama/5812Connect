@@ -89,6 +89,12 @@ async def send_notification(req: NotifyRequest):
         body = f"<p>Hi {name},</p><p><strong>{d.get('person_name')}</strong> has {'checked in to' if d.get('action') == 'in' else 'checked out of'} <strong>{d.get('location_name', '')}</strong> at {d.get('time', '')}.</p>"
         html = _email_template("Check-In Alert", body)
 
+    elif t == "approval_status":
+        status_label = d.get("status", "approved")
+        subject = f"Membership {status_label.title()}: {d.get('member_name', '')}"
+        body = f"<p>Hi {name},</p><p>Your membership request has been <strong>{status_label}</strong>.</p>"
+        html = _email_template("Membership Update", body)
+
     elif t == "guest_approval":
         subject = f"Guest Visit Request: {d.get('guest_name', '')}"
         body = f"<p>Hi {name},</p><p><strong>{d.get('guest_name')}</strong> is requesting to visit <strong>{d.get('location_name', '')}</strong> (restricted) on {d.get('date', '')}.</p><p>Purpose: {d.get('purpose', '-')}</p>"
@@ -118,11 +124,9 @@ async def send_bulk_notifications(data: dict):
             data=notification_data,
         )
         if req.recipient_email:
-            result = await send_email(req.recipient_email, "", "")  # Will be overridden
-            # Actually re-call the proper endpoint logic
             try:
                 await send_notification(req)
                 sent += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Bulk notification failed for {req.recipient_email}: {e}")
     return {"sent": sent, "total": len(recipients)}

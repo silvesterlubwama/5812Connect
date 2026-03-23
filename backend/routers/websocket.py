@@ -1,8 +1,11 @@
 """WebSocket real-time notifications and chat"""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, List, Set
+from typing import Dict, List
 import json
 import logging
+from datetime import datetime, timezone
+import uuid
+from deps import db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,6 +103,40 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                                 "user_id": user_id,
                                 "conversation_id": conv_id,
                             })
+
+                elif msg_type == "chat_message":
+                    conv_id = msg.get("conversation_id")
+                    text = msg.get("text", "").strip()
+                    if not conv_id or not text:
+                        continue
+                    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                    participants = conv.get("participants", []) if conv else [user_id]
+                    if not participants:
+                        participants = [user_id]
+                    sender_name = msg.get("sender_name")
+                    if not sender_name:
+                        user = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+                        sender_name = user.get("name") if user else "Unknown"
+                    msg_doc = {
+                        "id": f"msg_{str(uuid.uuid4())[:8]}",
+                        "conversation_id": conv_id,
+                        "sender_id": user_id,
+                        "sender_name": sender_name,
+                        "text": text,
+                        "type": "text",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await db.chat_messages.insert_one(msg_doc)
+                    msg_doc.pop("_id", None)
+                    await db.conversations.update_one(
+                        {"id": conv_id},
+                        {"$set": {"updated_at": msg_doc["created_at"], "last_message": text[:100]}}
+                    )
+                    await manager.send_to_users(participants, {
+                        "type": "chat_message",
+                        "conversation_id": conv_id,
+                        "message": msg_doc,
+                    })
 
             except json.JSONDecodeError:
                 pass
