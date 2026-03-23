@@ -1,0 +1,26 @@
+{
+  "short_name": "5812 CRM",
+  "name": "58:12 Global Connect Uganda",
+  "description": "Church & Community Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#8B4513",
+  "background_color": "#FAFAF8",
+  "icons": [
+    {
+      "src": "/logo192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "business"],
+  "prefer_related_applications": false
+}

@@ -6,7 +6,7 @@ import {
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
-  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText
+  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -15,6 +15,7 @@ import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import { Dialog, DialogContent } from './ui/dialog';
 import { notificationsApi, searchApi } from '../services/api';
+import { useWebSocket } from '../context/WebSocketContext';
 import { toast } from 'sonner';
 
 const NAV_SECTIONS = [
@@ -41,13 +42,13 @@ const NAV_SECTIONS = [
       { to: '/outreach', icon: Globe, label: 'Outreach' },
       { to: '/comms', icon: Megaphone, label: 'Communications' },
       { to: '/resources', icon: Building2, label: 'Resources' },
-      { to: '/access', icon: ScanLine, label: 'Access Control' },
+      { to: '/access', icon: ScanLine, label: 'Access Control', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager', 'Coordinator'] },
     ]
   },
   {
     label: 'Finance',
     items: [
-      { to: '/financial', icon: DollarSign, label: 'Financial' },
+      { to: '/financial', icon: DollarSign, label: 'Financial', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
       { to: '/sales', icon: ShoppingCart, label: 'Sales & Products' },
     ]
   },
@@ -55,15 +56,15 @@ const NAV_SECTIONS = [
     label: 'Analytics',
     items: [
       { to: '/attendance', icon: UserCheck, label: 'Attendance' },
-      { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics' },
-      { to: '/location-analytics', icon: BarChart3, label: 'Location Stats' },
-      { to: '/reports', icon: FileText, label: 'Reports & PDF' },
+      { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/location-analytics', icon: BarChart3, label: 'Location Stats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/reports', icon: FileText, label: 'Reports & PDF', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
     ]
   },
   {
     label: 'Admin',
     items: [
-      { to: '/locations', icon: MapPin, label: 'Compasses & Locations' },
+      { to: '/locations', icon: MapPin, label: 'Compasses & Locations', adminOnly: true },
       { to: '/audit', icon: Shield, label: 'Audit Trail', adminOnly: true },
       { to: '/settings', icon: Settings, label: 'Settings' },
     ]
@@ -111,6 +112,27 @@ export default function Layout() {
     : 'AU';
 
   const isAdmin = ['admin', 'system_admin'].includes(user?.role);
+  const userRole = user?.role || '';
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const { addListener } = useWebSocket();
+
+  // Online/offline detection
+  useEffect(() => {
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => { setIsOnline(false); toast.warning('You are offline. Some features may be limited.'); };
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+  }, []);
+
+  // Real-time WS notifications for guest approvals etc
+  useEffect(() => {
+    const unsub = addListener('notification', (data) => {
+      setUnreadCount(prev => prev + 1);
+      toast.info(data.title || 'New notification');
+    });
+    return unsub;
+  }, [addListener]);
 
   // ---- Fetch notifications ----
   const fetchUnreadCount = useCallback(async () => {
@@ -217,7 +239,11 @@ export default function Layout() {
                 <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{section.label}</p>
               )}
               {section.items
-                .filter(item => !item.adminOnly || isAdmin)
+                .filter(item => {
+                  if (item.adminOnly && !isAdmin) return false;
+                  if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
+                  return true;
+                })
                 .map(({ to, icon: Icon, label }) => (
                   <NavLink
                     key={to}
@@ -267,6 +293,13 @@ export default function Layout() {
           </button>
 
           <div className="flex-1" />
+
+          {/* Online/Offline indicator */}
+          {!isOnline && (
+            <Badge variant="destructive" className="text-[10px] gap-1 h-6 px-2">
+              <WifiOff size={11} /> Offline
+            </Badge>
+          )}
 
           {/* Dark Mode Toggle */}
           <Button variant="ghost" size="icon" className="h-9 w-9" onClick={toggleDarkMode} data-testid="dark-mode-toggle">

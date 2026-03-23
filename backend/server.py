@@ -405,6 +405,72 @@ async def google_auth_session(data: dict):
         raise HTTPException(status_code=500, detail="Google authentication failed")
 
 
+# ========== PASSWORD RESET ==========
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(data: dict):
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    user = await db.users.find_one({"email": email}, {"_id": 0, "id": 1, "name": 1})
+    if not user:
+        # Don't reveal if email exists
+        return {"message": "If an account exists with that email, a reset link has been sent."}
+    reset_token = str(uuid.uuid4())
+    await db.password_resets.insert_one({
+        "token": reset_token,
+        "user_id": user["id"],
+        "email": email,
+        "used": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    })
+    # Send email via Resend
+    try:
+        from routers.notifications import send_email
+        await send_email(
+            email,
+            "58:12 Global — Password Reset",
+            f"""<h2>Password Reset Request</h2>
+            <p>Hi {user.get('name', '')},</p>
+            <p>Use this code to reset your password: <strong>{reset_token[:8].upper()}</strong></p>
+            <p>This code expires in 1 hour.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+            <p>— 58:12 Global Connect</p>"""
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send reset email: {e}")
+    return {"message": "If an account exists with that email, a reset link has been sent."}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(data: dict):
+    token = (data.get("token") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+    if not token or not new_password:
+        raise HTTPException(status_code=400, detail="Token and new password are required")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    # Find valid reset token (check first 8 chars uppercase match)
+    reset = await db.password_resets.find_one({
+        "used": False,
+        "$or": [
+            {"token": token},
+            {"token": {"$regex": f"^{token.lower()[:8]}", "$options": "i"}}
+        ]
+    }, {"_id": 0})
+    if not reset:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+    if reset.get("expires_at") and reset["expires_at"] < datetime.now(timezone.utc).isoformat():
+        raise HTTPException(status_code=400, detail="Reset code has expired")
+    await db.users.update_one(
+        {"id": reset["user_id"]},
+        {"$set": {"password_hash": hash_password(new_password)}}
+    )
+    await db.password_resets.update_one({"token": reset["token"]}, {"$set": {"used": True}})
+    return {"message": "Password reset successfully. You can now login with your new password."}
+
+
 # ========== MEMBERS ==========
 
 @api_router.get("/members")
@@ -2582,12 +2648,22 @@ async def startup():
     if user_count == 0:
         logger.info("Seeding initial data...")
         try:
-            # Create indexes
+            # Create indexes for performance
             await db.users.create_index("email", unique=True)
+            await db.users.create_index("id", unique=True)
             await db.members.create_index("id", unique=True)
+            await db.members.create_index("email")
             await db.events.create_index("id", unique=True)
             await db.tasks.create_index("id", unique=True)
             await db.checkins.create_index("id", unique=True)
+            await db.chat_messages.create_index("conversation_id")
+            await db.chat_messages.create_index([("conversation_id", 1), ("created_at", -1)])
+            await db.notifications.create_index([("target_role", 1), ("created_at", -1)])
+            await db.guest_requests.create_index([("location_id", 1), ("status", 1)])
+            await db.access_logs.create_index([("location_id", 1), ("timestamp", -1)])
+            await db.files.create_index([("member_id", 1), ("is_deleted", 1)])
+            await db.password_resets.create_index("token")
+            await db.password_resets.create_index("expires_at")
         except Exception as e:
             logger.warning(f"Index creation: {e}")
         

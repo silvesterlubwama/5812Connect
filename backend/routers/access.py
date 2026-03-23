@@ -181,6 +181,17 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
         "purpose": doc.get("purpose", ""),
         "action_url": "/access",
     })
+    # Real-time WS broadcast to online managers
+    try:
+        from routers.websocket import manager as ws_manager
+        await ws_manager.broadcast({
+            "type": "notification",
+            "title": f"Guest visit request: {doc.get('guest_name', '')}",
+            "body": f"At {loc.get('name') if loc else location_id} on {doc.get('visit_date', '')}",
+            "link": "/access",
+        })
+    except Exception:
+        pass
     return doc
 
 

@@ -93,7 +93,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     await websocket.send_json({"type": "pong"})
 
                 elif msg_type == "typing":
-                    # Notify conversation participants
                     conv_id = msg.get("conversation_id")
                     participants = msg.get("participants", [])
                     for pid in participants:
@@ -107,6 +106,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 elif msg_type == "chat_message":
                     conv_id = msg.get("conversation_id")
                     text = msg.get("text", "").strip()
+                    reply_to = msg.get("reply_to")
                     if not conv_id or not text:
                         continue
                     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
@@ -115,8 +115,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         participants = [user_id]
                     sender_name = msg.get("sender_name")
                     if not sender_name:
-                        user = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
-                        sender_name = user.get("name") if user else "Unknown"
+                        user_doc = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+                        sender_name = user_doc.get("name") if user_doc else "Unknown"
                     msg_doc = {
                         "id": f"msg_{str(uuid.uuid4())[:8]}",
                         "conversation_id": conv_id,
@@ -124,6 +124,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "sender_name": sender_name,
                         "text": text,
                         "type": "text",
+                        "reply_to": reply_to,
+                        "read_by": [user_id],
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                     await db.chat_messages.insert_one(msg_doc)
@@ -137,6 +139,23 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "conversation_id": conv_id,
                         "message": msg_doc,
                     })
+
+                elif msg_type == "read_receipt":
+                    conv_id = msg.get("conversation_id")
+                    message_id = msg.get("message_id")
+                    if conv_id and message_id:
+                        await db.chat_messages.update_one(
+                            {"id": message_id},
+                            {"$addToSet": {"read_by": user_id}}
+                        )
+                        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                        if conv:
+                            await manager.send_to_users(conv.get("participants", []), {
+                                "type": "read_receipt",
+                                "conversation_id": conv_id,
+                                "message_id": message_id,
+                                "user_id": user_id,
+                            })
 
             except json.JSONDecodeError:
                 pass
