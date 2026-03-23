@@ -541,58 +541,6 @@ async def delete_venue(venue_id: str, current_user: dict = Depends(get_current_u
     return {"message": "Venue deleted"}
 
 
-# ========== DASHBOARD STATS ==========
-
-@api_router.get("/dashboard/stats")
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
-    total_members = await db.members.count_documents({})
-    active_members = await db.members.count_documents({"status": "active"})
-    
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
-    
-    events_this_month = await db.events.count_documents({"date": {"$gte": month_start[:7]}})
-    upcoming_events = await db.events.count_documents({"status": "upcoming"})
-    
-    today_start = now.replace(hour=0, minute=0, second=0).isoformat()
-    checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}})
-    
-    now_str = now.isoformat()[:10]
-    tasks_overdue = await db.tasks.count_documents({"status": {"$nin": ["done"]}, "due_date": {"$lt": now_str}})
-    
-    new_members_this_month = await db.members.count_documents({"join_date": {"$gte": month_start[:7]}})
-    
-    # Recent activity (combine from all collections)
-    recent_checkins = await db.checkins.find({}, {"_id": 0}).sort("check_in_time", -1).limit(3).to_list(3)
-    recent_members = await db.members.find({}, {"_id": 0}).sort("created_at", -1).limit(2).to_list(2)
-    
-    activity = []
-    for ci in recent_checkins:
-        activity.append({
-            "type": "checkin",
-            "message": f"{ci.get('member_name', 'Someone')} checked in" + (f" to {ci.get('event_name', '')}" if ci.get('event_name') else ""),
-            "time": ci.get("check_in_time", ""),
-        })
-    for m in recent_members:
-        activity.append({
-            "type": "member",
-            "message": f"New member: {m.get('name', '')} registered",
-            "time": m.get("created_at", ""),
-        })
-    activity.sort(key=lambda x: x.get("time", ""), reverse=True)
-    
-    return {
-        "total_members": total_members,
-        "active_members": active_members,
-        "events_this_month": events_this_month,
-        "upcoming_events": upcoming_events,
-        "checkins_today": checkins_today,
-        "tasks_overdue": tasks_overdue,
-        "new_members_this_month": new_members_this_month,
-        "recent_activity": activity[:5],
-    }
-
-
 # ========== PUBLIC ENDPOINTS ==========
 
 @api_router.get("/public/events")
@@ -797,6 +745,497 @@ async def seed_data():
 
 
 # ========== APP SETUP ==========
+
+# ========== FINANCIAL MODELS ==========
+
+class DonationCreate(BaseModel):
+    donor_name: str
+    amount: float
+    currency: str = "UGX"
+    type: str = "tithe"  # tithe, offering, donation, pledge
+    date: Optional[str] = None
+    notes: Optional[str] = None
+    member_id: Optional[str] = None
+
+class ExpenseCreate(BaseModel):
+    title: str
+    amount: float
+    currency: str = "UGX"
+    category: str = "general"  # salaries, utilities, supplies, maintenance, programs
+    date: Optional[str] = None
+    notes: Optional[str] = None
+    submitted_by: Optional[str] = None
+
+class ProductCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    price: float
+    currency: str = "UGX"
+    stock: int = 0
+    category: Optional[str] = None
+    sku: Optional[str] = None
+    reorder_level: int = 5
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    stock: Optional[int] = None
+    category: Optional[str] = None
+    reorder_level: Optional[int] = None
+
+class SaleCreate(BaseModel):
+    items: List[dict]  # [{product_id, name, qty, unit_price}]
+    customer_name: Optional[str] = "Walk-in Customer"
+    customer_phone: Optional[str] = None
+    total: float
+    payment_method: str = "cash"  # cash, mobile_money, card
+    notes: Optional[str] = None
+
+class FamilyCreate(BaseModel):
+    family_name: str
+    primary_contact_name: str
+    primary_contact_email: Optional[str] = None
+    primary_contact_phone: Optional[str] = None
+    address: Optional[str] = None
+    notes: Optional[str] = None
+
+class ChildCreate(BaseModel):
+    name: str
+    date_of_birth: Optional[str] = None
+    gender: Optional[str] = None
+    family_id: Optional[str] = None
+    class_group: Optional[str] = None
+    medical_notes: Optional[str] = None
+    allergies: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+
+class GuestCreate(BaseModel):
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    visit_date: Optional[str] = None
+    referred_by: Optional[str] = None
+    address: Optional[str] = None
+    notes: Optional[str] = None
+
+class AuditLogCreate(BaseModel):
+    action: str
+    resource: str
+    resource_id: Optional[str] = None
+    details: Optional[dict] = None
+
+# ========== FINANCIAL ROUTES ==========
+
+@api_router.get("/financial/summary")
+async def financial_summary(current_user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1).isoformat()[:7]
+
+    pipeline_donations = [
+        {"$match": {"date": {"$regex": f"^{month_start}"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]
+    pipeline_expenses = [
+        {"$match": {"date": {"$regex": f"^{month_start}"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]
+    pipeline_sales = [
+        {"$match": {"created_at": {"$regex": f"^{month_start}"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$total"}}}
+    ]
+
+    donations_result = await db.donations.aggregate(pipeline_donations).to_list(1)
+    expenses_result = await db.expenses.aggregate(pipeline_expenses).to_list(1)
+    sales_result = await db.sales.aggregate(pipeline_sales).to_list(1)
+
+    monthly_donations = donations_result[0]["total"] if donations_result else 0
+    monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
+    monthly_sales = sales_result[0]["total"] if sales_result else 0
+
+    # All-time totals for cashflow
+    all_donations = await db.donations.aggregate([{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    all_expenses = await db.expenses.aggregate([{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    all_sales = await db.sales.aggregate([{"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
+
+    total_in = (all_donations[0]["total"] if all_donations else 0) + (all_sales[0]["total"] if all_sales else 0)
+    total_out = all_expenses[0]["total"] if all_expenses else 0
+
+    return {
+        "monthly_donations": monthly_donations,
+        "monthly_expenses": monthly_expenses,
+        "monthly_sales": monthly_sales,
+        "cashflow_in": total_in,
+        "cashflow_out": total_out,
+        "net_balance": total_in - total_out,
+    }
+
+@api_router.get("/financial/donations")
+async def list_donations(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    donations = await db.donations.find({}, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
+    return donations
+
+@api_router.post("/financial/donations")
+async def create_donation(data: DonationCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"don_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "date": data.date or datetime.now(timezone.utc).isoformat()[:10],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.donations.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "donation", doc["id"])
+    return doc
+
+@api_router.get("/financial/expenses")
+async def list_expenses(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    expenses = await db.expenses.find({}, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
+    return expenses
+
+@api_router.post("/financial/expenses")
+async def create_expense(data: ExpenseCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"exp_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "date": data.date or datetime.now(timezone.utc).isoformat()[:10],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.expenses.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "expense", doc["id"])
+    return doc
+
+# ========== PRODUCTS / SALES ==========
+
+@api_router.get("/products")
+async def list_products(current_user: dict = Depends(get_current_user)):
+    products = await db.products.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    return products
+
+@api_router.post("/products")
+async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"prod_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.products.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/products/{product_id}")
+async def update_product(product_id: str, data: ProductUpdate, current_user: dict = Depends(get_current_user)):
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    await db.products.update_one({"id": product_id}, {"$set": update_data})
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    return product
+
+@api_router.delete("/products/{product_id}")
+async def delete_product(product_id: str, current_user: dict = Depends(get_current_user)):
+    await db.products.delete_one({"id": product_id})
+    return {"message": "Product deleted"}
+
+@api_router.get("/sales")
+async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    sales = await db.sales.find({}, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return sales
+
+@api_router.post("/sales")
+async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):
+    sale_id = f"inv_{str(uuid.uuid4())[:8].upper()}"
+    doc = {
+        "id": sale_id,
+        **data.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "cashier": current_user.get("name", "Unknown"),
+    }
+    await db.sales.insert_one(doc)
+    # Decrement stock for each product
+    for item in data.items:
+        if item.get("product_id"):
+            await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "sale", sale_id)
+    return doc
+
+# ========== FAMILIES ==========
+
+@api_router.get("/families")
+async def list_families(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if search:
+        query["$or"] = [
+            {"family_name": {"$regex": search, "$options": "i"}},
+            {"primary_contact_name": {"$regex": search, "$options": "i"}},
+        ]
+    families = await db.families.find(query, {"_id": 0}).sort("family_name", 1).to_list(500)
+    return families
+
+@api_router.post("/families")
+async def create_family(data: FamilyCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"fam_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.families.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/families/{family_id}")
+async def update_family(family_id: str, data: FamilyCreate, current_user: dict = Depends(get_current_user)):
+    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.families.update_one({"id": family_id}, {"$set": update})
+    return await db.families.find_one({"id": family_id}, {"_id": 0})
+
+@api_router.delete("/families/{family_id}")
+async def delete_family(family_id: str, current_user: dict = Depends(get_current_user)):
+    await db.families.delete_one({"id": family_id})
+    return {"message": "Family deleted"}
+
+# ========== CHILDREN ==========
+
+@api_router.get("/children")
+async def list_children(family_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if family_id:
+        query["family_id"] = family_id
+    if search:
+        query["name"] = {"$regex": search, "$options": "i"}
+    children = await db.children.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return children
+
+@api_router.post("/children")
+async def create_child(data: ChildCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"chd_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.children.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/children/{child_id}")
+async def update_child(child_id: str, data: ChildCreate, current_user: dict = Depends(get_current_user)):
+    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.children.update_one({"id": child_id}, {"$set": update})
+    return await db.children.find_one({"id": child_id}, {"_id": 0})
+
+@api_router.delete("/children/{child_id}")
+async def delete_child(child_id: str, current_user: dict = Depends(get_current_user)):
+    await db.children.delete_one({"id": child_id})
+    return {"message": "Child deleted"}
+
+# ========== GUESTS ==========
+
+@api_router.get("/guests")
+async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+        ]
+    guests = await db.guests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return guests
+
+@api_router.post("/guests")
+async def create_guest(data: GuestCreate, current_user: dict = Depends(get_current_user)):
+    doc = {
+        "id": f"gst_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "visit_date": data.visit_date or datetime.now(timezone.utc).isoformat()[:10],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guests.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/guests/{guest_id}")
+async def delete_guest(guest_id: str, current_user: dict = Depends(get_current_user)):
+    await db.guests.delete_one({"id": guest_id})
+    return {"message": "Guest deleted"}
+
+# ========== AUDIT TRAIL ==========
+
+async def _audit(user_id: str, action: str, resource: str, resource_id: str = None, details: dict = None):
+    """Internal helper to log audit events"""
+    try:
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "action": action,
+            "resource": resource,
+            "resource_id": resource_id,
+            "details": details or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+@api_router.get("/audit")
+async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in ("admin", "system_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    logs = await db.audit_log.find({}, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
+    total = await db.audit_log.count_documents({})
+    return {"logs": logs, "total": total}
+
+# ========== ENHANCED DASHBOARD ==========
+
+@api_router.get("/dashboard/stats")
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    month_start_str = now.replace(day=1).isoformat()[:7]  # "2026-04"
+
+    total_members = await db.members.count_documents({})
+    active_members = await db.members.count_documents({"status": "active"})
+    total_families = await db.families.count_documents({})
+    total_children = await db.children.count_documents({})
+
+    events_this_month = await db.events.count_documents({"date": {"$regex": f"^{month_start_str}"}})
+    upcoming_events = await db.events.count_documents({"status": "upcoming"})
+
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}})
+
+    now_str = now.isoformat()[:10]
+    tasks_overdue = await db.tasks.count_documents({"status": {"$nin": ["done"]}, "due_date": {"$lt": now_str, "$ne": ""}})
+
+    new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}})
+
+    # Monthly revenue
+    sales_result = await db.sales.aggregate([
+        {"$match": {"created_at": {"$regex": f"^{month_start_str}"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$total"}}}
+    ]).to_list(1)
+    monthly_sales = sales_result[0]["total"] if sales_result else 0
+
+    donations_result = await db.donations.aggregate([
+        {"$match": {"date": {"$regex": f"^{month_start_str}"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]).to_list(1)
+    monthly_donations = donations_result[0]["total"] if donations_result else 0
+
+    # Low stock products
+    low_stock = await db.products.count_documents({"$expr": {"$lte": ["$stock", "$reorder_level"]}})
+
+    # Recent activity
+    recent_checkins = await db.checkins.find({}, {"_id": 0}).sort("check_in_time", -1).limit(3).to_list(3)
+    recent_members = await db.members.find({}, {"_id": 0}).sort("created_at", -1).limit(2).to_list(2)
+
+    activity = []
+    for ci in recent_checkins:
+        activity.append({
+            "type": "checkin",
+            "message": f"{ci.get('member_name')} checked in" + (f" to {ci.get('event_name', '')}" if ci.get('event_name') else ""),
+            "time": ci.get("check_in_time", ""),
+        })
+    for m in recent_members:
+        activity.append({
+            "type": "member",
+            "message": f"New member: {m.get('name')} registered",
+            "time": m.get("created_at", ""),
+        })
+    activity.sort(key=lambda x: x.get("time", ""), reverse=True)
+
+    return {
+        "total_members": total_members,
+        "active_members": active_members,
+        "total_families": total_families,
+        "total_children": total_children,
+        "events_this_month": events_this_month,
+        "upcoming_events": upcoming_events,
+        "checkins_today": checkins_today,
+        "tasks_overdue": tasks_overdue,
+        "new_members_this_month": new_members_this_month,
+        "monthly_sales": monthly_sales,
+        "monthly_donations": monthly_donations,
+        "low_stock_count": low_stock,
+        "recent_activity": activity[:5],
+    }
+
+# ========== PEOPLE STATS ==========
+
+@api_router.get("/people/stats")
+async def people_stats(current_user: dict = Depends(get_current_user)):
+    return {
+        "total_members": await db.members.count_documents({}),
+        "active_members": await db.members.count_documents({"status": "active"}),
+        "total_families": await db.families.count_documents({}),
+        "total_children": await db.children.count_documents({}),
+        "total_guests": await db.guests.count_documents({}),
+        "pending_approvals": await db.users.count_documents({"status": "pending"}),
+    }
+
+# ========== SEED EXTENDED DATA ==========
+
+@api_router.post("/seed-extended")
+async def seed_extended():
+    """Seed additional data for financial/products/families/children"""
+    # Products
+    product_count = await db.products.count_documents({})
+    if product_count == 0:
+        products = [
+            {"id": "prod_001", "name": "4 Week Broiler Chicken", "price": 10000, "currency": "UGX", "stock": 198, "category": "Farm", "reorder_level": 20, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "prod_002", "name": "Coffee", "price": 20000, "currency": "UGX", "stock": 0, "category": "Beverages", "reorder_level": 10, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "prod_003", "name": "Eggs (Tray)", "price": 10000, "currency": "UGX", "stock": 0, "category": "Farm", "reorder_level": 15, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "prod_004", "name": "Local Chicken", "price": 40000, "currency": "UGX", "stock": 20, "category": "Farm", "reorder_level": 5, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "prod_005", "name": "2 Month Old Chicken", "price": 20000, "currency": "UGX", "stock": 20, "category": "Farm", "reorder_level": 10, "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "prod_006", "name": "Tea T-Shirt", "price": 25000, "currency": "UGX", "stock": 100, "category": "Merchandise", "reorder_level": 15, "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.products.insert_many(products)
+
+    # Families
+    family_count = await db.families.count_documents({})
+    if family_count == 0:
+        families = [
+            {"id": "fam_001", "family_name": "Nakato Family", "primary_contact_name": "Sarah Nakato", "primary_contact_email": "parent1@example.com", "primary_contact_phone": "+256 700 111001", "address": "Kampala", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "fam_002", "family_name": "Ssekitto Family", "primary_contact_name": "James Ssekitto", "primary_contact_email": "james@example.com", "primary_contact_phone": "+256 700 222002", "address": "Entebbe", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "fam_003", "family_name": "Kiggundu Family", "primary_contact_name": "Mary Kiggundu", "primary_contact_email": "mary@example.com", "primary_contact_phone": "+256 700 333003", "address": "Jinja", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.families.insert_many(families)
+
+    # Children
+    child_count = await db.children.count_documents({})
+    if child_count == 0:
+        children = [
+            {"id": "chd_001", "name": "Emma Nakato", "date_of_birth": "2016-03-15", "gender": "female", "family_id": "fam_001", "class_group": "Primary 4", "medical_notes": "Nut allergy - carry epipen", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "chd_002", "name": "Daniel Nakato", "date_of_birth": "2018-07-22", "gender": "male", "family_id": "fam_001", "class_group": "Primary 2", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "chd_003", "name": "Peter Ssekitto", "date_of_birth": "2015-11-08", "gender": "male", "family_id": "fam_002", "class_group": "Primary 5", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "chd_004", "name": "Grace Kiggundu", "date_of_birth": "2019-04-30", "gender": "female", "family_id": "fam_003", "class_group": "Nursery", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.children.insert_many(children)
+
+    # Donations
+    donation_count = await db.donations.count_documents({})
+    if donation_count == 0:
+        donations = [
+            {"id": "don_001", "donor_name": "Alice Namukasa", "amount": 50000, "currency": "UGX", "type": "tithe", "date": "2026-04-01", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "don_002", "donor_name": "Brian Ssekitto", "amount": 30000, "currency": "UGX", "type": "offering", "date": "2026-04-01", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "don_003", "donor_name": "Anonymous", "amount": 100000, "currency": "UGX", "type": "donation", "date": "2026-04-06", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "don_004", "donor_name": "Francis Tumwesigye", "amount": 75000, "currency": "UGX", "type": "tithe", "date": "2026-03-25", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.donations.insert_many(donations)
+
+    # Expenses
+    expense_count = await db.expenses.count_documents({})
+    if expense_count == 0:
+        expenses = [
+            {"id": "exp_001", "title": "Electricity Bill", "amount": 85000, "currency": "UGX", "category": "utilities", "date": "2026-04-02", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "exp_002", "title": "Caretaker Salary", "amount": 150000, "currency": "UGX", "category": "salaries", "date": "2026-04-01", "created_at": datetime.now(timezone.utc).isoformat()},
+            {"id": "exp_003", "title": "Office Supplies", "amount": 25000, "currency": "UGX", "category": "supplies", "date": "2026-03-28", "created_at": datetime.now(timezone.utc).isoformat()},
+        ]
+        await db.expenses.insert_many(expenses)
+
+    return {"message": "Extended seed data added"}
+
 
 app.include_router(api_router)
 
