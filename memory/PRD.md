@@ -8,6 +8,7 @@ Full-featured multi-location CRM for 58:12 Global Connect with: Compass system (
 - **Backend**: FastAPI + Motor (Async MongoDB) + Pydantic + Modular Routers
 - **Auth**: JWT (email/password) + Google OAuth (Emergent Auth)
 - **AI**: Gemini 2.5 Flash (emergentintegrations)
+- **Email**: Resend (transactional notifications)
 - **Real-time**: WebSocket (FastAPI native)
 - **Database**: MongoDB
 - **Security**: Rate limiting (120 req/min), CORS, JWT auth
@@ -52,6 +53,13 @@ Dashboard, Members, Families, Events, Calendar, Tasks, Check-Ins, Financial, Sal
 - Iteration 2: 100% (mega batch)
 - Iteration 3: 100% (compass overhaul + chat + AI)
 - Iteration 4: 96%/100% (bookings, rate limiting, pinned rooms, WebSocket)
+
+## Latest Updates (2026-03-23)
+- Implemented Resend email notifications with event/fund/approval triggers
+- Added restricted access APIs (resident assignments, staff passes, guest approvals, scan logs)
+- Added reporting endpoints with PDF export
+- WebSocket chat now broadcasts live messages (REST + WS)
+- Fixed /members/pending route conflict
 
 ## File Structure
 ```

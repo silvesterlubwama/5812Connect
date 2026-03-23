@@ -421,6 +421,11 @@ async def create_member(data: MemberCreate, current_user: dict = Depends(get_cur
     member.pop("_id", None)
     return member
 
+@api_router.get("/members/pending")
+async def list_pending_members(current_user: dict = Depends(get_current_user)):
+    members = await db.members.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return {"members": members, "total": len(members)}
+
 @api_router.get("/members/{member_id}")
 async def get_member(member_id: str, current_user: dict = Depends(get_current_user)):
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
@@ -2084,11 +2089,6 @@ async def get_member_badges(member_id: str, current_user: dict = Depends(get_cur
     return member.get("badges", [])
 
 # ========== MEMBER APPROVALS & BULK IMPORT ==========
-
-@api_router.get("/members/pending")
-async def list_pending_members(current_user: dict = Depends(get_current_user)):
-    members = await db.members.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return {"members": members, "total": len(members)}
 
 @api_router.put("/members/{member_id}/approve")
 async def approve_member(member_id: str, current_user: dict = Depends(get_current_user)):
