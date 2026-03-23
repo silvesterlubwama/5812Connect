@@ -23,7 +23,7 @@ export default function PeoplePage() {
   const [saving, setSaving] = useState(false);
   const [familyForm, setFamilyForm] = useState({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' });
   const [childForm, setChildForm] = useState({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' });
-  const [guestForm, setGuestForm] = useState({ name: '', email: '', phone: '', visit_date: '', referred_by: '', address: '', notes: '' });
+  const [guestForm, setGuestForm] = useState({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' });
 
   const fetchAll = async () => {
     setLoading(true);

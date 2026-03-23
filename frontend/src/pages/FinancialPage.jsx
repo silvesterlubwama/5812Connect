@@ -57,8 +57,9 @@ export default function FinancialPage() {
   const [showDonation, setShowDonation] = useState(false);
   const [showExpense, setShowExpense] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [donationForm, setDonationForm] = useState({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: '', notes: '' });
-  const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', currency: 'UGX', category: 'general', date: '', notes: '' });
+  const today = new Date().toISOString().split('T')[0];
+  const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '' }));
+  const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '' }));
 
   const fetchAll = async () => {
     setLoading(true);
@@ -84,7 +85,7 @@ export default function FinancialPage() {
       const res = await financialApi.createDonation({ ...donationForm, amount: parseFloat(donationForm.amount) });
       setDonations(prev => [res.data, ...prev]);
       setShowDonation(false);
-      setDonationForm({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: '', notes: '' });
+      setDonationForm({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: today, notes: '' });
       toast.success('Donation recorded!');
       fetchAll();
     } catch { toast.error('Failed to save donation'); }
@@ -98,7 +99,7 @@ export default function FinancialPage() {
       const res = await financialApi.createExpense({ ...expenseForm, amount: parseFloat(expenseForm.amount) });
       setExpenses(prev => [res.data, ...prev]);
       setShowExpense(false);
-      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: '', notes: '' });
+      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '' });
       toast.success('Expense recorded!');
       fetchAll();
     } catch { toast.error('Failed to save expense'); }
