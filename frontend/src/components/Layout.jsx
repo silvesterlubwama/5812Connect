@@ -16,56 +16,58 @@ import { Input } from './ui/input';
 import { Dialog, DialogContent } from './ui/dialog';
 import { notificationsApi, searchApi } from '../services/api';
 import { useWebSocket } from '../context/WebSocketContext';
+import { useI18n } from '../context/I18nContext';
+import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
 
 const NAV_SECTIONS = [
   {
     label: null,
     items: [
-      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+      { to: '/dashboard', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
     ]
   },
   {
-    label: 'People',
+    labelKey: 'people.title',
     items: [
-      { to: '/members', icon: Users, label: 'People' },
+      { to: '/members', icon: Users, labelKey: 'nav.people' },
     ]
   },
   {
     label: 'Ministry',
     items: [
-      { to: '/events', icon: Calendar, label: 'Events' },
-      { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
-      { to: '/tasks', icon: CheckSquare, label: 'Tasks' },
-      { to: '/check-ins', icon: UserCheck, label: 'Check-Ins' },
-      { to: '/outreach', icon: Globe, label: 'Outreach' },
-      { to: '/comms', icon: Megaphone, label: 'Communications' },
-      { to: '/resources', icon: Building2, label: 'Resources' },
-      { to: '/access', icon: ScanLine, label: 'Access Control', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager', 'Coordinator'] },
+      { to: '/events', icon: Calendar, labelKey: 'nav.events' },
+      { to: '/calendar', icon: CalendarDays, labelKey: 'nav.calendar' },
+      { to: '/tasks', icon: CheckSquare, labelKey: 'nav.tasks' },
+      { to: '/check-ins', icon: UserCheck, labelKey: 'nav.checkIns' },
+      { to: '/outreach', icon: Globe, labelKey: 'nav.outreach' },
+      { to: '/comms', icon: Megaphone, labelKey: 'nav.comms' },
+      { to: '/resources', icon: Building2, labelKey: 'nav.resources' },
+      { to: '/access', icon: ScanLine, labelKey: 'nav.accessControl', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager', 'Coordinator'] },
     ]
   },
   {
     label: 'Finance',
     items: [
-      { to: '/financial', icon: DollarSign, label: 'Financial', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
-      { to: '/sales', icon: ShoppingCart, label: 'Sales & Products' },
+      { to: '/financial', icon: DollarSign, labelKey: 'nav.financial', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/sales', icon: ShoppingCart, labelKey: 'nav.sales' },
     ]
   },
   {
     label: 'Analytics',
     items: [
-      { to: '/attendance', icon: UserCheck, label: 'Attendance' },
-      { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
-      { to: '/location-analytics', icon: BarChart3, label: 'Location Stats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
-      { to: '/reports', icon: FileText, label: 'Reports & PDF', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/attendance', icon: UserCheck, labelKey: 'nav.attendance' },
+      { to: '/sales-analytics', icon: TrendingUp, labelKey: 'nav.salesAnalytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/location-analytics', icon: BarChart3, labelKey: 'nav.locationStats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/reports', icon: FileText, labelKey: 'nav.reports', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
     ]
   },
   {
     label: 'Admin',
     items: [
-      { to: '/locations', icon: MapPin, label: 'Compasses & Locations', adminOnly: true },
-      { to: '/audit', icon: Shield, label: 'Audit Trail', adminOnly: true },
-      { to: '/settings', icon: Settings, label: 'Settings' },
+      { to: '/locations', icon: MapPin, labelKey: 'nav.locations', adminOnly: true },
+      { to: '/audit', icon: Shield, labelKey: 'nav.audit', adminOnly: true },
+      { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
     ]
   },
 ];
@@ -114,6 +116,7 @@ export default function Layout() {
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { addListener } = useWebSocket();
+  const { t, lang, changeLang, languages } = useI18n();
 
   // Online/offline detection
   useEffect(() => {
@@ -234,8 +237,8 @@ export default function Layout() {
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0">
           {NAV_SECTIONS.map((section, si) => (
             <div key={si} className={si > 0 ? 'mt-4' : ''}>
-              {section.label && (
-                <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{section.label}</p>
+              {(section.label || section.labelKey) && (
+                <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{section.labelKey ? t(section.labelKey) : section.label}</p>
               )}
               {section.items
                 .filter(item => {
@@ -243,7 +246,7 @@ export default function Layout() {
                   if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
                   return true;
                 })
-                .map(({ to, icon: Icon, label }) => (
+                .map(({ to, icon: Icon, labelKey }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -254,7 +257,7 @@ export default function Layout() {
                     data-testid={`nav-${to.replace('/', '')}`}
                   >
                     <Icon size={15} className="shrink-0" />
-                    {label}
+                    {t(labelKey)}
                   </NavLink>
               ))}
             </div>
@@ -292,6 +295,22 @@ export default function Layout() {
           </button>
 
           <div className="flex-1" />
+
+          {/* Language Switcher */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-9 gap-1.5 text-xs px-2" data-testid="language-switcher">
+                <Globe size={14} /> {languages.find(l => l.code === lang)?.name?.slice(0, 3) || 'EN'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {languages.map(l => (
+                <DropdownMenuItem key={l.code} onClick={() => changeLang(l.code)} className={lang === l.code ? 'font-semibold bg-accent' : ''} data-testid={`lang-${l.code}`}>
+                  {l.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* Online/Offline indicator */}
           {!isOnline && (

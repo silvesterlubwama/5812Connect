@@ -98,3 +98,34 @@ require_director = require_role(8)    # Director+
 require_manager = require_role(7)     # Manager+
 require_coordinator = require_role(6) # Coordinator+
 require_staff = require_role(5)       # Staff+
+
+
+# ---- SHARED HELPERS ----
+
+from fastapi import HTTPException as _HTTPException
+
+def normalize_gender(value):
+    if value is None or value == "":
+        return None
+    gender = value.lower()
+    if gender not in ("male", "female"):
+        raise _HTTPException(status_code=400, detail="Gender must be male or female")
+    return gender
+
+
+async def resolve_department(location_id, department):
+    if not location_id:
+        return department
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "type": 1, "departments": 1})
+    if not loc:
+        return department
+    available = loc.get("departments") or []
+    if department:
+        if department in available:
+            return department
+        if loc.get("type") == "sub-location" and department == loc.get("name"):
+            return department
+        raise _HTTPException(status_code=400, detail="Department must match selected location")
+    if loc.get("type") == "sub-location":
+        return loc.get("name")
+    return department

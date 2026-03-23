@@ -322,3 +322,14 @@ export const pushApi = {
 export const syncApi = {
   messages: (messages) => api.post('/sync/messages', { messages }),
 };
+
+// ---- BIOMETRIC / NFC ----
+export const biometricApi = {
+  register: (data) => api.post('/biometric/register', data),
+  verify: (data) => api.post('/biometric/verify', data),
+};
+
+export const nfcApi = {
+  register: (data) => api.post('/nfc/register', data),
+  scan: (data) => api.post('/nfc/scan', data),
+};

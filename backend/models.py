@@ -1,0 +1,188 @@
+"""Shared Pydantic models for 58:12 Global Connect CRM"""
+from pydantic import BaseModel, ConfigDict
+from typing import List, Optional
+
+
+class UserRegister(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    national_id: Optional[str] = None
+    password: str
+
+class UserLogin(BaseModel):
+    identifier: str
+    password: str
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    national_id: Optional[str] = None
+    role: str = "volunteer"
+    status: str = "active"
+    created_at: str
+
+class MemberCreate(BaseModel):
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    national_id: Optional[str] = None
+    role: str = "Staff"
+    group: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+    location_id: Optional[str] = None
+    department: Optional[str] = None
+    program: Optional[str] = None
+    is_parent: bool = False
+    is_customer: bool = False
+    is_donor: bool = False
+
+class MemberUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    national_id: Optional[str] = None
+    role: Optional[str] = None
+    group: Optional[str] = None
+    gender: Optional[str] = None
+    status: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+    location_id: Optional[str] = None
+    department: Optional[str] = None
+    program: Optional[str] = None
+    is_parent: Optional[bool] = None
+    is_customer: Optional[bool] = None
+    is_donor: Optional[bool] = None
+
+class FamilyCreate(BaseModel):
+    family_name: str
+    primary_contact_name: str
+    primary_contact_email: Optional[str] = None
+    primary_contact_phone: Optional[str] = None
+    address: Optional[str] = None
+    notes: Optional[str] = None
+
+class ChildCreate(BaseModel):
+    name: str
+    date_of_birth: Optional[str] = None
+    gender: Optional[str] = None
+    family_id: Optional[str] = None
+    class_group: Optional[str] = None
+    medical_notes: Optional[str] = None
+    allergies: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+
+class GuestCreate(BaseModel):
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    visit_date: Optional[str] = None
+    referred_by: Optional[str] = None
+    address: Optional[str] = None
+    notes: Optional[str] = None
+
+class EventCreate(BaseModel):
+    title: str
+    type: str = "service"
+    date: str
+    time: Optional[str] = None
+    end_time: Optional[str] = None
+    location: Optional[str] = None
+    capacity: int = 100
+    description: Optional[str] = None
+    is_public: bool = True
+    is_free: bool = True
+    price: Optional[float] = None
+    venue_id: Optional[str] = None
+    is_recurring: bool = False
+    recurrence_pattern: Optional[str] = None
+
+class EventUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    date: Optional[str] = None
+    time: Optional[str] = None
+    end_time: Optional[str] = None
+    location: Optional[str] = None
+    capacity: Optional[int] = None
+    description: Optional[str] = None
+    is_public: Optional[bool] = None
+    is_free: Optional[bool] = None
+    price: Optional[float] = None
+    status: Optional[str] = None
+
+class TaskCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    status: str = "todo"
+    priority: str = "medium"
+    assignee: Optional[str] = None
+    due_date: Optional[str] = None
+    tags: Optional[List[str]] = []
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assignee: Optional[str] = None
+    due_date: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class CheckInCreate(BaseModel):
+    member_id: Optional[str] = None
+    member_name: str
+    type: str = "member"
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    method: str = "manual"
+
+class VenueCreate(BaseModel):
+    name: str
+    capacity: int
+    type: str = "hall"
+    description: Optional[str] = None
+    hourly_rate: Optional[float] = None
+    available: bool = True
+
+class VenueUpdate(BaseModel):
+    name: Optional[str] = None
+    capacity: Optional[int] = None
+    type: Optional[str] = None
+    description: Optional[str] = None
+    hourly_rate: Optional[float] = None
+    available: Optional[bool] = None
+
+class PublicBookingCreate(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    event_id: str
+    num_tickets: int = 1
+
+class SpaceBookingCreate(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    venue_id: str
+    booking_date: str
+    start_time: str
+    end_time: str
+    purpose: Optional[str] = None
+
+class AuditLogCreate(BaseModel):
+    action: str
+    resource: str
+    resource_id: Optional[str] = None
+    details: Optional[dict] = None

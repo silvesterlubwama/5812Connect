@@ -8,8 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { accessApi, locationsApi, membersApi } from '../services/api';
+import { accessApi, locationsApi, membersApi, biometricApi, nfcApi } from '../services/api';
 import { toast } from 'sonner';
+import { Fingerprint, Smartphone } from 'lucide-react';
 
 export default function AccessPage() {
   const [locations, setLocations] = useState([]);
@@ -116,20 +117,36 @@ export default function AccessPage() {
     e.preventDefault();
     setSaving(true);
     try {
+      let memberId = scanForm.member_id;
+
+      // NFC mode: resolve serial number to member first
+      if (scanMode === 'nfc') {
+        const nfcRes = await nfcApi.scan({ serial_number: scanForm.member_id });
+        memberId = nfcRes.data.member?.id;
+        if (!memberId) throw new Error('NFC tag not linked to a member');
+      }
+
+      // Biometric mode: verify credential to get member
+      if (scanMode === 'biometric') {
+        const bioRes = await biometricApi.verify({ credential_id: scanForm.member_id });
+        memberId = bioRes.data.member?.id;
+        if (!memberId) throw new Error('Biometric credential not recognized');
+      }
+
       const payload = { location_id: selectedLocation, action: scanForm.action };
-      if (scanMode === 'member') {
-        payload.member_id = scanForm.member_id;
-      } else {
+      if (scanMode === 'guest') {
         payload.guest_request_id = scanForm.guest_request_id;
         payload.guest_name = scanForm.guest_name;
         payload.member_id = scanForm.member_id || 'guest';
+      } else {
+        payload.member_id = memberId;
       }
       const res = await accessApi.scan(payload);
       toast.success(`${scanForm.action === 'in' ? 'Scanned In' : 'Scanned Out'} — ${res.data.access_type}`);
       setShowScanDialog(false);
       setScanForm({ member_id: '', action: 'in', guest_request_id: '', guest_name: '' });
       fetchLocationData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'No access authorization'); }
+    } catch (err) { toast.error(err.response?.data?.detail || err.message || 'No access authorization'); }
     finally { setSaving(false); }
   };
 
@@ -375,6 +392,8 @@ export default function AccessPage() {
                 <SelectContent>
                   <SelectItem value="member">Resident / Staff</SelectItem>
                   <SelectItem value="guest">Approved Guest</SelectItem>
+                  <SelectItem value="nfc">NFC Tag</SelectItem>
+                  <SelectItem value="biometric">Biometric</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -386,7 +405,7 @@ export default function AccessPage() {
                   <SelectContent>{members.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-            ) : (
+            ) : scanMode === 'guest' ? (
               <>
                 <div className="space-y-2">
                   <Label>Approved Guest Request</Label>
@@ -399,6 +418,30 @@ export default function AccessPage() {
                   </Select>
                 </div>
               </>
+            ) : scanMode === 'nfc' ? (
+              <div className="space-y-3">
+                <div className="p-6 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 text-center">
+                  <Smartphone size={40} className="mx-auto mb-2 text-primary opacity-60" />
+                  <p className="text-sm font-medium">Place NFC tag on device</p>
+                  <p className="text-xs text-muted-foreground mt-1">Or enter serial number manually</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>NFC Serial Number</Label>
+                  <Input placeholder="e.g. 04:A2:B3:C4:D5" value={scanForm.member_id} onChange={e => setScanForm({ ...scanForm, member_id: e.target.value })} data-testid="nfc-serial-input" />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="p-6 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 text-center">
+                  <Fingerprint size={40} className="mx-auto mb-2 text-primary opacity-60" />
+                  <p className="text-sm font-medium">Touch the fingerprint sensor</p>
+                  <p className="text-xs text-muted-foreground mt-1">Or enter credential ID manually</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Credential ID</Label>
+                  <Input placeholder="Credential identifier" value={scanForm.member_id} onChange={e => setScanForm({ ...scanForm, member_id: e.target.value })} data-testid="biometric-credential-input" />
+                </div>
+              </div>
             )}
             <div className="space-y-2">
               <Label>Action</Label>
@@ -412,7 +455,7 @@ export default function AccessPage() {
             </div>
             <div className="flex gap-3">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowScanDialog(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" disabled={saving || (scanMode === 'member' ? !scanForm.member_id : !scanForm.guest_request_id)} data-testid="execute-scan-btn">
+              <Button type="submit" className="flex-1" disabled={saving || (scanMode === 'member' ? !scanForm.member_id : scanMode === 'guest' ? !scanForm.guest_request_id : !scanForm.member_id)} data-testid="execute-scan-btn">
                 {saving ? 'Processing...' : scanForm.action === 'in' ? 'Scan IN' : 'Scan OUT'}
               </Button>
             </div>

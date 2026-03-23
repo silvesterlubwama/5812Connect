@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { WebSocketProvider } from './context/WebSocketContext';
+import { I18nProvider } from './context/I18nContext';
 import { Toaster } from './components/ui/sonner';
 import './App.css';
 
@@ -88,14 +89,16 @@ function AppRoutes() {
 
 function App() {
   return (
-    <AuthProvider>
-      <WebSocketProvider>
-        <BrowserRouter>
-          <AppRoutes />
-          <Toaster />
-        </BrowserRouter>
-      </WebSocketProvider>
-    </AuthProvider>
+    <I18nProvider>
+      <AuthProvider>
+        <WebSocketProvider>
+          <BrowserRouter>
+            <AppRoutes />
+            <Toaster />
+          </BrowserRouter>
+        </WebSocketProvider>
+      </AuthProvider>
+    </I18nProvider>
   );
 }
 

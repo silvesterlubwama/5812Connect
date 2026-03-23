@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin } from 'lucide-react';
+import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { kioskApi, locationsApi, accessApi } from '../services/api';
+import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi } from '../services/api';
 import api from '../services/api';
 import { toast } from 'sonner';
 
@@ -36,6 +36,7 @@ export default function KioskPage() {
   const [recentScans, setRecentScans] = useState([]);
   const [todayStats, setTodayStats] = useState({ checkIns: 0, visitors: 0, scans: 0 });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [scanType, setScanType] = useState('manual'); // manual, nfc, biometric
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -56,6 +57,7 @@ export default function KioskPage() {
       const meRes = await api.get('/auth/me');
       setStaffUser(meRes.data);
       setAuthenticated(true);
+      setView('dashboard');
       toast.success(`Welcome, ${meRes.data.name}`);
       // Load locations for access scanning
       try {
@@ -109,13 +111,29 @@ export default function KioskPage() {
     setLoading(true);
     setScanResult(null);
     try {
-      const res = await accessApi.scan({ member_id: scanMemberId, location_id: selectedLocation, action: scanAction });
+      let memberId = scanMemberId;
+
+      // NFC mode: resolve serial number to member
+      if (scanType === 'nfc') {
+        const nfcRes = await nfcApi.scan({ serial_number: scanMemberId });
+        memberId = nfcRes.data.member?.id;
+        if (!memberId) throw new Error('NFC tag not linked to a member');
+      }
+
+      // Biometric mode: verify credential to get member
+      if (scanType === 'biometric') {
+        const bioRes = await biometricApi.verify({ credential_id: scanMemberId });
+        memberId = bioRes.data.member?.id;
+        if (!memberId) throw new Error('Biometric credential not recognized');
+      }
+
+      const res = await accessApi.scan({ member_id: memberId, location_id: selectedLocation, action: scanAction });
       setScanResult({ success: true, ...res.data });
       setTodayStats(prev => ({ ...prev, scans: prev.scans + 1 }));
-      setRecentScans(prev => [{ id: Date.now(), member_id: scanMemberId, action: scanAction, timestamp: new Date().toISOString(), ...res.data }, ...prev.slice(0, 9)]);
+      setRecentScans(prev => [{ id: Date.now(), member_id: memberId, action: scanAction, timestamp: new Date().toISOString(), ...res.data }, ...prev.slice(0, 9)]);
       toast.success(`${scanAction === 'in' ? 'Scanned IN' : 'Scanned OUT'}`);
       setScanMemberId('');
-    } catch (err) { setScanResult({ success: false, detail: err.response?.data?.detail || 'No access' }); toast.error(err.response?.data?.detail || 'Access denied'); }
+    } catch (err) { setScanResult({ success: false, detail: err.response?.data?.detail || err.message || 'No access' }); toast.error(err.response?.data?.detail || err.message || 'Access denied'); }
     finally { setLoading(false); }
   };
 
@@ -159,18 +177,22 @@ export default function KioskPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
             <Button className="h-20 text-lg gap-3 flex-col" onClick={() => setView('id')} data-testid="kiosk-id-checkin-btn">
               <CreditCard size={28} />
-              <span>ID Check-In</span>
+              <span className="text-xs">ID Check-In</span>
             </Button>
             <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={() => setView('visitor')} data-testid="kiosk-visitor-btn">
               <UserCheck size={28} />
-              <span>Visitor</span>
+              <span className="text-xs">Visitor</span>
             </Button>
-            <Button variant="secondary" className="h-20 text-lg gap-3 flex-col" onClick={() => setView('scan')} data-testid="kiosk-scan-btn">
+            <Button variant="secondary" className="h-20 text-lg gap-3 flex-col" onClick={() => { setScanType('manual'); setView('scan'); }} data-testid="kiosk-scan-btn">
               <ScanLine size={28} />
-              <span>Access Scan</span>
+              <span className="text-xs">Access Scan</span>
+            </Button>
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => { setScanType('nfc'); setView('scan'); }} data-testid="kiosk-nfc-btn">
+              <Smartphone size={28} />
+              <span className="text-xs">NFC Scan</span>
             </Button>
           </div>
 
@@ -206,12 +228,25 @@ export default function KioskPage() {
         <Card className="w-full max-w-md shadow rounded-xl">
           <CardHeader className="text-center space-y-3">
             <div className="mx-auto w-20 h-20 rounded-full bg-primary flex items-center justify-center">
-              <ScanLine size={36} className="text-primary-foreground" />
+              {scanType === 'nfc' ? <Smartphone size={36} className="text-primary-foreground" /> : scanType === 'biometric' ? <Fingerprint size={36} className="text-primary-foreground" /> : <ScanLine size={36} className="text-primary-foreground" />}
             </div>
-            <CardTitle className="text-2xl font-heading">Access Scan</CardTitle>
-            <CardDescription>Scan residents/staff in or out of restricted areas</CardDescription>
+            <CardTitle className="text-2xl font-heading">{scanType === 'nfc' ? 'NFC Scan' : scanType === 'biometric' ? 'Biometric Scan' : 'Access Scan'}</CardTitle>
+            <CardDescription>{scanType === 'nfc' ? 'Place NFC tag on device to scan' : scanType === 'biometric' ? 'Use fingerprint sensor to verify' : 'Scan residents/staff in or out of restricted areas'}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Scan type picker */}
+            <div className="flex gap-2">
+              <Button size="sm" variant={scanType === 'manual' ? 'default' : 'outline'} className="flex-1 gap-1.5" onClick={() => setScanType('manual')} data-testid="kiosk-scan-type-manual">
+                <ScanLine size={14} /> Manual
+              </Button>
+              <Button size="sm" variant={scanType === 'nfc' ? 'default' : 'outline'} className="flex-1 gap-1.5" onClick={() => setScanType('nfc')} data-testid="kiosk-scan-type-nfc">
+                <Smartphone size={14} /> NFC
+              </Button>
+              <Button size="sm" variant={scanType === 'biometric' ? 'default' : 'outline'} className="flex-1 gap-1.5" onClick={() => setScanType('biometric')} data-testid="kiosk-scan-type-biometric">
+                <Fingerprint size={14} /> Biometric
+              </Button>
+            </div>
+
             <div className="space-y-2">
               <Label className="text-base">Location</Label>
               <Select value={selectedLocation} onValueChange={setSelectedLocation}>
@@ -219,10 +254,32 @@ export default function KioskPage() {
                 <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label className="text-base">Member ID / National ID</Label>
-              <Input className="h-12 text-lg" placeholder="Enter ID..." value={scanMemberId} onChange={e => setScanMemberId(e.target.value)} data-testid="kiosk-scan-member-input" />
-            </div>
+
+            {scanType === 'nfc' ? (
+              <div className="space-y-3">
+                <div className="p-8 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 text-center">
+                  <Smartphone size={48} className="mx-auto mb-2 text-primary opacity-50 animate-pulse" />
+                  <p className="text-sm font-medium">Place NFC tag on device</p>
+                  <p className="text-xs text-muted-foreground mt-1">Or enter serial number below</p>
+                </div>
+                <Input className="h-12 text-lg" placeholder="NFC Serial (e.g. 04:A2:B3:C4:D5)" value={scanMemberId} onChange={e => setScanMemberId(e.target.value)} data-testid="kiosk-nfc-input" />
+              </div>
+            ) : scanType === 'biometric' ? (
+              <div className="space-y-3">
+                <div className="p-8 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 text-center">
+                  <Fingerprint size={48} className="mx-auto mb-2 text-primary opacity-50 animate-pulse" />
+                  <p className="text-sm font-medium">Touch the fingerprint sensor</p>
+                  <p className="text-xs text-muted-foreground mt-1">Or enter credential ID below</p>
+                </div>
+                <Input className="h-12 text-lg" placeholder="Credential ID" value={scanMemberId} onChange={e => setScanMemberId(e.target.value)} data-testid="kiosk-biometric-input" />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label className="text-base">Member ID / National ID</Label>
+                <Input className="h-12 text-lg" placeholder="Enter ID..." value={scanMemberId} onChange={e => setScanMemberId(e.target.value)} data-testid="kiosk-scan-member-input" />
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <Button className={`h-14 text-lg ${scanAction === 'in' ? 'bg-green-600 hover:bg-green-700' : 'bg-secondary text-foreground'}`} onClick={() => setScanAction('in')} data-testid="kiosk-scan-in-toggle">
                 SCAN IN

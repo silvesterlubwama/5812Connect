@@ -5,7 +5,7 @@ import csv
 import io
 from dotenv import load_dotenv
 from storage import init_storage
-from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff
+from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff, get_current_user, hash_password, verify_password, create_token
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -84,488 +84,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
-# ========== MODELS ==========
-
-class UserRegister(BaseModel):
-    name: str
-    email: str
-    phone: Optional[str] = None
-    national_id: Optional[str] = None
-    password: str
-
-class UserLogin(BaseModel):
-    identifier: str  # email, phone, or national_id
-    password: str
-
-class UserOut(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str
-    name: str
-    email: str
-    phone: Optional[str] = None
-    national_id: Optional[str] = None
-    role: str = "volunteer"
-    status: str = "active"
-    created_at: str
-
-class MemberCreate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    national_id: Optional[str] = None
-    role: str = "Staff"
-    group: Optional[str] = None
-    gender: Optional[str] = None
-    date_of_birth: Optional[str] = None
-    address: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    notes: Optional[str] = None
-    location_id: Optional[str] = None
-    department: Optional[str] = None
-    program: Optional[str] = None
-    is_parent: bool = False
-    is_customer: bool = False
-    is_donor: bool = False
-
-class MemberUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    national_id: Optional[str] = None
-    role: Optional[str] = None
-    group: Optional[str] = None
-    gender: Optional[str] = None
-    status: Optional[str] = None
-    date_of_birth: Optional[str] = None
-    address: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    notes: Optional[str] = None
-    location_id: Optional[str] = None
-    department: Optional[str] = None
-    program: Optional[str] = None
-    is_parent: Optional[bool] = None
-    is_customer: Optional[bool] = None
-    is_donor: Optional[bool] = None
-
-class EventCreate(BaseModel):
-    title: str
-    type: str = "service"
-    date: str
-    time: Optional[str] = None
-    end_time: Optional[str] = None
-    location: Optional[str] = None
-    capacity: int = 100
-    description: Optional[str] = None
-    is_public: bool = True
-    is_free: bool = True
-    price: Optional[float] = None
-    venue_id: Optional[str] = None
-    is_recurring: bool = False
-    recurrence_pattern: Optional[str] = None
-
-class EventUpdate(BaseModel):
-    title: Optional[str] = None
-    type: Optional[str] = None
-    date: Optional[str] = None
-    time: Optional[str] = None
-    end_time: Optional[str] = None
-    location: Optional[str] = None
-    capacity: Optional[int] = None
-    description: Optional[str] = None
-    is_public: Optional[bool] = None
-    is_free: Optional[bool] = None
-    price: Optional[float] = None
-    status: Optional[str] = None
-
-class TaskCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
-    status: str = "todo"
-    priority: str = "medium"
-    assignee: Optional[str] = None
-    due_date: Optional[str] = None
-    tags: Optional[List[str]] = []
-
-class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    status: Optional[str] = None
-    priority: Optional[str] = None
-    assignee: Optional[str] = None
-    due_date: Optional[str] = None
-    tags: Optional[List[str]] = None
-
-class CheckInCreate(BaseModel):
-    member_id: Optional[str] = None
-    member_name: str
-    type: str = "member"  # member, staff, visitor
-    event_id: Optional[str] = None
-    event_name: Optional[str] = None
-    method: str = "manual"  # manual, qr, id
-
-class VenueCreate(BaseModel):
-    name: str
-    capacity: int
-    type: str = "hall"
-    description: Optional[str] = None
-    hourly_rate: Optional[float] = None
-    available: bool = True
-
-class VenueUpdate(BaseModel):
-    name: Optional[str] = None
-    capacity: Optional[int] = None
-    type: Optional[str] = None
-    description: Optional[str] = None
-    hourly_rate: Optional[float] = None
-    available: Optional[bool] = None
-
-class PublicBookingCreate(BaseModel):
-    name: str
-    email: str
-    phone: Optional[str] = None
-    event_id: str
-    num_tickets: int = 1
-
-class SpaceBookingCreate(BaseModel):
-    name: str
-    email: str
-    phone: Optional[str] = None
-    venue_id: str
-    booking_date: str
-    start_time: str
-    end_time: str
-    purpose: Optional[str] = None
+# ========== MODELS (imported from models.py) ==========
+from models import (
+    UserRegister, UserLogin, UserOut, MemberCreate, MemberUpdate,
+    EventCreate, EventUpdate, TaskCreate, TaskUpdate, CheckInCreate,
+    VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate,
+    FamilyCreate, ChildCreate, GuestCreate, AuditLogCreate,
+)
 
 
-# ========== AUTH HELPERS ==========
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
-def create_token(user_id: str) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-    return jwt.encode({"sub": user_id, "exp": expires}, SECRET_KEY, algorithm=ALGORITHM)
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    user = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials:
-        return None
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
-        user = await db.users.find_one({"id": user_id}, {"_id": 0})
-        return user
-    except:
-        return None
+# ========== AUTH HELPERS (imported from deps.py) ==========
+from deps import normalize_gender, resolve_department
 
 
-def normalize_gender(value: Optional[str]) -> Optional[str]:
-    if value is None or value == "":
-        return None
-    gender = value.lower()
-    if gender not in ("male", "female"):
-        raise HTTPException(status_code=400, detail="Gender must be male or female")
-    return gender
+# ========== AUTH ROUTES (moved to routers/auth.py) ==========
 
 
-async def resolve_department(location_id: Optional[str], department: Optional[str]) -> Optional[str]:
-    if not location_id:
-        return department
-    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "type": 1, "departments": 1})
-    if not loc:
-        return department
-    available = loc.get("departments") or []
-    if department:
-        if department in available:
-            return department
-        if loc.get("type") == "sub-location" and department == loc.get("name"):
-            return department
-        raise HTTPException(status_code=400, detail="Department must match selected location")
-    if loc.get("type") == "sub-location":
-        return loc.get("name")
-    return department
-
-
-# ========== AUTH ROUTES ==========
-
-@api_router.post("/auth/register")
-async def register(data: UserRegister):
-    # Check if email already exists
-    existing = await db.users.find_one({"email": data.email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    user_id = str(uuid.uuid4())
-    user = {
-        "id": user_id,
-        "name": data.name,
-        "email": data.email.lower(),
-        "phone": data.phone,
-        "national_id": data.national_id,
-        "password_hash": hash_password(data.password),
-        "role": "volunteer",
-        "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.users.insert_one(user)
-    token = create_token(user_id)
-    user_out = {k: v for k, v in user.items() if k != "password_hash"}
-    return {"token": token, "user": user_out}
-
-@api_router.post("/auth/login")
-async def login(data: UserLogin):
-    identifier = data.identifier.strip().lower()
-    # Find by email, phone, or national_id
-    user = await db.users.find_one({
-        "$or": [
-            {"email": identifier},
-            {"phone": identifier},
-            {"national_id": data.identifier.strip()},
-        ]
-    })
-    if not user or not verify_password(data.password, user.get("password_hash", "")):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    token = create_token(user["id"])
-    user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
-    return {"token": token, "user": user_out}
-
-@api_router.get("/auth/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
-    user_out = {k: v for k, v in current_user.items() if k not in ("password_hash", "_id")}
-    return user_out
-
-@api_router.post("/auth/logout")
-async def logout():
-    return {"message": "Logged out successfully"}
-
-@api_router.post("/auth/google-session")
-async def google_auth_session(data: dict):
-    """Exchange Emergent Google Auth session_id for a JWT token"""
-    import httpx
-    session_id = data.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-                headers={"X-Session-ID": session_id},
-                timeout=10.0,
-            )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid Google session")
-        google_data = resp.json()
-        email = google_data.get("email", "").lower()
-        name = google_data.get("name", "")
-        picture = google_data.get("picture", "")
-        if not email:
-            raise HTTPException(status_code=400, detail="No email from Google")
-        # Find or create user
-        existing = await db.users.find_one({"email": email}, {"_id": 0})
-        if existing:
-            user_id = existing["id"]
-            if picture and not existing.get("picture"):
-                await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
-        else:
-            user_id = str(uuid.uuid4())
-            new_user = {
-                "id": user_id,
-                "name": name,
-                "email": email,
-                "phone": None,
-                "national_id": None,
-                "password_hash": hash_password(str(uuid.uuid4())),
-                "role": "volunteer",
-                "status": "active",
-                "picture": picture,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.users.insert_one(new_user)
-        token = create_token(user_id)
-        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-        return {"token": token, "user": user}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Google auth error: {e}")
-        raise HTTPException(status_code=500, detail="Google authentication failed")
-
-
-# ========== PASSWORD RESET ==========
-
-@api_router.post("/auth/forgot-password")
-async def forgot_password(data: dict):
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-    user = await db.users.find_one({"email": email}, {"_id": 0, "id": 1, "name": 1})
-    if not user:
-        # Don't reveal if email exists
-        return {"message": "If an account exists with that email, a reset link has been sent."}
-    reset_token = str(uuid.uuid4())
-    await db.password_resets.insert_one({
-        "token": reset_token,
-        "user_id": user["id"],
-        "email": email,
-        "used": False,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-    })
-    # Send email via Resend
-    try:
-        from routers.notifications import send_email
-        await send_email(
-            email,
-            "58:12 Global — Password Reset",
-            f"""<h2>Password Reset Request</h2>
-            <p>Hi {user.get('name', '')},</p>
-            <p>Use this code to reset your password: <strong>{reset_token[:8].upper()}</strong></p>
-            <p>This code expires in 1 hour.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-            <p>— 58:12 Global Connect</p>"""
-        )
-    except Exception as e:
-        logger.warning(f"Failed to send reset email: {e}")
-    return {"message": "If an account exists with that email, a reset link has been sent."}
-
-
-@api_router.post("/auth/reset-password")
-async def reset_password(data: dict):
-    token = (data.get("token") or "").strip()
-    new_password = (data.get("new_password") or "").strip()
-    if not token or not new_password:
-        raise HTTPException(status_code=400, detail="Token and new password are required")
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    # Find valid reset token (check first 8 chars uppercase match)
-    reset = await db.password_resets.find_one({
-        "used": False,
-        "$or": [
-            {"token": token},
-            {"token": {"$regex": f"^{token.lower()[:8]}", "$options": "i"}}
-        ]
-    }, {"_id": 0})
-    if not reset:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
-    if reset.get("expires_at") and reset["expires_at"] < datetime.now(timezone.utc).isoformat():
-        raise HTTPException(status_code=400, detail="Reset code has expired")
-    await db.users.update_one(
-        {"id": reset["user_id"]},
-        {"$set": {"password_hash": hash_password(new_password)}}
-    )
-    await db.password_resets.update_one({"token": reset["token"]}, {"$set": {"used": True}})
-    return {"message": "Password reset successfully. You can now login with your new password."}
-
-
-# ========== MEMBERS ==========
-
-@api_router.get("/members")
-async def list_members(
-    search: Optional[str] = None,
-    group: Optional[str] = None,
-    status: Optional[str] = None,
-    role: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
-    current_user: dict = Depends(get_current_user)
-):
-    query = {}
-    if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"phone": {"$regex": search, "$options": "i"}},
-            {"national_id": {"$regex": search, "$options": "i"}},
-        ]
-    if group and group != "all":
-        query["group"] = group
-    if status and status != "all":
-        query["status"] = status
-    if role and role != "all":
-        query["role"] = role
-    
-    total = await db.members.count_documents(query)
-    members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
-    return {"members": members, "total": total}
-
-@api_router.post("/members")
-async def create_member(data: MemberCreate, current_user: dict = Depends(get_current_user)):
-    payload = data.model_dump()
-    payload["gender"] = normalize_gender(payload.get("gender"))
-    payload["department"] = await resolve_department(payload.get("location_id"), payload.get("department"))
-    member_id = f"mem_{str(uuid.uuid4())[:8]}"
-    member = {
-        "id": member_id,
-        **payload,
-        "status": "active",
-        "join_date": datetime.now(timezone.utc).isoformat().split("T")[0],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "created_by": current_user["id"],
-    }
-    await db.members.insert_one(member)
-    member.pop("_id", None)
-    return member
-
-@api_router.get("/members/pending")
-async def list_pending_members(current_user: dict = Depends(get_current_user)):
-    members = await db.members.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return {"members": members, "total": len(members)}
-
-@api_router.get("/members/{member_id}")
-async def get_member(member_id: str, current_user: dict = Depends(get_current_user)):
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    
-    # Fetch check-in history
-    checkins = await db.checkins.find({"member_id": member_id}, {"_id": 0}).sort("check_in_time", -1).limit(20).to_list(20)
-    member["checkin_history"] = checkins
-    return member
-
-@api_router.put("/members/{member_id}")
-async def update_member(member_id: str, data: MemberUpdate, current_user: dict = Depends(get_current_user)):
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    if "gender" in update_data:
-        update_data["gender"] = normalize_gender(update_data["gender"])
-    if "department" in update_data or "location_id" in update_data:
-        location_id = update_data.get("location_id", member.get("location_id"))
-        department = update_data.get("department", member.get("department"))
-        update_data["department"] = await resolve_department(location_id, department)
-    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.members.update_one({"id": member_id}, {"$set": update_data})
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    return member
-
-@api_router.delete("/members/{member_id}")
-async def delete_member(member_id: str, current_user: dict = Depends(require_coordinator)):
-    result = await db.members.delete_one({"id": member_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Member not found")
-    return {"message": "Member deleted"}
+# ========== MEMBERS ROUTES (moved to routers/members.py) ==========
 
 
 # ========== EVENTS ==========
@@ -1039,39 +574,6 @@ class SaleCreate(BaseModel):
     notes: Optional[str] = None
     location_id: Optional[str] = None
 
-class FamilyCreate(BaseModel):
-    family_name: str
-    primary_contact_name: str
-    primary_contact_email: Optional[str] = None
-    primary_contact_phone: Optional[str] = None
-    address: Optional[str] = None
-    notes: Optional[str] = None
-
-class ChildCreate(BaseModel):
-    name: str
-    date_of_birth: Optional[str] = None
-    gender: Optional[str] = None
-    family_id: Optional[str] = None
-    class_group: Optional[str] = None
-    medical_notes: Optional[str] = None
-    allergies: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    notes: Optional[str] = None
-
-class GuestCreate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    visit_date: Optional[str] = None
-    referred_by: Optional[str] = None
-    address: Optional[str] = None
-    notes: Optional[str] = None
-
-class AuditLogCreate(BaseModel):
-    action: str
-    resource: str
-    resource_id: Optional[str] = None
-    details: Optional[dict] = None
 
 # ========== FINANCIAL ROUTES ==========
 
@@ -1281,104 +783,7 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
     await _audit(current_user["id"], "create", "sale", sale_id)
     return doc
 
-# ========== FAMILIES ==========
-
-@api_router.get("/families")
-async def list_families(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
-    if search:
-        query["$or"] = [
-            {"family_name": {"$regex": search, "$options": "i"}},
-            {"primary_contact_name": {"$regex": search, "$options": "i"}},
-        ]
-    families = await db.families.find(query, {"_id": 0}).sort("family_name", 1).to_list(500)
-    return families
-
-@api_router.post("/families")
-async def create_family(data: FamilyCreate, current_user: dict = Depends(get_current_user)):
-    doc = {
-        "id": f"fam_{str(uuid.uuid4())[:8]}",
-        **data.model_dump(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.families.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.put("/families/{family_id}")
-async def update_family(family_id: str, data: FamilyCreate, current_user: dict = Depends(get_current_user)):
-    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
-    await db.families.update_one({"id": family_id}, {"$set": update})
-    return await db.families.find_one({"id": family_id}, {"_id": 0})
-
-@api_router.delete("/families/{family_id}")
-async def delete_family(family_id: str, current_user: dict = Depends(get_current_user)):
-    await db.families.delete_one({"id": family_id})
-    return {"message": "Family deleted"}
-
-# ========== CHILDREN ==========
-
-@api_router.get("/children")
-async def list_children(family_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
-    if family_id:
-        query["family_id"] = family_id
-    if search:
-        query["name"] = {"$regex": search, "$options": "i"}
-    children = await db.children.find(query, {"_id": 0}).sort("name", 1).to_list(500)
-    return children
-
-@api_router.post("/children")
-async def create_child(data: ChildCreate, current_user: dict = Depends(get_current_user)):
-    doc = {
-        "id": f"chd_{str(uuid.uuid4())[:8]}",
-        **data.model_dump(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.children.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.put("/children/{child_id}")
-async def update_child(child_id: str, data: ChildCreate, current_user: dict = Depends(get_current_user)):
-    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
-    await db.children.update_one({"id": child_id}, {"$set": update})
-    return await db.children.find_one({"id": child_id}, {"_id": 0})
-
-@api_router.delete("/children/{child_id}")
-async def delete_child(child_id: str, current_user: dict = Depends(get_current_user)):
-    await db.children.delete_one({"id": child_id})
-    return {"message": "Child deleted"}
-
-# ========== GUESTS ==========
-
-@api_router.get("/guests")
-async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
-    if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-        ]
-    guests = await db.guests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return guests
-
-@api_router.post("/guests")
-async def create_guest(data: GuestCreate, current_user: dict = Depends(get_current_user)):
-    doc = {
-        "id": f"gst_{str(uuid.uuid4())[:8]}",
-        **data.model_dump(),
-        "visit_date": data.visit_date or datetime.now(timezone.utc).isoformat()[:10],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.guests.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.delete("/guests/{guest_id}")
-async def delete_guest(guest_id: str, current_user: dict = Depends(get_current_user)):
-    await db.guests.delete_one({"id": guest_id})
-    return {"message": "Guest deleted"}
+# ========== FAMILIES, CHILDREN, GUESTS (moved to routers/members.py) ==========
 
 # ========== AUDIT TRAIL ==========
 
@@ -1749,11 +1154,46 @@ async def unsubscribe_push(current_user: dict = Depends(get_current_user)):
 @api_router.get("/push/vapid-key")
 async def get_vapid_key():
     """Return the public VAPID key for push subscriptions"""
-    # Generate a static keypair if not existing
-    import hashlib
-    seed = os.environ.get("SECRET_KEY", "5812global")
-    key = hashlib.sha256(seed.encode()).hexdigest()[:64]
-    return {"publicKey": f"BPush-{key[:32]}"}
+    pub_key = os.environ.get("VAPID_PUBLIC_KEY", "")
+    return {"publicKey": pub_key}
+
+
+async def send_push_to_user(user_id: str, title: str, body: str, url: str = "/"):
+    """Send a real push notification to a user via pywebpush"""
+    try:
+        from pywebpush import webpush
+        subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(10)
+        vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "")
+        vapid_email = os.environ.get("VAPID_CLAIMS_EMAIL", "admin@5812global.org")
+        if not vapid_private:
+            return
+        import json
+        payload = json.dumps({"title": title, "body": body, "url": url, "tag": f"5812-{user_id[:8]}"})
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info=sub["subscription"],
+                    data=payload,
+                    vapid_private_key=vapid_private,
+                    vapid_claims={"sub": f"mailto:{vapid_email}"},
+                )
+            except Exception as e:
+                if "410" in str(e) or "404" in str(e):
+                    await db.push_subscriptions.delete_one({"user_id": user_id, "subscription.endpoint": sub["subscription"].get("endpoint")})
+    except Exception as e:
+        logger.warning(f"Push failed: {e}")
+
+
+async def send_push_to_role(min_level: int, title: str, body: str, url: str = "/"):
+    """Send push to all users with role >= min_level"""
+    try:
+        role_map = {"system_admin": 10, "admin": 10, "Executive Director": 9, "Director": 8, "Manager": 7, "Coordinator": 6, "Staff": 5}
+        eligible_roles = [r for r, l in role_map.items() if l >= min_level]
+        users = await db.users.find({"role": {"$in": eligible_roles}}, {"_id": 0, "id": 1}).to_list(100)
+        for u in users:
+            await send_push_to_user(u["id"], title, body, url)
+    except Exception as e:
+        logger.warning(f"Role push failed: {e}")
 
 
 # ========== OFFLINE SYNC ==========
@@ -1784,6 +1224,85 @@ async def sync_offline_messages(data: dict, current_user: dict = Depends(get_cur
         await db.chat_messages.insert_one(doc)
         synced += 1
     return {"synced": synced}
+
+
+# ========== BIOMETRIC / NFC REGISTRATION ==========
+
+@api_router.post("/biometric/register")
+async def register_biometric(data: dict, current_user: dict = Depends(get_current_user)):
+    """Register a WebAuthn credential for biometric access"""
+    member_id = data.get("member_id") or current_user["id"]
+    credential_id = data.get("credential_id")
+    public_key = data.get("public_key")
+    authenticator_type = data.get("type", "platform")  # platform or cross-platform
+    if not credential_id:
+        raise HTTPException(status_code=400, detail="credential_id required")
+    doc = {
+        "id": f"bio_{str(uuid.uuid4())[:8]}",
+        "member_id": member_id,
+        "credential_id": credential_id,
+        "public_key": public_key,
+        "type": authenticator_type,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_used": None,
+    }
+    await db.biometric_credentials.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/biometric/verify")
+async def verify_biometric(data: dict):
+    """Verify a biometric credential for scan-in/out"""
+    credential_id = data.get("credential_id")
+    if not credential_id:
+        raise HTTPException(status_code=400, detail="credential_id required")
+    cred = await db.biometric_credentials.find_one({"credential_id": credential_id}, {"_id": 0})
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    await db.biometric_credentials.update_one(
+        {"credential_id": credential_id},
+        {"$set": {"last_used": datetime.now(timezone.utc).isoformat()}}
+    )
+    member = await db.members.find_one({"id": cred["member_id"]}, {"_id": 0, "id": 1, "name": 1, "role": 1})
+    return {"verified": True, "member": member, "credential_type": cred.get("type")}
+
+
+@api_router.post("/nfc/register")
+async def register_nfc(data: dict, current_user: dict = Depends(get_current_user)):
+    """Register an NFC tag serial number for a member"""
+    member_id = data.get("member_id")
+    serial_number = data.get("serial_number")
+    if not member_id or not serial_number:
+        raise HTTPException(status_code=400, detail="member_id and serial_number required")
+    existing = await db.nfc_tags.find_one({"serial_number": serial_number})
+    if existing:
+        raise HTTPException(status_code=409, detail="NFC tag already registered")
+    doc = {
+        "id": f"nfc_{str(uuid.uuid4())[:8]}",
+        "member_id": member_id,
+        "serial_number": serial_number,
+        "registered_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.nfc_tags.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/nfc/scan")
+async def scan_nfc(data: dict):
+    """Scan an NFC tag and return the associated member"""
+    serial_number = data.get("serial_number")
+    if not serial_number:
+        raise HTTPException(status_code=400, detail="serial_number required")
+    tag = await db.nfc_tags.find_one({"serial_number": serial_number}, {"_id": 0})
+    if not tag:
+        raise HTTPException(status_code=404, detail="NFC tag not registered")
+    member = await db.members.find_one({"id": tag["member_id"]}, {"_id": 0, "id": 1, "name": 1, "role": 1, "group": 1})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"member": member, "tag_id": tag["id"]}
 
 # ========== GLOBAL SEARCH ==========
 
@@ -2225,280 +1744,7 @@ async def toggle_announcement_pin(ann_id: str, current_user: dict = Depends(get_
         await db.announcements.update_one({"id": ann_id}, {"$set": {"pinned": not ann.get("pinned", False)}})
     return {"message": "Updated"}
 
-# ========== BADGE ROUTES ==========
-
-@api_router.get("/badges")
-async def list_badges(current_user: dict = Depends(get_current_user)):
-    badges = await db.badges.find({}, {"_id": 0}).sort("name", 1).to_list(100)
-    return badges
-
-@api_router.post("/badges")
-async def create_badge(data: BadgeCreate, current_user: dict = Depends(get_current_user)):
-    doc = {"id": f"bdg_{str(uuid.uuid4())[:8]}", **data.model_dump(), "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
-    await db.badges.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.delete("/badges/{badge_id}")
-async def delete_badge(badge_id: str, current_user: dict = Depends(get_current_user)):
-    await db.badges.delete_one({"id": badge_id})
-    return {"message": "Deleted"}
-
-@api_router.post("/members/{member_id}/issue-badge")
-async def issue_badge_to_member(member_id: str, badge_id: str = Query(...), current_user: dict = Depends(get_current_user)):
-    badge = await db.badges.find_one({"id": badge_id}, {"_id": 0})
-    if not badge:
-        raise HTTPException(status_code=404, detail="Badge not found")
-    issued = {"badge_id": badge_id, "badge_name": badge["name"], "badge_color": badge.get("color", "#6366f1"), "issued_at": datetime.now(timezone.utc).isoformat(), "issued_by": current_user["id"]}
-    await db.members.update_one({"id": member_id}, {"$push": {"badges": issued}})
-    await db.badges.update_one({"id": badge_id}, {"$inc": {"issued_count": 1}})
-    await _audit(current_user["id"], "create", "badge_issue", f"{member_id}:{badge_id}")
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    return member
-
-@api_router.get("/members/{member_id}/badges")
-async def get_member_badges(member_id: str, current_user: dict = Depends(get_current_user)):
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    return member.get("badges", [])
-
-# ========== MEMBER APPROVALS & BULK IMPORT ==========
-
-@api_router.put("/members/{member_id}/approve")
-async def approve_member(member_id: str, current_user: dict = Depends(get_current_user)):
-    await db.members.update_one({"id": member_id}, {"$set": {"status": "active", "approved_at": datetime.now(timezone.utc).isoformat(), "approved_by": current_user["id"]}})
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    await _audit(current_user["id"], "update", "member_approval", member_id)
-    try:
-        from routers.notifications import send_notification, NotifyRequest
-        if member and member.get("email"):
-            await send_notification(NotifyRequest(
-                type="approval_status",
-                recipient_email=member["email"],
-                recipient_name=member.get("name", ""),
-                data={"member_name": member.get("name", ""), "status": "approved"},
-            ))
-    except Exception as e:
-        logger.warning(f"Member approval notify failed: {e}")
-    return member
-
-@api_router.put("/members/{member_id}/reject")
-async def reject_member(member_id: str, current_user: dict = Depends(get_current_user)):
-    await db.members.update_one({"id": member_id}, {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat(), "rejected_by": current_user["id"]}})
-    member = await db.members.find_one({"id": member_id}, {"_id": 0})
-    await _audit(current_user["id"], "update", "member_rejection", member_id)
-    try:
-        from routers.notifications import send_notification, NotifyRequest
-        if member and member.get("email"):
-            await send_notification(NotifyRequest(
-                type="approval_status",
-                recipient_email=member["email"],
-                recipient_name=member.get("name", ""),
-                data={"member_name": member.get("name", ""), "status": "rejected"},
-            ))
-    except Exception as e:
-        logger.warning(f"Member rejection notify failed: {e}")
-    return member
-
-@api_router.post("/members/bulk-import")
-async def bulk_import_members(file: str = None, members_data: list = None, current_user: dict = Depends(get_current_user)):
-    if not members_data:
-        return {"imported": 0, "errors": []}
-    imported = 0
-    errors = []
-    for i, row in enumerate(members_data):
-        try:
-            if not row.get("name"):
-                errors.append(f"Row {i+1}: Name is required")
-                continue
-            existing = await db.members.find_one({"email": row.get("email", "")})
-            if existing and row.get("email"):
-                errors.append(f"Row {i+1}: Email {row['email']} already exists")
-                continue
-            doc = {"id": f"m_{str(uuid.uuid4())[:8]}", "name": row.get("name", ""), "email": row.get("email", ""), "phone": row.get("phone", ""), "national_id": row.get("national_id", ""), "role": row.get("role", "Member"), "group": row.get("group", "General"), "gender": row.get("gender", ""), "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(), "location_id": row.get("location_id"), "created_at": datetime.now(timezone.utc).isoformat()}
-            await db.members.insert_one(doc)
-            imported += 1
-        except Exception as e:
-            errors.append(f"Row {i+1}: {str(e)}")
-    await _audit(current_user["id"], "create", "bulk_import", f"{imported}_members")
-    return {"imported": imported, "errors": errors, "total": len(members_data)}
-
-@api_router.post("/import/children-parents")
-async def import_children_parents(data: dict, current_user: dict = Depends(get_current_user)):
-    """Import children and parents from CSV data.
-    Expected fields per row: first_name, last_name, date_of_birth, grade, family_name,
-    fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs
-    """
-    rows = data.get("rows", [])
-    imported_children = 0
-    imported_parents = 0
-    imported_families = 0
-    errors = []
-    for i, row in enumerate(rows):
-        try:
-            fname = row.get("first_name", "").strip()
-            lname = row.get("last_name", "").strip()
-            if not fname:
-                errors.append(f"Row {i+1}: first_name required")
-                continue
-            child_name = f"{fname} {lname}".strip()
-            family_name = row.get("family_name", lname).strip() or lname
-
-            # Find or create family
-            family = await db.families.find_one({"name": family_name})
-            if not family:
-                family_id = f"fam_{str(uuid.uuid4())[:8]}"
-                family = {"id": family_id, "name": family_name, "members": [], "created_at": datetime.now(timezone.utc).isoformat()}
-                await db.families.insert_one(family)
-                imported_families += 1
-            else:
-                family_id = family["id"]
-
-            # Create child member
-            child_id = f"m_{str(uuid.uuid4())[:8]}"
-            child_doc = {
-                "id": child_id, "name": child_name, "role": "Child", "group": row.get("grade", ""),
-                "date_of_birth": row.get("date_of_birth", ""), "family_id": family_id,
-                "allergies": row.get("allergies", ""), "medical_notes": row.get("medical_notes", ""),
-                "special_needs": row.get("special_needs", ""), "status": "active",
-                "join_date": datetime.now(timezone.utc).date().isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.members.insert_one(child_doc)
-            imported_children += 1
-
-            # Create/link father
-            father_name = row.get("fathers_names", "").strip()
-            if father_name:
-                existing_father = await db.members.find_one({"name": father_name, "is_parent": True})
-                if not existing_father:
-                    father_id = f"m_{str(uuid.uuid4())[:8]}"
-                    father_doc = {
-                        "id": father_id, "name": father_name, "phone": row.get("fathers_phone", ""),
-                        "role": "Parent", "is_parent": True, "gender": "male", "family_id": family_id,
-                        "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(),
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    await db.members.insert_one(father_doc)
-                    imported_parents += 1
-
-            # Create/link mother
-            mother_name = row.get("mothers_names", "").strip()
-            if mother_name:
-                existing_mother = await db.members.find_one({"name": mother_name, "is_parent": True})
-                if not existing_mother:
-                    mother_id = f"m_{str(uuid.uuid4())[:8]}"
-                    mother_doc = {
-                        "id": mother_id, "name": mother_name, "phone": row.get("mothers_phone", ""),
-                        "role": "Parent", "is_parent": True, "gender": "female", "family_id": family_id,
-                        "status": "active", "join_date": datetime.now(timezone.utc).date().isoformat(),
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    await db.members.insert_one(mother_doc)
-                    imported_parents += 1
-        except Exception as e:
-            errors.append(f"Row {i+1}: {str(e)}")
-    await _audit(current_user["id"], "create", "csv_import", f"{imported_children}_children_{imported_parents}_parents")
-    return {"imported_children": imported_children, "imported_parents": imported_parents, "imported_families": imported_families, "errors": errors}
-
-@api_router.post("/import/staff")
-async def import_staff(data: dict, current_user: dict = Depends(require_manager)):
-    """Import staff from CSV. Fields: name, email, phone, national_id, role, department"""
-    rows = data.get("rows", [])
-    imported = 0
-    errors = []
-    for i, row in enumerate(rows):
-        try:
-            name = row.get("name", "").strip()
-            if not name:
-                errors.append(f"Row {i+1}: name required")
-                continue
-            email = row.get("email", "").strip().lower()
-            if email:
-                existing = await db.members.find_one({"email": email})
-                if existing:
-                    errors.append(f"Row {i+1}: Email {email} already exists")
-                    continue
-            doc = {
-                "id": f"m_{str(uuid.uuid4())[:8]}", "name": name, "email": email,
-                "phone": row.get("phone", ""), "national_id": row.get("national_id", ""),
-                "role": row.get("role", "Staff"), "department": row.get("department", ""),
-                "group": "", "gender": "", "status": "active",
-                "join_date": datetime.now(timezone.utc).date().isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.members.insert_one(doc)
-            imported += 1
-        except Exception as e:
-            errors.append(f"Row {i+1}: {str(e)}")
-    await _audit(current_user["id"], "create", "staff_import", f"{imported}_staff")
-    return {"imported": imported, "errors": errors, "total": len(rows)}
-
-
-# ========== REAL CSV FILE UPLOAD ==========
-
-from fastapi import UploadFile, File
-
-@api_router.post("/import/csv/members")
-async def import_csv_members_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
-    """Upload a real CSV file to import members"""
-    content = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
-    imported = 0
-    errors = []
-    for i, row in enumerate(reader):
-        try:
-            name = (row.get("name") or "").strip()
-            if not name:
-                errors.append(f"Row {i+1}: name required")
-                continue
-            email = (row.get("email") or "").strip().lower()
-            if email:
-                existing = await db.members.find_one({"email": email})
-                if existing:
-                    errors.append(f"Row {i+1}: Email {email} exists")
-                    continue
-            doc = {
-                "id": f"m_{str(uuid.uuid4())[:8]}",
-                "name": name,
-                "email": email,
-                "phone": (row.get("phone") or "").strip(),
-                "national_id": (row.get("national_id") or "").strip(),
-                "role": (row.get("role") or "Member").strip(),
-                "group": (row.get("group") or "General").strip(),
-                "gender": (row.get("gender") or "").strip().lower(),
-                "department": (row.get("department") or "").strip(),
-                "status": "active",
-                "join_date": datetime.now(timezone.utc).date().isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.members.insert_one(doc)
-            imported += 1
-        except Exception as e:
-            errors.append(f"Row {i+1}: {str(e)}")
-    await _audit(current_user["id"], "create", "csv_file_import", f"{imported}_members")
-    return {"imported": imported, "errors": errors}
-
-
-@api_router.post("/import/csv/children-parents")
-async def import_csv_children_parents_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
-    """Upload a real CSV file to import children and parents"""
-    content = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
-    rows = list(reader)
-    result = await import_children_parents({"rows": rows}, current_user)
-    return result
-
-
-@api_router.post("/import/csv/staff")
-async def import_csv_staff_file(file: UploadFile = File(...), current_user: dict = Depends(require_manager)):
-    """Upload a real CSV file to import staff"""
-    content = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
-    rows = list(reader)
-    result = await import_staff({"rows": rows}, current_user)
-    return result
+# ========== BADGES, APPROVALS, IMPORTS (moved to routers/members.py & routers/import_csv.py) ==========
 
 
 # ========== ANALYTICS ROUTES ==========
@@ -2685,12 +1931,18 @@ try:
     from routers.access import router as access_router
     from routers.reports import router as reports_router
     from routers.documents import router as documents_router
+    from routers.auth import router as auth_router
+    from routers.members import router as members_router
+    from routers.import_csv import router as import_csv_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
     app.include_router(access_router)
     app.include_router(reports_router)
     app.include_router(documents_router)
+    app.include_router(auth_router)
+    app.include_router(members_router)
+    app.include_router(import_csv_router)
     logger.info("Modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

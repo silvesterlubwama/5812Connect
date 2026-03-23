@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { venuesApi, authApi, appSettingsApi } from '../services/api';
+import { venuesApi, authApi, appSettingsApi, pushApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -36,6 +36,59 @@ export default function SettingsPage() {
   const [savingPass, setSavingPass] = useState(false);
   const [appSettings, setAppSettings] = useState({ registration_open: true, default_role: 'member', maintenance_mode: false });
   const [savingAdmin, setSavingAdmin] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+
+  // Check current push subscription status on mount
+  useEffect(() => {
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.pushManager.getSubscription().then(sub => {
+          setPushEnabled(!!sub);
+        });
+      });
+    }
+  }, []);
+
+  const togglePushNotifications = async () => {
+    setPushLoading(true);
+    try {
+      if (pushEnabled) {
+        // Unsubscribe
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) await sub.unsubscribe();
+        await pushApi.unsubscribe();
+        setPushEnabled(false);
+        toast.success('Push notifications disabled');
+      } else {
+        // Subscribe
+        const vapidRes = await pushApi.vapidKey();
+        const publicKey = vapidRes.data.publicKey;
+        if (!publicKey) { toast.error('Push not configured on server'); return; }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+        await pushApi.subscribe(sub.toJSON());
+        setPushEnabled(true);
+        toast.success('Push notifications enabled');
+      }
+    } catch (err) {
+      toast.error('Failed to toggle push notifications');
+    } finally { setPushLoading(false); }
+  };
+
+  // Helper to convert VAPID base64 to Uint8Array
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
 
   useEffect(() => {
     venuesApi.list()
@@ -263,6 +316,19 @@ export default function SettingsPage() {
               <CardDescription>Choose when and how you receive notifications</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
+              {/* Web Push Notifications */}
+              {'PushManager' in window && (
+                <div>
+                  <p className="text-sm font-medium mb-3">Push Notifications</p>
+                  <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-primary/5">
+                    <div>
+                      <p className="text-sm font-medium">Browser Push Notifications</p>
+                      <p className="text-xs text-muted-foreground">Receive real-time alerts even when the app is closed</p>
+                    </div>
+                    <Switch checked={pushEnabled} onCheckedChange={togglePushNotifications} disabled={pushLoading} data-testid="push-notification-toggle" />
+                  </div>
+                </div>
+              )}
               <div>
                 <p className="text-sm font-medium mb-3">Email Notifications</p>
                 <div className="space-y-3">
