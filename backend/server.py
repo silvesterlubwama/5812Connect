@@ -2023,11 +2023,38 @@ async def startup():
             "status": "active",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        admin2 = {
+            "id": str(uuid.uuid4()),
+            "name": "Admin",
+            "email": "admin@5812uganda.org",
+            "phone": "+256 800 5813",
+            "password_hash": hash_password("Admin@5812"),
+            "role": "admin",
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
         try:
             await db.users.insert_one(admin)
-            logger.info("Admin user created: admin@5812global.org / Admin@1234")
+            await db.users.insert_one(admin2)
+            logger.info("Admin users created")
         except Exception as e:
             logger.warning(f"Admin creation: {e}")
+
+    # Ensure admin@5812uganda.org always exists with correct credentials
+    uganda_admin = await db.users.find_one({"email": "admin@5812uganda.org"})
+    if not uganda_admin:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Admin",
+            "email": "admin@5812uganda.org",
+            "phone": "+256 800 5813",
+            "password_hash": hash_password("Admin@5812"),
+            "role": "admin",
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    else:
+        await db.users.update_one({"email": "admin@5812uganda.org"}, {"$set": {"password_hash": hash_password("Admin@5812"), "role": "admin", "status": "active"}})
 
     # Seed locations and notifications if empty
     try:
