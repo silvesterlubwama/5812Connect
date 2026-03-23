@@ -23,8 +23,8 @@ export default function LoginPage() {
     try {
       await login(identifier, password);
       navigate('/dashboard');
-    } catch {
-      toast.error('Invalid credentials');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -48,42 +48,21 @@ export default function LoginPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="identifier">Email, Phone, or ID Number</Label>
-                <Input
-                  id="identifier"
-                  type="text"
-                  placeholder="Email, phone, or national ID"
-                  value={identifier}
-                  onChange={e => setIdentifier(e.target.value)}
-                  required
-                />
+                <Input id="identifier" type="text" placeholder="Email, phone, or national ID" value={identifier} onChange={e => setIdentifier(e.target.value)} required />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
                 <div className="relative">
-                  <Input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    required
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
+                  <Input id="password" type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required className="pr-10" />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
               </div>
 
               <div className="text-right">
-                <Link to="/reset-password" className="text-sm text-primary hover:underline">
-                  Forgot password?
-                </Link>
+                <Link to="/reset-password" className="text-sm text-primary hover:underline">Forgot password?</Link>
               </div>
 
               <Button type="submit" className="w-full" disabled={loading}>
@@ -91,23 +70,15 @@ export default function LoginPage() {
               </Button>
 
               <div className="text-center">
-                <Button variant="link" type="button" className="text-sm text-primary" asChild>
-                  <Link to="/reset-password">Forgot your password?</Link>
-                </Button>
+                <Link to="/reset-password" className="text-sm text-primary hover:underline">Forgot your password?</Link>
               </div>
             </form>
 
-            {/* Divider */}
             <div className="relative my-2">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-border" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">Or</span>
-              </div>
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
+              <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Or</span></div>
             </div>
 
-            {/* Google */}
             <Button variant="outline" className="w-full gap-2" type="button">
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -118,38 +89,24 @@ export default function LoginPage() {
               Sign in with Google
             </Button>
 
-            {/* Quick Access */}
             <div className="relative my-2">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-border" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">Quick Access</span>
-              </div>
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
+              <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Quick Access</span></div>
             </div>
 
-            <Button
-              variant="outline"
-              className="w-full gap-2 border-primary/20 hover:bg-primary/5"
-              type="button"
-              onClick={() => navigate('/members')}
-            >
-              <Users size={16} />
-              Parent Portal Login
+            <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button">
+              <Users size={16} /> Parent Portal Login
             </Button>
 
             <p className="text-center text-sm text-muted-foreground mt-2">
               Need access?{' '}
-              <Link to="/register" className="text-primary hover:underline font-medium">
-                Request account
-              </Link>
+              <Link to="/register" className="text-primary hover:underline font-medium">Request account</Link>
             </p>
 
             <div className="pt-4 border-t border-border space-y-2">
               <Link to="/kiosk">
                 <Button variant="ghost" className="w-full gap-2 text-muted-foreground">
-                  <Monitor size={16} />
-                  Open Check-in Kiosk
+                  <Monitor size={16} /> Open Check-in Kiosk
                 </Button>
               </Link>
               <Link to="/public-bookings">
@@ -160,10 +117,7 @@ export default function LoginPage() {
             </div>
           </CardContent>
         </Card>
-
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          58:12 Global • Uganda CRM System
-        </p>
+        <p className="text-center text-xs text-muted-foreground mt-6">58:12 Global • Uganda CRM System</p>
       </div>
     </div>
   );

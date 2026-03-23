@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, Plus, UserCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, Plus, UserCheck, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -7,85 +7,106 @@ import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
-import { MOCK_CHECKINS, MOCK_EVENTS } from '../mock';
+import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
 
-const methodBadge = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-gray-100 text-gray-700', id: 'bg-purple-100 text-purple-700' };
-const typeBadge = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600' };
+const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700' };
+const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600' };
 
 export default function CheckInsPage() {
-  const [checkins, setCheckins] = useState(MOCK_CHECKINS);
+  const [checkins, setCheckins] = useState([]);
+  const [stats, setStats] = useState({ total: 0, today: 0, members: 0, visitors: 0, staff: 0 });
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
-  const [newCheckin, setNewCheckin] = useState({ memberName: '', type: 'member', eventName: '', method: 'manual' });
+  const [events, setEvents] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [newCI, setNewCI] = useState({ member_name: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
 
-  const filtered = checkins.filter(c =>
-    !search || c.memberName.toLowerCase().includes(search.toLowerCase()) || c.eventName.toLowerCase().includes(search.toLowerCase())
-  );
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [ciRes, statsRes] = await Promise.all([
+        checkinsApi.list({ search: search || undefined, type: typeFilter !== 'all' ? typeFilter : undefined }),
+        checkinsApi.stats(),
+      ]);
+      setCheckins(ciRes.data);
+      setStats(statsRes.data);
+    } catch { toast.error('Failed to load check-ins'); }
+    finally { setLoading(false); }
+  };
 
-  const handleAdd = (e) => {
+  useEffect(() => { fetchData(); }, [search, typeFilter]);
+
+  useEffect(() => {
+    eventsApi.list({ status: 'upcoming' }).then(res => setEvents(res.data)).catch(() => {});
+  }, []);
+
+  const handleAdd = async (e) => {
     e.preventDefault();
-    const ci = {
-      ...newCheckin,
-      id: `ci_${Date.now()}`,
-      memberId: null,
-      checkInTime: new Date().toISOString(),
-    };
-    setCheckins(prev => [ci, ...prev]);
-    setShowAdd(false);
-    setNewCheckin({ memberName: '', type: 'member', eventName: '', method: 'manual' });
-    toast.success(`${ci.memberName} checked in successfully!`);
+    setSaving(true);
+    const eventObj = events.find(ev => ev.id === newCI.event_id);
+    try {
+      const payload = { ...newCI, event_name: eventObj?.title || newCI.event_name };
+      const res = await checkinsApi.create(payload);
+      setCheckins(prev => [res.data, ...prev]);
+      setStats(s => ({ ...s, total: s.total + 1, today: s.today + 1, [res.data.type + 's']: (s[res.data.type + 's'] || 0) + 1 }));
+      setShowAdd(false);
+      setNewCI({ member_name: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
+      toast.success(`${res.data.member_name} checked in!`);
+    } catch { toast.error('Failed to check in'); }
+    finally { setSaving(false); }
   };
 
-  const formatTime = (isoStr) => {
-    return new Date(isoStr).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  };
+  const formatTime = (iso) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold font-heading">Check-Ins</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{checkins.length} total check-ins recorded</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{stats.total} total · {stats.today} today</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <a href="/kiosk" target="_blank" className="gap-2">
-              <UserCheck size={16} /> Open Kiosk
-            </a>
-          </Button>
-          <Button onClick={() => setShowAdd(true)} className="gap-2">
-            <Plus size={16} /> Manual Check-In
-          </Button>
+          <Button variant="outline" size="sm" asChild><a href="/kiosk" target="_blank" className="gap-2 flex items-center"><UserCheck size={15} />Kiosk</a></Button>
+          <Button variant="outline" size="sm" onClick={fetchData}><RefreshCw size={14} /></Button>
+          <Button onClick={() => setShowAdd(true)} className="gap-2"><Plus size={16} /> Manual Check-In</Button>
         </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card className="shadow-soft rounded-xl">
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-primary">{checkins.filter(c => c.type === 'member').length}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Members</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-soft rounded-xl">
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-blue-600">{checkins.filter(c => c.type === 'staff').length}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Staff</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-soft rounded-xl">
-          <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-orange-500">{checkins.filter(c => c.type === 'visitor').length}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Visitors</p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: 'Total', value: stats.total, color: 'text-foreground' },
+          { label: 'Today', value: stats.today, color: 'text-primary' },
+          { label: 'Members', value: stats.members, color: 'text-green-600' },
+          { label: 'Visitors', value: stats.visitors, color: 'text-orange-500' },
+        ].map(s => (
+          <Card key={s.label} className="shadow-soft rounded-xl">
+            <CardContent className="p-4 text-center">
+              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Search check-ins..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+      {/* Filters */}
+      <div className="flex gap-3">
+        <div className="relative flex-1">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="Search check-ins..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-36"><SelectValue placeholder="Type" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="member">Member</SelectItem>
+            <SelectItem value="staff">Staff</SelectItem>
+            <SelectItem value="visitor">Visitor</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Table */}
@@ -102,27 +123,27 @@ export default function CheckInsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.map(ci => (
+              {loading ? (
+                [...Array(5)].map((_, i) => (
+                  <tr key={i}><td colSpan={5} className="px-4 py-3"><div className="h-5 bg-muted animate-pulse rounded" /></td></tr>
+                ))
+              ) : checkins.map(ci => (
                 <tr key={ci.id} className="hover:bg-accent/30 transition-colors">
-                  <td className="px-4 py-3 font-medium">{ci.memberName}</td>
+                  <td className="px-4 py-3 font-medium">{ci.member_name}</td>
                   <td className="px-4 py-3">
-                    <Badge variant="outline" className={`text-xs capitalize ${typeBadge[ci.type] || ''}`}>
-                      {ci.type}
-                    </Badge>
+                    <Badge variant="outline" className={`text-xs capitalize ${typeStyle[ci.type] || ''}`}>{ci.type}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{ci.eventName}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{ci.event_name || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium uppercase ${methodBadge[ci.method] || ''}`}>
-                      {ci.method}
-                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium uppercase ${methodStyle[ci.method] || ''}`}>{ci.method}</span>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{formatTime(ci.checkInTime)}</td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs">{formatTime(ci.check_in_time)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {filtered.length === 0 && (
-            <p className="text-center py-10 text-muted-foreground">No check-ins found</p>
+          {!loading && checkins.length === 0 && (
+            <p className="text-center py-12 text-muted-foreground">No check-ins found</p>
           )}
         </div>
       </Card>
@@ -130,17 +151,15 @@ export default function CheckInsPage() {
       {/* Manual Check-In Dialog */}
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
         <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Manual Check-In</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Manual Check-In</DialogTitle></DialogHeader>
           <form onSubmit={handleAdd} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label>Person Name</Label>
-              <Input placeholder="Full name" value={newCheckin.memberName} onChange={e => setNewCheckin({...newCheckin, memberName: e.target.value})} required />
+              <Label>Person Name *</Label>
+              <Input placeholder="Full name" value={newCI.member_name} onChange={e => setNewCI({...newCI, member_name: e.target.value})} required />
             </div>
             <div className="space-y-2">
               <Label>Type</Label>
-              <Select value={newCheckin.type} onValueChange={v => setNewCheckin({...newCheckin, type: v})}>
+              <Select value={newCI.type} onValueChange={v => setNewCI({...newCI, type: v})}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="member">Member</SelectItem>
@@ -151,16 +170,27 @@ export default function CheckInsPage() {
             </div>
             <div className="space-y-2">
               <Label>Event</Label>
-              <Select value={newCheckin.eventName} onValueChange={v => setNewCheckin({...newCheckin, eventName: v})}>
-                <SelectTrigger><SelectValue placeholder="Select event" /></SelectTrigger>
+              <Select value={newCI.event_id} onValueChange={v => setNewCI({...newCI, event_id: v})}>
+                <SelectTrigger><SelectValue placeholder="Select event (optional)" /></SelectTrigger>
                 <SelectContent>
-                  {MOCK_EVENTS.map(e => <SelectItem key={e.id} value={e.title}>{e.title}</SelectItem>)}
+                  {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Method</Label>
+              <Select value={newCI.method} onValueChange={v => setNewCI({...newCI, method: v})}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="qr">QR Code</SelectItem>
+                  <SelectItem value="id">ID Scan</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowAdd(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1">Check In</Button>
+              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Checking in...' : 'Check In'}</Button>
             </div>
           </form>
         </DialogContent>

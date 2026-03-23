@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authApi } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -7,28 +8,32 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const stored = localStorage.getItem('5812_auth_user');
-    if (stored) {
-      try {
-        setUser(JSON.parse(stored));
-      } catch {}
+    const token = localStorage.getItem('5812_token');
+    if (token) {
+      authApi.me()
+        .then(res => setUser(res.data))
+        .catch(() => {
+          localStorage.removeItem('5812_token');
+          localStorage.removeItem('5812_auth_user');
+        })
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   const login = async (identifier, password) => {
-    const mockUser = {
-      id: 'usr_001',
-      name: 'Admin User',
-      email: identifier.includes('@') ? identifier : 'admin@5812global.org',
-      role: 'admin',
-    };
-    localStorage.setItem('5812_auth_user', JSON.stringify(mockUser));
-    setUser(mockUser);
+    const res = await authApi.login(identifier, password);
+    const { token, user: userData } = res.data;
+    localStorage.setItem('5812_token', token);
+    localStorage.setItem('5812_auth_user', JSON.stringify(userData));
+    setUser(userData);
     return { success: true };
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try { await authApi.logout(); } catch {}
+    localStorage.removeItem('5812_token');
     localStorage.removeItem('5812_auth_user');
     setUser(null);
   };
