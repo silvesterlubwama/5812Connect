@@ -11,7 +11,7 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi } from '../services/api';
+import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi } from '../services/api';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
 
@@ -49,6 +49,9 @@ export default function MembersPage() {
   const [docLabel, setDocLabel] = useState('');
   const [docLoading, setDocLoading] = useState(false);
   const [docUploading, setDocUploading] = useState(false);
+  const [csvFile, setCsvFile] = useState(null);
+  const [childCsvFile, setChildCsvFile] = useState(null);
+  const [staffCsvFile, setStaffCsvFile] = useState(null);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -73,7 +76,7 @@ export default function MembersPage() {
   }, [fetchMembers]);
 
   useEffect(() => {
-    approvalsApi.pending().then(r => setPendingMembers(r.data)).catch(() => {});
+    approvalsApi.pending().then(r => setPendingMembers(r.data.members || [])).catch(() => {});
     badgesApi.list().then(r => setBadges(r.data)).catch(() => {});
     locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {});
   }, []);
@@ -104,17 +107,25 @@ export default function MembersPage() {
   };
 
   const handleBulkImport = async () => {
-    if (!bulkData.trim()) return;
     setImportLoading(true);
     try {
-      const lines = bulkData.trim().split('\n').map(l => {
-        const [name, email, phone, group] = l.split(',').map(s => s.trim());
-        return { name, email, phone, group: group || 'Youth', role: 'Member' };
-      }).filter(m => m.name);
-      const res = await approvalsApi.bulkImport(lines);
-      toast.success(`Imported ${res.data.imported || lines.length} members!`);
+      if (csvFile) {
+        const formData = new FormData();
+        formData.append('file', csvFile);
+        const res = await csvUploadApi.uploadMembers(formData);
+        toast.success(`Imported ${res.data.imported} members from CSV file!`);
+        if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      } else if (bulkData.trim()) {
+        const lines = bulkData.trim().split('\n').map(l => {
+          const [name, email, phone, group] = l.split(',').map(s => s.trim());
+          return { name, email, phone, group: group || 'Youth', role: 'Member' };
+        }).filter(m => m.name);
+        const res = await approvalsApi.bulkImport(lines);
+        toast.success(`Imported ${res.data.imported || lines.length} members!`);
+      } else return;
       setShowBulkImport(false);
       setBulkData('');
+      setCsvFile(null);
       fetchMembers();
     } catch { toast.error('Import failed'); }
     finally { setImportLoading(false); }
@@ -151,44 +162,60 @@ export default function MembersPage() {
   };
 
   const handleChildParentImport = async () => {
-    if (!childCsvData.trim()) return;
     setImportLoading(true);
     try {
-      const lines = childCsvData.trim().split('\n');
-      const header = lines[0].toLowerCase().split(',').map(h => h.trim());
-      const rows = lines.slice(1).map(line => {
-        const vals = line.split(',').map(v => v.trim());
-        const row = {};
-        header.forEach((h, i) => { row[h] = vals[i] || ''; });
-        return row;
-      }).filter(r => r.first_name);
-      const res = await importApi.childrenParents(rows);
-      toast.success(`Imported: ${res.data.imported_children} children, ${res.data.imported_parents} parents, ${res.data.imported_families} families`);
-      if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      if (childCsvFile) {
+        const formData = new FormData();
+        formData.append('file', childCsvFile);
+        const res = await csvUploadApi.uploadChildrenParents(formData);
+        toast.success(`Imported: ${res.data.imported_children} children, ${res.data.imported_parents} parents, ${res.data.imported_families} families`);
+        if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      } else if (childCsvData.trim()) {
+        const lines = childCsvData.trim().split('\n');
+        const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+        const rows = lines.slice(1).map(line => {
+          const vals = line.split(',').map(v => v.trim());
+          const row = {};
+          header.forEach((h, i) => { row[h] = vals[i] || ''; });
+          return row;
+        }).filter(r => r.first_name);
+        const res = await importApi.childrenParents(rows);
+        toast.success(`Imported: ${res.data.imported_children} children, ${res.data.imported_parents} parents, ${res.data.imported_families} families`);
+        if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      } else return;
       setShowChildImport(false);
       setChildCsvData('');
+      setChildCsvFile(null);
       fetchMembers();
     } catch { toast.error('Import failed'); }
     finally { setImportLoading(false); }
   };
 
   const handleStaffImport = async () => {
-    if (!staffCsvData.trim()) return;
     setImportLoading(true);
     try {
-      const lines = staffCsvData.trim().split('\n');
-      const header = lines[0].toLowerCase().split(',').map(h => h.trim());
-      const rows = lines.slice(1).map(line => {
-        const vals = line.split(',').map(v => v.trim());
-        const row = {};
-        header.forEach((h, i) => { row[h] = vals[i] || ''; });
-        return row;
-      }).filter(r => r.name);
-      const res = await importApi.staff(rows);
-      toast.success(`Imported ${res.data.imported} staff members!`);
-      if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      if (staffCsvFile) {
+        const formData = new FormData();
+        formData.append('file', staffCsvFile);
+        const res = await csvUploadApi.uploadStaff(formData);
+        toast.success(`Imported ${res.data.imported} staff members from CSV file!`);
+        if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      } else if (staffCsvData.trim()) {
+        const lines = staffCsvData.trim().split('\n');
+        const header = lines[0].toLowerCase().split(',').map(h => h.trim());
+        const rows = lines.slice(1).map(line => {
+          const vals = line.split(',').map(v => v.trim());
+          const row = {};
+          header.forEach((h, i) => { row[h] = vals[i] || ''; });
+          return row;
+        }).filter(r => r.name);
+        const res = await importApi.staff(rows);
+        toast.success(`Imported ${res.data.imported} staff members!`);
+        if (res.data.errors?.length > 0) toast.warning(`${res.data.errors.length} rows had errors`);
+      } else return;
       setShowStaffImport(false);
       setStaffCsvData('');
+      setStaffCsvFile(null);
       fetchMembers();
     } catch { toast.error('Import failed'); }
     finally { setImportLoading(false); }
@@ -798,18 +825,25 @@ export default function MembersPage() {
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bulk Import Members</DialogTitle>
-            <DialogDescription>Paste CSV data: name, email, phone, group (one per line)</DialogDescription>
+            <DialogDescription>Upload a CSV file or paste data below (name, email, phone, group per line)</DialogDescription>
           </DialogHeader>
-          <Textarea
-            rows={8}
-            placeholder={`John Doe, john@email.com, +256700111222, Youth\nJane Smith, jane@email.com, +256700333444, Women`}
-            value={bulkData}
-            onChange={e => setBulkData(e.target.value)}
-            data-testid="bulk-import-textarea"
-          />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Upload CSV File</Label>
+              <Input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} data-testid="bulk-csv-file-input" />
+            </div>
+            <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
+            <Textarea
+              rows={6}
+              placeholder={`John Doe, john@email.com, +256700111222, Youth\nJane Smith, jane@email.com, +256700333444, Women`}
+              value={bulkData}
+              onChange={e => setBulkData(e.target.value)}
+              data-testid="bulk-import-textarea"
+            />
+          </div>
           <div className="flex gap-3 pt-2">
             <Button type="button" variant="outline" className="flex-1" onClick={() => setShowBulkImport(false)}>Cancel</Button>
-            <Button className="flex-1" disabled={importLoading || !bulkData.trim()} onClick={handleBulkImport} data-testid="import-btn">
+            <Button className="flex-1" disabled={importLoading || (!bulkData.trim() && !csvFile)} onClick={handleBulkImport} data-testid="import-btn">
               {importLoading ? 'Importing...' : 'Import Members'}
             </Button>
           </div>
@@ -843,13 +877,20 @@ export default function MembersPage() {
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Children & Parents</DialogTitle>
-            <DialogDescription>Paste CSV with header: first_name, last_name, date_of_birth, grade, family_name, fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs</DialogDescription>
+            <DialogDescription>Upload a CSV file or paste data with header: first_name, last_name, date_of_birth, grade, family_name, fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs</DialogDescription>
           </DialogHeader>
-          <Textarea rows={8} placeholder={`first_name,last_name,date_of_birth,grade,family_name,fathers_names,fathers_phone,mothers_names,mothers_phone,allergies,medical_notes,special_needs\nJohn,Doe,2015-05-10,3,Doe Family,James Doe,+256700111222,Mary Doe,+256700333444,None,None,None`}
-            value={childCsvData} onChange={e => setChildCsvData(e.target.value)} data-testid="child-import-textarea" />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Upload CSV File</Label>
+              <Input type="file" accept=".csv" onChange={e => setChildCsvFile(e.target.files?.[0] || null)} data-testid="child-csv-file-input" />
+            </div>
+            <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
+            <Textarea rows={6} placeholder={`first_name,last_name,date_of_birth,grade,family_name,...\nJohn,Doe,2015-05-10,3,Doe Family,...`}
+              value={childCsvData} onChange={e => setChildCsvData(e.target.value)} data-testid="child-import-textarea" />
+          </div>
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => setShowChildImport(false)}>Cancel</Button>
-            <Button className="flex-1" disabled={importLoading || !childCsvData.trim()} onClick={handleChildParentImport} data-testid="import-children-btn">
+            <Button className="flex-1" disabled={importLoading || (!childCsvData.trim() && !childCsvFile)} onClick={handleChildParentImport} data-testid="import-children-btn">
               {importLoading ? 'Importing...' : 'Import Children & Parents'}
             </Button>
           </div>
@@ -861,13 +902,20 @@ export default function MembersPage() {
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Staff</DialogTitle>
-            <DialogDescription>Paste CSV with header: name, email, phone, national_id, role, department</DialogDescription>
+            <DialogDescription>Upload a CSV file or paste data with header: name, email, phone, national_id, role, department</DialogDescription>
           </DialogHeader>
-          <Textarea rows={8} placeholder={`name,email,phone,national_id,role,department\nJane Smith,jane@example.com,+256700111222,CM12345,Staff,Education\nBob Johnson,bob@example.com,+256700333444,CM67890,Coordinator,Operations`}
-            value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} data-testid="staff-import-textarea" />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Upload CSV File</Label>
+              <Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} data-testid="staff-csv-file-input" />
+            </div>
+            <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
+            <Textarea rows={6} placeholder={`name,email,phone,national_id,role,department\nJane Smith,jane@example.com,...`}
+              value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} data-testid="staff-import-textarea" />
+          </div>
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => setShowStaffImport(false)}>Cancel</Button>
-            <Button className="flex-1" disabled={importLoading || !staffCsvData.trim()} onClick={handleStaffImport} data-testid="import-staff-btn">
+            <Button className="flex-1" disabled={importLoading || (!staffCsvData.trim() && !staffCsvFile)} onClick={handleStaffImport} data-testid="import-staff-btn">
               {importLoading ? 'Importing...' : 'Import Staff'}
             </Button>
           </div>

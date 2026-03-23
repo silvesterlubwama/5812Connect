@@ -279,3 +279,32 @@ export const bookingsApi = {
   update: (id, data) => api.put(`/bookings/${id}`, data),
   cancel: (id) => api.delete(`/bookings/${id}`),
 };
+
+// ---- ACCESS CONTROL ----
+export const accessApi = {
+  residents: (params) => api.get('/access/residents', { params }),
+  assignResident: (data) => api.post('/access/residents', data),
+  removeResident: (id) => api.delete(`/access/residents/${id}`),
+  staffPasses: (params) => api.get('/access/staff-passes', { params }),
+  assignStaffPass: (data) => api.post('/access/staff-passes', data),
+  revokeStaffPass: (id) => api.delete(`/access/staff-passes/${id}`),
+  guestRequests: (params) => api.get('/access/guest-requests', { params }),
+  requestGuestVisit: (data) => api.post('/access/guest-requests', data),
+  approveGuest: (id) => api.put(`/access/guest-requests/${id}/approve`),
+  rejectGuest: (id) => api.put(`/access/guest-requests/${id}/reject`),
+  scan: (data) => api.post('/access/scan', data),
+  scanLog: (params) => api.get('/access/scan-log', { params }),
+};
+
+// ---- REPORTS ----
+export const reportsApi = {
+  summary: (params) => api.get('/reports/summary', { params }),
+  downloadPdf: (params) => api.get('/reports/pdf', { params, responseType: 'blob' }),
+};
+
+// ---- CSV FILE UPLOAD ----
+export const csvUploadApi = {
+  uploadMembers: (formData) => api.post('/import/csv/members', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  uploadChildrenParents: (formData) => api.post('/import/csv/children-parents', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  uploadStaff: (formData) => api.post('/import/csv/staff', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+};

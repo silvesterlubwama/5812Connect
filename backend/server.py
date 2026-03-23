@@ -2300,6 +2300,72 @@ async def import_staff(data: dict, current_user: dict = Depends(get_current_user
     await _audit(current_user["id"], "create", "staff_import", f"{imported}_staff")
     return {"imported": imported, "errors": errors, "total": len(rows)}
 
+
+# ========== REAL CSV FILE UPLOAD ==========
+
+from fastapi import UploadFile, File
+
+@api_router.post("/import/csv/members")
+async def import_csv_members_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Upload a real CSV file to import members"""
+    content = (await file.read()).decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+    imported = 0
+    errors = []
+    for i, row in enumerate(reader):
+        try:
+            name = (row.get("name") or "").strip()
+            if not name:
+                errors.append(f"Row {i+1}: name required")
+                continue
+            email = (row.get("email") or "").strip().lower()
+            if email:
+                existing = await db.members.find_one({"email": email})
+                if existing:
+                    errors.append(f"Row {i+1}: Email {email} exists")
+                    continue
+            doc = {
+                "id": f"m_{str(uuid.uuid4())[:8]}",
+                "name": name,
+                "email": email,
+                "phone": (row.get("phone") or "").strip(),
+                "national_id": (row.get("national_id") or "").strip(),
+                "role": (row.get("role") or "Member").strip(),
+                "group": (row.get("group") or "General").strip(),
+                "gender": (row.get("gender") or "").strip().lower(),
+                "department": (row.get("department") or "").strip(),
+                "status": "active",
+                "join_date": datetime.now(timezone.utc).date().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.members.insert_one(doc)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)}")
+    await _audit(current_user["id"], "create", "csv_file_import", f"{imported}_members")
+    return {"imported": imported, "errors": errors}
+
+
+@api_router.post("/import/csv/children-parents")
+async def import_csv_children_parents_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Upload a real CSV file to import children and parents"""
+    content = (await file.read()).decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+    rows = list(reader)
+    result = await import_children_parents({"rows": rows}, current_user)
+    return result
+
+
+@api_router.post("/import/csv/staff")
+async def import_csv_staff_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Upload a real CSV file to import staff"""
+    content = (await file.read()).decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+    rows = list(reader)
+    result = await import_staff({"rows": rows}, current_user)
+    return result
+
+
 # ========== ANALYTICS ROUTES ==========
 
 @api_router.get("/analytics/attendance")

@@ -27,6 +27,8 @@ import LocationAnalyticsPage from './pages/LocationAnalyticsPage';
 import CommsPage from './pages/CommsPage';
 import OutreachPage from './pages/OutreachPage';
 import ResourcesPage from './pages/ResourcesPage';
+import AccessPage from './pages/AccessPage';
+import ReportsPage from './pages/ReportsPage';
 import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
 
@@ -74,6 +76,8 @@ function AppRoutes() {
         <Route path="comms" element={<CommsPage />} />
         <Route path="outreach" element={<OutreachPage />} />
         <Route path="resources" element={<ResourcesPage />} />
+        <Route path="access" element={<AccessPage />} />
+        <Route path="reports" element={<ReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

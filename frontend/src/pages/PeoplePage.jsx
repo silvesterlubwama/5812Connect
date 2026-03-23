@@ -300,7 +300,7 @@ export default function PeoplePage() {
 
       {/* Add Family Dialog */}
       <Dialog open={showFamily} onOpenChange={setShowFamily}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Add Family</DialogTitle></DialogHeader>
           <form onSubmit={handleAddFamily} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Family Name *</Label>
@@ -330,7 +330,7 @@ export default function PeoplePage() {
 
       {/* Add Child Dialog */}
       <Dialog open={showChild} onOpenChange={setShowChild}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Add Child</DialogTitle></DialogHeader>
           <form onSubmit={handleAddChild} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Name *</Label>
@@ -376,7 +376,7 @@ export default function PeoplePage() {
 
       {/* Add Guest Dialog */}
       <Dialog open={showGuest} onOpenChange={setShowGuest}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Record Guest Visit</DialogTitle></DialogHeader>
           <form onSubmit={handleAddGuest} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Name *</Label>

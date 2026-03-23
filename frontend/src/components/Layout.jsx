@@ -6,7 +6,7 @@ import {
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
-  Globe, Building2, TrendingUp, Sun, Moon
+  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -41,6 +41,7 @@ const NAV_SECTIONS = [
       { to: '/outreach', icon: Globe, label: 'Outreach' },
       { to: '/comms', icon: Megaphone, label: 'Communications' },
       { to: '/resources', icon: Building2, label: 'Resources' },
+      { to: '/access', icon: ScanLine, label: 'Access Control' },
     ]
   },
   {
@@ -56,6 +57,7 @@ const NAV_SECTIONS = [
       { to: '/attendance', icon: UserCheck, label: 'Attendance' },
       { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics' },
       { to: '/location-analytics', icon: BarChart3, label: 'Location Stats' },
+      { to: '/reports', icon: FileText, label: 'Reports & PDF' },
     ]
   },
   {
