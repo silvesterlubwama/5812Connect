@@ -139,6 +139,7 @@ export default function UnifiedPeoplePage() {
 
   // Track default tab when opening member view
   const [defaultMemberTab, setDefaultMemberTab] = useState('info');
+  const [editMember, setEditMember] = useState(null);
   const [editMemberForm, setEditMemberForm] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
 
