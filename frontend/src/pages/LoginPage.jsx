@@ -69,9 +69,6 @@ export default function LoginPage() {
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
 
-              <div className="text-center">
-                <Link to="/reset-password" className="text-sm text-primary hover:underline">Forgot your password?</Link>
-              </div>
             </form>
 
             <div className="relative my-2">
