@@ -1,65 +1,70 @@
 import React, { useState, useEffect } from 'react';
-import { Globe, Plus, Trash2, Users, Calendar, MapPin, RefreshCw } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Globe, Plus, Trash2, Users, Calendar, MapPin, RefreshCw, Copy, Settings, Repeat } from 'lucide-react';
+import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
+import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { outreachApi } from '../services/api';
 import { toast } from 'sonner';
 
-const categoryColors = {
-  community: 'bg-blue-100 text-blue-700',
-  health: 'bg-green-100 text-green-700',
-  education: 'bg-purple-100 text-purple-700',
-  welfare: 'bg-amber-100 text-amber-700',
-  evangelism: 'bg-red-100 text-red-700',
-};
-
 const statusColors = { active: 'border-green-500 text-green-600', completed: 'border-slate-400 text-slate-500', paused: 'border-amber-500 text-amber-600' };
 
 export default function OutreachPage() {
   const [programs, setPrograms] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProgram, setShowProgram] = useState(false);
   const [showSession, setShowSession] = useState(false);
+  const [showCatManager, setShowCatManager] = useState(false);
+  const [showRecurring, setShowRecurring] = useState(null);
+  const [editingProg, setEditingProg] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [progForm, setProgForm] = useState({ name: '', description: '', category: 'community', status: 'active', location: '', start_date: new Date().toISOString().split('T')[0], target: '' });
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatColor, setNewCatColor] = useState('#10b981');
+  const emptyProg = { name: '', description: '', category: 'community', status: 'active', location: '', start_date: new Date().toISOString().split('T')[0], target: '', is_recurring: false, recurrence_pattern: 'saturday', recurrence_day: 1, recurrence_time: '09:00', recurrence_end_time: '12:00' };
+  const [progForm, setProgForm] = useState({ ...emptyProg });
   const [sessionForm, setSessionForm] = useState({ program_id: '', date: new Date().toISOString().split('T')[0], time: '', location: '', attendees: '', notes: '', led_by: '' });
+  const [recurForm, setRecurForm] = useState({ months_ahead: 3, nth_day: 2, day_of_week: 'saturday', time: '09:00', end_time: '12:00' });
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [progRes, sessRes] = await Promise.all([outreachApi.programs(), outreachApi.sessions()]);
-      setPrograms(progRes.data);
-      setSessions(sessRes.data);
+      const [progRes, sessRes, catRes] = await Promise.all([outreachApi.programs(), outreachApi.sessions(), outreachApi.categories()]);
+      setPrograms(progRes.data); setSessions(sessRes.data); setCategories(catRes.data);
     } catch { toast.error('Failed to load outreach data'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { fetchAll(); }, []);
 
+  const catColorMap = Object.fromEntries(categories.map(c => [c.name, c.color]));
+
   const handleAddProgram = async (e) => {
-    e.preventDefault();
-    setSaving(true);
+    e.preventDefault(); setSaving(true);
     try {
-      const res = await outreachApi.createProgram({ ...progForm, target: progForm.target ? parseInt(progForm.target) : null });
-      setPrograms(prev => [res.data, ...prev]);
-      setShowProgram(false);
-      setProgForm({ name: '', description: '', category: 'community', status: 'active', location: '', start_date: new Date().toISOString().split('T')[0], target: '' });
-      toast.success('Program created!');
-    } catch { toast.error('Failed to create program'); }
+      const payload = { ...progForm, target: progForm.target ? parseInt(progForm.target) : null };
+      const res = editingProg ? await outreachApi.updateProgram(editingProg.id, payload) : await outreachApi.createProgram(payload);
+      if (editingProg) {
+        setPrograms(prev => prev.map(p => p.id === editingProg.id ? res.data : p));
+        toast.success('Programme updated');
+      } else {
+        setPrograms(prev => [res.data, ...prev]);
+        toast.success('Programme created!');
+      }
+      setShowProgram(false); setEditingProg(null); setProgForm({ ...emptyProg });
+    } catch { toast.error('Failed to save programme'); }
     finally { setSaving(false); }
   };
 
   const handleAddSession = async (e) => {
-    e.preventDefault();
-    setSaving(true);
+    e.preventDefault(); setSaving(true);
     try {
       const res = await outreachApi.createSession({ ...sessionForm, attendees: parseInt(sessionForm.attendees) || 0 });
       setSessions(prev => [res.data, ...prev]);
@@ -72,172 +77,214 @@ export default function OutreachPage() {
     finally { setSaving(false); }
   };
 
+  const editProgram = (p) => {
+    setEditingProg(p);
+    setProgForm({ name: p.name, description: p.description || '', category: p.category || 'community', status: p.status || 'active', location: p.location || '', start_date: p.start_date || '', target: p.target || '', is_recurring: p.is_recurring || false, recurrence_pattern: p.recurrence_pattern || 'saturday', recurrence_day: p.recurrence_day || 1, recurrence_time: p.recurrence_time || '09:00', recurrence_end_time: p.recurrence_end_time || '12:00' });
+    setShowProgram(true);
+  };
+
+  const duplicateProgram = async (p) => {
+    try { const res = await outreachApi.duplicateProgram(p.id); setPrograms(prev => [res.data, ...prev]); toast.success(`Duplicated as "${res.data.name}"`); } catch { toast.error('Failed to duplicate'); }
+  };
+
   const deleteProgram = async (id) => {
-    if (!window.confirm('Delete this program?')) return;
-    await outreachApi.deleteProgram(id);
-    setPrograms(prev => prev.filter(p => p.id !== id));
-    toast.success('Program deleted');
+    if (!window.confirm('Delete this programme?')) return;
+    await outreachApi.deleteProgram(id); setPrograms(prev => prev.filter(p => p.id !== id)); toast.success('Deleted');
+  };
+
+  const generateRecurring = async () => {
+    if (!showRecurring) return;
+    setSaving(true);
+    try {
+      const res = await outreachApi.generateEvents(showRecurring.id, recurForm);
+      toast.success(`Generated ${res.data.created} recurring events`);
+      setShowRecurring(null);
+    } catch { toast.error('Failed to generate events'); }
+    finally { setSaving(false); }
+  };
+
+  const addCategory = async () => {
+    if (!newCatName.trim()) return;
+    try { const r = await outreachApi.createCategory({ name: newCatName, label: newCatName, color: newCatColor }); setCategories(prev => [...prev, r.data]); setNewCatName(''); toast.success('Category added'); } catch { toast.error('Failed'); }
+  };
+
+  const deleteCategory = async (id) => {
+    try { await outreachApi.deleteCategory(id); setCategories(prev => prev.filter(c => c.id !== id)); toast.success('Deleted'); } catch { toast.error('Failed'); }
   };
 
   const totalReached = programs.reduce((s, p) => s + (p.total_reached || 0), 0);
 
   return (
     <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold font-heading">Outreach</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{programs.length} programs · {totalReached.toLocaleString()} people reached</p>
+          <h1 className="text-2xl font-semibold font-heading">Programmes & Outreach</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{programs.length} programmes · {totalReached.toLocaleString()} reached</p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchAll}><RefreshCw size={14} /></Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowCatManager(true)}>Categories</Button>
+          <Button variant="outline" size="sm" onClick={fetchAll}><RefreshCw size={14} /></Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        {[
-          { label: 'Active Programs', value: programs.filter(p => p.status === 'active').length, color: 'text-green-600' },
-          { label: 'Total Sessions', value: sessions.length, color: 'text-blue-600' },
-          { label: 'People Reached', value: totalReached.toLocaleString(), color: 'text-primary' },
-        ].map((s, i) => (
-          <Card key={i} className="shadow-soft rounded-xl">
-            <CardContent className="p-4 text-center">
-              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-              <p className="text-xs text-muted-foreground mt-1">{s.label}</p>
-            </CardContent>
-          </Card>
+        {[{ label: 'Active', value: programs.filter(p => p.status === 'active').length, color: 'text-green-600' }, { label: 'Sessions', value: sessions.length, color: 'text-blue-600' }, { label: 'Reached', value: totalReached.toLocaleString(), color: 'text-primary' }].map((s, i) => (
+          <Card key={i} className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${s.color}`}>{s.value}</p><p className="text-xs text-muted-foreground mt-1">{s.label}</p></CardContent></Card>
         ))}
       </div>
 
       <Tabs defaultValue="programs">
-        <TabsList>
-          <TabsTrigger value="programs" data-testid="tab-programs">Programs ({programs.length})</TabsTrigger>
-          <TabsTrigger value="sessions" data-testid="tab-sessions">Sessions ({sessions.length})</TabsTrigger>
-        </TabsList>
-
+        <TabsList><TabsTrigger value="programs">Programmes ({programs.length})</TabsTrigger><TabsTrigger value="sessions">Sessions ({sessions.length})</TabsTrigger></TabsList>
         <TabsContent value="programs" className="mt-4">
-          <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-2" onClick={() => setShowProgram(true)} data-testid="add-program-btn"><Plus size={14} /> New Program</Button>
-          </div>
-          {loading ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[1,2,3].map(i => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}</div>
-          ) : programs.length > 0 ? (
+          <div className="flex justify-end mb-3"><Button size="sm" className="gap-2" onClick={() => { setEditingProg(null); setProgForm({...emptyProg}); setShowProgram(true); }}><Plus size={14} /> New Programme</Button></div>
+          {loading ? <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[1,2,3].map(i => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}</div> : programs.length > 0 ? (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {programs.map(p => (
                 <Card key={p.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow" data-testid="program-card">
                   <CardContent className="p-5">
                     <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1">
-                        <p className="font-semibold text-sm">{p.name}</p>
+                      <div className="flex-1"><p className="font-semibold text-sm">{p.name}</p>
                         <div className="flex gap-2 mt-1">
-                          <Badge variant="outline" className={`text-xs capitalize ${categoryColors[p.category] || ''} border-0`}>{p.category}</Badge>
+                          <span className="text-xs px-2 py-0.5 rounded-full capitalize" style={{ backgroundColor: (catColorMap[p.category] || '#6366f1') + '22', color: catColorMap[p.category] || '#6366f1' }}>{p.category}</span>
                           <Badge variant="outline" className={`text-xs capitalize ${statusColors[p.status] || ''}`}>{p.status}</Badge>
+                          {p.is_recurring && <Badge variant="outline" className="text-xs border-purple-300 text-purple-600"><Repeat size={10} className="mr-1" />Recurring</Badge>}
                         </div>
                       </div>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0" onClick={() => deleteProgram(p.id)}><Trash2 size={12} /></Button>
                     </div>
                     {p.description && <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{p.description}</p>}
-                    <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="space-y-1 text-xs text-muted-foreground mb-3">
                       {p.location && <div className="flex items-center gap-1.5"><MapPin size={11} />{p.location}</div>}
-                      <div className="flex items-center gap-1.5"><Users size={11} />{p.total_reached || 0} reached / {p.target || '—'} target</div>
+                      <div className="flex items-center gap-1.5"><Users size={11} />{p.total_reached || 0} / {p.target || '—'}</div>
                       <div className="flex items-center gap-1.5"><Calendar size={11} />{p.sessions_count || 0} sessions</div>
+                    </div>
+                    <div className="flex gap-1.5 border-t border-border pt-3">
+                      <Button size="sm" variant="ghost" onClick={() => editProgram(p)} title="Edit"><Settings size={13} /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => duplicateProgram(p)} title="Duplicate"><Copy size={13} /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setRecurForm({ months_ahead: 3, nth_day: p.recurrence_day || 2, day_of_week: p.recurrence_pattern || 'saturday', time: p.recurrence_time || '09:00', end_time: p.recurrence_end_time || '12:00' }); setShowRecurring(p); }} title="Generate Events"><Repeat size={13} /></Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteProgram(p.id)}><Trash2 size={13} /></Button>
                     </div>
                   </CardContent>
                 </Card>
               ))}
             </div>
-          ) : <p className="text-center text-sm text-muted-foreground py-12">No programs yet.</p>}
+          ) : <p className="text-center text-sm text-muted-foreground py-12">No programmes yet.</p>}
         </TabsContent>
-
         <TabsContent value="sessions" className="mt-4">
-          <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-2" onClick={() => setShowSession(true)} data-testid="add-session-btn"><Plus size={14} /> Log Session</Button>
-          </div>
-          <Card className="shadow-soft rounded-xl">
-            <CardContent className="p-5">
-              {loading ? <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div> :
-                sessions.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead><tr className="border-b border-border text-left">
-                        <th className="pb-2 font-medium text-muted-foreground">Program</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Date</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Location</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Attendees</th>
-                        <th className="pb-2 font-medium text-muted-foreground">Led by</th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-border">
-                        {sessions.map(s => {
-                          const prog = programs.find(p => p.id === s.program_id);
-                          return (
-                            <tr key={s.id} className="hover:bg-accent/30" data-testid="session-row">
-                              <td className="py-3 font-medium">{prog?.name || s.program_id}</td>
-                              <td className="py-3 text-muted-foreground">{s.date}</td>
-                              <td className="py-3 text-muted-foreground">{s.location || '—'}</td>
-                              <td className="py-3 font-semibold text-primary">{s.attendees}</td>
-                              <td className="py-3 text-muted-foreground">{s.led_by || '—'}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : <p className="text-sm text-muted-foreground text-center py-10">No sessions logged yet.</p>}
-            </CardContent>
-          </Card>
+          <div className="flex justify-end mb-3"><Button size="sm" className="gap-2" onClick={() => setShowSession(true)}><Plus size={14} /> Log Session</Button></div>
+          <Card className="shadow-soft rounded-xl"><CardContent className="p-5">
+            {sessions.length > 0 ? (
+              <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-border text-left"><th className="pb-2 font-medium text-muted-foreground">Program</th><th className="pb-2 font-medium text-muted-foreground">Date</th><th className="pb-2 font-medium text-muted-foreground">Location</th><th className="pb-2 font-medium text-muted-foreground">Attendees</th><th className="pb-2 font-medium text-muted-foreground">Led by</th></tr></thead>
+                <tbody className="divide-y divide-border">{sessions.map(s => { const prog = programs.find(pp => pp.id === s.program_id); return (<tr key={s.id} className="hover:bg-accent/30"><td className="py-3 font-medium">{prog?.name || s.program_id}</td><td className="py-3 text-muted-foreground">{s.date}</td><td className="py-3 text-muted-foreground">{s.location || '—'}</td><td className="py-3 font-semibold text-primary">{s.attendees}</td><td className="py-3 text-muted-foreground">{s.led_by || '—'}</td></tr>); })}</tbody></table></div>
+            ) : <p className="text-sm text-muted-foreground text-center py-10">No sessions logged yet.</p>}
+          </CardContent></Card>
         </TabsContent>
       </Tabs>
 
-      <Dialog open={showProgram} onOpenChange={setShowProgram}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>New Outreach Program</DialogTitle></DialogHeader>
+      {/* Add/Edit Programme */}
+      <Dialog open={showProgram} onOpenChange={v => { if (!v) { setShowProgram(false); setEditingProg(null); } }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>{editingProg ? 'Edit Programme' : 'New Programme'}</DialogTitle></DialogHeader>
           <form onSubmit={handleAddProgram} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Program Name *</Label><Input placeholder="Program name" value={progForm.name} onChange={e => setProgForm({...progForm, name: e.target.value})} required data-testid="program-name-input" /></div>
-            <div className="space-y-2"><Label>Description</Label><Textarea placeholder="What does this program do?" rows={2} value={progForm.description} onChange={e => setProgForm({...progForm, description: e.target.value})} /></div>
+            <div className="space-y-2"><Label>Name *</Label><Input placeholder="Programme name" value={progForm.name} onChange={e => setProgForm({...progForm, name: e.target.value})} required /></div>
+            <div className="space-y-2"><Label>Description</Label><Textarea rows={2} value={progForm.description} onChange={e => setProgForm({...progForm, description: e.target.value})} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Category</Label>
-                <Select value={progForm.category} onValueChange={v => setProgForm({...progForm, category: v})}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="community">Community</SelectItem>
-                    <SelectItem value="health">Health</SelectItem>
-                    <SelectItem value="education">Education</SelectItem>
-                    <SelectItem value="welfare">Welfare</SelectItem>
-                    <SelectItem value="evangelism">Evangelism</SelectItem>
-                  </SelectContent>
+                <Select value={progForm.category} onValueChange={v => setProgForm({...progForm, category: v})}><SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{categories.map(c => <SelectItem key={c.id} value={c.name}>{c.label}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>Target (people)</Label><Input type="number" placeholder="500" value={progForm.target} onChange={e => setProgForm({...progForm, target: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Target</Label><Input type="number" placeholder="500" value={progForm.target} onChange={e => setProgForm({...progForm, target: e.target.value})} /></div>
             </div>
-            <div className="space-y-2"><Label>Location</Label><Input placeholder="Where is this based?" value={progForm.location} onChange={e => setProgForm({...progForm, location: e.target.value})} /></div>
-            <div className="space-y-2"><Label>Start Date</Label><Input type="date" value={progForm.start_date} onChange={e => setProgForm({...progForm, start_date: e.target.value})} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Location</Label><Input value={progForm.location} onChange={e => setProgForm({...progForm, location: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Start Date</Label><Input type="date" value={progForm.start_date} onChange={e => setProgForm({...progForm, start_date: e.target.value})} /></div>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+              <div><p className="text-sm font-medium">Recurring Events</p><p className="text-xs text-muted-foreground">Auto-generate events on schedule</p></div>
+              <Switch checked={progForm.is_recurring} onCheckedChange={v => setProgForm({...progForm, is_recurring: v})} />
+            </div>
+            {progForm.is_recurring && (
+              <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
+                <div className="space-y-2"><Label>Day of Week</Label>
+                  <Select value={progForm.recurrence_pattern} onValueChange={v => setProgForm({...progForm, recurrence_pattern: v})}><SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(d => <SelectItem key={d} value={d}>{d.charAt(0).toUpperCase()+d.slice(1)}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Nth Week</Label>
+                  <Select value={String(progForm.recurrence_day)} onValueChange={v => setProgForm({...progForm, recurrence_day: parseInt(v)})}><SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Time</Label><Input type="time" value={progForm.recurrence_time} onChange={e => setProgForm({...progForm, recurrence_time: e.target.value})} /></div>
+                <div className="space-y-2"><Label>End Time</Label><Input type="time" value={progForm.recurrence_end_time} onChange={e => setProgForm({...progForm, recurrence_end_time: e.target.value})} /></div>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowProgram(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" disabled={saving} data-testid="save-program-btn">{saving ? 'Creating...' : 'Create Program'}</Button>
+              <Button type="button" variant="outline" className="flex-1" onClick={() => { setShowProgram(false); setEditingProg(null); }}>Cancel</Button>
+              <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : editingProg ? 'Update' : 'Create'}</Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
+      {/* Session Dialog */}
       <Dialog open={showSession} onOpenChange={setShowSession}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Log Outreach Session</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Log Session</DialogTitle></DialogHeader>
           <form onSubmit={handleAddSession} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Program *</Label>
-              <Select value={sessionForm.program_id} onValueChange={v => setSessionForm({...sessionForm, program_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Select program" /></SelectTrigger>
-                <SelectContent>{programs.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
+            <div className="space-y-2"><Label>Program *</Label><Select value={sessionForm.program_id} onValueChange={v => setSessionForm({...sessionForm, program_id: v})}><SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>{programs.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent></Select></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Date</Label><Input type="date" value={sessionForm.date} onChange={e => setSessionForm({...sessionForm, date: e.target.value})} /></div>
-              <div className="space-y-2"><Label>Attendees</Label><Input type="number" placeholder="0" value={sessionForm.attendees} onChange={e => setSessionForm({...sessionForm, attendees: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Attendees</Label><Input type="number" value={sessionForm.attendees} onChange={e => setSessionForm({...sessionForm, attendees: e.target.value})} /></div>
             </div>
-            <div className="space-y-2"><Label>Location</Label><Input placeholder="Session location" value={sessionForm.location} onChange={e => setSessionForm({...sessionForm, location: e.target.value})} /></div>
-            <div className="space-y-2"><Label>Led By</Label><Input placeholder="Session leader name" value={sessionForm.led_by} onChange={e => setSessionForm({...sessionForm, led_by: e.target.value})} /></div>
-            <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} placeholder="Session highlights..." value={sessionForm.notes} onChange={e => setSessionForm({...sessionForm, notes: e.target.value})} /></div>
+            <div className="space-y-2"><Label>Location</Label><Input value={sessionForm.location} onChange={e => setSessionForm({...sessionForm, location: e.target.value})} /></div>
+            <div className="space-y-2"><Label>Led By</Label><Input value={sessionForm.led_by} onChange={e => setSessionForm({...sessionForm, led_by: e.target.value})} /></div>
+            <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={sessionForm.notes} onChange={e => setSessionForm({...sessionForm, notes: e.target.value})} /></div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowSession(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" disabled={saving || !sessionForm.program_id} data-testid="save-session-btn">{saving ? 'Saving...' : 'Log Session'}</Button>
+              <Button type="submit" className="flex-1" disabled={saving || !sessionForm.program_id}>{saving ? 'Saving...' : 'Log Session'}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Generate Recurring Events */}
+      <Dialog open={!!showRecurring} onOpenChange={() => setShowRecurring(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Generate Recurring Events</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">{showRecurring?.name}</p>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Months Ahead</Label><Input type="number" value={recurForm.months_ahead} onChange={e => setRecurForm({...recurForm, months_ahead: parseInt(e.target.value) || 3})} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Day</Label><Select value={recurForm.day_of_week} onValueChange={v => setRecurForm({...recurForm, day_of_week: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(d => <SelectItem key={d} value={d}>{d.charAt(0).toUpperCase()+d.slice(1)}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Nth</Label><Select value={String(recurForm.nth_day)} onValueChange={v => setRecurForm({...recurForm, nth_day: parseInt(v)})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent></Select></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Time</Label><Input type="time" value={recurForm.time} onChange={e => setRecurForm({...recurForm, time: e.target.value})} /></div>
+              <div className="space-y-2"><Label>End Time</Label><Input type="time" value={recurForm.end_time} onChange={e => setRecurForm({...recurForm, end_time: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-3"><Button variant="outline" className="flex-1" onClick={() => setShowRecurring(null)}>Cancel</Button><Button className="flex-1" onClick={generateRecurring} disabled={saving}>{saving ? 'Generating...' : 'Generate'}</Button></div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Category Manager */}
+      <Dialog open={showCatManager} onOpenChange={setShowCatManager}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Programme Categories</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            {categories.map(c => (
+              <div key={c.id} className="flex items-center justify-between p-2 rounded border border-border">
+                <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full" style={{ backgroundColor: c.color }} /><span className="text-sm font-medium">{c.label}</span></div>
+                <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={() => deleteCategory(c.id)}><Trash2 size={13} /></Button>
+              </div>
+            ))}
+            <div className="flex gap-2 pt-2 border-t border-border">
+              <Input placeholder="New category" value={newCatName} onChange={e => setNewCatName(e.target.value)} className="flex-1" />
+              <input type="color" value={newCatColor} onChange={e => setNewCatColor(e.target.value)} className="w-10 h-9 rounded border cursor-pointer" />
+              <Button size="sm" onClick={addCategory} disabled={!newCatName.trim()}>Add</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

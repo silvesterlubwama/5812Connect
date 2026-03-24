@@ -99,7 +99,7 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
 
 
 @router.post("/financial/expenses")
-async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_manager)):
+async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_staff)):
     doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
     await db.expenses.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "expense", doc["id"])
@@ -122,7 +122,6 @@ async def approve_expense(expense_id: str, data: dict = None, current_user: dict
     update = {"status": "approved", "approved_by": current_user["id"], "approved_by_name": current_user.get("name", ""), "approved_at": datetime.now(timezone.utc).isoformat(), "approval_comment": data.get("comment", "")}
     await db.expenses.update_one({"id": expense_id}, {"$set": update})
     await _audit(current_user["id"], "update", "expense_approval", expense_id)
-    # Notify submitter
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification

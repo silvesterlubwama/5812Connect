@@ -1,10 +1,11 @@
-"""Tasks CRUD routes"""
+"""Tasks CRUD routes + Trello import"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user
+from deps import db, get_current_user, _audit, logger
 from models import TaskCreate, TaskUpdate
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 import uuid
+import json
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
@@ -20,7 +21,12 @@ async def list_tasks(status: Optional[str] = None, priority: Optional[str] = Non
 
 @router.post("/tasks")
 async def create_task(data: TaskCreate, current_user: dict = Depends(get_current_user)):
-    task = {"id": f"task_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    task = {
+        "id": f"task_{str(uuid.uuid4())[:8]}",
+        **data.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
     await db.tasks.insert_one(task)
     task.pop("_id", None)
     return task
@@ -42,3 +48,67 @@ async def delete_task(task_id: str, current_user: dict = Depends(get_current_use
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted"}
+
+
+@router.post("/tasks/import-trello")
+async def import_trello(data: dict, current_user: dict = Depends(get_current_user)):
+    """Import tasks from Trello JSON export or generic kanban format.
+    Expects: { "cards": [...] } or Trello board JSON with "cards" key.
+    Each card: { "name": "...", "desc": "...", "labels": [...], "due": "...", "idList": "...", "checklists": [...] }
+    Also supports: { "lists": [...], "cards": [...] } format.
+    """
+    cards = data.get("cards", [])
+    lists = data.get("lists", [])
+    list_map = {}
+    for lst in lists:
+        list_map[lst.get("id", "")] = lst.get("name", "todo")
+
+    # Map Trello list names to our statuses
+    status_mapping = {
+        "to do": "todo", "todo": "todo", "backlog": "todo",
+        "doing": "in-progress", "in progress": "in-progress", "in-progress": "in-progress",
+        "done": "done", "complete": "done", "completed": "done",
+    }
+
+    imported = 0
+    for card in cards:
+        name = card.get("name", "").strip()
+        if not name:
+            continue
+        list_name = list_map.get(card.get("idList", ""), card.get("list", "todo"))
+        status = status_mapping.get(list_name.lower(), "todo")
+
+        labels = []
+        for lbl in card.get("labels", []):
+            if isinstance(lbl, dict):
+                labels.append(lbl.get("name", lbl.get("color", "")))
+            elif isinstance(lbl, str):
+                labels.append(lbl)
+
+        checklist_items = []
+        for cl in card.get("checklists", []):
+            for item in cl.get("checkItems", cl.get("items", [])):
+                checklist_items.append({
+                    "text": item.get("name", item.get("text", "")),
+                    "completed": item.get("state", "") == "complete" or item.get("completed", False),
+                })
+
+        task = {
+            "id": f"task_{str(uuid.uuid4())[:8]}",
+            "title": name,
+            "description": card.get("desc", card.get("description", "")),
+            "status": status,
+            "priority": "medium",
+            "assignee": None,
+            "due_date": (card.get("due") or card.get("due_date") or "")[:10] if card.get("due") or card.get("due_date") else None,
+            "tags": labels[:5],
+            "labels": labels,
+            "checklist": checklist_items,
+            "source": "trello_import",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.tasks.insert_one(task)
+        imported += 1
+
+    return {"imported": imported, "message": f"Successfully imported {imported} cards"}

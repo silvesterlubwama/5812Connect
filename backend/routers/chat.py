@@ -1,4 +1,4 @@
-"""Chat, AI Assistant routes"""
+"""Chat, AI Assistant, Offline Sync routes"""
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, logger
 from datetime import datetime, timezone
@@ -19,7 +19,13 @@ async def create_conversation(data: dict, current_user: dict = Depends(get_curre
     participants = data.get("participants", [])
     if current_user["id"] not in participants:
         participants.append(current_user["id"])
-    doc = {"id": f"conv_{str(uuid.uuid4())[:8]}", "type": conv_type, "name": data.get("name", ""), "participants": participants, "location_id": data.get("location_id"), "created_by": current_user["id"], "is_no_reply": data.get("is_no_reply", False), "created_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(), "last_message": None}
+    doc = {
+        "id": f"conv_{str(uuid.uuid4())[:8]}", "type": conv_type, "name": data.get("name", ""),
+        "participants": participants, "location_id": data.get("location_id"),
+        "created_by": current_user["id"], "is_no_reply": data.get("is_no_reply", False),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(), "last_message": None,
+    }
     await db.conversations.insert_one(doc); doc.pop("_id", None)
     return doc
 
@@ -33,7 +39,11 @@ async def get_messages(conv_id: str, skip: int = 0, limit: int = 50, current_use
 async def send_message(conv_id: str, data: dict, current_user: dict = Depends(get_current_user)):
     text = data.get("text", "").strip()
     if not text: raise HTTPException(status_code=400, detail="Message text required")
-    msg = {"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id, "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"), "text": text, "type": "text", "created_at": datetime.now(timezone.utc).isoformat()}
+    msg = {
+        "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+        "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"),
+        "text": text, "type": "text", "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     await db.chat_messages.insert_one(msg); msg.pop("_id", None)
     await db.conversations.update_one({"id": conv_id}, {"$set": {"updated_at": msg["created_at"], "last_message": text[:100]}})
     try:
@@ -77,6 +87,13 @@ async def sync_offline_messages(data: dict, current_user: dict = Depends(get_cur
         if not msg.get("conversation_id") or not msg.get("text"): continue
         existing = await db.chat_messages.find_one({"id": msg.get("id")})
         if existing: continue
-        doc = {"id": msg.get("id", f"msg_{str(uuid.uuid4())[:8]}"), "conversation_id": msg["conversation_id"], "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"), "text": msg["text"], "type": "text", "reply_to": msg.get("reply_to"), "read_by": [current_user["id"]], "created_at": msg.get("created_at", datetime.now(timezone.utc).isoformat()), "synced_at": datetime.now(timezone.utc).isoformat()}
+        doc = {
+            "id": msg.get("id", f"msg_{str(uuid.uuid4())[:8]}"), "conversation_id": msg["conversation_id"],
+            "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"),
+            "text": msg["text"], "type": "text", "reply_to": msg.get("reply_to"),
+            "read_by": [current_user["id"]],
+            "created_at": msg.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+        }
         await db.chat_messages.insert_one(doc); synced += 1
     return {"synced": synced}

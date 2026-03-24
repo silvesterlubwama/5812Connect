@@ -22,7 +22,8 @@
     "audit": "Audit",
     "settings": "Parametres",
     "kiosk": "Kiosque terrain",
-    "portal": "Mon Portail"
+    "portal": "Mon Portail",
+    "admin": "Admin"
   },
   "common": {
     "save": "Enregistrer",

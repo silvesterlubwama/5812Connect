@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -12,7 +12,8 @@ import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '../components/ui/dropdown-menu';
-import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, familiesApi, childrenApi, guestsApi } from '../services/api';
+import { Checkbox } from '../components/ui/checkbox';
+import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, familiesApi, childrenApi, guestsApi, adminApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
@@ -85,6 +86,13 @@ function MemberForm({ data, onChange, locations, showDepartment }) {
         </div>
       )}
       <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={data.date_of_birth || ''} onChange={e => onChange({ ...data, date_of_birth: e.target.value })} /></div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5"><Label className="text-xs">PIN Code</Label><Input placeholder="4-digit PIN" maxLength={10} value={data.pin || ''} onChange={e => onChange({ ...data, pin: e.target.value })} /></div>
+        <div className="space-y-1.5 flex flex-col justify-end gap-2">
+          <div className="flex items-center gap-2"><Switch checked={data.is_parent || false} onCheckedChange={v => onChange({ ...data, is_parent: v })} /><Label className="text-xs">Parent</Label></div>
+          <div className="flex items-center gap-2"><Switch checked={data.is_donor || false} onCheckedChange={v => onChange({ ...data, is_donor: v })} /><Label className="text-xs">Donor</Label></div>
+        </div>
+      </div>
       <div className="space-y-1.5"><Label className="text-xs">Notes</Label><Textarea rows={2} value={data.notes || ''} onChange={e => onChange({ ...data, notes: e.target.value })} /></div>
     </div>
   );
@@ -122,6 +130,12 @@ export default function UnifiedPeoplePage() {
   const [csvFile, setCsvFile] = useState(null);
   const [childCsvFile, setChildCsvFile] = useState(null);
   const [staffCsvFile, setStaffCsvFile] = useState(null);
+
+  // Bulk operations
+  const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
+  const [showBulkAction, setShowBulkAction] = useState(false);
+  const [bulkActionType, setBulkActionType] = useState('');
+  const [bulkRole, setBulkRole] = useState('');
 
   // Documents
   const [memberDocuments, setMemberDocuments] = useState([]);

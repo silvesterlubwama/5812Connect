@@ -56,6 +56,11 @@ export const eventsApi = {
   create: (data) => api.post('/events', data),
   update: (id, data) => api.put(`/events/${id}`, data),
   delete: (id) => api.delete(`/events/${id}`),
+  duplicate: (id) => api.post(`/events/${id}/duplicate`),
+  types: () => api.get('/event-types'),
+  createType: (data) => api.post('/event-types', data),
+  updateType: (id, data) => api.put(`/event-types/${id}`, data),
+  deleteType: (id) => api.delete(`/event-types/${id}`),
 };
 
 // ---- TASKS ----
@@ -64,6 +69,7 @@ export const tasksApi = {
   create: (data) => api.post('/tasks', data),
   update: (id, data) => api.put(`/tasks/${id}`, data),
   delete: (id) => api.delete(`/tasks/${id}`),
+  importTrello: (data) => api.post('/tasks/import-trello', data),
 };
 
 // ---- CHECK-INS ----
@@ -71,11 +77,13 @@ export const checkinsApi = {
   list: (params) => api.get('/checkins', { params }),
   create: (data) => api.post('/checkins', data),
   stats: () => api.get('/checkins/stats'),
+  pinCheckin: (data) => api.post('/checkins/pin', data),
+  checkout: (id) => api.post(`/checkins/${id}/checkout`),
 };
 
 // ---- VENUES ----
 export const venuesApi = {
-  list: () => api.get('/venues'),
+  list: (params) => api.get('/venues', { params }),
   create: (data) => api.post('/venues', data),
   update: (id, data) => api.put(`/venues/${id}`, data),
   delete: (id) => api.delete(`/venues/${id}`),
@@ -99,6 +107,7 @@ export const publicApi = {
 export const kioskApi = {
   checkin: (data) => api.post('/kiosk/checkin', data),
   lookup: (identifier) => api.get('/kiosk/lookup', { params: { identifier } }),
+  pinCheckin: (data) => api.post('/kiosk/pin-checkin', data),
 };
 
 // ---- FINANCIAL ----
@@ -109,6 +118,9 @@ export const financialApi = {
   expenses: (params) => api.get('/financial/expenses', { params }),
   createExpense: (data) => api.post('/financial/expenses', data),
   distributeFunds: (data) => api.post('/financial/distribute-funds', data),
+  pendingExpenses: () => api.get('/financial/expenses/pending'),
+  approveExpense: (id, comment) => api.put(`/financial/expenses/${id}/approve`, { comment }),
+  rejectExpense: (id, comment) => api.put(`/financial/expenses/${id}/reject`, { comment }),
 };
 
 // ---- PRODUCTS & SALES ----
@@ -174,7 +186,7 @@ export const searchApi = {
 
 // ---- AUDIT ----
 export const auditApi = {
-  list: (params) => api.get('/audit', { params }),
+  list: (params) => api.get('/admin/audit', { params }),
 };
 
 // ---- PEOPLE STATS ----
@@ -193,11 +205,18 @@ export const exportApi = {
 // ---- OUTREACH ----
 export const outreachApi = {
   programs: (params) => api.get('/outreach/programs', { params }),
+  getProgram: (id) => api.get(`/outreach/programs/${id}`),
   createProgram: (data) => api.post('/outreach/programs', data),
   updateProgram: (id, data) => api.put(`/outreach/programs/${id}`, data),
   deleteProgram: (id) => api.delete(`/outreach/programs/${id}`),
+  duplicateProgram: (id) => api.post(`/outreach/programs/${id}/duplicate`),
+  generateEvents: (id, data) => api.post(`/outreach/programs/${id}/generate-events`, data),
   sessions: (params) => api.get('/outreach/sessions', { params }),
   createSession: (data) => api.post('/outreach/sessions', data),
+  categories: () => api.get('/programme-categories'),
+  createCategory: (data) => api.post('/programme-categories', data),
+  updateCategory: (id, data) => api.put(`/programme-categories/${id}`, data),
+  deleteCategory: (id) => api.delete(`/programme-categories/${id}`),
 };
 
 // ---- RESOURCES ----
@@ -209,6 +228,10 @@ export const resourcesApi = {
   bookings: (params) => api.get('/resources/bookings', { params }),
   createBooking: (data) => api.post('/resources/bookings', data),
   deleteBooking: (id) => api.delete(`/resources/bookings/${id}`),
+  types: () => api.get('/resource-types'),
+  createType: (data) => api.post('/resource-types', data),
+  updateType: (id, data) => api.put(`/resource-types/${id}`, data),
+  deleteType: (id) => api.delete(`/resource-types/${id}`),
 };
 
 // ---- ANNOUNCEMENTS ----
@@ -349,4 +372,23 @@ export const portalApi = {
   checkins: () => api.get('/portal/checkins'),
   documents: () => api.get('/portal/documents'),
   sales: () => api.get('/portal/sales'),
+};
+
+// ---- ADMIN ----
+export const adminApi = {
+  users: (params) => api.get('/admin/users', { params }),
+  getUser: (id) => api.get(`/admin/users/${id}`),
+  updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
+  resetPassword: (id, new_password) => api.post(`/admin/users/${id}/reset-password`, { new_password }),
+  deleteUser: (id) => api.delete(`/admin/users/${id}`),
+  bulkUpdateUsers: (user_ids, updates) => api.post('/admin/users/bulk-update', { user_ids, updates }),
+  bulkDeleteUsers: (user_ids) => api.post('/admin/users/bulk-delete', { user_ids }),
+  bulkUpdateMembers: (member_ids, updates) => api.post('/admin/members/bulk-update', { member_ids, updates }),
+  bulkDeleteMembers: (member_ids) => api.post('/admin/members/bulk-delete', { member_ids }),
+  audit: (params) => api.get('/admin/audit', { params }),
+};
+
+// ---- LOCATION VENUES (Event Location Picker) ----
+export const locationVenuesApi = {
+  get: (locationId) => api.get(`/locations/${locationId}/venues`),
 };

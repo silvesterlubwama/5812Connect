@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, GripVertical, Trash2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, GripVertical, Trash2, RefreshCw, Upload } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -29,6 +29,9 @@ export default function TasksPage() {
   const [dragId, setDragId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [newTask, setNewTask] = useState({ title: '', description: '', status: 'todo', priority: 'medium', assignee: '', due_date: '', tags: [] });
+  const [showImport, setShowImport] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     fetchTasks();
@@ -88,6 +91,22 @@ export default function TasksPage() {
     finally { setSaving(false); }
   };
 
+  const handleTrelloImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await tasksApi.importTrello(data);
+      toast.success(`Imported ${res.data.imported} cards`);
+      fetchTasks();
+      setShowImport(false);
+    } catch (err) {
+      toast.error(err.message === 'Unexpected token' ? 'Invalid JSON file' : 'Import failed');
+    } finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
@@ -99,6 +118,7 @@ export default function TasksPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchTasks}><RefreshCw size={14} /></Button>
+          <Button variant="outline" onClick={() => setShowImport(true)} className="gap-2"><Upload size={16} /> Import</Button>
           <Button onClick={() => setShowAdd(true)} className="gap-2"><Plus size={16} /> Add Task</Button>
         </div>
       </div>
@@ -254,6 +274,27 @@ export default function TasksPage() {
               <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Adding...' : 'Add Task'}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Dialog */}
+      <Dialog open={showImport} onOpenChange={setShowImport}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Import Kanban Cards</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <p className="text-sm text-muted-foreground">Import cards from Trello or other kanban apps. Export your Trello board as JSON and upload it here.</p>
+            <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
+              <Upload size={32} className="mx-auto mb-3 text-muted-foreground" />
+              <p className="text-sm font-medium mb-2">Drop JSON file or click to browse</p>
+              <input ref={fileRef} type="file" accept=".json" onChange={handleTrelloImport} className="hidden" />
+              <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={importing}>{importing ? 'Importing...' : 'Select File'}</Button>
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p className="font-medium">Supported formats:</p>
+              <p>Trello JSON export (with cards, lists, checklists)</p>
+              <p>Generic: {`{ "cards": [{ "name": "...", "desc": "...", "labels": [...] }] }`}</p>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

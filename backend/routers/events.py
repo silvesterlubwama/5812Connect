@@ -1,16 +1,71 @@
-"""Events, Check-ins, Venues routes"""
+"""Events, Check-ins, Venues, Event Types, Public Events routes"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, _audit, logger
-from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate
+from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger
+from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 import uuid
+import copy
 
 router = APIRouter(prefix="/api", tags=["events"])
 
 
+# ========== EVENT TYPES ==========
+
+@router.get("/event-types")
+async def list_event_types(current_user: dict = Depends(get_current_user)):
+    types = await db.event_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    if not types:
+        defaults = [
+            {"id": "etype_service", "name": "service", "label": "Service", "color": "#6366f1"},
+            {"id": "etype_conference", "name": "conference", "label": "Conference", "color": "#f59e0b"},
+            {"id": "etype_meeting", "name": "meeting", "label": "Meeting", "color": "#3b82f6"},
+            {"id": "etype_community", "name": "community", "label": "Community", "color": "#10b981"},
+            {"id": "etype_workshop", "name": "workshop", "label": "Workshop", "color": "#8b5cf6"},
+            {"id": "etype_outreach", "name": "outreach", "label": "Outreach", "color": "#ec4899"},
+            {"id": "etype_training", "name": "training", "label": "Training", "color": "#14b8a6"},
+            {"id": "etype_social", "name": "social", "label": "Social", "color": "#f97316"},
+        ]
+        await db.event_types.insert_many(defaults)
+        for d in defaults:
+            d.pop("_id", None)
+        return defaults
+    return types
+
+
+@router.post("/event-types")
+async def create_event_type(data: dict, current_user: dict = Depends(require_manager)):
+    doc = {
+        "id": f"etype_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", "").lower().replace(" ", "_"),
+        "label": data.get("label", data.get("name", "")),
+        "color": data.get("color", "#6366f1"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.event_types.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/event-types/{type_id}")
+async def update_event_type(type_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    update = {k: v for k, v in data.items() if k in ("name", "label", "color") and v is not None}
+    if update.get("name"):
+        update["name"] = update["name"].lower().replace(" ", "_")
+    await db.event_types.update_one({"id": type_id}, {"$set": update})
+    return await db.event_types.find_one({"id": type_id}, {"_id": 0})
+
+
+@router.delete("/event-types/{type_id}")
+async def delete_event_type(type_id: str, current_user: dict = Depends(require_admin)):
+    await db.event_types.delete_one({"id": type_id})
+    return {"message": "Event type deleted"}
+
+
+# ========== EVENTS ==========
+
 @router.get("/events")
-async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, current_user: dict = Depends(get_current_user)):
+async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     query = {}
     if search:
         query["title"] = {"$regex": search, "$options": "i"}
@@ -20,6 +75,8 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
         query["status"] = status
     if is_public is not None:
         query["is_public"] = is_public
+    if visibility and visibility != "all":
+        query["visibility"] = visibility
     events = await db.events.find(query, {"_id": 0}).sort("date", -1).to_list(200)
     return events
 
@@ -27,14 +84,27 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
 @router.post("/events")
 async def create_event(data: EventCreate, current_user: dict = Depends(get_current_user)):
     event_id = f"evt_{str(uuid.uuid4())[:8]}"
-    event = {"id": event_id, **data.model_dump(), "registered": 0, "status": "upcoming", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    event = {
+        "id": event_id,
+        **data.model_dump(),
+        "registered": 0,
+        "status": "upcoming",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
     await db.events.insert_one(event)
     event.pop("_id", None)
     try:
         from routers.notifications import send_bulk_notifications
-        recipients = await db.users.find({"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}, "email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "name": 1}).to_list(200)
+        recipients = await db.users.find(
+            {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}, "email": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "email": 1, "name": 1}
+        ).to_list(200)
         if recipients:
-            await send_bulk_notifications({"recipients": recipients, "type": "event_reminder", "data": {"event_title": event.get("title"), "date": event.get("date"), "time": event.get("time"), "location": event.get("location")}})
+            await send_bulk_notifications({
+                "recipients": recipients, "type": "event_reminder",
+                "data": {"event_title": event.get("title"), "date": event.get("date"), "time": event.get("time"), "location": event.get("location")},
+            })
     except Exception as e:
         logger.warning(f"Event notify failed: {e}")
     return event
@@ -70,15 +140,28 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
     return {"message": "Event deleted"}
 
 
+@router.post("/events/{event_id}/duplicate")
+async def duplicate_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    new_id = f"evt_{str(uuid.uuid4())[:8]}"
+    new_event = {**event, "id": new_id, "title": f"{event['title']} (Copy)", "registered": 0, "status": "upcoming", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.events.insert_one(new_event)
+    new_event.pop("_id", None)
+    return new_event
+
+
 # ========== CHECK-INS ==========
 
 @router.get("/checkins")
-async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str] = None, type: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str] = None, type: Optional[str] = None, search: Optional[str] = None, location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     query = {}
     if event_id: query["event_id"] = event_id
     if member_id: query["member_id"] = member_id
     if type and type != "all": query["type"] = type
     if search: query["member_name"] = {"$regex": search, "$options": "i"}
+    if location_id: query["location_id"] = location_id
     checkins = await db.checkins.find(query, {"_id": 0}).sort("check_in_time", -1).to_list(1000)
     return checkins
 
@@ -86,10 +169,65 @@ async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str]
 @router.post("/checkins")
 async def create_checkin(data: CheckInCreate, current_user: dict = Depends(get_current_user)):
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
-    checkin = {"id": ci_id, **data.model_dump(), "check_in_time": datetime.now(timezone.utc).isoformat(), "checked_in_by": current_user["id"]}
+    checkin = {
+        "id": ci_id, **data.model_dump(),
+        "check_in_time": datetime.now(timezone.utc).isoformat(),
+        "checked_in_by": current_user["id"],
+    }
     await db.checkins.insert_one(checkin)
     checkin.pop("_id", None)
     return checkin
+
+
+@router.post("/checkins/pin")
+async def pin_checkin(data: dict, current_user: dict = Depends(get_current_user)):
+    """Check in/out a member using their PIN code"""
+    pin = data.get("pin", "").strip()
+    event_id = data.get("event_id")
+    event_name = data.get("event_name", "")
+    action = data.get("action", "checkin")
+    if not pin:
+        raise HTTPException(status_code=400, detail="PIN required")
+    member = await db.members.find_one({"pin": pin}, {"_id": 0})
+    if not member:
+        raise HTTPException(status_code=404, detail="Invalid PIN")
+    if action == "checkout":
+        last_checkin = await db.checkins.find_one(
+            {"member_id": member["id"], "check_out_time": None},
+            {"_id": 0}, sort=[("check_in_time", -1)]
+        )
+        if last_checkin:
+            await db.checkins.update_one(
+                {"id": last_checkin["id"]},
+                {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat(), "checked_out_by": current_user["id"]}}
+            )
+            return {"message": "Checked out", "member": member, "checkin_id": last_checkin["id"]}
+        return {"message": "No active check-in found", "member": member}
+    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    checkin = {
+        "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
+        "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
+        "method": "pin", "check_in_time": datetime.now(timezone.utc).isoformat(),
+        "checked_in_by": current_user["id"],
+    }
+    await db.checkins.insert_one(checkin)
+    checkin.pop("_id", None)
+    return {"message": "Checked in", "member": member, "checkin": checkin}
+
+
+@router.post("/checkins/{checkin_id}/checkout")
+async def checkout_person(checkin_id: str, current_user: dict = Depends(require_staff)):
+    """Admin/manager can check out a person from the backend"""
+    checkin = await db.checkins.find_one({"id": checkin_id}, {"_id": 0})
+    if not checkin:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    if checkin.get("check_out_time"):
+        raise HTTPException(status_code=400, detail="Already checked out")
+    await db.checkins.update_one(
+        {"id": checkin_id},
+        {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat(), "checked_out_by": current_user["id"]}}
+    )
+    return {"message": "Checked out successfully"}
 
 
 @router.get("/checkins/stats")
@@ -104,11 +242,72 @@ async def get_checkin_stats(current_user: dict = Depends(get_current_user)):
     }
 
 
+# ========== KIOSK ==========
+
+@router.post("/kiosk/checkin")
+async def kiosk_checkin(data: CheckInCreate):
+    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    checkin = {
+        "id": ci_id, **data.model_dump(),
+        "check_in_time": datetime.now(timezone.utc).isoformat(),
+        "source": "kiosk",
+    }
+    await db.checkins.insert_one(checkin)
+    checkin.pop("_id", None)
+    return checkin
+
+
+@router.get("/kiosk/lookup")
+async def kiosk_lookup(identifier: str):
+    member = await db.members.find_one(
+        {"$or": [{"national_id": identifier}, {"phone": identifier}, {"email": identifier.lower()}]},
+        {"_id": 0, "password_hash": 0}
+    )
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member
+
+
+@router.post("/kiosk/pin-checkin")
+async def kiosk_pin_checkin(data: dict):
+    """Kiosk PIN-based check-in/out (no auth required)"""
+    pin = data.get("pin", "").strip()
+    event_id = data.get("event_id")
+    event_name = data.get("event_name", "")
+    action = data.get("action", "checkin")
+    if not pin:
+        raise HTTPException(status_code=400, detail="PIN required")
+    member = await db.members.find_one({"pin": pin}, {"_id": 0})
+    if not member:
+        raise HTTPException(status_code=404, detail="Invalid PIN")
+    if action == "checkout":
+        last_ci = await db.checkins.find_one(
+            {"member_id": member["id"], "check_out_time": None},
+            {"_id": 0}, sort=[("check_in_time", -1)]
+        )
+        if last_ci:
+            await db.checkins.update_one({"id": last_ci["id"]}, {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat()}})
+            return {"message": "Checked out", "member_name": member.get("name")}
+        return {"message": "No active check-in", "member_name": member.get("name")}
+    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    checkin = {
+        "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
+        "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
+        "method": "pin", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
+    }
+    await db.checkins.insert_one(checkin)
+    checkin.pop("_id", None)
+    return {"message": "Checked in", "member_name": member.get("name"), "checkin": checkin}
+
+
 # ========== VENUES ==========
 
 @router.get("/venues")
-async def list_venues(current_user: dict = Depends(get_current_user)):
-    return await db.venues.find({}, {"_id": 0}).to_list(100)
+async def list_venues(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    return await db.venues.find(query, {"_id": 0}).sort("name", 1).to_list(100)
 
 
 @router.post("/venues")
@@ -130,3 +329,74 @@ async def update_venue(venue_id: str, data: VenueUpdate, current_user: dict = De
 async def delete_venue(venue_id: str, current_user: dict = Depends(get_current_user)):
     await db.venues.delete_one({"id": venue_id})
     return {"message": "Venue deleted"}
+
+
+# ========== PUBLIC ENDPOINTS ==========
+
+@router.get("/public/events")
+async def public_events():
+    events = await db.events.find(
+        {"is_public": True, "status": "upcoming"},
+        {"_id": 0}
+    ).sort("date", 1).to_list(50)
+    return events
+
+
+@router.get("/public/venues")
+async def public_venues():
+    venues = await db.venues.find({"available": True}, {"_id": 0}).to_list(50)
+    return venues
+
+
+@router.post("/public/bookings/event")
+async def public_book_event(data: PublicBookingCreate):
+    event = await db.events.find_one({"id": data.event_id})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if event.get("registered", 0) >= event.get("capacity", 0):
+        raise HTTPException(status_code=400, detail="Event is fully booked")
+    booking_id = f"book_{str(uuid.uuid4())[:12]}"
+    booking = {
+        "id": booking_id, **data.model_dump(),
+        "event_title": event.get("title", ""),
+        "is_free": event.get("is_free", True),
+        "price": event.get("price", 0),
+        "status": "confirmed" if event.get("is_free", True) else "pending_payment",
+        "ticket_ids": [f"TKT-{str(uuid.uuid4())[:4].upper()}" for _ in range(data.num_tickets)],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.public_bookings.insert_one(booking)
+    await db.events.update_one({"id": data.event_id}, {"$inc": {"registered": data.num_tickets}})
+    booking.pop("_id", None)
+    return booking
+
+
+@router.post("/public/bookings/space")
+async def public_book_space(data: SpaceBookingCreate):
+    venue = await db.venues.find_one({"id": data.venue_id})
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    booking_id = f"book_{str(uuid.uuid4())[:12]}"
+    booking = {
+        "id": booking_id, **data.model_dump(),
+        "type": "space", "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.public_bookings.insert_one(booking)
+    booking.pop("_id", None)
+    return booking
+
+
+@router.get("/public/bookings/status")
+async def check_booking_status(booking_id: Optional[str] = None, email: Optional[str] = None, phone: Optional[str] = None):
+    query = {}
+    if booking_id:
+        query["id"] = booking_id
+    elif email:
+        query["email"] = email.lower()
+    elif phone:
+        query["phone"] = phone
+    else:
+        raise HTTPException(status_code=400, detail="Provide booking_id, email, or phone")
+    bookings = await db.public_bookings.find(query, {"_id": 0}).to_list(20)
+    return bookings

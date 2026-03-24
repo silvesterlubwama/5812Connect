@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle, CalendarDays } from 'lucide-react';
+import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle, CalendarDays, Settings } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
 import api from '../services/api';
-import { locationsApi, bookingsApi } from '../services/api';
+import { locationsApi, bookingsApi, resourcesApi } from '../services/api';
 import { toast } from 'sonner';
 
 const RESOURCE_TYPES = [
@@ -44,16 +44,21 @@ export default function ResourcesPage() {
   const [bookingForm, setBookingForm] = useState({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
   const [bookings, setBookings] = useState([]);
   const [mainTab, setMainTab] = useState('resources');
+  const [resourceTypes, setResourceTypes] = useState(RESOURCE_TYPES);
+  const [showTypeManager, setShowTypeManager] = useState(false);
+  const [newTypeName, setNewTypeName] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [resRes, locRes] = await Promise.all([
+      const [resRes, locRes, typRes] = await Promise.all([
         api.get('/resources'),
         locationsApi.list(),
+        resourcesApi.types(),
       ]);
       setResources(resRes.data);
       setLocations(locRes.data);
+      if (typRes.data?.length > 0) setResourceTypes(typRes.data.map(t => ({ value: t.name, label: t.label, id: t.id })));
     } catch { toast.error('Failed to load resources'); }
     finally { setLoading(false); }
   };

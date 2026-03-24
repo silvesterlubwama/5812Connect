@@ -64,6 +64,9 @@ export default function FinancialPage() {
   const [allLocations, setAllLocations] = useState([]);
   const [showDistribute, setShowDistribute] = useState(false);
   const [distForm, setDistForm] = useState({ from_location_id: '', to_location_id: '', amount: '', currency: 'UGX', notes: '' });
+  const [pendingExpenses, setPendingExpenses] = useState([]);
+  const [showApprovalComment, setShowApprovalComment] = useState(null);
+  const [approvalComment, setApprovalComment] = useState('');
   const today = new Date().toISOString().split('T')[0];
 
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
@@ -88,9 +91,21 @@ export default function FinancialPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); }, []);
+  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
+
+  const fetchPending = async () => {
+    try { const r = await financialApi.pendingExpenses(); setPendingExpenses(r.data); } catch {}
+  };
+
+  const approveExpense = async (id) => {
+    try { await financialApi.approveExpense(id, approvalComment); setPendingExpenses(prev => prev.filter(e => e.id !== id)); setShowApprovalComment(null); setApprovalComment(''); toast.success('Expense approved'); fetchAll(); } catch { toast.error('Failed'); }
+  };
+
+  const rejectExpense = async (id) => {
+    try { await financialApi.rejectExpense(id, approvalComment); setPendingExpenses(prev => prev.filter(e => e.id !== id)); setShowApprovalComment(null); setApprovalComment(''); toast.success('Expense rejected'); } catch { toast.error('Failed'); }
+  };
 
   const handleAddDonation = async (e) => {
     e.preventDefault();
@@ -225,6 +240,7 @@ export default function FinancialPage() {
         <TabsList>
           <TabsTrigger value="donations" data-testid="tab-donations">Donations</TabsTrigger>
           <TabsTrigger value="expenses" data-testid="tab-expenses">Expenses</TabsTrigger>
+          <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="donations" className="mt-4">
@@ -304,7 +320,52 @@ export default function FinancialPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="approvals" className="mt-4">
+          <Card className="shadow-soft rounded-xl">
+            <CardHeader className="flex flex-row items-center justify-between py-4 px-5">
+              <CardTitle className="text-base font-semibold">Pending Expense Approvals</CardTitle>
+              <Button size="sm" variant="outline" onClick={fetchPending}><RefreshCw size={14} /></Button>
+            </CardHeader>
+            <CardContent className="px-5 pb-5">
+              {pendingExpenses.length > 0 ? (
+                <div className="space-y-3">
+                  {pendingExpenses.map(e => (
+                    <div key={e.id} className="flex items-center justify-between p-3 rounded-lg border border-border" data-testid={`pending-expense-${e.id}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm">{e.title}</p>
+                        <p className="text-xs text-muted-foreground">{e.category} · {e.date} · Submitted by: {e.submitted_by || e.created_by || 'Staff'}</p>
+                      </div>
+                      <p className="text-sm font-bold text-red-600 mx-4">{e.currency || 'UGX'} {(e.amount || 0).toLocaleString()}</p>
+                      <div className="flex gap-1.5">
+                        <Button data-testid={`approve-expense-${e.id}`} size="sm" className="bg-green-600 hover:bg-green-700 text-white h-8 text-xs" onClick={() => approveExpense(e.id)}>Approve</Button>
+                        <Button data-testid={`reject-expense-${e.id}`} size="sm" variant="destructive" className="h-8 text-xs" onClick={() => { setShowApprovalComment(e); }}>Reject</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-10">No pending expenses to approve.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {/* Rejection Comment Dialog */}
+      <Dialog open={!!showApprovalComment} onOpenChange={() => setShowApprovalComment(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reject Expense</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <p className="text-sm">Rejecting: <strong>{showApprovalComment?.title}</strong></p>
+            <div className="space-y-2"><Label>Reason (optional)</Label><Input placeholder="Reason for rejection" value={approvalComment} onChange={e => setApprovalComment(e.target.value)} /></div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowApprovalComment(null); setApprovalComment(''); }}>Cancel</Button>
+              <Button variant="destructive" className="flex-1" onClick={() => rejectExpense(showApprovalComment?.id)}>Reject</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Donation Modal */}
       <Dialog open={showDonation} onOpenChange={setShowDonation}>

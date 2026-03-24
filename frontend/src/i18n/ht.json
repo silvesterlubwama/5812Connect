@@ -22,7 +22,8 @@
     "audit": "Odit",
     "settings": "Paramèt",
     "kiosk": "Kyosk Teren",
-    "portal": "Pòtal Mwen"
+    "portal": "Pòtal Mwen",
+    "admin": "Admin"
   },
   "common": {
     "save": "Anrejistre",

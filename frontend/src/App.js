@@ -32,6 +32,7 @@ import OutreachPage from './pages/OutreachPage';
 import ResourcesPage from './pages/ResourcesPage';
 import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
+import AdminPage from './pages/AdminPage';
 import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
 import PortalLayout from './components/PortalLayout';
@@ -89,6 +90,7 @@ function AppRoutes() {
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="access" element={<AccessPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="admin" element={<AdminPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>

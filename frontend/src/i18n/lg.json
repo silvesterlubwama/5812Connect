@@ -22,7 +22,8 @@
     "audit": "Okukebera",
     "settings": "Entegeka",
     "kiosk": "Ekiosiki ey'omu nnimiro",
-    "portal": "Ekkisenge Kyange"
+    "portal": "Ekkisenge Kyange",
+    "admin": "Admin"
   },
   "common": {
     "save": "Kuuma",

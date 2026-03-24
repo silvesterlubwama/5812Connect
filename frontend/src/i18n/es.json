@@ -22,7 +22,8 @@
     "audit": "Auditoria",
     "settings": "Configuracion",
     "kiosk": "Kiosco de Campo",
-    "portal": "Mi Portal"
+    "portal": "Mi Portal",
+    "admin": "Admin"
   },
   "common": {
     "save": "Guardar",

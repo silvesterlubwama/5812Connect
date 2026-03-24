@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, UserCheck, RefreshCw } from 'lucide-react';
+import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -10,7 +10,7 @@ import { Label } from '../components/ui/label';
 import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
 
-const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700' };
+const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700', pin: 'bg-green-100 text-green-700', biometric: 'bg-indigo-100 text-indigo-700', nfc: 'bg-cyan-100 text-cyan-700' };
 const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600' };
 
 export default function CheckInsPage() {
@@ -23,6 +23,9 @@ export default function CheckInsPage() {
   const [events, setEvents] = useState([]);
   const [saving, setSaving] = useState(false);
   const [newCI, setNewCI] = useState({ member_name: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
+  const [showPin, setShowPin] = useState(false);
+  const [pinCode, setPinCode] = useState('');
+  const [pinEvent, setPinEvent] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
@@ -61,6 +64,24 @@ export default function CheckInsPage() {
 
   const formatTime = (iso) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+  const handlePinCheckin = async () => {
+    if (!pinCode.trim()) return;
+    const eventObj = events.find(ev => ev.id === pinEvent);
+    try {
+      const res = await checkinsApi.pinCheckin({ pin: pinCode, event_id: pinEvent || undefined, event_name: eventObj?.title || '', action: 'checkin' });
+      toast.success(`${res.data.member?.name || 'Member'} checked in via PIN!`);
+      setPinCode(''); setShowPin(false); fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Invalid PIN'); }
+  };
+
+  const handleCheckout = async (ci) => {
+    try {
+      await checkinsApi.checkout(ci.id);
+      toast.success(`${ci.member_name} checked out`);
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Checkout failed'); }
+  };
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
@@ -70,6 +91,7 @@ export default function CheckInsPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" asChild><a href="/kiosk" target="_blank" className="gap-2 flex items-center"><UserCheck size={15} />Kiosk</a></Button>
+          <Button variant="outline" onClick={() => setShowPin(true)} className="gap-2"><KeyRound size={15} /> PIN</Button>
           <Button variant="outline" size="sm" onClick={fetchData}><RefreshCw size={14} /></Button>
           <Button onClick={() => setShowAdd(true)} className="gap-2"><Plus size={16} /> Manual Check-In</Button>
         </div>
@@ -120,6 +142,7 @@ export default function CheckInsPage() {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Event</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Method</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Time</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -138,6 +161,13 @@ export default function CheckInsPage() {
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium uppercase ${methodStyle[ci.method] || ''}`}>{ci.method}</span>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground text-xs">{formatTime(ci.check_in_time)}</td>
+                  <td className="px-4 py-3">
+                    {ci.check_out_time ? (
+                      <Badge className="bg-green-100 text-green-700 text-xs">Out {new Date(ci.check_out_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</Badge>
+                    ) : (
+                      <Button data-testid={`checkout-${ci.id}`} size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => handleCheckout(ci)}><LogOut size={12} />Check Out</Button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -193,6 +223,33 @@ export default function CheckInsPage() {
               <Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Checking in...' : 'Check In'}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* PIN Check-In Dialog */}
+      <Dialog open={showPin} onOpenChange={setShowPin}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader><DialogTitle>PIN Check-In</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label>Event (optional)</Label>
+              <Select value={pinEvent} onValueChange={setPinEvent}>
+                <SelectTrigger><SelectValue placeholder="Select event" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">No event</SelectItem>
+                  {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Enter PIN *</Label>
+              <Input data-testid="pin-input" placeholder="4-digit PIN" value={pinCode} onChange={e => setPinCode(e.target.value)} maxLength={10} className="text-center text-2xl tracking-[0.3em] font-mono" />
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowPin(false); setPinCode(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={handlePinCheckin} disabled={!pinCode.trim()}>Check In</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

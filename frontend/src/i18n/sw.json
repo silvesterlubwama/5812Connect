@@ -22,7 +22,8 @@
     "audit": "Ukaguzi",
     "settings": "Mipangilio",
     "kiosk": "Kiosk ya Uwanjani",
-    "portal": "Portal Yangu"
+    "portal": "Portal Yangu",
+    "admin": "Admin"
   },
   "common": {
     "save": "Hifadhi",

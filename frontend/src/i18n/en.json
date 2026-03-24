@@ -22,7 +22,8 @@
     "audit": "Audit Trail",
     "settings": "Settings",
     "kiosk": "Field Kiosk",
-    "portal": "My Portal"
+    "portal": "My Portal",
+    "admin": "User Management"
   },
   "common": {
     "save": "Save",

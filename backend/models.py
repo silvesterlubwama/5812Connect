@@ -31,6 +31,7 @@ class MemberCreate(BaseModel):
     phone: Optional[str] = None
     national_id: Optional[str] = None
     role: str = "Staff"
+    secondary_roles: Optional[List[str]] = []
     group: Optional[str] = None
     gender: Optional[str] = None
     date_of_birth: Optional[str] = None
@@ -43,6 +44,7 @@ class MemberCreate(BaseModel):
     is_parent: bool = False
     is_customer: bool = False
     is_donor: bool = False
+    pin: Optional[str] = None
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
@@ -50,6 +52,7 @@ class MemberUpdate(BaseModel):
     phone: Optional[str] = None
     national_id: Optional[str] = None
     role: Optional[str] = None
+    secondary_roles: Optional[List[str]] = None
     group: Optional[str] = None
     gender: Optional[str] = None
     status: Optional[str] = None
@@ -63,6 +66,7 @@ class MemberUpdate(BaseModel):
     is_parent: Optional[bool] = None
     is_customer: Optional[bool] = None
     is_donor: Optional[bool] = None
+    pin: Optional[str] = None
 
 class FamilyCreate(BaseModel):
     family_name: str
@@ -99,14 +103,18 @@ class EventCreate(BaseModel):
     time: Optional[str] = None
     end_time: Optional[str] = None
     location: Optional[str] = None
+    location_id: Optional[str] = None
+    venue_id: Optional[str] = None
     capacity: int = 100
     description: Optional[str] = None
     is_public: bool = True
     is_free: bool = True
     price: Optional[float] = None
-    venue_id: Optional[str] = None
+    visibility: str = "external"
     is_recurring: bool = False
     recurrence_pattern: Optional[str] = None
+    recurrence_day: Optional[int] = None
+    programme_id: Optional[str] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -115,12 +123,18 @@ class EventUpdate(BaseModel):
     time: Optional[str] = None
     end_time: Optional[str] = None
     location: Optional[str] = None
+    location_id: Optional[str] = None
+    venue_id: Optional[str] = None
     capacity: Optional[int] = None
     description: Optional[str] = None
     is_public: Optional[bool] = None
     is_free: Optional[bool] = None
     price: Optional[float] = None
+    visibility: Optional[str] = None
     status: Optional[str] = None
+    is_recurring: Optional[bool] = None
+    recurrence_pattern: Optional[str] = None
+    recurrence_day: Optional[int] = None
 
 class TaskCreate(BaseModel):
     title: str
@@ -130,6 +144,8 @@ class TaskCreate(BaseModel):
     assignee: Optional[str] = None
     due_date: Optional[str] = None
     tags: Optional[List[str]] = []
+    labels: Optional[List[str]] = []
+    checklist: Optional[List[dict]] = []
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -139,6 +155,8 @@ class TaskUpdate(BaseModel):
     assignee: Optional[str] = None
     due_date: Optional[str] = None
     tags: Optional[List[str]] = None
+    labels: Optional[List[str]] = None
+    checklist: Optional[List[dict]] = None
 
 class CheckInCreate(BaseModel):
     member_id: Optional[str] = None
@@ -147,6 +165,8 @@ class CheckInCreate(BaseModel):
     event_id: Optional[str] = None
     event_name: Optional[str] = None
     method: str = "manual"
+    pin: Optional[str] = None
+    location_id: Optional[str] = None
 
 class VenueCreate(BaseModel):
     name: str
@@ -155,6 +175,7 @@ class VenueCreate(BaseModel):
     description: Optional[str] = None
     hourly_rate: Optional[float] = None
     available: bool = True
+    location_id: Optional[str] = None
 
 class VenueUpdate(BaseModel):
     name: Optional[str] = None
@@ -163,6 +184,7 @@ class VenueUpdate(BaseModel):
     description: Optional[str] = None
     hourly_rate: Optional[float] = None
     available: Optional[bool] = None
+    location_id: Optional[str] = None
 
 class PublicBookingCreate(BaseModel):
     name: str

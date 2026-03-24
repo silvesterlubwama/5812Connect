@@ -66,6 +66,7 @@ const NAV_SECTIONS = [
   {
     label: 'Admin',
     items: [
+      { to: '/admin', icon: Shield, labelKey: 'nav.admin', adminOnly: true },
       { to: '/locations', icon: MapPin, labelKey: 'nav.locations', adminOnly: true },
       { to: '/audit', icon: Shield, labelKey: 'nav.audit', adminOnly: true },
       { to: '/settings', icon: Settings, labelKey: 'nav.settings' },

@@ -58,13 +58,19 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-async def _audit(user_id: str, action: str, resource_type: str, resource_id: str, details: str = ""):
-    await db.audit_logs.insert_one({
-        "id": f"audit_{str(uuid.uuid4())[:8]}",
-        "user_id": user_id, "action": action,
-        "resource_type": resource_type, "resource_id": resource_id,
-        "details": details, "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
+async def _audit(user_id: str, action: str, resource: str, resource_id: str = None, details: dict = None):
+    try:
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "action": action,
+            "resource": resource,
+            "resource_id": resource_id,
+            "details": details or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
 
 
 # ---- RBAC HELPERS ----
