@@ -6,7 +6,7 @@ import {
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
-  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff
+  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -25,6 +25,7 @@ const NAV_SECTIONS = [
     label: null,
     items: [
       { to: '/dashboard', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
+      { to: '/portal', icon: CircleUser, labelKey: 'nav.portal' },
     ]
   },
   {

@@ -333,3 +333,20 @@ export const nfcApi = {
   register: (data) => api.post('/nfc/register', data),
   scan: (data) => api.post('/nfc/scan', data),
 };
+
+// ---- PORTAL (SELF-SERVICE) ----
+export const portalApi = {
+  dashboard: () => api.get('/portal/dashboard'),
+  profile: () => api.get('/portal/profile'),
+  updateProfile: (data) => api.put('/portal/profile', data),
+  tasks: (params) => api.get('/portal/tasks', { params }),
+  updateTaskStatus: (id, status) => api.put(`/portal/tasks/${id}/status`, { status }),
+  expenses: () => api.get('/portal/expenses'),
+  createExpense: (data) => api.post('/portal/expenses', data),
+  cashRequest: (data) => api.post('/portal/cash-request', data),
+  events: () => api.get('/portal/events'),
+  rsvpEvent: (id) => api.post(`/portal/events/${id}/rsvp`),
+  checkins: () => api.get('/portal/checkins'),
+  documents: () => api.get('/portal/documents'),
+  sales: () => api.get('/portal/sales'),
+};

@@ -34,6 +34,14 @@ import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
 import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
+import PortalLayout from './components/PortalLayout';
+import PortalDashboard from './pages/PortalDashboard';
+import PortalTasks from './pages/PortalTasks';
+import PortalExpenses from './pages/PortalExpenses';
+import PortalEvents from './pages/PortalEvents';
+import PortalProfile from './pages/PortalProfile';
+import PortalDocuments from './pages/PortalDocuments';
+import PortalSales from './pages/PortalSales';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -81,6 +89,17 @@ function AppRoutes() {
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="access" element={<AccessPage />} />
         <Route path="reports" element={<ReportsPage />} />
+      </Route>
+      {/* Staff/Member Self-Service Portal */}
+      <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
+        <Route index element={<PortalDashboard />} />
+        <Route path="tasks" element={<PortalTasks />} />
+        <Route path="chat" element={<CommsPage />} />
+        <Route path="expenses" element={<PortalExpenses />} />
+        <Route path="events" element={<PortalEvents />} />
+        <Route path="sales" element={<PortalSales />} />
+        <Route path="documents" element={<PortalDocuments />} />
+        <Route path="profile" element={<PortalProfile />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

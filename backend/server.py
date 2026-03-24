@@ -1934,6 +1934,7 @@ try:
     from routers.auth import router as auth_router
     from routers.members import router as members_router
     from routers.import_csv import router as import_csv_router
+    from routers.portal import router as portal_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -1943,6 +1944,7 @@ try:
     app.include_router(auth_router)
     app.include_router(members_router)
     app.include_router(import_csv_router)
+    app.include_router(portal_router)
     logger.info("Modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
