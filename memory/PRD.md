@@ -10,6 +10,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - Real CSV file upload functionality
 - Internal document storage for ID scans
 - Advanced reporting dashboard with exportable PDFs
+- Staff/Member Self-Service Portal (tasks, expenses, chat, cash requests, events)
 
 ## Tech Stack
 - **Frontend**: React, Tailwind CSS, Shadcn/UI, PWA (Service Workers, Background Sync), Context API
@@ -20,7 +21,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 ## Architecture
 ```
 /app/backend/
-  server.py          — Core app (events, tasks, financial, push, biometric, NFC, kiosk, chat)
+  server.py          — Core (events, tasks, financial, push, biometric, NFC, kiosk, chat, search, analytics)
   deps.py            — Shared auth, RBAC, DB, helpers
   models.py          — Shared Pydantic models
   storage.py         — File storage logic
@@ -28,6 +29,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
     auth.py          — Auth (login, register, password reset, Google SSO)
     members.py       — Members, families, children, guests, badges, approvals
     import_csv.py    — CSV file upload import
+    portal.py        — Staff/Member Self-Service Portal endpoints
     access.py        — Access control (locations, guest requests, scan)
     bookings.py      — Public bookings, space bookings
     documents.py     — Internal document storage
@@ -39,9 +41,9 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
   src/
     context/         — AuthContext, WebSocketContext, I18nContext
     i18n/            — Translation JSON files (en, lg, sw, th, ht, es, fr)
-    pages/           — All page components
-    components/      — Layout, UI components
-    services/api.js  — API client
+    components/      — Layout, PortalLayout, UI components
+    pages/           — All pages including Portal (Dashboard, Tasks, Expenses, Events, Profile, Sales, Documents)
+    services/api.js  — API client with portalApi
 ```
 
 ## DB Collections
@@ -73,16 +75,21 @@ files, audit_log, password_resets, outreach_programs, app_settings
 - [x] Multi-language support (7 languages: EN, LG, SW, TH, HT, ES, FR)
 - [x] Web Push notifications via pywebpush (VAPID keys generated)
 - [x] Biometric/NFC scanning UI (Kiosk + Access pages)
-- [x] NFC/Biometric backend endpoints
 - [x] Push notification toggle in Settings
 - [x] Server refactoring (auth, members, imports extracted to routers)
-- [x] Outreach programs module
-- [x] Badge system
-- [x] Analytics/attendance tracking
-- [x] Password reset flow (with email)
+- [x] **Staff/Member Self-Service Portal** with:
+  - Portal Dashboard (overview stats: tasks, expenses, events, messages)
+  - My Tasks (Kanban: view + update status of assigned tasks)
+  - Chat (full messaging in portal context)
+  - Expenses (submit expenses, view history, track status)
+  - Cash Requests (submit via chat, auto-notify admins)
+  - Events (view upcoming, RSVP)
+  - My Sales (view sales created by user)
+  - Documents (view own documents)
+  - Profile (view/edit personal info, check-in history)
 
-## Backlog
+## Backlog (P2)
 - [ ] SMS notification integration via Twilio
 - [ ] Further server.py refactoring (extract events, tasks, financial, chat into routers)
-- [ ] End-to-end WebAuthn biometric authentication (currently placeholder UI)
+- [ ] End-to-end WebAuthn biometric authentication
 - [ ] Real NFC Web API integration for physical tag reads
