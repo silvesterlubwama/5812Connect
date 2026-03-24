@@ -137,8 +137,8 @@ export default function UnifiedPeoplePage() {
   const [bulkActionType, setBulkActionType] = useState('');
   const [bulkRole, setBulkRole] = useState('');
 
-  // Inline edit for members
-  const [editMember, setEditMember] = useState(null);
+  // Track default tab when opening member view
+  const [defaultMemberTab, setDefaultMemberTab] = useState('info');
   const [editMemberForm, setEditMemberForm] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -459,7 +459,7 @@ export default function UnifiedPeoplePage() {
           ) : (
             <div className="space-y-2">
               {filteredMembers.map(m => (
-                <Card key={m.id} className={`shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors ${selectedMemberIds.has(m.id) ? 'ring-2 ring-primary/30' : ''}`} onClick={() => handleViewMember(m)} data-testid={`member-card-${m.id}`}>
+                <Card key={m.id} className={`shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors ${selectedMemberIds.has(m.id) ? 'ring-2 ring-primary/30' : ''}`} onClick={() => { setDefaultMemberTab('info'); handleViewMember(m); }} data-testid={`member-card-${m.id}`}>
                   <CardContent className="p-3 flex items-center gap-3">
                     <Checkbox checked={selectedMemberIds.has(m.id)} onCheckedChange={() => toggleMemberSelect(m.id)} onClick={e => e.stopPropagation()} data-testid={`select-member-${m.id}`} />
                     <Avatar className="h-10 w-10"><AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(m.name)}</AvatarFallback></Avatar>
@@ -475,7 +475,7 @@ export default function UnifiedPeoplePage() {
                     <Badge className={`text-[10px] ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{m.status || 'active'}</Badge>
                     {isCoordinator && (
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={e => openEditMember(m, e)} title="Edit"><Eye size={13} /></Button>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
                         <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>
                       </div>
                     )}
@@ -597,11 +597,11 @@ export default function UnifiedPeoplePage() {
       </Dialog>
 
       {/* MEMBER DETAIL DIALOG */}
-      <Dialog open={!!selectedMember} onOpenChange={(o) => { if (!o) { setSelectedMember(null); setMemberDetail(null); } }}>
+      <Dialog open={!!selectedMember} onOpenChange={(o) => { if (!o) { setSelectedMember(null); setMemberDetail(null); setDefaultMemberTab('info'); } }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle></DialogHeader>
           {memberDetail && (
-            <Tabs defaultValue="info">
+            <Tabs defaultValue={defaultMemberTab} key={defaultMemberTab}>
               <TabsList><TabsTrigger value="info">Info</TabsTrigger>{isCoordinator && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
               <TabsContent value="info" className="space-y-4 mt-3">
                 <div className="grid grid-cols-2 gap-3 text-sm">

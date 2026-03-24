@@ -89,14 +89,16 @@ files, document_requests, audit_log, password_resets, outreach_programs, app_set
 - [x] Resource type management
 - [x] Event type management, duplication, recurring, internal/external, free/paid
 - [x] **Admin full profile edit** — merged users+members in one 4-tab dialog (Profile/Account/Flags/Documents)
+- [x] **Admin/Manager profile editing from People page** — checkboxes on member cards, bulk action bar, Edit Profile tab in member detail dialog (pre-filled MemberForm), inline edit flow
+- [x] **Children editing** — Edit button on child cards, full edit dialog (name, DOB, gender, family, class, allergies)
+- [x] **Bulk selection (People page)** — checkboxes per member, select-all, bulk action bar (activate/deactivate/change role/delete)
 - [x] **Document workflow** — self-upload by member (portal), admin/HR requests docs from members, 11 ID types
 - [x] **Badge printing** — CR80 badge with company logo, print via window.open()
 - [x] **Scanner integration** — Web Bluetooth/USB Serial with graceful fallback to file upload
 - [x] Footer updated to "Central System" (was "Uganda CRM System")
 
-## Backlog (P0 — High Priority)
-- [ ] Real WebAuthn Biometric API (Passkey/FIDO2) for passwordless login
-- [ ] Real NDEFReader NFC Web API for physical NFC tag reads
+- [x] **WebAuthn Passkey/FIDO2** — register/authenticate endpoints (webauthn.py), Settings Security tab with Add Passkey button, Login page passkey sign-in button; RP ID derived from client-passed hostname
+- [x] **NFC Check-in via NDEFReader** — NFC button in CheckInsPage, NDEFReader scan dialog, graceful fallback for unsupported browsers, confirms check-in on tag read
 
 ## Backlog (P2 — Low Priority)
 - [ ] SMS notification integration via Twilio
