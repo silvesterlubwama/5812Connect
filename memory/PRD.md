@@ -97,7 +97,9 @@ files, document_requests, audit_log, password_resets, outreach_programs, app_set
 - [x] **Scanner integration** — Web Bluetooth/USB Serial with graceful fallback to file upload
 - [x] Footer updated to "Central System" (was "Uganda CRM System")
 
-- [x] **WebAuthn Passkey/FIDO2** — register/authenticate endpoints (webauthn.py), Settings Security tab with Add Passkey button, Login page passkey sign-in button; RP ID derived from client-passed hostname
+- [x] **Family display fix** — DB migrated: 65 families now have `family_name` field (was `name`); families show correctly in Families tab
+- [x] **Children-parent import fixed** — children go to `db.children`, parents to `db.members`, families use `family_name` field, full dedup by name+phone
+- [x] **Kanban → Full Trello-like rewrite** — Boards (one per location), horizontal scrollable lists, drag-&-drop cards, card detail dialog (labels/checklist/priority/due date/assignee), Trello JSON import, RBAC visibility by location
 - [x] **NFC Check-in via NDEFReader** — NFC button in CheckInsPage, NDEFReader scan dialog, graceful fallback for unsupported browsers, confirms check-in on tag read
 
 ## Backlog (P2 — Low Priority)
