@@ -670,6 +670,12 @@ export default function AdminPage() {
 // ===== BADGE PRINT COMPONENT =====
 function BadgePrintView({ user, onClose }) {
   const badgeRef = useRef(null);
+  const [btStatus, setBtStatus] = useState('idle'); // idle | connecting | connected | error
+  const [btDevice, setBtDevice] = useState(null);
+  const [showZpl, setShowZpl] = useState(false);
+
+  const initials = user.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'XX';
+  const memberId = user.id?.slice(-8).toUpperCase() || 'N/A';
 
   const printBadge = () => {
     const printContents = badgeRef.current?.innerHTML;
@@ -682,16 +688,6 @@ function BadgePrintView({ user, onClose }) {
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; }
             .badge { width: 3.375in; height: 2.125in; border: 2px solid #1a1a2e; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-            .badge-header { background: #1a1a2e; padding: 8px 12px; display: flex; align-items: center; gap: 8px; }
-            .badge-header img { height: 22px; filter: brightness(0) invert(1); }
-            .badge-header-text { color: white; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; }
-            .badge-body { flex: 1; padding: 10px 14px; display: flex; align-items: center; gap: 12px; }
-            .badge-avatar { width: 48px; height: 48px; border-radius: 50%; background: #e8e8f0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: #1a1a2e; border: 2px solid #1a1a2e; flex-shrink: 0; }
-            .badge-info { flex: 1; }
-            .badge-name { font-size: 14px; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
-            .badge-role { font-size: 10px; color: #555; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.8px; }
-            .badge-id { font-size: 9px; color: #888; margin-top: 6px; }
-            .badge-footer { background: #f0f0f0; padding: 5px 12px; text-align: center; font-size: 8px; color: #666; border-top: 1px solid #ddd; }
             @media print { body { height: auto; } .badge { box-shadow: none; } }
           </style>
         </head>
@@ -702,20 +698,62 @@ function BadgePrintView({ user, onClose }) {
     setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
   };
 
-  const initials = user.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'XX';
-  const memberId = user.id?.slice(-8).toUpperCase() || 'N/A';
+  // Generate ZPL for Zebra label printers (2.125" × 3.375" landscape label)
+  const generateZpl = () => {
+    const nameLines = (user.name || '').split(' ');
+    const firstName = nameLines[0] || '';
+    const lastName = nameLines.slice(1).join(' ') || '';
+    return `^XA
+^FO20,20^A0N,28,28^FD58:12 Global Connect^FS
+^FO20,55^A0N,18,18^FDCENTRAL SYSTEM^FS
+^FO20,90^A0N,36,36^FD${firstName}^FS
+^FO20,130^A0N,36,36^FD${lastName}^FS
+^FO20,175^A0N,22,22^FD${(user.role || '').toUpperCase()}^FS
+^FO20,205^A0N,18,18^FDID: ${memberId}^FS
+^FO20,230^GB570,2,2^FS
+^FO20,238^A0N,16,16^FD58:12 Global · ${new Date().getFullYear()}^FS
+^XZ`;
+  };
+
+  const connectBluetooth = async () => {
+    if (!navigator.bluetooth) {
+      toast.error('Web Bluetooth is not supported in this browser. Use Chrome or Edge on desktop.');
+      return;
+    }
+    setBtStatus('connecting');
+    try {
+      // Generic access profile — works with most BLE-capable printers
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [
+          '000018f0-0000-1000-8000-00805f9b34fb', // Generic Printer Service
+          '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC BLE UART service (common in thermal printers)
+          '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART
+        ],
+      });
+      setBtDevice(device);
+      setBtStatus('connected');
+      toast.success(`Connected: ${device.name || 'Bluetooth Printer'}. Use the ZPL code to print via your printer's software.`);
+    } catch (err) {
+      if (err.name !== 'NotFoundError') {
+        setBtStatus('error');
+        toast.error(`Bluetooth error: ${err.message}`);
+      } else {
+        setBtStatus('idle');
+      }
+    }
+  };
+
+  const zpl = generateZpl();
 
   return (
     <div className="space-y-4">
       {/* Preview */}
       <div ref={badgeRef}>
-        <div className="badge" style={{ width: '324px', height: '204px', border: '2px solid #1a1a2e', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', boxShadow: '0 2px 8px rgba(0,0,0,0.15)', margin: '0 auto' }}>
+        <div style={{ width: '324px', height: '204px', border: '2px solid #1a1a2e', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', boxShadow: '0 2px 8px rgba(0,0,0,0.15)', margin: '0 auto' }}>
           <div style={{ background: '#1a1a2e', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <img
-              src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1"
-              alt="58:12 Global"
-              style={{ height: '20px', filter: 'brightness(0) invert(1)' }}
-            />
+            <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global"
+              style={{ height: '20px', filter: 'brightness(0) invert(1)' }} />
             <span style={{ color: 'white', fontSize: '9px', fontWeight: 600, letterSpacing: '0.5px', marginLeft: 'auto' }}>CENTRAL SYSTEM</span>
           </div>
           <div style={{ flex: 1, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -737,12 +775,37 @@ function BadgePrintView({ user, onClose }) {
 
       <p className="text-xs text-muted-foreground text-center">Badge preview (3.375" × 2.125" — CR80 card size)</p>
 
-      <div className="flex gap-3">
-        <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
-        <Button className="flex-1 gap-2" onClick={printBadge} data-testid="print-badge-btn">
-          <Printer size={14} /> Print Badge
+      {/* Printer Options */}
+      <div className="grid grid-cols-3 gap-2">
+        <Button className="gap-1.5 text-xs" onClick={printBadge} data-testid="print-badge-btn">
+          <Printer size={13} /> Browser Print
+        </Button>
+        <Button variant="outline" className="gap-1.5 text-xs"
+          onClick={connectBluetooth}
+          disabled={btStatus === 'connecting'}>
+          <Bluetooth size={13} className={btStatus === 'connected' ? 'text-blue-500' : ''} />
+          {btStatus === 'connecting' ? 'Connecting...' : btStatus === 'connected' ? `${btDevice?.name?.slice(0,10) || 'Connected'}` : 'Bluetooth'}
+        </Button>
+        <Button variant="outline" className="gap-1.5 text-xs" onClick={() => setShowZpl(!showZpl)}>
+          <Monitor size={13} /> ZPL Code
         </Button>
       </div>
+
+      {showZpl && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium">ZPL for Zebra Printers</p>
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1"
+              onClick={() => { navigator.clipboard.writeText(zpl); toast.success('ZPL copied to clipboard'); }}>
+              Copy
+            </Button>
+          </div>
+          <pre className="text-[10px] bg-muted p-3 rounded-lg overflow-x-auto text-muted-foreground font-mono leading-relaxed">{zpl}</pre>
+          <p className="text-xs text-muted-foreground">Send this ZPL code to your networked Zebra printer via its web interface or Zebra Designer software.</p>
+        </div>
+      )}
+
+      <Button variant="ghost" className="w-full text-sm" onClick={onClose}>Close</Button>
     </div>
   );
 }

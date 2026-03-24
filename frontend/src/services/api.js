@@ -357,12 +357,24 @@ export const boardsApi = {
   addList: (boardId, data) => api.post(`/boards/${boardId}/lists`, data),
   updateList: (boardId, listId, data) => api.put(`/boards/${boardId}/lists/${listId}`, data),
   deleteList: (boardId, listId) => api.delete(`/boards/${boardId}/lists/${listId}`),
+  archiveList: (boardId, listId) => api.post(`/boards/${boardId}/lists/${listId}/archive`),
+  restoreList: (boardId, listId) => api.post(`/boards/${boardId}/lists/${listId}/restore`),
+  archivedLists: (boardId) => api.get(`/boards/${boardId}/lists/archived`),
   reorderLists: (boardId, listIds) => api.post(`/boards/${boardId}/lists/reorder`, { list_ids: listIds }),
   // Trello import
   importTrello: (data) => api.post('/boards/import-trello', data),
   // Tasks (filtered)
   tasks: (boardId, listId) => api.get('/tasks', { params: { board_id: boardId, list_id: listId } }),
   moveTask: (taskId, data) => api.patch(`/tasks/${taskId}/move`, data),
+};
+
+// ---- TASKS EXTENDED ----
+export const tasksExtApi = {
+  archive: (id) => api.post(`/tasks/${id}/archive`),
+  restore: (id) => api.post(`/tasks/${id}/restore`),
+  archived: (boardId) => api.get('/tasks/archived', { params: { board_id: boardId } }),
+  uploadAttachment: (taskId, formData) => api.post(`/tasks/${taskId}/attachments`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteAttachment: (taskId, attId) => api.delete(`/tasks/${taskId}/attachments/${attId}`),
 };
 export const biometricApi = {
   register: (data) => api.post('/biometric/register', data),

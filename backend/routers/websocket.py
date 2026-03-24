@@ -10,6 +10,9 @@ from deps import db
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ── Board room presence ─────────────────────────────────────────────────────
+board_rooms: Dict[str, set] = {}   # board_id → {user_id, ...}
+
 
 class ConnectionManager:
     """Manages WebSocket connections per user"""
@@ -28,6 +31,11 @@ class ConnectionManager:
             self.active_connections[user_id] = [ws for ws in self.active_connections[user_id] if ws != websocket]
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
+        # Remove from all board rooms on disconnect
+        for board_id in list(board_rooms.keys()):
+            board_rooms[board_id].discard(user_id)
+            if not board_rooms[board_id]:
+                del board_rooms[board_id]
         logger.info(f"WS disconnected: {user_id}")
 
     async def send_to_user(self, user_id: str, message: dict):
@@ -61,8 +69,18 @@ class ConnectionManager:
         for uid in dead_users:
             del self.active_connections[uid]
 
+    async def broadcast_to_board(self, board_id: str, message: dict, exclude_user: str = None):
+        """Send a message to all users currently viewing a board"""
+        viewers = board_rooms.get(board_id, set())
+        for uid in list(viewers):
+            if uid != exclude_user:
+                await self.send_to_user(uid, message)
+
     def get_online_users(self) -> List[str]:
         return list(self.active_connections.keys())
+
+    def get_board_viewers(self, board_id: str) -> List[str]:
+        return list(board_rooms.get(board_id, set()))
 
 
 manager = ConnectionManager()
@@ -91,6 +109,37 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
+
+                elif msg_type == "join_board":
+                    board_id = msg.get("board_id")
+                    if board_id:
+                        if board_id not in board_rooms:
+                            board_rooms[board_id] = set()
+                        board_rooms[board_id].add(user_id)
+                        viewers = list(board_rooms[board_id])
+                        await websocket.send_json({
+                            "type": "board_presence",
+                            "board_id": board_id,
+                            "viewers": viewers,
+                        })
+                        await manager.broadcast_to_board(board_id, {
+                            "type": "board_presence",
+                            "board_id": board_id,
+                            "viewers": viewers,
+                        }, exclude_user=user_id)
+
+                elif msg_type == "leave_board":
+                    board_id = msg.get("board_id")
+                    if board_id and board_id in board_rooms:
+                        board_rooms[board_id].discard(user_id)
+                        if not board_rooms[board_id]:
+                            del board_rooms[board_id]
+                        else:
+                            await manager.broadcast_to_board(board_id, {
+                                "type": "board_presence",
+                                "board_id": board_id,
+                                "viewers": list(board_rooms[board_id]),
+                            })
 
                 elif msg_type == "typing":
                     conv_id = msg.get("conversation_id")

@@ -127,3 +127,4 @@ websockets==16.0
 yarl==1.23.0
 zipp==3.23.0
 webauthn==2.7.1
+httpx==0.28.1

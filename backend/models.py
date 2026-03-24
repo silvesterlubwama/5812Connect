@@ -142,13 +142,17 @@ class TaskCreate(BaseModel):
     status: str = "todo"
     priority: str = "medium"
     assignee: Optional[str] = None
+    assignees: Optional[List[str]] = []
     due_date: Optional[str] = None
     tags: Optional[List[str]] = []
     labels: Optional[List[dict]] = []
     checklist: Optional[List[dict]] = []
+    attachments: Optional[List[dict]] = []
     board_id: Optional[str] = None
     list_id: Optional[str] = None
+    list_name: Optional[str] = None
     position: Optional[int] = 0
+    is_archived: bool = False
 
 
 class TaskUpdate(BaseModel):
@@ -157,13 +161,17 @@ class TaskUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     assignee: Optional[str] = None
+    assignees: Optional[List[str]] = None
     due_date: Optional[str] = None
     tags: Optional[List[str]] = None
     labels: Optional[List[dict]] = None
     checklist: Optional[List[dict]] = None
+    attachments: Optional[List[dict]] = None
     board_id: Optional[str] = None
     list_id: Optional[str] = None
+    list_name: Optional[str] = None
     position: Optional[int] = None
+    is_archived: Optional[bool] = None
 
 class CheckInCreate(BaseModel):
     member_id: Optional[str] = None

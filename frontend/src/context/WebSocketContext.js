@@ -36,6 +36,14 @@ export const WebSocketProvider = ({ children }) => {
     send({ type: 'read_receipt', conversation_id: conversationId, message_id: messageId });
   }, [send]);
 
+  const joinBoard = useCallback((boardId) => {
+    send({ type: 'join_board', board_id: boardId });
+  }, [send]);
+
+  const leaveBoard = useCallback((boardId) => {
+    send({ type: 'leave_board', board_id: boardId });
+  }, [send]);
+
   const connect = useCallback(() => {
     if (!user?.id || isConnecting.current) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -164,7 +172,7 @@ export const WebSocketProvider = ({ children }) => {
   }, []);
 
   return (
-    <WebSocketContext.Provider value={{ onlineUsers, typingUsers, send, sendTyping, sendChatMessage: sendChatMessageWithFallback, sendReadReceipt, addListener, subscribePush, queueOfflineMessage }}>
+    <WebSocketContext.Provider value={{ onlineUsers, typingUsers, send, sendTyping, sendChatMessage: sendChatMessageWithFallback, sendReadReceipt, addListener, subscribePush, queueOfflineMessage, joinBoard, leaveBoard }}>
       {children}
     </WebSocketContext.Provider>
   );
@@ -172,6 +180,6 @@ export const WebSocketProvider = ({ children }) => {
 
 export const useWebSocket = () => {
   const ctx = useContext(WebSocketContext);
-  if (!ctx) return { onlineUsers: [], typingUsers: {}, send: () => {}, sendTyping: () => {}, sendChatMessage: () => {}, sendReadReceipt: () => {}, addListener: () => () => {}, subscribePush: () => {}, queueOfflineMessage: () => {} };
+  if (!ctx) return { onlineUsers: [], typingUsers: {}, send: () => {}, sendTyping: () => {}, sendChatMessage: () => {}, sendReadReceipt: () => {}, addListener: () => () => {}, subscribePush: () => {}, queueOfflineMessage: () => {}, joinBoard: () => {}, leaveBoard: () => {} };
   return ctx;
 };

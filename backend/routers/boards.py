@@ -20,11 +20,24 @@ async def _can_access_board(board: dict, user: dict) -> bool:
         return True
     if board.get("location_id") and user.get("location_id") == board["location_id"]:
         return True
-    # Managers/Coordinators see boards for their location
     role = (user.get("role") or "").lower()
     if role in {"manager", "coordinator", "staff", "hr"}:
         return board.get("location_id") == user.get("location_id") or not board.get("location_id")
     return False
+
+
+async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_user: str = None):
+    """Lazily import manager to avoid circular deps and broadcast a board event."""
+    try:
+        from routers.websocket import manager
+        await manager.broadcast_to_board(board_id, {
+            "type": "board_event",
+            "board_id": board_id,
+            "action": action,
+            **payload,
+        }, exclude_user=exclude_user)
+    except Exception as e:
+        logger.warning(f"WS broadcast failed: {e}")
 
 
 # =================== BOARDS ===================
@@ -41,10 +54,9 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
             query = {"is_global": True}
         boards = await db.boards.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
 
-    # Attach list counts
     for b in boards:
         b["list_count"] = await db.board_lists.count_documents({"board_id": b["id"]})
-        b["card_count"] = await db.tasks.count_documents({"board_id": b["id"]})
+        b["card_count"] = await db.tasks.count_documents({"board_id": b["id"], "is_archived": {"$ne": True}})
     return boards
 
 
@@ -65,7 +77,6 @@ async def create_board(data: dict, current_user: dict = Depends(get_current_user
     await db.boards.insert_one(board)
     board.pop("_id", None)
 
-    # Auto-create default lists
     default_lists = data.get("default_lists", ["To Do", "In Progress", "Done"])
     for i, list_name in enumerate(default_lists):
         await db.board_lists.insert_one({
@@ -83,7 +94,7 @@ async def create_board(data: dict, current_user: dict = Depends(get_current_user
 
 @router.get("/boards/{board_id}")
 async def get_board(board_id: str, current_user: dict = Depends(get_current_user)):
-    """Get board with its lists"""
+    """Get board with its active lists"""
     board = await db.boards.find_one({"id": board_id}, {"_id": 0})
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
@@ -124,7 +135,6 @@ async def add_list(board_id: str, data: dict, current_user: dict = Depends(get_c
     board = await db.boards.find_one({"id": board_id})
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
-    # Get max position
     last = await db.board_lists.find_one({"board_id": board_id}, {"_id": 0, "position": 1}, sort=[("position", -1)])
     pos = (last["position"] + 1) if last else 0
     lst = {
@@ -138,6 +148,7 @@ async def add_list(board_id: str, data: dict, current_user: dict = Depends(get_c
     }
     await db.board_lists.insert_one(lst)
     lst.pop("_id", None)
+    await _broadcast_board(board_id, "list_created", {"list": lst}, exclude_user=current_user["id"])
     return lst
 
 
@@ -147,23 +158,58 @@ async def update_list(board_id: str, list_id: str, data: dict, current_user: dic
     update = {k: v for k, v in data.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.board_lists.update_one({"id": list_id, "board_id": board_id}, {"$set": update})
-    return await db.board_lists.find_one({"id": list_id}, {"_id": 0})
+    lst = await db.board_lists.find_one({"id": list_id}, {"_id": 0})
+    await _broadcast_board(board_id, "list_updated", {"list_id": list_id, "list": lst}, exclude_user=current_user["id"])
+    return lst
+
+
+@router.post("/boards/{board_id}/lists/{list_id}/archive")
+async def archive_list(board_id: str, list_id: str, current_user: dict = Depends(get_current_user)):
+    """Archive a list (soft delete — hidden from active board, cards preserved)"""
+    await db.board_lists.update_one(
+        {"id": list_id, "board_id": board_id},
+        {"$set": {"is_archived": True, "archived_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    await _broadcast_board(board_id, "list_archived", {"list_id": list_id}, exclude_user=current_user["id"])
+    return {"message": "List archived"}
+
+
+@router.post("/boards/{board_id}/lists/{list_id}/restore")
+async def restore_list(board_id: str, list_id: str, current_user: dict = Depends(get_current_user)):
+    """Restore an archived list back to the active board"""
+    await db.board_lists.update_one(
+        {"id": list_id, "board_id": board_id},
+        {"$set": {"is_archived": False}, "$unset": {"archived_at": ""}}
+    )
+    lst = await db.board_lists.find_one({"id": list_id}, {"_id": 0})
+    await _broadcast_board(board_id, "list_restored", {"list_id": list_id, "list": lst}, exclude_user=current_user["id"])
+    return lst
+
+
+@router.get("/boards/{board_id}/lists/archived")
+async def get_archived_lists(board_id: str, current_user: dict = Depends(get_current_user)):
+    """Get all archived lists for a board"""
+    lists = await db.board_lists.find(
+        {"board_id": board_id, "is_archived": True}, {"_id": 0}
+    ).sort("archived_at", -1).to_list(100)
+    return lists
 
 
 @router.delete("/boards/{board_id}/lists/{list_id}")
 async def delete_list(board_id: str, list_id: str, current_user: dict = Depends(get_current_user)):
-    # Move cards from this list to first remaining list
     await db.tasks.update_many({"board_id": board_id, "list_id": list_id}, {"$unset": {"list_id": ""}})
     await db.board_lists.delete_one({"id": list_id, "board_id": board_id})
+    await _broadcast_board(board_id, "list_deleted", {"list_id": list_id}, exclude_user=current_user["id"])
     return {"message": "List deleted"}
 
 
 @router.post("/boards/{board_id}/lists/reorder")
 async def reorder_lists(board_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """data: {"list_ids": ["list_a", "list_b", ...]} — new order"""
     for i, lid in enumerate(data.get("list_ids", [])):
         await db.board_lists.update_one({"id": lid, "board_id": board_id}, {"$set": {"position": i}})
+    await _broadcast_board(board_id, "lists_reordered", {"list_ids": data.get("list_ids", [])}, exclude_user=current_user["id"])
     return {"message": "Reordered"}
 
 
@@ -171,16 +217,17 @@ async def reorder_lists(board_id: str, data: dict, current_user: dict = Depends(
 
 @router.post("/boards/import-trello")
 async def import_trello_board(data: dict, current_user: dict = Depends(get_current_user)):
-    """Full Trello board JSON import — creates board + lists + cards"""
+    """Full Trello board JSON import — creates board + lists + cards + attachments"""
+    import asyncio
+    import httpx
+
     board_name = data.get("name", "Imported Board")
-    location_id = data.get("location_id")  # optional: assign to a location
+    location_id = data.get("location_id")
     lists_raw = [l for l in data.get("lists", []) if not l.get("closed", False)]
     cards_raw = [c for c in data.get("cards", []) if not c.get("closed", False)]
     checklists_raw = data.get("checklists", [])
-    attachments_raw = data.get("attachments", [])
     labels_raw = data.get("labels", [])
 
-    # Create board
     board_id = f"board_{str(uuid.uuid4())[:8]}"
     board_doc = {
         "id": board_id,
@@ -196,8 +243,7 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
     }
     await db.boards.insert_one(board_doc)
 
-    # Create lists
-    list_id_map = {}  # trello list id → our list id
+    list_id_map = {}
     for i, lst in enumerate(sorted(lists_raw, key=lambda x: x.get("pos", 0))):
         new_list_id = f"list_{str(uuid.uuid4())[:8]}"
         list_doc = {
@@ -212,34 +258,25 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
         await db.board_lists.insert_one(list_doc)
         list_id_map[lst["id"]] = new_list_id
 
-    # Build checklist map
-    checklist_map = {}
-    for cl in checklists_raw:
-        checklist_map[cl["id"]] = cl
-
-    # Build label map
+    checklist_map = {cl["id"]: cl for cl in checklists_raw}
     label_map = {}
     for lbl in labels_raw:
         if lbl.get("id"):
             label_map[lbl["id"]] = {"name": lbl.get("name", ""), "color": lbl.get("color", "")}
 
-    # Create cards (tasks)
     imported = 0
     for card in sorted(cards_raw, key=lambda x: x.get("pos", 0)):
         trello_list_id = card.get("idList", "")
         list_id = list_id_map.get(trello_list_id)
 
-        # Labels
         labels = []
         for lbl in card.get("labels", []):
             if isinstance(lbl, dict):
                 labels.append({"name": lbl.get("name", lbl.get("color", "")), "color": lbl.get("color", "")})
-        # Also resolve from idLabels
         for lbl_id in card.get("idLabels", []):
             if lbl_id in label_map and not any(l.get("name") == label_map[lbl_id]["name"] for l in labels):
                 labels.append(label_map[lbl_id])
 
-        # Checklists
         checklist_items = []
         for cl_id in card.get("idChecklists", []):
             cl = checklist_map.get(cl_id, {})
@@ -249,21 +286,49 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
                     "completed": item.get("state", "") == "complete",
                 })
 
-        # Members/assignees
         assignees = card.get("idMembers", [])
 
-        # Determine status from list name
-        list_name = ""
-        for lst in lists_raw:
-            if lst["id"] == trello_list_id:
-                list_name = lst.get("name", "")
-                break
+        list_name = next((lst.get("name", "") for lst in lists_raw if lst["id"] == trello_list_id), "")
         status_map = {
             "to do": "todo", "todo": "todo", "backlog": "todo",
-            "in progress": "in-progress", "doing": "in-progress", "in-progress": "in-progress",
+            "in progress": "in-progress", "doing": "in-progress",
             "done": "done", "complete": "done", "completed": "done",
         }
         status = status_map.get(list_name.lower().strip(), "todo")
+
+        # Parse attachments — store URL + metadata; attempt to download small images
+        attachments = []
+        for att in card.get("attachments", []):
+            att_url = att.get("url", "")
+            att_name = att.get("name", "") or att.get("fileName", "") or "attachment"
+            att_mime = att.get("mimeType", "")
+            att_bytes = att.get("bytes")
+            att_is_upload = att.get("isUpload", False)
+
+            attachment_doc = {
+                "id": f"att_{str(uuid.uuid4())[:8]}",
+                "name": att_name,
+                "url": att_url,
+                "mime_type": att_mime,
+                "source": "trello",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Attempt to copy to our storage for small files (<10MB) with direct URLs
+            if att_url and att_bytes and int(att_bytes or 0) < 10 * 1024 * 1024:
+                try:
+                    from storage import put_object, init_storage
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        resp = await client.get(att_url)
+                        if resp.status_code == 200:
+                            storage_path = f"card-attachments/{board_id}/{str(uuid.uuid4())[:8]}_{att_name}"
+                            put_object(storage_path, resp.content, att_mime or "application/octet-stream")
+                            attachment_doc["storage_path"] = storage_path
+                            attachment_doc["copied"] = True
+                except Exception as e:
+                    logger.warning(f"Could not copy Trello attachment: {e}")
+
+            attachments.append(attachment_doc)
 
         task = {
             "id": f"task_{str(uuid.uuid4())[:8]}",
@@ -280,10 +345,12 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
             "labels": labels,
             "tags": [l.get("name") or l.get("color", "") for l in labels][:5],
             "checklist": checklist_items,
+            "attachments": attachments,
             "trello_id": card.get("id"),
             "position": card.get("pos", 0),
             "cover_color": (card.get("cover") or {}).get("color"),
             "source": "trello_import",
+            "is_archived": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "created_by": current_user["id"],
         }
