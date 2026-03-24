@@ -29,6 +29,7 @@ export default api;
 export const authApi = {
   login: (identifier, password) => api.post('/auth/login', { identifier, password }),
   register: (data) => api.post('/auth/register', data),
+  visitorRegister: (data) => api.post('/auth/visitor-register', data),
   me: () => api.get('/auth/me'),
   logout: () => api.post('/auth/logout'),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
@@ -418,6 +419,8 @@ export const adminApi = {
   users: (params) => api.get('/admin/users', { params }),
   getUser: (id) => api.get(`/admin/users/${id}`),
   getUserFullProfile: (id) => api.get(`/admin/users/${id}/profile`),
+  createUser: (data) => api.post('/admin/users', data),
+  importUsers: (users) => api.post('/admin/users/import', { users }),
   updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
   resetPassword: (id, new_password) => api.post(`/admin/users/${id}/reset-password`, { new_password }),
   deleteUser: (id) => api.delete(`/admin/users/${id}`),

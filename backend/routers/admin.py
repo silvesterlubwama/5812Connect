@@ -4,6 +4,7 @@ from deps import db, get_current_user, require_admin, require_manager, require_s
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
+import secrets
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -18,7 +19,109 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
     if role and role != "all": query["role"] = role
     if status and status != "all": query["status"] = status
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
+    # Enrich with member profile existence
+    for u in users:
+        member = await db.members.find_one(
+            {"$or": [{"user_id": u["id"]}, {"email": u.get("email", "__none__")}]},
+            {"_id": 0, "id": 1}
+        )
+        u["has_member_profile"] = bool(member)
+        if member:
+            u["member_id"] = member["id"]
     return users
+
+
+@router.post("/users")
+async def create_user(data: dict, current_user: dict = Depends(require_admin)):
+    """Create a new user account. Optionally also creates a linked member record."""
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="Name and email are required")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    password = data.get("password") or secrets.token_urlsafe(10)
+    user_id = str(uuid.uuid4())
+    user = {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": data.get("phone", ""),
+        "role": data.get("role", "Staff"),
+        "status": data.get("status", "active"),
+        "department": data.get("department", ""),
+        "location_id": data.get("location_id", ""),
+        "password_hash": hash_password(password),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.users.insert_one(user)
+    user.pop("_id", None)
+    user_out = {k: v for k, v in user.items() if k != "password_hash"}
+    user_out["temp_password"] = password  # show once so admin can share
+
+    if data.get("also_create_member", True):
+        member_id = str(uuid.uuid4())
+        await db.members.insert_one({
+            "id": member_id, "user_id": user_id,
+            "name": name, "email": email, "phone": data.get("phone", ""),
+            "role": "member", "membership_type": data.get("role", "Staff").lower(),
+            "status": "active", "location_id": data.get("location_id", ""),
+            "department": data.get("department", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        user_out["member_id"] = member_id
+        user_out["has_member_profile"] = True
+    await _audit(current_user["id"], "create", "user", user_id, {"name": name, "role": user["role"]})
+    return user_out
+
+
+@router.post("/users/import")
+async def import_users(data: dict, current_user: dict = Depends(require_admin)):
+    """Bulk import users from a JSON array or CSV-parsed data."""
+    users_data = data.get("users", [])
+    if not users_data:
+        raise HTTPException(status_code=400, detail="No users provided")
+    created = 0
+    skipped = 0
+    error_list = []
+    for row in users_data:
+        name = (row.get("name") or row.get("Name") or "").strip()
+        email = (row.get("email") or row.get("Email") or "").strip().lower()
+        if not name or not email:
+            error_list.append(f"Missing name/email: {row}")
+            skipped += 1
+            continue
+        if await db.users.find_one({"email": email}):
+            skipped += 1
+            continue
+        password = row.get("password") or secrets.token_urlsafe(10)
+        user_id = str(uuid.uuid4())
+        role = row.get("role") or row.get("Role") or "Staff"
+        loc_id = row.get("location_id") or row.get("location") or ""
+        dept = row.get("department") or row.get("Department") or ""
+        phone = row.get("phone") or row.get("Phone") or ""
+        user = {
+            "id": user_id, "name": name, "email": email, "phone": phone,
+            "role": role, "status": "active", "department": dept,
+            "location_id": loc_id, "password_hash": hash_password(password),
+            "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+        }
+        await db.users.insert_one(user)
+        # Always create member record on import
+        await db.members.insert_one({
+            "id": str(uuid.uuid4()), "user_id": user_id,
+            "name": name, "email": email, "phone": phone,
+            "role": "member", "membership_type": role.lower(),
+            "status": "active", "location_id": loc_id, "department": dept,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        created += 1
+    await _audit(current_user["id"], "create", "bulk_import_users", f"{created}_users")
+    return {"created": created, "skipped": skipped, "errors": error_list[:10]}
+
+
 
 
 @router.get("/users/{user_id}")

@@ -1,15 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone } from 'lucide-react';
+import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone, UserPlus, History, Star, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi } from '../services/api';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi } from '../services/api';
 import api from '../services/api';
 import { toast } from 'sonner';
+
+// ===== Visitor Memory Helpers =====
+const KIOSK_VISITORS_KEY = 'kiosk_recent_visitors';
+const MAX_RECENT = 8;
+const saveRecentVisitor = (v) => {
+  try {
+    const existing = getRecentVisitors().filter(rv => rv.phone !== v.phone && rv.id !== v.id);
+    const updated = [{ ...v, last_visit: new Date().toISOString() }, ...existing].slice(0, MAX_RECENT);
+    localStorage.setItem(KIOSK_VISITORS_KEY, JSON.stringify(updated));
+  } catch {}
+};
+const getRecentVisitors = () => {
+  try { return JSON.parse(localStorage.getItem(KIOSK_VISITORS_KEY) || '[]'); } catch { return []; }
+};
+const removeRecentVisitor = (id) => {
+  try {
+    const updated = getRecentVisitors().filter(v => v.id !== id);
+    localStorage.setItem(KIOSK_VISITORS_KEY, JSON.stringify(updated));
+  } catch {}
+};
 
 export default function KioskPage() {
   const [email, setEmail] = useState('');
@@ -27,6 +48,13 @@ export default function KioskPage() {
   const [foundMember, setFoundMember] = useState(null);
   const [lookupLoading, setLookupLoading] = useState(false);
 
+  // Recent visitors & guest registration
+  const [recentVisitors, setRecentVisitors] = useState([]);
+  const [showGuestRegister, setShowGuestRegister] = useState(false);
+  const [guestForm, setGuestForm] = useState({ name: '', phone: '', role: 'visitor', notes: '' });
+  const [guestLoading, setGuestLoading] = useState(false);
+  const [registeredGuest, setRegisteredGuest] = useState(null);
+
   // Access scan mode
   const [locations, setLocations] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState('');
@@ -43,6 +71,8 @@ export default function KioskPage() {
     const goOffline = () => { setIsOnline(false); toast.warning('Offline — check-ins will be queued'); };
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
+    // Load recent visitors from local storage
+    setRecentVisitors(getRecentVisitors());
     return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
 
@@ -76,11 +106,41 @@ export default function KioskPage() {
     try {
       await kioskApi.checkin({ member_name: visitorName, type: 'visitor', method: 'manual', phone: visitorPhone });
       toast.success(`Visitor "${visitorName}" checked in!`);
+      // Save to recent visitors memory
+      const vid = `visitor_${Date.now()}`;
+      saveRecentVisitor({ id: vid, name: visitorName, phone: visitorPhone, type: 'visitor' });
+      setRecentVisitors(getRecentVisitors());
       setTodayStats(prev => ({ ...prev, visitors: prev.visitors + 1, checkIns: prev.checkIns + 1 }));
       setVisitorName(''); setVisitorPhone('');
       setView(authenticated ? 'dashboard' : 'home');
     } catch { toast.error('Check-in failed'); }
-    finally { setLoading(false); }
+  };
+
+  const quickCheckinVisitor = async (visitor) => {
+    try {
+      await kioskApi.checkin({ member_name: visitor.name, type: visitor.type || 'visitor', method: 'quick', phone: visitor.phone });
+      toast.success(`${visitor.name} checked in!`);
+      saveRecentVisitor(visitor);
+      setRecentVisitors(getRecentVisitors());
+      setTodayStats(prev => ({ ...prev, visitors: prev.visitors + 1, checkIns: prev.checkIns + 1 }));
+    } catch { toast.error('Check-in failed'); }
+  };
+
+  const handleGuestRegister = async () => {
+    if (!guestForm.name.trim()) { toast.error('Name is required'); return; }
+    setGuestLoading(true);
+    try {
+      const res = await authApi.visitorRegister(guestForm);
+      const guest = res.data;
+      setRegisteredGuest(guest);
+      // Save to recent visitors
+      saveRecentVisitor({ id: guest.user.id, name: guest.user.name, phone: guest.user.phone, type: guestForm.role });
+      setRecentVisitors(getRecentVisitors());
+      toast.success(`${guestForm.role === 'parent' ? 'Parent' : 'Visitor'} "${guestForm.name}" registered!`);
+      // Also check them in
+      await kioskApi.checkin({ member_name: guestForm.name, type: guestForm.role, method: 'guest_register', phone: guestForm.phone });
+    } catch (err) { toast.error(err.response?.data?.detail || 'Registration failed'); }
+    finally { setGuestLoading(false); }
   };
 
   const handleIdLookup = async (e) => {
@@ -190,11 +250,51 @@ export default function KioskPage() {
               <ScanLine size={28} />
               <span className="text-xs">Access Scan</span>
             </Button>
-            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => { setScanType('nfc'); setView('scan'); }} data-testid="kiosk-nfc-btn">
-              <Smartphone size={28} />
-              <span className="text-xs">NFC Scan</span>
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
+              <UserPlus size={28} />
+              <span className="text-xs">Register Guest</span>
             </Button>
           </div>
+
+          {/* Recent Visitors Quick Check-In */}
+          {recentVisitors.length > 0 && (
+            <Card className="shadow-soft rounded-xl mb-4">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <History size={14} /> Quick Check-In — Recent Visitors
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {recentVisitors.map(v => (
+                    <div key={v.id} className="relative group">
+                      <button
+                        className="w-full p-2.5 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left"
+                        onClick={() => quickCheckinVisitor(v)}
+                        data-testid={`quick-checkin-${v.id}`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary flex-shrink-0">
+                            {v.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="text-xs font-medium truncate">{v.name}</span>
+                        </div>
+                        {v.phone && <p className="text-[10px] text-muted-foreground truncate">{v.phone}</p>}
+                        <p className="text-[9px] text-muted-foreground capitalize">{v.type || 'visitor'}</p>
+                      </button>
+                      <button
+                        className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                        onClick={() => { removeRecentVisitor(v.id); setRecentVisitors(getRecentVisitors()); }}
+                        title="Remove from list"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Recent scans */}
           {recentScans.length > 0 && (
@@ -217,6 +317,64 @@ export default function KioskPage() {
             <Link to="/login" className="text-sm text-muted-foreground hover:text-primary">Exit to main login</Link>
           </div>
         </div>
+
+        {/* Guest Registration Dialog */}
+        <Dialog open={showGuestRegister} onOpenChange={o => { setShowGuestRegister(o); if (!o) { setRegisteredGuest(null); setGuestForm({ name: '', phone: '', role: 'visitor', notes: '' }); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{registeredGuest ? 'Guest Registered!' : 'Register Guest/Visitor'}</DialogTitle>
+            </DialogHeader>
+            {registeredGuest ? (
+              <div className="space-y-4 text-center">
+                <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto">
+                  <UserCheck size={28} className="text-green-600" />
+                </div>
+                <p className="font-semibold text-lg">{registeredGuest.user?.name}</p>
+                <p className="text-sm text-muted-foreground capitalize">{registeredGuest.user?.role}</p>
+                {registeredGuest.pin && (
+                  <div className="bg-muted rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Access PIN (save this)</p>
+                    <p className="text-2xl font-mono font-bold tracking-widest">{registeredGuest.pin}</p>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">Guest checked in and added to quick check-in list</p>
+                <Button className="w-full" onClick={() => { setShowGuestRegister(false); setRegisteredGuest(null); setGuestForm({ name: '', phone: '', role: 'visitor', notes: '' }); }}>Done</Button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-xs">Guest Type</Label>
+                  <div className="flex gap-2">
+                    {[['visitor', 'Visitor'], ['parent', 'Parent/Guardian']].map(([v, l]) => (
+                      <button key={v} onClick={() => setGuestForm({ ...guestForm, role: v })}
+                        className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${guestForm.role === v ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/50'}`}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Full Name *</Label>
+                  <Input placeholder="Enter full name" value={guestForm.name} onChange={e => setGuestForm({ ...guestForm, name: e.target.value })} data-testid="guest-name-input" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Phone Number</Label>
+                  <Input placeholder="+256..." value={guestForm.phone} onChange={e => setGuestForm({ ...guestForm, phone: e.target.value })} data-testid="guest-phone-input" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Notes (optional)</Label>
+                  <Input placeholder="e.g. Parent of John Doe" value={guestForm.notes} onChange={e => setGuestForm({ ...guestForm, notes: e.target.value })} />
+                </div>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setShowGuestRegister(false)}>Cancel</Button>
+                  <Button className="flex-1 gap-2" onClick={handleGuestRegister} disabled={guestLoading || !guestForm.name.trim()} data-testid="confirm-guest-register">
+                    <UserPlus size={14} /> {guestLoading ? 'Registering...' : 'Register & Check In'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

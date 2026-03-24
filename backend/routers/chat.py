@@ -66,7 +66,42 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         api_key = os.environ.get("EMERGENT_LLM_KEY")
         if not api_key: raise HTTPException(status_code=500, detail="AI not configured")
-        chat = LlmChat(api_key=api_key, session_id=session_id, system_message="You are a helpful AI assistant for 58:12 Global Connect, a multi-location organization. Help staff with questions about processes, scheduling, member management, and general organizational tasks. Keep responses concise and helpful.").with_model("gemini", "gemini-2.5-flash")
+
+        # Build live app context based on user's role & access level
+        role = (current_user.get("role") or "").lower()
+        is_admin = role in {"admin", "system_admin", "executive director", "director"}
+        is_manager = is_admin or role in {"manager", "coordinator", "hr"}
+        user_loc = current_user.get("location_id")
+        ctx = await _build_app_context(current_user, is_admin, is_manager, user_loc)
+
+        system_msg = f"""You are the AI Assistant for 58:12 Global Connect, a multi-location non-profit organization based in Uganda. Your role is to help staff navigate and understand the system.
+
+Current user: {current_user.get('name')} (Role: {current_user.get('role', 'Staff')})
+Access level: {'Full admin access' if is_admin else 'Manager/Coordinator' if is_manager else 'Staff/Member view'}
+
+LIVE APP DATA (as of now, filtered to your access level):
+{ctx}
+
+AVAILABLE APP MODULES:
+- People: Members, families, children management
+- Events: Calendar, RSVP, recurring events, check-ins
+- Check-ins: Attendance, kiosk mode, NFC scan
+- Tasks/Kanban: Project boards (Trello-like), card assignments, archive
+- Finance: Donations, expenses, products/POS, fund transfers
+- Communications: Staff chat, AI assistant (you), announcements
+- Reports: Attendance, financial, member analytics
+- Admin: User management, profiles, badge printing, documents
+- Settings: Locations (with timezone), roles, integrations, badges
+
+INSTRUCTIONS:
+- Answer questions about the app, its data, and how to use features
+- Only share data the user's role permits (no financial data for non-admins unless their role includes it)
+- Be concise (2–4 sentences max unless a detailed list is requested)
+- If asked about something not in context, say you'd need to check the live system
+- Suggest navigation paths: e.g., "Go to People > Members to find this"
+"""
+
+        chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_msg).with_model("gemini", "gemini-2.5-flash")
         response = await chat.send_message(UserMessage(text=message))
         now = datetime.now(timezone.utc).isoformat()
         await db.chat_messages.insert_one({"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": f"ai_{current_user['id']}", "sender_id": current_user["id"], "sender_name": current_user.get("name"), "text": message, "type": "user", "created_at": now})
@@ -76,6 +111,79 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
     except Exception as e:
         logger.error(f"AI chat error: {e}")
         raise HTTPException(status_code=500, detail=f"AI assistant error: {str(e)}")
+
+
+async def _build_app_context(user: dict, is_admin: bool, is_manager: bool, user_loc: str) -> str:
+    """Fetch live data from DB and format as context string based on user access level."""
+    parts = []
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    this_month_start = date.today().replace(day=1).isoformat()
+
+    try:
+        # ---- Members ----
+        mem_query = {} if is_admin else {"location_id": user_loc} if user_loc else {}
+        total_members = await db.members.count_documents(mem_query)
+        active_members = await db.members.count_documents({**mem_query, "status": "active"})
+        parts.append(f"Members: {total_members} total, {active_members} active")
+
+        # ---- Families / Children ----
+        if is_manager:
+            fam_count = await db.families.count_documents({})
+            child_count = await db.children.count_documents({})
+            parts.append(f"Families: {fam_count} families, {child_count} children registered")
+
+        # ---- Check-ins today ----
+        ci_query = {"date": today}
+        if not is_admin and user_loc:
+            ci_query["location_id"] = user_loc
+        checkins_today = await db.checkins.count_documents(ci_query)
+        parts.append(f"Check-ins today: {checkins_today}")
+
+        # ---- Upcoming events ----
+        ev_query = {"date": {"$gte": today, "$lte": (date.today().replace(month=min(date.today().month+1, 12))).isoformat()}}
+        if not is_admin and user_loc:
+            ev_query["$or"] = [{"location_id": user_loc}, {"is_public": True}]
+        events = await db.events.find(ev_query, {"_id": 0, "title": 1, "date": 1, "time": 1, "location": 1}).sort("date", 1).to_list(5)
+        if events:
+            ev_lines = [f"  - {e['title']} on {e['date']}{' at ' + e['time'] if e.get('time') else ''}" for e in events]
+            parts.append(f"Upcoming events (next ~30 days):\n" + "\n".join(ev_lines))
+        else:
+            parts.append("Upcoming events: None scheduled")
+
+        # ---- Active tasks (Kanban) ----
+        task_query = {"is_archived": {"$ne": True}, "status": {"$ne": "done"}}
+        if not is_admin and user_loc:
+            boards = await db.boards.find({"$or": [{"location_id": user_loc}, {"is_global": True}]}, {"id": 1}).to_list(20)
+            board_ids = [b["id"] for b in boards]
+            task_query["board_id"] = {"$in": board_ids}
+        task_due_soon = await db.tasks.count_documents({**task_query, "due_date": {"$lte": tomorrow, "$gte": today}})
+        total_tasks = await db.tasks.count_documents(task_query)
+        parts.append(f"Tasks: {total_tasks} open tasks, {task_due_soon} due within 24 hours")
+
+        # ---- Financial (admin/manager only) ----
+        if is_manager:
+            fin_query = {"date": {"$gte": this_month_start}}
+            if not is_admin and user_loc:
+                fin_query["location_id"] = user_loc
+            donations = await db.financial.find({**fin_query, "type": "donation"}, {"_id": 0, "amount": 1}).to_list(500)
+            expenses = await db.financial.find({**fin_query, "type": "expense"}, {"_id": 0, "amount": 1}).to_list(500)
+            total_don = sum(d.get("amount", 0) for d in donations)
+            total_exp = sum(e.get("amount", 0) for e in expenses)
+            parts.append(f"Finance this month: UGX {total_don:,.0f} income, UGX {total_exp:,.0f} expenses, Net: UGX {total_don - total_exp:,.0f}")
+
+        # ---- Locations ----
+        if is_admin:
+            locs = await db.locations.find({}, {"_id": 0, "name": 1, "type": 1, "timezone": 1}).to_list(20)
+            loc_names = [f"{l['name']} ({l.get('timezone', 'N/A')} timezone)" for l in locs]
+            parts.append(f"Locations ({len(locs)}): " + ", ".join(loc_names))
+
+    except Exception as e:
+        logger.warning(f"AI context build error: {e}")
+        parts.append("(Some live data unavailable)")
+
+    return "\n".join(parts) if parts else "No data available"
 
 
 # ========== OFFLINE SYNC ==========

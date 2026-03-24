@@ -10,7 +10,9 @@ from starlette.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import json
 import time
+import asyncio
 from collections import defaultdict
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -90,6 +92,7 @@ class LocationCreate(BaseModel):
     address: Optional[str] = None
     country: Optional[str] = None
     currency: str = "USD"
+    timezone: Optional[str] = "Africa/Kampala"
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     director_id: Optional[str] = None
@@ -106,6 +109,7 @@ class LocationUpdate(BaseModel):
     address: Optional[str] = None
     country: Optional[str] = None
     currency: Optional[str] = None
+    timezone: Optional[str] = None
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     director_id: Optional[str] = None
@@ -642,6 +646,53 @@ app.add_middleware(
 )
 
 
+async def _send_push_to_user(user_id: str, title: str, body: str, url: str = "/tasks"):
+    """Send a Web Push notification to all devices of a user."""
+    try:
+        from pywebpush import webpush
+        vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "")
+        vapid_email = os.environ.get("VAPID_EMAIL", "admin@5812.org")
+        if not vapid_private:
+            return
+        subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(10)
+        payload = json.dumps({"title": title, "body": body, "icon": "/icon-192.png", "url": url})
+        for sub in subs:
+            try:
+                webpush(subscription_info=sub["subscription"], data=payload, vapid_private_key=vapid_private, vapid_claims={"sub": f"mailto:{vapid_email}"})
+            except Exception as e:
+                logger.warning(f"Push send failed for {user_id}: {e}")
+                if "expired" in str(e).lower() or "unsubscribe" in str(e).lower():
+                    await db.push_subscriptions.delete_one({"user_id": user_id, "subscription.endpoint": sub["subscription"].get("endpoint")})
+    except Exception as e:
+        logger.warning(f"Push notification error: {e}")
+
+
+async def _run_due_date_reminder_scheduler():
+    """Hourly background task: notify assignees when their task is due tomorrow."""
+    from datetime import date, timedelta
+    await asyncio.sleep(30)  # short initial delay to let startup finish
+    while True:
+        try:
+            tomorrow = (date.today() + timedelta(days=1)).isoformat()
+            due_tasks = await db.tasks.find({
+                "due_date": tomorrow,
+                "is_archived": {"$ne": True},
+                "status": {"$ne": "done"},
+            }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
+
+            for task in due_tasks:
+                assignees = list(task.get("assignees") or [])
+                if task.get("assignee") and task["assignee"] not in assignees:
+                    assignees.append(task["assignee"])
+                for uid in assignees:
+                    await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', "/tasks")
+            if due_tasks:
+                logger.info(f"Sent due-date reminders for {len(due_tasks)} tasks")
+        except Exception as e:
+            logger.error(f"Due-date scheduler error: {e}")
+        await asyncio.sleep(3600)  # Run every hour
+
+
 @app.on_event("startup")
 async def startup():
     try:
@@ -649,6 +700,8 @@ async def startup():
         logger.info("Storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
+    # Start background task reminder scheduler
+    asyncio.create_task(_run_due_date_reminder_scheduler())
     user_count = await db.users.count_documents({})
     if user_count == 0:
         logger.info("Seeding initial data...")

@@ -9,8 +9,8 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const StatCard = ({ title, value, sub, icon: Icon, color, loading }) => (
-  <Card className="shadow-soft rounded-xl">
+const StatCard = ({ title, value, sub, icon: Icon, color, loading, onClick }) => (
+  <Card className={`shadow-soft rounded-xl ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`} onClick={onClick}>
     <CardContent className="p-5">
       <div className="flex items-start justify-between">
         <div>
@@ -163,15 +163,15 @@ export default function DashboardPage() {
 
       {/* Primary stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Members" value={stats?.total_members?.toLocaleString()} sub={`${stats?.active_members ?? 0} active`} icon={Users} color="bg-primary" loading={loadingStats} />
-        <StatCard title="Families" value={familyCount} sub={`${childrenCount} children`} icon={Heart} color="bg-pink-500" loading={loadingStats} />
-        <StatCard title="Check-ins Today" value={stats?.checkins_today} sub="Across all venues" icon={UserCheck} color="bg-green-500" loading={loadingStats} />
-        <StatCard title="Events This Month" value={stats?.events_this_month} sub={`${stats?.upcoming_events ?? 0} upcoming`} icon={Calendar} color="bg-blue-500" loading={loadingStats} />
+        <StatCard title="Total Members" value={stats?.total_members?.toLocaleString()} sub={`${stats?.active_members ?? 0} active`} icon={Users} color="bg-primary" loading={loadingStats} onClick={() => navigate('/people')} />
+        <StatCard title="Families" value={familyCount} sub={`${childrenCount} children`} icon={Heart} color="bg-pink-500" loading={loadingStats} onClick={() => navigate('/people')} />
+        <StatCard title="Check-ins Today" value={stats?.checkins_today} sub="Across all venues" icon={UserCheck} color="bg-green-500" loading={loadingStats} onClick={() => navigate('/check-ins')} />
+        <StatCard title="Events This Month" value={stats?.events_this_month} sub={`${stats?.upcoming_events ?? 0} upcoming`} icon={Calendar} color="bg-blue-500" loading={loadingStats} onClick={() => navigate('/events')} />
       </div>
 
       {/* Financial summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="shadow-soft rounded-xl">
+        <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-2.5 rounded-lg bg-green-500"><DollarSign size={18} className="text-white" /></div>
             <div>
@@ -182,7 +182,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="shadow-soft rounded-xl">
+        <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-2.5 rounded-lg bg-red-500"><TrendingDown size={18} className="text-white" /></div>
             <div>
@@ -193,7 +193,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="shadow-soft rounded-xl">
+        <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
             <div className={`p-2.5 rounded-lg ${(financial?.net_balance || 0) >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}><TrendingUp size={18} className="text-white" /></div>
             <div>
@@ -235,7 +235,7 @@ export default function DashboardPage() {
                 events.length > 0 ? (
                   <div className="space-y-2">
                     {events.map(ev => (
-                      <div key={ev.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/30 transition-colors">
+                      <div key={ev.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/30 transition-colors cursor-pointer" onClick={() => navigate('/events')}>
                         <div className="p-2 rounded-lg bg-primary/10"><Calendar size={14} className="text-primary" /></div>
                         <div className="flex-1">
                           <p className="text-sm font-medium">{ev.title}</p>
@@ -259,7 +259,7 @@ export default function DashboardPage() {
               <CardContent className="px-5 pb-5">
                 <div className="space-y-2">
                   {tasks.map(task => (
-                    <div key={task.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/30 transition-colors">
+                    <div key={task.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/30 transition-colors cursor-pointer" onClick={() => navigate('/tasks')}>
                       <div className="p-2 rounded-lg bg-amber-100"><CheckSquare size={14} className="text-amber-600" /></div>
                       <div className="flex-1">
                         <p className="text-sm font-medium">{task.title}</p>

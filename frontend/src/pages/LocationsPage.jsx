@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapPin, Plus, Trash2, Edit2, CheckCircle, XCircle, Users, DollarSign, Building2, Shield, Globe, ChevronRight, ChevronDown } from 'lucide-react';
+import { MapPin, Plus, Trash2, Edit2, CheckCircle, XCircle, Users, DollarSign, Building2, Shield, Globe, ChevronRight, ChevronDown, Clock } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -14,6 +14,15 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
 const CURRENCIES = ['USD','UGX','KES','TZS','RWF','GBP','EUR','ZAR','NGN','GHS','ETB','HTG'];
+const TIMEZONES = [
+  'Africa/Kampala', 'Africa/Nairobi', 'Africa/Dar_es_Salaam', 'Africa/Kigali', 'Africa/Bujumbura',
+  'Africa/Lagos', 'Africa/Accra', 'Africa/Abidjan', 'Africa/Johannesburg', 'Africa/Cairo',
+  'Africa/Addis_Ababa', 'Africa/Lusaka', 'Africa/Harare',
+  'UTC', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Toronto',
+  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo',
+  'Australia/Sydney', 'Pacific/Auckland',
+];
 
 const typeLabels = { main: 'Main', compass: 'Compass', 'sub-location': 'Sub-Location' };
 const typeColors = {
@@ -24,7 +33,7 @@ const typeColors = {
 
 const emptyForm = {
   name: '', code: '', type: 'compass', parent_id: '', address: '', country: '',
-  currency: 'USD', contact_name: '', contact_phone: '', director_id: '',
+  currency: 'USD', timezone: 'Africa/Kampala', contact_name: '', contact_phone: '', director_id: '',
   is_venue: false, is_bookable: false, is_restricted: false, departments: [],
 };
 
@@ -69,7 +78,7 @@ export default function LocationsPage() {
     setForm({
       name: loc.name || '', code: loc.code || '', type: loc.type || 'compass',
       parent_id: loc.parent_id || '', address: loc.address || '', country: loc.country || '',
-      currency: loc.currency || 'USD', contact_name: loc.contact_name || '',
+      currency: loc.currency || 'USD', timezone: loc.timezone || 'Africa/Kampala', contact_name: loc.contact_name || '',
       contact_phone: loc.contact_phone || '', director_id: loc.director_id || '',
       is_venue: loc.is_venue || false, is_bookable: loc.is_bookable || false,
       is_restricted: loc.is_restricted || false, departments: loc.departments || [],
@@ -241,6 +250,14 @@ export default function LocationsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2"><Label>Timezone</Label>
+                <Select value={form.timezone || 'Africa/Kampala'} onValueChange={v => setForm({...form, timezone: v})}>
+                  <SelectTrigger data-testid="timezone-select"><SelectValue /></SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {TIMEZONES.map(tz => <SelectItem key={tz} value={tz}>{tz}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div className="space-y-2"><Label>Address</Label>
@@ -347,6 +364,7 @@ function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete,
                 {typeLabels[loc.type] || loc.type}
               </Badge>
               {loc.currency && <Badge variant="outline" className="text-xs gap-1"><DollarSign size={9} />{loc.currency}</Badge>}
+              {loc.timezone && <Badge variant="outline" className="text-xs gap-1"><Clock size={9} />{loc.timezone}</Badge>}
               {loc.is_venue && <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300">Venue</Badge>}
               {loc.is_bookable && <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300">Bookable</Badge>}
               {loc.is_restricted && <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300"><Shield size={9} className="mr-0.5" />Restricted</Badge>}

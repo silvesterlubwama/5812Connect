@@ -15,7 +15,7 @@ import { Switch } from '../components/ui/switch';
 import { Checkbox } from '../components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
-import { adminApi, documentsApi, membersApi } from '../services/api';
+import { adminApi, documentsApi, membersApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -38,6 +38,7 @@ const ID_TYPE_LABELS = {
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
@@ -53,6 +54,16 @@ export default function AdminPage() {
   const [bulkAction, setBulkAction] = useState('');
   const [bulkRole, setBulkRole] = useState('');
   const [saving, setSaving] = useState(false);
+  // New User
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true });
+  const [createdUser, setCreatedUser] = useState(null);
+  // Import Users
+  const [showImport, setShowImport] = useState(false);
+  const [importJson, setImportJson] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const importFileRef = useRef(null);
   // Documents
   const [memberDocs, setMemberDocs] = useState([]);
   const [docRequests, setDocRequests] = useState([]);
@@ -68,13 +79,63 @@ export default function AdminPage() {
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await adminApi.users({ search: search || undefined, role: roleFilter !== 'all' ? roleFilter : undefined });
-      setUsers(res.data);
+      const [usersRes, locsRes] = await Promise.all([
+        adminApi.users({ search: search || undefined, role: roleFilter !== 'all' ? roleFilter : undefined }),
+        locationsApi.list().catch(() => ({ data: [] })),
+      ]);
+      setUsers(usersRes.data);
+      setLocations(locsRes.data || []);
     } catch { toast.error('Failed to load users'); }
     finally { setLoading(false); }
   }, [search, roleFilter]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  const handleCreateUser = async () => {
+    if (!createForm.name.trim() || !createForm.email.trim()) { toast.error('Name and email are required'); return; }
+    try {
+      const res = await adminApi.createUser(createForm);
+      setCreatedUser(res.data);
+      setUsers(prev => [res.data, ...prev]);
+      toast.success(`User "${res.data.name}" created`);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to create user'); }
+  };
+
+  const handleImportUsers = async () => {
+    if (!importJson.trim()) { toast.error('Paste JSON or upload a file'); return; }
+    setImportLoading(true);
+    try {
+      let parsed;
+      try { parsed = JSON.parse(importJson); } catch { toast.error('Invalid JSON format'); setImportLoading(false); return; }
+      const users = Array.isArray(parsed) ? parsed : (parsed.users || [parsed]);
+      const res = await adminApi.importUsers(users);
+      setImportResult(res.data);
+      await fetchUsers();
+      toast.success(`Imported ${res.data.created} users, skipped ${res.data.skipped}`);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Import failed'); }
+    finally { setImportLoading(false); }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    if (file.name.endsWith('.csv')) {
+      reader.onload = (ev) => {
+        const lines = ev.target.result.split('\n').filter(Boolean);
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+        const rows = lines.slice(1).map(line => {
+          const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+          return Object.fromEntries(headers.map((h, i) => [h, vals[i] || '']));
+        });
+        setImportJson(JSON.stringify(rows, null, 2));
+      };
+      reader.readAsText(file);
+    } else {
+      reader.onload = (ev) => setImportJson(ev.target.result);
+      reader.readAsText(file);
+    }
+  };
 
   const toggleSelect = (id) => {
     setSelectedIds(prev => {
@@ -294,8 +355,10 @@ export default function AdminPage() {
           <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> User Administration</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{users.length} users · Manage profiles, roles, passwords & documents</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {selectedIds.size > 0 && <Button variant="outline" onClick={() => setShowBulk(true)} className="gap-2"><UserCog size={16} /> Bulk ({selectedIds.size})</Button>}
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setShowImport(true); setImportResult(null); setImportJson(''); }}><Download size={14} /> Import</Button>
+          <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
           <Button variant="outline" size="sm" onClick={fetchUsers}><RefreshCw size={14} /></Button>
         </div>
       </div>
@@ -332,11 +395,12 @@ export default function AdminPage() {
                     <p className="font-medium text-sm">{user.name}</p>
                     <Badge className={`text-xs ${roleColor(user.role)}`}>{user.role}</Badge>
                     {user.status === 'inactive' && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                    {user.has_member_profile && <Badge variant="outline" className="text-xs border-indigo-300 text-indigo-600 bg-indigo-50" title="Has People profile">People</Badge>}
                     {user.is_parent && <Badge variant="outline" className="text-xs border-pink-300 text-pink-600">Parent</Badge>}
                     {user.is_donor && <Badge variant="outline" className="text-xs border-green-300 text-green-600">Donor</Badge>}
                     {user.is_customer && <Badge variant="outline" className="text-xs border-blue-300 text-blue-600">Customer</Badge>}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">{user.email} {user.phone ? `· ${user.phone}` : ''}</p>
+                  <p className="text-xs text-muted-foreground truncate">{user.email} {user.phone ? `· ${user.phone}` : ''} {user.location_id ? `· Loc: ${locations.find(l => l.id === user.location_id)?.name || user.location_id}` : ''}</p>
                 </div>
                 <div className="flex gap-1.5">
                   <Button data-testid={`edit-user-${user.id}`} size="sm" variant="ghost" onClick={() => openEdit(user)} title="Edit Profile"><Edit size={14} /></Button>
@@ -350,6 +414,116 @@ export default function AdminPage() {
           {users.length === 0 && <div className="text-center py-12 text-muted-foreground"><Users size={40} className="mx-auto mb-3 opacity-30" /><p>No users found</p></div>}
         </div>
       )}
+
+      {/* ===== CREATE USER DIALOG ===== */}
+      <Dialog open={showCreateUser} onOpenChange={o => { setShowCreateUser(o); if (!o) setCreatedUser(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{createdUser ? 'User Created!' : 'Create New User'}</DialogTitle>
+            <DialogDescription>{createdUser ? 'Share these credentials with the new user.' : 'Add a staff member or user account.'}</DialogDescription>
+          </DialogHeader>
+          {createdUser ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-4 bg-green-50 rounded-xl border border-green-200">
+                <div className="h-10 w-10 rounded-full bg-green-100 flex items-center justify-center font-bold text-green-700">{createdUser.name?.[0]}</div>
+                <div>
+                  <p className="font-semibold">{createdUser.name}</p>
+                  <p className="text-sm text-muted-foreground">{createdUser.email} · {createdUser.role}</p>
+                </div>
+              </div>
+              {createdUser.temp_password && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Temporary Password (share securely)</p>
+                  <div className="flex items-center gap-2 p-3 bg-muted rounded-lg font-mono text-sm">
+                    <span className="flex-1">{createdUser.temp_password}</span>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { navigator.clipboard.writeText(createdUser.temp_password); toast.success('Copied!'); }}>Copy</Button>
+                  </div>
+                </div>
+              )}
+              {createdUser.has_member_profile && <p className="text-xs text-indigo-600 flex items-center gap-1.5"><Users size={12} /> Also added to People directory</p>}
+              <Button className="w-full" onClick={() => { setShowCreateUser(false); setCreatedUser(null); }}>Done</Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 space-y-1.5"><Label className="text-xs">Full Name *</Label><Input value={createForm.name} onChange={e => setCreateForm({ ...createForm, name: e.target.value })} data-testid="create-user-name" /></div>
+                <div className="col-span-2 space-y-1.5"><Label className="text-xs">Email *</Label><Input type="email" value={createForm.email} onChange={e => setCreateForm({ ...createForm, email: e.target.value })} data-testid="create-user-email" /></div>
+                <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={createForm.phone} onChange={e => setCreateForm({ ...createForm, phone: e.target.value })} /></div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Role</Label>
+                  <Select value={createForm.role} onValueChange={v => setCreateForm({ ...createForm, role: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5"><Label className="text-xs">Department</Label><Input value={createForm.department} onChange={e => setCreateForm({ ...createForm, department: e.target.value })} /></div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Location</Label>
+                  <Select value={createForm.location_id || '_none'} onValueChange={v => setCreateForm({ ...createForm, location_id: v === '_none' ? '' : v })}>
+                    <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">None</SelectItem>
+                      {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <input type="checkbox" className="accent-primary" checked={createForm.also_create_member} onChange={e => setCreateForm({ ...createForm, also_create_member: e.target.checked })} />
+                Also add to People directory (recommended)
+              </label>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1" onClick={() => setShowCreateUser(false)}>Cancel</Button>
+                <Button className="flex-1 gap-2" onClick={handleCreateUser} data-testid="confirm-create-user"><Plus size={14} /> Create User</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== IMPORT USERS DIALOG ===== */}
+      <Dialog open={showImport} onOpenChange={o => { setShowImport(o); if (!o) { setImportResult(null); setImportJson(''); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Users</DialogTitle>
+            <DialogDescription>Upload a CSV or paste JSON array. Each row: name, email, role, phone, department, location_id</DialogDescription>
+          </DialogHeader>
+          {importResult ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="p-3 bg-green-50 rounded-lg border border-green-200"><p className="text-2xl font-bold text-green-700">{importResult.created}</p><p className="text-xs text-muted-foreground">Created</p></div>
+                <div className="p-3 bg-amber-50 rounded-lg border border-amber-200"><p className="text-2xl font-bold text-amber-700">{importResult.skipped}</p><p className="text-xs text-muted-foreground">Skipped</p></div>
+                <div className="p-3 bg-red-50 rounded-lg border border-red-200"><p className="text-2xl font-bold text-red-700">{importResult.errors?.length || 0}</p><p className="text-xs text-muted-foreground">Errors</p></div>
+              </div>
+              {importResult.errors?.length > 0 && <div className="text-xs text-red-600 bg-red-50 rounded-lg p-3 space-y-1">{importResult.errors.map((e, i) => <p key={i}>{e}</p>)}</div>}
+              <Button className="w-full" onClick={() => setShowImport(false)}>Done</Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">JSON / CSV Data</Label>
+                  <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => importFileRef.current?.click()}><Upload size={11} /> Upload CSV/JSON</Button>
+                  <input ref={importFileRef} type="file" className="hidden" accept=".csv,.json" onChange={handleImportFile} />
+                </div>
+                <Textarea rows={6} placeholder={'[{"name":"Jane Doe","email":"jane@example.com","role":"Staff","phone":"+256..."},...]'}
+                  className="text-xs font-mono" value={importJson} onChange={e => setImportJson(e.target.value)} data-testid="import-json-input" />
+              </div>
+              <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
+                <p className="font-medium">CSV column headers:</p>
+                <p className="font-mono">name, email, role, phone, department, location_id</p>
+                <p className="mt-1">All imported users are also added to the People directory.</p>
+              </div>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1" onClick={() => setShowImport(false)}>Cancel</Button>
+                <Button className="flex-1 gap-2" onClick={handleImportUsers} disabled={importLoading || !importJson.trim()} data-testid="import-users-btn">
+                  <Download size={14} /> {importLoading ? 'Importing...' : 'Import Users'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* ===== FULL PROFILE EDIT DIALOG ===== */}
       <Dialog open={showEdit} onOpenChange={setShowEdit}>

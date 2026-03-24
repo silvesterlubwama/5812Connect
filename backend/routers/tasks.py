@@ -250,7 +250,21 @@ async def delete_attachment(task_id: str, att_id: str, current_user: dict = Depe
 
 # =================== TRELLO IMPORT (flat) ===================
 
-@router.post("/tasks/import-trello")
+@router.get("/tasks/{task_id}/attachments/{att_id}/file")
+async def serve_local_attachment(task_id: str, att_id: str, current_user: dict = Depends(get_current_user)):
+    """Serve a locally stored card attachment file."""
+    from fastapi.responses import FileResponse
+    import os
+    local_dir = f"/app/backend/uploads/card-attachments/{task_id}"
+    if not os.path.exists(local_dir):
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    matches = [f for f in os.listdir(local_dir) if f.startswith(att_id)]
+    if not matches:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    file_path = os.path.join(local_dir, matches[0])
+    import mimetypes
+    mime, _ = mimetypes.guess_type(file_path)
+    return FileResponse(file_path, media_type=mime or "application/octet-stream", filename=matches[0][len(att_id)+1:])
 async def import_trello(data: dict, current_user: dict = Depends(get_current_user)):
     """Import tasks from Trello JSON export or generic kanban format."""
     cards = data.get("cards", [])

@@ -14,21 +14,77 @@ async def register(data: UserRegister):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = str(uuid.uuid4())
+    # Allow self-registration as visitor/parent with pending status
+    role = getattr(data, 'role', None) or 'volunteer'
+    if role not in {'volunteer', 'visitor', 'parent'}:
+        role = 'volunteer'  # enforce safe defaults for self-registration
+    expiry = None
+    if role == 'visitor':
+        # Visitors get 30-day access by default
+        expiry = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     user = {
         "id": user_id,
         "name": data.name,
         "email": data.email.lower(),
-        "phone": data.phone,
-        "national_id": data.national_id,
+        "phone": getattr(data, 'phone', None),
+        "national_id": getattr(data, 'national_id', None),
         "password_hash": hash_password(data.password),
-        "role": "volunteer",
+        "role": role,
         "status": "pending",
+        "expires_at": expiry,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user)
     token = create_token(user_id)
-    user_out = {k: v for k, v in user.items() if k != "password_hash"}
+    user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
     return {"token": token, "user": user_out}
+
+
+@router.post("/auth/visitor-register")
+async def visitor_register(data: dict):
+    """Quick visitor/parent guest account creation — no password required, phone-based."""
+    name = (data.get("name") or "").strip()
+    phone = (data.get("phone") or "").strip()
+    email = (data.get("email") or f"visitor_{uuid.uuid4().hex[:8]}@kiosk.local").strip().lower()
+    role = data.get("role", "visitor")
+    if role not in {"visitor", "parent"}:
+        role = "visitor"
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+
+    existing = await db.users.find_one({"phone": phone}) if phone else None
+    if existing:
+        user_out = {k: v for k, v in existing.items() if k not in ("password_hash", "_id")}
+        return {"token": None, "user": user_out, "existing": True}
+
+    user_id = str(uuid.uuid4())
+    pin = data.get("pin") or uuid.uuid4().hex[:4].upper()
+    expiry = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
+    user = {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "national_id": data.get("national_id"),
+        "password_hash": hash_password(pin),
+        "role": role,
+        "status": "active",
+        "guest_pin": pin,
+        "expires_at": expiry,
+        "notes": data.get("notes", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(user)
+    # Also create a member record for check-in purposes
+    member_id = str(uuid.uuid4())
+    await db.members.insert_one({
+        "id": member_id, "user_id": user_id, "name": name, "email": email,
+        "phone": phone, "role": "member", "status": "active",
+        "membership_type": role, "national_id": data.get("national_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
+    return {"token": None, "user": user_out, "pin": pin, "member_id": member_id}
 
 
 @router.post("/auth/login")
