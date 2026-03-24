@@ -606,6 +606,7 @@ try:
     from routers.admin import router as admin_router
     from routers.programmes import router as programmes_router
     from routers.misc import router as misc_router
+    from routers.webauthn import router as webauthn_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -623,6 +624,7 @@ try:
     app.include_router(admin_router)
     app.include_router(programmes_router)
     app.include_router(misc_router)
+    app.include_router(webauthn_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

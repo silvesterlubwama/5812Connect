@@ -1,0 +1,99 @@
+{
+  "summary": "Iteration 12 — Full test of: UnifiedPeoplePage checkboxes/bulk-select/edit, Children edit, WebAuthn backend endpoints, NFC dialog, Settings Security passkeys, Login passkey button. 21/21 backend tests passed. 2 frontend bugs found and fixed (NFC crash + Export TypeError). 1 UX bug reported (eye icon no-op).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "CheckInsPage.jsx",
+        "issue": "FIXED: NFC Check-In dialog crashed with runtime error 'A <Select.Item /> must have a value prop that is not an empty string' because NFC event SelectItem had value='' — Fixed to value='_none' with proper handler",
+        "selector": "[data-testid='nfc-scan-btn']",
+        "priority": "CRITICAL — was causing full page crash"
+      },
+      {
+        "component": "UnifiedPeoplePage.jsx / api.js",
+        "issue": "FIXED: Export button called exportApi.membersCsv() which does not exist — TypeError caused 'Export failed' toast every time. Fixed to use exportApi.members() URL-based download",
+        "selector": "[data-testid='export-csv-btn']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "UnifiedPeoplePage.jsx",
+        "issue": "BUG REMAINING: Eye icon button (data-testid=edit-member-{id}) on member card calls openEditMember(m, e) which only pre-fills form state but does NOT set selectedMember, so the member detail dialog never opens. Eye icon click is effectively a no-op. Clicking the member card itself correctly opens dialog with Edit Profile tab.",
+        "selector": "[data-testid^='edit-member-']",
+        "priority": "MEDIUM — workaround: click card to open dialog, then Edit Profile tab"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration12_webauthn_people.py",
+    "/app/test_reports/pytest/pytest_results_iteration12.xml"
+  ],
+  "action_items": [
+    "Fix eye icon (edit-member-{id}) on member card list: Call handleViewMember(m) instead of openEditMember(m, e) and auto-switch to 'Edit Profile' tab. Currently clicking eye does nothing visible (dialog doesn't open).",
+    "Optionally: Track defaultTab state in UnifiedPeoplePage to auto-switch to Edit Profile tab when eye icon clicked"
+  ],
+  "critical_code_review_comments": [
+    "CheckInsPage.jsx L344: <SelectItem value=''>No event</SelectItem> — Radix Select disallows empty string value, causes runtime crash. FIXED to value='_none'.",
+    "UnifiedPeoplePage.jsx L381: exportApi.membersCsv() — Method doesn't exist in api.js. exportApi only exposes URL strings (members, financial, events, ical), not axios calls. FIXED to use exportApi.members() with anchor-tag download.",
+    "UnifiedPeoplePage.jsx L478: Eye icon onClick={e => openEditMember(m, e)} — openEditMember sets editMember/editMemberForm state but never sets selectedMember, so the Member Detail Dialog (open={!!selectedMember}) does not open. Eye icon is a dead button.",
+    "UnifiedPeoplePage.jsx: Gender field in Edit Profile form shows 'Select' (not pre-filled) for members with no gender set — this is acceptable but shows blank data quality issue",
+    "webauthn.py register/complete L101: rp_id extracted from headers not body (body.get('rpId') not passed). Frontend sends rpId in registerComplete body. The _get_rp_id(request) (without body parameter) will try to derive from headers — may mismatch. Register/begin stores rp_id in challenge, register/complete uses stored rp_id, so this is actually OK."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/CheckInsPage.jsx",
+    "/app/frontend/src/pages/UnifiedPeoplePage.jsx",
+    "/app/backend/tests/test_iteration12_webauthn_people.py"
+  ],
+  "success_rate": {
+    "backend": "100% (21/21 passed)",
+    "frontend": "90% (2 bugs fixed, 1 UX bug remaining)"
+  },
+  "test_credentials": {
+    "admin": "admin@5812global.org / Admin@1234"
+  },
+  "seed_data_creation": "Backend tests created TEST_EditChild (auto-cleaned up by fixture). No persistent test data created.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "2 bugs fixed in this iteration: (1) NFC dialog SelectItem empty string crash in CheckInsPage.jsx — fixed to '_none' sentinel. (2) exportApi.membersCsv() TypeError in UnifiedPeoplePage.jsx — fixed to exportApi.members() URL download. Remaining: Eye icon on member card list (edit-member-{id}) does NOT open dialog (openEditMember sets form but not selectedMember). WebAuthn full round-trip (register+authenticate) requires physical device, was not tested end-to-end. All backend WebAuthn endpoints (register/begin, credentials, authenticate/begin) confirmed working at 100%.",
+  "features_tested": {
+    "backend": {
+      "webauthn_register_begin": "POST /api/webauthn/register/begin — PASS, returns options with correct rp.id, requires auth",
+      "webauthn_credentials_list": "GET /api/webauthn/credentials — PASS, returns empty list, no public_key exposed",
+      "webauthn_auth_begin_no_email": "POST /api/webauthn/authenticate/begin (no email) — PASS, returns challenge",
+      "webauthn_auth_begin_with_email": "POST /api/webauthn/authenticate/begin (admin email) — PASS, returns challenge",
+      "webauthn_auth_begin_unknown_email": "POST /api/webauthn/authenticate/begin (unknown email) — PASS, returns empty allowCredentials",
+      "webauthn_auth_begin_public": "authenticate/begin is public endpoint (no auth required) — PASS",
+      "member_bulk_update_activate": "POST /api/admin/members/bulk-update status=active — PASS",
+      "member_bulk_update_role": "POST /api/admin/members/bulk-update role=Staff — PASS, verified persistence",
+      "member_bulk_update_auth": "bulk-update returns 401 without auth — PASS",
+      "member_edit_name": "PUT /api/members/{id} name update — PASS",
+      "member_edit_phone": "PUT /api/members/{id} phone update — PASS, verified persistence",
+      "member_edit_404": "PUT /api/members/nonexistent_id — PASS, returns 404",
+      "children_edit_name": "PUT /api/children/{id} name update — PASS, data verified",
+      "children_edit_allergies": "PUT /api/children/{id} allergies update — PASS",
+      "children_list": "GET /api/children — PASS, returns list",
+      "export_endpoint": "GET /api/export/members — PASS, returns 200 CSV"
+    },
+    "frontend": {
+      "login_passkey_btn": "PASS — 'Sign in with Passkey' button visible on login page below first OR divider",
+      "people_page_load": "PASS — 10 member cards, tabs visible",
+      "member_checkboxes": "PASS — Checkboxes on member cards clickable",
+      "bulk_action_bar": "PASS — Activate/Deactivate/Change Role/Delete/Clear buttons appear when member selected",
+      "bulk_clear": "PASS — Clear button deselects all",
+      "bulk_role_change": "PASS — Change Role dialog opens, role selected, Execute triggers 'Role updated for 1 members' toast",
+      "edit_profile_tab": "PASS — Clicking member card opens dialog with Info/Edit Profile/Documents tabs",
+      "edit_profile_form": "PASS — Name, Email, Phone, Gender, Role, Group, Location, DOB, PIN, Notes, Parent/Donor toggles pre-filled",
+      "save_profile": "PASS — 'Profile saved' toast appears after clicking Save Profile",
+      "children_tab": "PASS — Shows 'No children registered' empty state (0 children in env)",
+      "settings_security_passkeys": "PASS — 'Passkeys (Biometric Login)' section with Add Passkey button, 0 passkeys count, No passkeys empty state",
+      "nfc_button": "PASS — NFC button visible in Check-Ins page header",
+      "nfc_dialog": "PASS (after fix) — Dialog opens with Start NFC Scan button",
+      "nfc_unsupported": "PASS — Amber unsupported message shown on desktop after clicking Start NFC Scan",
+      "export_button": "PASS (after fix) — 'Exporting members CSV...' toast shown"
+    }
+  }
+}

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { venuesApi, authApi, appSettingsApi, pushApi } from '../services/api';
+import { venuesApi, authApi, appSettingsApi, pushApi, webAuthnApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -38,6 +38,88 @@ export default function SettingsPage() {
   const [savingAdmin, setSavingAdmin] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
+
+  // Passkeys
+  const [passkeys, setPasskeys] = useState([]);
+  const [passkeysLoading, setPasskeysLoading] = useState(false);
+  const [registeringPasskey, setRegisteringPasskey] = useState(false);
+
+  const fetchPasskeys = useCallback(async () => {
+    setPasskeysLoading(true);
+    try {
+      const res = await webAuthnApi.listCredentials();
+      setPasskeys(res.data || []);
+    } catch { /* not critical */ }
+    finally { setPasskeysLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchPasskeys(); }, [fetchPasskeys]);
+
+  const registerPasskey = async () => {
+    if (!window.PublicKeyCredential) {
+      toast.error('Passkeys are not supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+    setRegisteringPasskey(true);
+    try {
+      // 1. Get registration options from server (send rpId so server uses correct domain)
+      const rpId = window.location.hostname;
+      const optRes = await webAuthnApi.registerBegin({ rpId });
+      const options = optRes.data;
+
+      // 2. Convert base64url to ArrayBuffer
+      const b64toAB = (b64) => {
+        const bin = atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+        return Uint8Array.from(bin, c => c.charCodeAt(0)).buffer;
+      };
+      const publicKey = {
+        ...options,
+        challenge: b64toAB(options.challenge),
+        user: { ...options.user, id: b64toAB(options.user.id) },
+        excludeCredentials: (options.excludeCredentials || []).map(c => ({ ...c, id: b64toAB(c.id) })),
+      };
+
+      // 3. Create credential
+      const credential = await navigator.credentials.create({ publicKey });
+
+      // 4. Convert response to base64url
+      const ABtoB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+      const credJSON = {
+        id: credential.id,
+        rawId: ABtoB64(credential.rawId),
+        type: credential.type,
+        response: {
+          clientDataJSON: ABtoB64(credential.response.clientDataJSON),
+          attestationObject: ABtoB64(credential.response.attestationObject),
+        },
+        device_name: `${navigator.platform || 'Device'} ${new Date().toLocaleDateString()}`,
+      };
+
+      // 5. Complete registration
+      credJSON.rpId = rpId;
+      credJSON.expectedOrigin = window.location.origin;
+      await webAuthnApi.registerComplete(credJSON);
+      toast.success('Passkey registered! You can now sign in with biometrics.');
+      fetchPasskeys();
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        toast.info('Passkey registration cancelled');
+      } else if (err.name === 'InvalidStateError') {
+        toast.warning('This device already has a passkey registered');
+      } else {
+        toast.error(`Registration failed: ${err.message}`);
+      }
+    } finally { setRegisteringPasskey(false); }
+  };
+
+  const removePasskey = async (credId) => {
+    if (!window.confirm('Remove this passkey?')) return;
+    try {
+      await webAuthnApi.removeCredential(credId);
+      setPasskeys(prev => prev.filter(p => p.id !== credId));
+      toast.success('Passkey removed');
+    } catch { toast.error('Failed to remove passkey'); }
+  };
 
   // Check current push subscription status on mount
   useEffect(() => {
@@ -382,15 +464,54 @@ export default function SettingsPage() {
             </Card>
             <Card className="shadow-soft rounded-xl">
               <CardHeader className="pb-4">
-                <CardTitle className="text-base">Two-Factor Authentication</CardTitle>
-                <CardDescription>Add an extra layer of security to your account</CardDescription>
+                <CardTitle className="text-base flex items-center gap-2"><Fingerprint size={16} /> Passkeys (Biometric Login)</CardTitle>
+                <CardDescription>Sign in with your fingerprint, Face ID, or device PIN instead of a password</CardDescription>
               </CardHeader>
-              <CardContent className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm">2FA Status: <span className="text-muted-foreground">Not enabled</span></p>
-                  <p className="text-xs text-muted-foreground mt-1">Enable 2FA to protect your account</p>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">{passkeys.length} passkey{passkeys.length !== 1 ? 's' : ''} registered</p>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={registerPasskey}
+                    disabled={registeringPasskey}
+                    data-testid="register-passkey-btn"
+                  >
+                    <KeyRound size={14} />
+                    {registeringPasskey ? 'Follow browser prompt...' : 'Add Passkey'}
+                  </Button>
                 </div>
-                <Button variant="outline" onClick={() => toast.info('2FA setup coming soon')}>Enable 2FA</Button>
+                {passkeysLoading ? (
+                  <div className="h-12 animate-pulse bg-muted rounded-lg" />
+                ) : passkeys.length === 0 ? (
+                  <div className="p-4 rounded-lg border border-dashed border-border text-center text-sm text-muted-foreground">
+                    <Fingerprint size={28} className="mx-auto mb-2 opacity-30" />
+                    <p>No passkeys registered yet</p>
+                    <p className="text-xs mt-1">Add a passkey to sign in with biometrics</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {passkeys.map(pk => (
+                      <div key={pk.id} data-testid={`passkey-${pk.id}`} className="flex items-center justify-between p-3 rounded-lg border border-border">
+                        <div className="flex items-center gap-2.5">
+                          <KeyRound size={14} className="text-primary" />
+                          <div>
+                            <p className="text-sm font-medium">{pk.device_name || 'Passkey'}</p>
+                            <p className="text-xs text-muted-foreground">Added {new Date(pk.created_at).toLocaleDateString()}{pk.last_used_at ? ` · Last used ${new Date(pk.last_used_at).toLocaleDateString()}` : ''}</p>
+                          </div>
+                        </div>
+                        <Button size="sm" variant="ghost" className="h-7 text-destructive hover:text-destructive" onClick={() => removePasskey(pk.id)}>
+                          <Trash2 size={13} />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!window.PublicKeyCredential && (
+                  <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg">
+                    Passkeys require a modern browser (Chrome 67+, Safari 16+, Edge 18+) with platform authenticator support.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>

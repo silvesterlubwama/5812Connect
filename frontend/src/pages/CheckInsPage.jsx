@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut } from 'lucide-react';
+import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
@@ -26,6 +26,79 @@ export default function CheckInsPage() {
   const [showPin, setShowPin] = useState(false);
   const [pinCode, setPinCode] = useState('');
   const [pinEvent, setPinEvent] = useState('');
+  const [showNfc, setShowNfc] = useState(false);
+  const [nfcStatus, setNfcStatus] = useState('idle'); // idle | scanning | connected | unsupported | success | error
+  const [nfcMember, setNfcMember] = useState(null);
+  const [nfcEventId, setNfcEventId] = useState('');
+
+  const handleNfcScan = async () => {
+    if (!('NDEFReader' in window)) {
+      setNfcStatus('unsupported');
+      return;
+    }
+    setNfcStatus('scanning');
+    try {
+      const reader = new window.NDEFReader();
+      await reader.scan();
+      reader.onreading = async ({ serialNumber, message }) => {
+        setNfcStatus('connected');
+        // Try to decode member ID from NDEF records
+        let memberId = null;
+        if (message && message.records.length > 0) {
+          for (const record of message.records) {
+            if (record.recordType === 'text') {
+              const decoder = new TextDecoder(record.encoding || 'utf-8');
+              memberId = decoder.decode(record.data);
+              break;
+            } else if (record.recordType === 'url') {
+              const url = new TextDecoder().decode(record.data);
+              memberId = url.split('/').pop();
+              break;
+            }
+          }
+        }
+        // Fallback: use tag serial as lookup key
+        const lookupKey = memberId || serialNumber || '';
+        try {
+          const res = await membersApi.list({ search: lookupKey, limit: 1 });
+          const found = (res.data.members || res.data || [])[0];
+          if (found) {
+            setNfcMember(found);
+            setNfcStatus('success');
+          } else {
+            toast.warning(`NFC tag read (${serialNumber}) — member not found. Tag ID: ${serialNumber}`);
+            setNfcStatus('idle');
+          }
+        } catch {
+          toast.error('Failed to look up member from NFC tag');
+          setNfcStatus('idle');
+        }
+      };
+      reader.onerror = (err) => {
+        setNfcStatus('error');
+        toast.error(`NFC error: ${err.message}`);
+      };
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        toast.error('NFC permission denied. Please allow NFC in browser settings.');
+      } else if (err.name === 'NotSupportedError') {
+        setNfcStatus('unsupported');
+      } else {
+        setNfcStatus('error');
+        toast.error(`NFC scan failed: ${err.message}`);
+      }
+    }
+  };
+
+  const confirmNfcCheckin = async () => {
+    if (!nfcMember) return;
+    const eventObj = events.find(ev => ev.id === nfcEventId);
+    try {
+      await checkinsApi.create({ member_name: nfcMember.name, type: 'member', event_id: nfcEventId || '', event_name: eventObj?.title || '', method: 'nfc' });
+      toast.success(`${nfcMember.name} checked in via NFC!`);
+      setShowNfc(false); setNfcMember(null); setNfcStatus('idle'); fetchData();
+    } catch { toast.error('Check-in failed'); }
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -92,6 +165,7 @@ export default function CheckInsPage() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" asChild><a href="/kiosk" target="_blank" className="gap-2 flex items-center"><UserCheck size={15} />Kiosk</a></Button>
           <Button variant="outline" onClick={() => setShowPin(true)} className="gap-2"><KeyRound size={15} /> PIN</Button>
+          <Button variant="outline" onClick={() => { setShowNfc(true); setNfcStatus('idle'); setNfcMember(null); }} className="gap-2" data-testid="nfc-scan-btn"><Wifi size={15} /> NFC</Button>
           <Button variant="outline" size="sm" onClick={fetchData}><RefreshCw size={14} /></Button>
           <Button onClick={() => setShowAdd(true)} className="gap-2"><Plus size={16} /> Manual Check-In</Button>
         </div>
@@ -249,6 +323,79 @@ export default function CheckInsPage() {
               <Button variant="outline" className="flex-1" onClick={() => { setShowPin(false); setPinCode(''); }}>Cancel</Button>
               <Button className="flex-1" onClick={handlePinCheckin} disabled={!pinCode.trim()}>Check In</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* NFC Check-In Dialog */}
+      <Dialog open={showNfc} onOpenChange={(o) => { if (!o) { setShowNfc(false); setNfcStatus('idle'); setNfcMember(null); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>NFC Check-In</DialogTitle>
+            <DialogDescription>Tap an NFC tag to check in a member</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            {nfcStatus === 'idle' && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Event (optional)</Label>
+                  <Select value={nfcEventId || '_none'} onValueChange={v => setNfcEventId(v === '_none' ? '' : v)}>
+                    <SelectTrigger><SelectValue placeholder="Select event" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">No event</SelectItem>
+                      {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button className="w-full gap-2" onClick={handleNfcScan} data-testid="start-nfc-scan">
+                  <Wifi size={16} /> Start NFC Scan
+                </Button>
+              </div>
+            )}
+            {nfcStatus === 'scanning' && (
+              <div className="flex flex-col items-center gap-4 py-6">
+                <div className="relative">
+                  <div className="h-20 w-20 rounded-full border-4 border-primary/30 flex items-center justify-center">
+                    <Wifi size={32} className="text-primary animate-pulse" />
+                  </div>
+                  <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+                </div>
+                <p className="text-sm font-medium">Waiting for NFC tag...</p>
+                <p className="text-xs text-muted-foreground text-center">Hold the NFC card or phone near the reader</p>
+                <Button variant="outline" size="sm" onClick={() => setNfcStatus('idle')}>Cancel</Button>
+              </div>
+            )}
+            {nfcStatus === 'success' && nfcMember && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-green-50 border border-green-200 text-center">
+                  <p className="text-xs text-green-600 mb-1">NFC Tag Detected</p>
+                  <p className="font-semibold text-green-900">{nfcMember.name}</p>
+                  <p className="text-xs text-green-700">{nfcMember.role} · {nfcMember.group}</p>
+                </div>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => { setNfcStatus('idle'); setNfcMember(null); }}>Cancel</Button>
+                  <Button className="flex-1" onClick={confirmNfcCheckin} data-testid="confirm-nfc-checkin">Confirm Check-In</Button>
+                </div>
+              </div>
+            )}
+            {nfcStatus === 'unsupported' && (
+              <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
+                  <p className="font-medium mb-1">NFC Not Supported</p>
+                  <p className="text-xs">Web NFC (NDEFReader) requires Chrome on Android. Desktop browsers and Safari are not supported.</p>
+                  <p className="text-xs mt-2">Please use PIN check-in or manual entry instead.</p>
+                </div>
+                <Button variant="outline" className="w-full" onClick={() => setShowNfc(false)}>Close</Button>
+              </div>
+            )}
+            {nfcStatus === 'error' && (
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-800">NFC scan failed. Please try again.</div>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setShowNfc(false)}>Close</Button>
+                  <Button className="flex-1" onClick={() => { setNfcStatus('idle'); handleNfcScan(); }}>Retry</Button>
+                </div>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

@@ -137,6 +137,16 @@ export default function UnifiedPeoplePage() {
   const [bulkActionType, setBulkActionType] = useState('');
   const [bulkRole, setBulkRole] = useState('');
 
+  // Inline edit for members
+  const [editMember, setEditMember] = useState(null);
+  const [editMemberForm, setEditMemberForm] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Inline edit for children
+  const [editChild, setEditChild] = useState(null);
+  const [editChildForm, setEditChildForm] = useState({});
+  const [savingChild, setSavingChild] = useState(false);
+
   // Documents
   const [memberDocuments, setMemberDocuments] = useState([]);
   const [docFile, setDocFile] = useState(null);
@@ -192,6 +202,75 @@ export default function UnifiedPeoplePage() {
     load();
   }, [fetchMembers, fetchPeople]);
 
+  // Bulk selection helpers
+  const toggleMemberSelect = (id) => setSelectedMemberIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectAllMembers = () => setSelectedMemberIds(prev => prev.size === members.length ? new Set() : new Set(members.map(m => m.id)));
+
+  const executeBulk = async () => {
+    const ids = [...selectedMemberIds];
+    if (!ids.length) return;
+    setSaving(true);
+    try {
+      if (bulkActionType === 'delete') {
+        await adminApi.bulkDeleteMembers(ids);
+        toast.success(`Deleted ${ids.length} members`);
+        fetchMembers();
+      } else if (bulkActionType === 'role' && bulkRole) {
+        await adminApi.bulkUpdateMembers(ids, { role: bulkRole });
+        toast.success(`Role updated for ${ids.length} members`);
+        fetchMembers();
+      } else if (bulkActionType === 'activate') {
+        await adminApi.bulkUpdateMembers(ids, { status: 'active' });
+        toast.success(`Activated ${ids.length} members`);
+        fetchMembers();
+      } else if (bulkActionType === 'deactivate') {
+        await adminApi.bulkUpdateMembers(ids, { status: 'inactive' });
+        toast.success(`Deactivated ${ids.length} members`);
+        fetchMembers();
+      }
+      setSelectedMemberIds(new Set()); setShowBulkAction(false);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Bulk action failed'); }
+    finally { setSaving(false); }
+  };
+
+  // Edit member
+  const openEditMember = (m, e) => {
+    if (e) e.stopPropagation();
+    setEditMember(m);
+    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: m.pin || '', notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false });
+  };
+  const saveEditMember = async () => {
+    if (!editMember) return;
+    setSavingEdit(true);
+    try {
+      const res = await membersApi.update(editMember.id, editMemberForm);
+      setMembers(prev => prev.map(m => m.id === editMember.id ? { ...m, ...res.data } : m));
+      // Also update in selectedMember view if open
+      if (selectedMember?.id === editMember.id) setMemberDetail(prev => ({ ...prev, ...res.data }));
+      setEditMember(null);
+      toast.success('Profile saved');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+    finally { setSavingEdit(false); }
+  };
+
+  // Edit child
+  const openEditChild = (c, e) => {
+    if (e) e.stopPropagation();
+    setEditChild(c);
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' });
+  };
+  const saveEditChild = async () => {
+    if (!editChild) return;
+    setSavingChild(true);
+    try {
+      await childrenApi.update(editChild.id, editChildForm);
+      setChildren(prev => prev.map(c => c.id === editChild.id ? { ...c, ...editChildForm } : c));
+      setEditChild(null);
+      toast.success('Child profile saved');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+    finally { setSavingChild(false); }
+  };
+
   // Member CRUD
   const handleAddMember = async (e) => {
     e.preventDefault();
@@ -208,9 +287,14 @@ export default function UnifiedPeoplePage() {
 
   const handleViewMember = async (member) => {
     setSelectedMember(member);
+    // Pre-initialize edit form when viewing
+    setEditMember(member);
+    setEditMemberForm({ name: member.name || '', email: member.email || '', phone: member.phone || '', role: member.role || 'Member', group: member.group || '', gender: member.gender || '', date_of_birth: member.date_of_birth || '', national_id: member.national_id || '', address: member.address || '', department: member.department || '', program: member.program || '', pin: member.pin || '', notes: member.notes || '', status: member.status || 'active', location_id: member.location_id || '', is_parent: member.is_parent || false, is_donor: member.is_donor || false });
     try {
       const [detRes, docRes] = await Promise.all([membersApi.get(member.id), api.get(`/members/${member.id}/documents`).catch(() => ({ data: [] }))]);
       setMemberDetail(detRes.data);
+      const detailed = detRes.data;
+      setEditMemberForm({ name: detailed.name || '', email: detailed.email || '', phone: detailed.phone || '', role: detailed.role || 'Member', group: detailed.group || '', gender: detailed.gender || '', date_of_birth: detailed.date_of_birth || '', national_id: detailed.national_id || '', address: detailed.address || '', department: detailed.department || '', program: detailed.program || '', pin: detailed.pin || '', notes: detailed.notes || '', status: detailed.status || 'active', location_id: detailed.location_id || '', is_parent: detailed.is_parent || false, is_donor: detailed.is_donor || false });
       setMemberDocuments(docRes.data || []);
     } catch { setMemberDetail(member); }
   };
@@ -294,7 +378,7 @@ export default function UnifiedPeoplePage() {
   const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' }); fetchPeople(); } catch { toast.error('Failed'); } finally { setSaving(false); } };
   const handleAddGuest = async (e) => { e.preventDefault(); setSaving(true); try { await guestsApi.create(guestForm); toast.success('Guest recorded!'); setShowGuest(false); setGuestForm({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' }); fetchPeople(); } catch { toast.error('Failed'); } finally { setSaving(false); } };
 
-  const handleExportCsv = async () => { try { const res = await exportApi.membersCsv(); const url = window.URL.createObjectURL(new Blob([res.data])); const a = document.createElement('a'); a.href = url; a.download = 'members.csv'; a.click(); } catch { toast.error('Export failed'); } };
+  const handleExportCsv = async () => { try { const url = exportApi.members(); const a = document.createElement('a'); a.href = url; a.download = 'members.csv'; a.click(); toast.success('Exporting members CSV...'); } catch { toast.error('Export failed'); } };
 
   const filteredMembers = members;
   const childrenForFamily = (fid) => children.filter(c => c.family_id === fid);
@@ -349,6 +433,25 @@ export default function UnifiedPeoplePage() {
             </Select>
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={fetchMembers}><RefreshCw size={13} /> Refresh</Button>
           </div>
+          {/* Bulk bar */}
+          {selectedMemberIds.size > 0 && (
+            <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-xl border border-primary/20 mb-3">
+              <Checkbox checked={selectedMemberIds.size === members.length} onCheckedChange={selectAllMembers} />
+              <span className="text-sm font-medium">{selectedMemberIds.size} selected</span>
+              <div className="flex gap-2 ml-auto">
+                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('activate'); setShowBulkAction(true); }}>Activate</Button>
+                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('deactivate'); setShowBulkAction(true); }}>Deactivate</Button>
+                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('role'); setShowBulkAction(true); }}>Change Role</Button>
+                <Button size="sm" variant="destructive" className="h-7" onClick={() => { setBulkActionType('delete'); setShowBulkAction(true); }}>Delete</Button>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelectedMemberIds(new Set())}>Clear</Button>
+              </div>
+            </div>
+          )}
+          {/* Select all row */}
+          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+            <Checkbox checked={selectedMemberIds.size > 0 && selectedMemberIds.size === members.length} onCheckedChange={selectAllMembers} data-testid="select-all-members" />
+            <span>Select all</span>
+          </div>
           {loading ? (
             <div className="space-y-2">{[1,2,3,4,5].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded-xl" />)}</div>
           ) : filteredMembers.length === 0 ? (
@@ -356,8 +459,9 @@ export default function UnifiedPeoplePage() {
           ) : (
             <div className="space-y-2">
               {filteredMembers.map(m => (
-                <Card key={m.id} className="shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors" onClick={() => handleViewMember(m)} data-testid={`member-card-${m.id}`}>
+                <Card key={m.id} className={`shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors ${selectedMemberIds.has(m.id) ? 'ring-2 ring-primary/30' : ''}`} onClick={() => handleViewMember(m)} data-testid={`member-card-${m.id}`}>
                   <CardContent className="p-3 flex items-center gap-3">
+                    <Checkbox checked={selectedMemberIds.has(m.id)} onCheckedChange={() => toggleMemberSelect(m.id)} onClick={e => e.stopPropagation()} data-testid={`select-member-${m.id}`} />
                     <Avatar className="h-10 w-10"><AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(m.name)}</AvatarFallback></Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{m.name}</p>
@@ -369,7 +473,12 @@ export default function UnifiedPeoplePage() {
                     <Badge variant="outline" className="text-[10px] capitalize">{m.role}</Badge>
                     <Badge variant="secondary" className="text-[10px]">{m.group}</Badge>
                     <Badge className={`text-[10px] ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{m.status || 'active'}</Badge>
-                    {isCoordinator && <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>}
+                    {isCoordinator && (
+                      <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={e => openEditMember(m, e)} title="Edit"><Eye size={13} /></Button>
+                        <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -415,9 +524,19 @@ export default function UnifiedPeoplePage() {
               {children.map(c => (
                 <Card key={c.id} className="shadow-soft rounded-xl" data-testid={`child-card-${c.id}`}>
                   <CardContent className="p-4">
-                    <p className="font-medium text-sm">{c.name}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{c.class_group} &middot; DOB: {c.date_of_birth || 'N/A'}</p>
-                    {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1.5">{c.allergies}</Badge>}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">{c.name}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{c.class_group} &middot; DOB: {c.date_of_birth || 'N/A'}</p>
+                        {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1.5">{c.allergies}</Badge>}
+                      </div>
+                      {isCoordinator && (
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-child-${c.id}`} onClick={() => openEditChild(c)} title="Edit"><Eye size={13} /></Button>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => childrenApi.delete(c.id).then(() => { toast.success('Deleted'); fetchPeople(); })}><Trash2 size={13} /></Button>
+                        </div>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -483,7 +602,7 @@ export default function UnifiedPeoplePage() {
           <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle></DialogHeader>
           {memberDetail && (
             <Tabs defaultValue="info">
-              <TabsList><TabsTrigger value="info">Info</TabsTrigger><TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
+              <TabsList><TabsTrigger value="info">Info</TabsTrigger>{isCoordinator && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
               <TabsContent value="info" className="space-y-4 mt-3">
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-xs text-muted-foreground">Name</span><p className="font-medium">{memberDetail.name}</p></div>
@@ -499,6 +618,20 @@ export default function UnifiedPeoplePage() {
                 </div>
                 {memberDetail.notes && <div><span className="text-xs text-muted-foreground">Notes</span><p className="text-sm mt-0.5">{memberDetail.notes}</p></div>}
               </TabsContent>
+              {isCoordinator && (
+                <TabsContent value="edit" className="space-y-4 mt-3">
+                  <MemberForm
+                    data={editMemberForm}
+                    onChange={setEditMemberForm}
+                    locations={allLocations}
+                    showDepartment={true}
+                  />
+                  <div className="flex gap-3">
+                    <Button variant="outline" className="flex-1" onClick={() => setSelectedMember(null)}>Cancel</Button>
+                    <Button className="flex-1" data-testid="save-member-edit-btn" onClick={saveEditMember} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Profile'}</Button>
+                  </div>
+                </TabsContent>
+              )}
               <TabsContent value="documents" className="space-y-4 mt-3">
                 {memberDetail.role !== 'Child' && (
                   <div className="p-4 rounded-xl border border-dashed border-border space-y-3">
@@ -516,7 +649,7 @@ export default function UnifiedPeoplePage() {
                     <div key={d.id} className="flex items-center justify-between p-3 rounded-lg border text-sm" data-testid={`doc-${d.id}`}>
                       <div><p className="font-medium">{d.label}</p><p className="text-xs text-muted-foreground">{d.original_filename} &middot; {d.created_at?.slice(0, 10)}</p></div>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" className="h-7" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/download`, '_blank')}>View</Button>
+                        <Button size="sm" variant="outline" className="h-7" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/file`, '_blank')}>View</Button>
                         <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={async () => { await api.put(`/documents/${d.id}/archive`); toast.success('Archived'); setMemberDocuments(prev => prev.filter(p => p.id !== d.id)); }}>Archive</Button>
                       </div>
                     </div>
@@ -592,6 +725,63 @@ export default function UnifiedPeoplePage() {
             <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={guestForm.notes} onChange={e => setGuestForm({ ...guestForm, notes: e.target.value })} /></div>
             <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowGuest(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : 'Record Visit'}</Button></div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* BULK ACTION DIALOG */}
+      <Dialog open={showBulkAction} onOpenChange={setShowBulkAction}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Bulk Action ({selectedMemberIds.size} members)</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            {bulkActionType === 'role' && (
+              <div className="space-y-2"><Label>New Role</Label>
+                <Select value={bulkRole} onValueChange={setBulkRole}>
+                  <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
+                  <SelectContent>{MOCK_ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            {bulkActionType === 'delete' && <p className="text-sm text-destructive font-medium">This will permanently delete {selectedMemberIds.size} members!</p>}
+            {(bulkActionType === 'activate' || bulkActionType === 'deactivate') && <p className="text-sm">This will {bulkActionType} {selectedMemberIds.size} members.</p>}
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBulkAction(false)}>Cancel</Button>
+              <Button className="flex-1" variant={bulkActionType === 'delete' ? 'destructive' : 'default'} onClick={executeBulk} disabled={saving || (bulkActionType === 'role' && !bulkRole)} data-testid="confirm-bulk-action-btn">{saving ? 'Processing...' : 'Execute'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* EDIT CHILD DIALOG */}
+      <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) setEditChild(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Child: {editChild?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label>Name *</Label><Input data-testid="edit-child-name" value={editChildForm.name || ''} onChange={e => setEditChildForm({ ...editChildForm, name: e.target.value })} required /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Date of Birth</Label><Input type="date" value={editChildForm.date_of_birth || ''} onChange={e => setEditChildForm({ ...editChildForm, date_of_birth: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Gender</Label>
+                <Select value={editChildForm.gender || ''} onValueChange={v => setEditChildForm({ ...editChildForm, gender: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent><SelectItem value="male">Male</SelectItem><SelectItem value="female">Female</SelectItem></SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Family</Label>
+                <Select value={editChildForm.family_id || ''} onValueChange={v => setEditChildForm({ ...editChildForm, family_id: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent>{families.map(f => <SelectItem key={f.id} value={f.id}>{f.family_name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label>Class / Group</Label><Input value={editChildForm.class_group || ''} onChange={e => setEditChildForm({ ...editChildForm, class_group: e.target.value })} /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Medical Notes</Label><Textarea rows={2} value={editChildForm.medical_notes || ''} onChange={e => setEditChildForm({ ...editChildForm, medical_notes: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Allergies</Label><Input value={editChildForm.allergies || ''} onChange={e => setEditChildForm({ ...editChildForm, allergies: e.target.value })} /></div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="save-child-btn" onClick={saveEditChild} disabled={savingChild}>{savingChild ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

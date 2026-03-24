@@ -1,20 +1,22 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Eye, EyeOff, Monitor, Users } from 'lucide-react';
+import { Eye, EyeOff, Monitor, Users, Fingerprint } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { webAuthnApi } from '../services/api';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, setUser } = useAuth();
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -28,6 +30,64 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePasskeyLogin = async () => {
+    if (!window.PublicKeyCredential) {
+      toast.error('Passkeys not supported in this browser');
+      return;
+    }
+    setPasskeyLoading(true);
+    try {
+      // 1. Get auth options from server
+      const rpId = window.location.hostname;
+      const optRes = await webAuthnApi.authenticateBegin(identifier.trim().toLowerCase() || '', rpId);
+      const options = optRes.data;
+
+      // 2. Convert base64url to ArrayBuffer
+      const b64toAB = (b64) => {
+        const bin = atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+        return Uint8Array.from(bin, c => c.charCodeAt(0)).buffer;
+      };
+      const publicKey = {
+        ...options,
+        challenge: b64toAB(options.challenge),
+        allowCredentials: (options.allowCredentials || []).map(c => ({ ...c, id: b64toAB(c.id) })),
+      };
+
+      // 3. Get assertion
+      const assertion = await navigator.credentials.get({ publicKey });
+
+      // 4. Convert to base64url
+      const ABtoB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+      const assertionJSON = {
+        id: assertion.id,
+        rawId: ABtoB64(assertion.rawId),
+        type: assertion.type,
+        response: {
+          clientDataJSON: ABtoB64(assertion.response.clientDataJSON),
+          authenticatorData: ABtoB64(assertion.response.authenticatorData),
+          signature: ABtoB64(assertion.response.signature),
+          userHandle: assertion.response.userHandle ? ABtoB64(assertion.response.userHandle) : null,
+        },
+      };
+
+      // 5. Complete authentication
+      assertionJSON.rpId = rpId;
+      assertionJSON.expectedOrigin = window.location.origin;
+      const verifyRes = await webAuthnApi.authenticateComplete(assertionJSON);
+      const { token, user } = verifyRes.data;
+      localStorage.setItem('token', token);
+      setUser(user);
+      toast.success(`Welcome back, ${user.name}!`);
+      navigate('/dashboard');
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        toast.info('Passkey authentication cancelled');
+      } else {
+        toast.error(err.response?.data?.detail || err.message || 'Passkey authentication failed');
+      }
+    } finally { setPasskeyLoading(false); }
   };
 
   return (
@@ -68,9 +128,23 @@ export default function LoginPage() {
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
-
             </form>
 
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+              <div className="relative flex justify-center text-xs uppercase"><span className="bg-background px-2 text-muted-foreground">Or</span></div>
+            </div>
+
+            <Button
+              variant="outline"
+              className="w-full gap-2"
+              onClick={handlePasskeyLogin}
+              disabled={passkeyLoading}
+              data-testid="passkey-login-btn"
+            >
+              <Fingerprint size={16} />
+              {passkeyLoading ? 'Authenticating...' : 'Sign in with Passkey'}
+            </Button>
             <div className="relative my-2">
               <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
               <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Or</span></div>

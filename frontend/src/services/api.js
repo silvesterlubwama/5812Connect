@@ -357,6 +357,16 @@ export const nfcApi = {
   scan: (data) => api.post('/nfc/scan', data),
 };
 
+// ---- WEBAUTHN (Passkey/FIDO2) ----
+export const webAuthnApi = {
+  registerBegin: (body = {}) => api.post('/webauthn/register/begin', body),
+  registerComplete: (data) => api.post('/webauthn/register/complete', data),
+  authenticateBegin: (email, rpId = '') => api.post('/webauthn/authenticate/begin', { email, rpId }),
+  authenticateComplete: (data) => api.post('/webauthn/authenticate/complete', data),
+  listCredentials: () => api.get('/webauthn/credentials'),
+  removeCredential: (id) => api.delete(`/webauthn/credentials/${id}`),
+};
+
 // ---- PORTAL (SELF-SERVICE) ----
 export const portalApi = {
   dashboard: () => api.get('/portal/dashboard'),
