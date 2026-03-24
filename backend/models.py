@@ -144,8 +144,12 @@ class TaskCreate(BaseModel):
     assignee: Optional[str] = None
     due_date: Optional[str] = None
     tags: Optional[List[str]] = []
-    labels: Optional[List[str]] = []
+    labels: Optional[List[dict]] = []
     checklist: Optional[List[dict]] = []
+    board_id: Optional[str] = None
+    list_id: Optional[str] = None
+    position: Optional[int] = 0
+
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -155,8 +159,11 @@ class TaskUpdate(BaseModel):
     assignee: Optional[str] = None
     due_date: Optional[str] = None
     tags: Optional[List[str]] = None
-    labels: Optional[List[str]] = None
+    labels: Optional[List[dict]] = None
     checklist: Optional[List[dict]] = None
+    board_id: Optional[str] = None
+    list_id: Optional[str] = None
+    position: Optional[int] = None
 
 class CheckInCreate(BaseModel):
     member_id: Optional[str] = None

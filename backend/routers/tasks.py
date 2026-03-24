@@ -11,12 +11,21 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 
 
 @router.get("/tasks")
-async def list_tasks(status: Optional[str] = None, priority: Optional[str] = None, assignee: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_tasks(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    board_id: Optional[str] = None,
+    list_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
     query = {}
     if status and status != "all": query["status"] = status
     if priority and priority != "all": query["priority"] = priority
     if assignee: query["assignee"] = assignee
-    return await db.tasks.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    if board_id: query["board_id"] = board_id
+    if list_id: query["list_id"] = list_id
+    return await db.tasks.find(query, {"_id": 0}).sort("position", 1).to_list(1000)
 
 
 @router.post("/tasks")
@@ -35,10 +44,29 @@ async def create_task(data: TaskCreate, current_user: dict = Depends(get_current
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depends(get_current_user)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    # Allow moving between lists
+    if "list_id" in data.model_dump():
+        update_data["list_id"] = data.model_dump()["list_id"]
+    if "board_id" in data.model_dump():
+        update_data["board_id"] = data.model_dump()["board_id"]
+    if "position" in data.model_dump():
+        update_data["position"] = data.model_dump()["position"]
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.tasks.update_one({"id": task_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
+    return await db.tasks.find_one({"id": task_id}, {"_id": 0})
+
+
+@router.patch("/tasks/{task_id}/move")
+async def move_task(task_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Move task to a different list and/or update position"""
+    update = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if "list_id" in data: update["list_id"] = data["list_id"]
+    if "board_id" in data: update["board_id"] = data["board_id"]
+    if "position" in data: update["position"] = data["position"]
+    if "status" in data: update["status"] = data["status"]
+    await db.tasks.update_one({"id": task_id}, {"$set": update})
     return await db.tasks.find_one({"id": task_id}, {"_id": 0})
 
 

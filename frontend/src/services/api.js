@@ -346,7 +346,24 @@ export const syncApi = {
   messages: (messages) => api.post('/sync/messages', { messages }),
 };
 
-// ---- BIOMETRIC / NFC ----
+// ---- BOARDS (Kanban) ----
+export const boardsApi = {
+  list: () => api.get('/boards'),
+  get: (id) => api.get(`/boards/${id}`),
+  create: (data) => api.post('/boards', data),
+  update: (id, data) => api.put(`/boards/${id}`, data),
+  delete: (id) => api.delete(`/boards/${id}`),
+  // Lists
+  addList: (boardId, data) => api.post(`/boards/${boardId}/lists`, data),
+  updateList: (boardId, listId, data) => api.put(`/boards/${boardId}/lists/${listId}`, data),
+  deleteList: (boardId, listId) => api.delete(`/boards/${boardId}/lists/${listId}`),
+  reorderLists: (boardId, listIds) => api.post(`/boards/${boardId}/lists/reorder`, { list_ids: listIds }),
+  // Trello import
+  importTrello: (data) => api.post('/boards/import-trello', data),
+  // Tasks (filtered)
+  tasks: (boardId, listId) => api.get('/tasks', { params: { board_id: boardId, list_id: listId } }),
+  moveTask: (taskId, data) => api.patch(`/tasks/${taskId}/move`, data),
+};
 export const biometricApi = {
   register: (data) => api.post('/biometric/register', data),
   verify: (data) => api.post('/biometric/verify', data),
