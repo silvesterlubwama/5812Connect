@@ -1,106 +1,129 @@
-# 58:12 Global Connect Uganda CRM — Product Requirements Document
+# 58:12 Global Connect Uganda — CRM PRD
 
 ## Original Problem Statement
-Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make the app production-ready with:
-- Unified "People" UI combining all roles with API-level RBAC enforcement
+Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make the app production-ready.
+
+## Product Requirements
+- Unified "People" UI with API-level RBAC enforcement
 - Offline/PWA support with background sync and mobile-optimized kiosk mode
 - Push notification delivery via pywebpush
-- Biometric/NFC scanning for access control
-- Multi-language support (English, Luganda, Swahili, Thai, Haitian, Spanish, French)
-- Real CSV file upload functionality
-- Internal document storage for ID scans
-- Advanced reporting dashboard with exportable PDFs
-- Staff/Member Self-Service Portal (tasks, expenses, chat, cash requests, events)
-
-## Tech Stack
-- **Frontend**: React, Tailwind CSS, Shadcn/UI, PWA (Service Workers, Background Sync), Context API
-- **Backend**: FastAPI, Motor (Async MongoDB), PyWebPush (VAPID), ReportLab, WebSockets, JWT Auth
-- **Database**: MongoDB
-- **3rd Party**: Emergent LLM Key (Gemini Flash for AI assistant), Local File Storage (documents at /app/backend/uploads/)
+- Staff/Member self-service portal (Tasks, Chat, Expenses, etc.)
+- Advanced reporting dashboard
+- Admin capability to edit user profiles, manage passwords, and expense workflows
+- WebAuthn Biometric authentication and Real NFC Web API
+- Trello Kanban import, PIN-based check-in, recurring events, and bulk edit features
+- Document scanning/upload via Web APIs, and networked Badge Printing
 
 ## Architecture
+
 ```
-/app/backend/
-  server.py          — Core (events, tasks, financial, push, biometric, NFC, kiosk, chat, search, analytics)
-  deps.py            — Shared auth, RBAC, DB, helpers
-  models.py          — Shared Pydantic models
-  storage.py         — Legacy object storage (not used for documents)
-  uploads/           — LOCAL document file storage (per-member subdirs)
-  routers/
-    auth.py          — Auth (login, register, password reset, Google SSO)
-    admin.py         — Admin user management, full profile edit (users+members merged), bulk ops, audit
-    members.py       — Members, families, children, guests, badges, approvals
-    import_csv.py    — CSV file upload import
-    portal.py        — Staff/Member Self-Service Portal endpoints
-    access.py        — Access control (locations, guest requests, scan)
-    bookings.py      — Public bookings, space bookings
-    documents.py     — Document storage (local fs), document requests, ID types
-    notifications.py — Email notifications, in-app notifications
-    reports.py       — PDF report generation
-    websocket.py     — WebSocket chat/messaging
-/app/frontend/
-  public/sw.js, manifest.json  — PWA service worker
-  src/
-    context/         — AuthContext, WebSocketContext, I18nContext
-    i18n/            — Translation JSON files (en, lg, sw, th, ht, es, fr)
-    components/      — Layout, PortalLayout, UI components
-    pages/
-      AdminPage.jsx  — Full user+member profile edit (4 tabs: Profile/Account/Flags/Documents), badge print, scanner
-      PortalDocuments.jsx — Self-upload, pending requests from admin, fulfill requests
-    services/api.js  — API client with portalApi, documentsApi, adminApi
+/app/
+├── backend/
+│   ├── deps.py              — DB, JWT, audit logger
+│   ├── models.py            — Pydantic models (TaskCreate/Update now has assignees, is_archived, attachments)
+│   ├── server.py            — FastAPI app, all routers registered
+│   ├── storage.py           — Emergent object storage
+│   └── routers/
+│       ├── access.py, admin.py, auth.py, bookings.py, chat.py
+│       ├── boards.py        — Kanban boards, lists (archive/restore), Trello import
+│       ├── documents.py     — Document upload/workflow
+│       ├── events.py, financial.py, import_csv.py, members.py
+│       ├── misc.py, notifications.py, portal.py, programmes.py
+│       ├── reports.py, tasks.py    — Cards (archive/restore, assignees, attachments, WS)
+│       ├── webauthn.py      — Passkey auth
+│       └── websocket.py     — WS manager + board room join/leave
+└── frontend/
+    └── src/
+        ├── components/ui/   — Shadcn components
+        ├── context/
+        │   ├── AuthContext.js
+        │   └── WebSocketContext.js   — joinBoard / leaveBoard added
+        ├── pages/
+        │   ├── TasksPage.jsx         — Full Kanban rebuild (dark navy, sidebar, archive, assignments)
+        │   ├── AdminPage.jsx         — BadgePrintView with Bluetooth + ZPL support
+        │   ├── UnifiedPeoplePage.jsx
+        │   └── (all other pages)
+        └── services/api.js  — boardsApi (archiveList/restoreList/archivedLists), tasksExtApi
 ```
 
-## DB Collections
-users, members, families, children, guests, events, tasks, checkins, donations, expenses,
-sales, products, venues, badges, locations, access_logs, guest_requests, nfc_tags,
-biometric_credentials, chat_messages, conversations, notifications, push_subscriptions,
-files, document_requests, audit_log, password_resets, outreach_programs, app_settings
+## Key DB Schema
+- `members`, `users`, `families` (uses `family_name`), `children`
+- `boards`: id, name, location_id, background, is_global, created_by
+- `board_lists`: id, board_id, name, position, is_archived, archived_at
+- `tasks` (Cards): id, title, board_id, list_id, status, assignees[], is_archived, attachments[], checklist[], labels[]
+- `webauthn_credentials`: id, user_id, credential_id, public_key
 
-## Credentials
-- Admin 1: admin@5812global.org / Admin@1234
-- Admin 2: admin@5812uganda.org / Admin@5812
+## 3rd Party Integrations
+- Emergent LLM Key — Gemini (AI Assistant in Comms)
+- Resend (Emails) — requires user API key
+- Object Storage (Documents, Card Attachments) — Emergent LLM Key
+- WebAuthn (Passkeys) — browser native
+- NFC (NDEFReader) — browser native
 
-## What's Implemented (Complete)
-- [x] JWT Authentication + Google SSO
-- [x] RBAC enforcement (10-level role hierarchy)
-- [x] Unified People UI (members, families, children, guests)
-- [x] Member CRUD with approval workflow
-- [x] Events CRUD with check-in tracking
-- [x] Tasks (Kanban board)
-- [x] Financial module (donations, expenses, products/sales, fund transfers)
-- [x] Access control (locations, guest requests, scan in/out)
-- [x] Kiosk mode (mobile-optimized, offline-capable)
-- [x] WebSocket real-time chat
-- [x] In-app notification system
-- [x] **Document storage (local filesystem)** — member upload, admin requests, 11 ID types, serve & download
-- [x] PDF report generation
-- [x] Real CSV file upload (members, children-parents, staff)
-- [x] PWA/Offline support with background sync
-- [x] Multi-language support (7 languages: EN, LG, SW, TH, HT, ES, FR)
-- [x] Web Push notifications via pywebpush (VAPID keys generated)
-- [x] Biometric/NFC scanning UI (Kiosk + Access pages)
-- [x] Push notification toggle in Settings
-- [x] **Backend fully modular** (all routes in dedicated routers)
-- [x] **Staff/Member Self-Service Portal** with Dashboard, Tasks, Chat, Expenses, Events, Sales, Documents, Profile
-- [x] Trello kanban board import
-- [x] PIN code check-in / checkout
-- [x] Bulk select for mass edit/delete (People + Admin)
-- [x] Expense approval workflow
-- [x] Resource type management
-- [x] Event type management, duplication, recurring, internal/external, free/paid
-- [x] **Admin full profile edit** — merged users+members in one 4-tab dialog (Profile/Account/Flags/Documents)
-- [x] **Admin/Manager profile editing from People page** — checkboxes on member cards, bulk action bar, Edit Profile tab in member detail dialog (pre-filled MemberForm), inline edit flow
-- [x] **Children editing** — Edit button on child cards, full edit dialog (name, DOB, gender, family, class, allergies)
-- [x] **Bulk selection (People page)** — checkboxes per member, select-all, bulk action bar (activate/deactivate/change role/delete)
-- [x] **Document workflow** — self-upload by member (portal), admin/HR requests docs from members, 11 ID types
-- [x] **Badge printing** — CR80 badge with company logo, print via window.open()
-- [x] **Scanner integration** — Web Bluetooth/USB Serial with graceful fallback to file upload
-- [x] Footer updated to "Central System" (was "Uganda CRM System")
+## Test Credentials
+- Admin: admin@5812uganda.org / Admin@5812
+- Local: admin@5812global.org / Admin@1234
 
-- [x] **Family display fix** — DB migrated: 65 families now have `family_name` field (was `name`); families show correctly in Families tab
-- [x] **Children-parent import fixed** — children go to `db.children`, parents to `db.members`, families use `family_name` field, full dedup by name+phone
-- [x] **Kanban → Full Trello-like rewrite** — Boards (one per location), horizontal scrollable lists, drag-&-drop cards, card detail dialog (labels/checklist/priority/due date/assignee), Trello JSON import, RBAC visibility by location
-- [x] **NFC Check-in via NDEFReader** — NFC button in CheckInsPage, NDEFReader scan dialog, graceful fallback for unsupported browsers, confirms check-in on tag read
+---
 
-## Backlog (P2 — Low Priority)
+## What's Been Implemented (Changelog Summary)
+
+### Session 1 (Previous forks)
+- [x] Full app scaffold (React + FastAPI + MongoDB)
+- [x] Authentication (JWT, WebAuthn Passkeys, Google OAuth)
+- [x] Unified People page (members + users, RBAC)
+- [x] Events & Calendar with recurring events
+- [x] Check-ins with PIN-based kiosk mode
+- [x] Financial module (donations, expenses, products/POS)
+- [x] Communications (chat, AI assistant via Gemini)
+- [x] Reports & PDF export
+- [x] PWA/offline support + push notifications
+- [x] Document upload workflow
+- [x] Badge printing (browser print, CR80 template)
+- [x] NFC real check-ins via NDEFReader
+- [x] Admin Full Profile Edit (4-tab dialog, all users/members)
+- [x] Family/Children data fix (family_name migration)
+
+### Session 2 (Previous fork — Kanban foundations)
+- [x] Complete Trello-like Kanban UI rebuild (boards per location)
+- [x] Drag-and-drop card movement
+- [x] Trello JSON board import
+- [x] WebSocket infrastructure (board rooms)
+- [x] Iteration 13: 100% pass rate
+
+### Session 3 (Current — 2026-03-24)
+- [x] TasksPage.jsx: Full redesign — dark navy canvas, left sidebar board navigation, improved readability
+- [x] Card memberships/assignments — multi-user staff selection in card detail
+- [x] Archive cards — soft delete, accessible via hover icon + card detail button
+- [x] Restore cards — from Archive panel
+- [x] Archive lists — via list ... menu dropdown
+- [x] Restore lists — from Archive panel
+- [x] Hard delete for cards and lists with confirmation
+- [x] Archive panel — opens from board header, tabs for Cards/Lists
+- [x] Trello JSON attachment import — parses attachment metadata + attempts object storage copy
+- [x] Card attachments — upload files to cards, view/delete
+- [x] Real-time WebSocket sync — join_board/leave_board, board_presence, broadcast all mutations
+- [x] Badge Printing: Bluetooth (Web Bluetooth API), ZPL code generation for Zebra printers
+- [x] Iteration 14: 100% pass rate (21/21 backend, 27/27 frontend)
+
+---
+
+## Prioritized Backlog
+
+### P0 — Critical / In Progress
+- None (all current P0s resolved)
+
+### P1 — High Priority
+- [x] Badge printing via Web Bluetooth + ZPL (DONE in Session 3)
+- [ ] File attachment storage: currently falls back to local filesystem if object storage fails; wire up properly
+
+### P2 — Medium Priority
 - [ ] SMS notification integration via Twilio
+- [ ] Replace native date input in card detail with shadcn DatePicker
+- [ ] Split TasksPage.jsx (1316 lines) into KanbanCard.jsx, KanbanList.jsx, ArchivePanel.jsx
+
+### P3 — Low Priority / Future
+- [ ] Card due-date reminders via push notifications
+- [ ] Board sharing / external guest access
+- [ ] Recurring task cards
+- [ ] Bulk card operations (multi-select, bulk archive/move)
