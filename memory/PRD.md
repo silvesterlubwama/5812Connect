@@ -20,7 +20,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 ├── backend/
 │   ├── deps.py              — DB, JWT, audit logger
 │   ├── models.py            — Pydantic models (TaskCreate/Update: assignees, is_archived, attachments)
-│   ├── server.py            — FastAPI app, LocationCreate/Update with timezone, due-date scheduler
+│   ├── server.py            — FastAPI app, LocationCreate/Update with timezone, due-date scheduler (today+tomorrow)
 │   ├── storage.py           — Emergent object storage
 │   └── routers/
 │       ├── access.py, auth.py (visitor-register), bookings.py, chat.py (AI w/ context)
@@ -32,12 +32,13 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 └── frontend/
     └── src/
         ├── pages/
-        │   ├── TasksPage.jsx         — Lean (imports from kanban/)
+        │   ├── TasksPage.jsx         — Board/Calendar view toggle
         │   ├── kanban/               — Kanban component split
         │   │   ├── KanbanCard.jsx
         │   │   ├── KanbanList.jsx
-        │   │   ├── ArchivePanel.jsx  — self-contained fetch
-        │   │   └── CardDetailDialog.jsx — self-contained state
+        │   │   ├── ArchivePanel.jsx
+        │   │   ├── CardDetailDialog.jsx
+        │   │   └── TeamCalendar.jsx  — Monthly calendar with workload sidebar
         │   ├── DashboardPage.jsx     — Clickable stat/event/task/financial cards
         │   ├── LocationsPage.jsx     — Timezone field (27 timezone options)
         │   ├── AdminPage.jsx         — Create User + Import Users dialogs, People badge
@@ -46,22 +47,24 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
         ├── context/
         │   ├── AuthContext.js
         │   └── WebSocketContext.js   — joinBoard / leaveBoard
-        └── services/api.js  — authApi.visitorRegister, adminApi.createUser/importUsers, tasksExtApi
+        └── services/api.js
 ```
 
 ## Key DB Schema
 - `members`, `users`, `families`, `children`
 - `boards`: id, name, location_id, background, is_global
 - `board_lists`: id, board_id, name, position, is_archived, archived_at
-- `tasks`: id, title, board_id, list_id, assignees[], is_archived, attachments[], checklist[]
+- `tasks`: id, title, board_id, list_id, due_date, assignees[], is_archived, attachments[], checklist[]
 - `webauthn_credentials`: id, user_id, credential_id, public_key
 - `locations`: id, name, currency, timezone, ...
+- `push_subscriptions`: user_id, subscription (VAPID push subscriptions)
 
 ## 3rd Party Integrations
 - Emergent LLM Key — Gemini AI Assistant (context-aware, live DB data)
 - Resend (Emails) — requires user API key
 - Object Storage (Documents, Card Attachments) — Emergent LLM Key
 - WebAuthn (Passkeys), NFC (NDEFReader) — browser native
+- pywebpush — VAPID push notifications for due-date reminders
 
 ## Test Credentials
 - Admin: admin@5812uganda.org / Admin@5812
@@ -84,39 +87,46 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - Badge Printing via Web Bluetooth + ZPL code generation
 - Iteration 14: 100% pass rate
 
-### Session 3 (2026-03-24 Fork B — Current)
+### Session 3 (2026-03-24 Fork B)
 - Dashboard stat/event/task/financial cards made clickable with navigation
 - Timezone per location: 27 timezone options, persisted in DB
 - Parent/Visitor guest users: /api/auth/visitor-register, guest PIN
-- Kiosk visitor memory: localStorage recent visitors, quick check-in, remove button
-- Kiosk guest registration dialog: Visitor/Parent type, auto check-in + member record
-- AI Assistant: live DB context (members, events, check-ins, tasks, finance) filtered by RBAC
-- Due-date push notification scheduler: hourly background task in server.py
-- TasksPage split: KanbanCard, KanbanList, ArchivePanel, CardDetailDialog (kanban/)
-- Location-filtered card assignment: boardStaff memoized by board.location_id
-- User Admin: Create New User dialog (temp password, also_create_member)
-- User Admin: Import Users (CSV/JSON) with /api/admin/users/import
-- User Admin: People badge on users with linked member profiles
-- Object storage: local file serve endpoint for card attachments
-- Iteration 15: 100% backend (20/20), 95% frontend
+- Kiosk visitor memory: localStorage recent visitors, quick check-in
+- AI Assistant: live DB context filtered by RBAC
+- Due-date push notification scheduler: hourly in server.py
+- TasksPage split: KanbanCard, KanbanList, ArchivePanel, CardDetailDialog
+- User Admin: Create New User + Import Users (CSV/JSON)
+- Object storage: local file serve for card attachments
+- Iteration 15: 100% backend, 95% frontend
+
+### Session 3 (2026-03-24 Fork C — Current)
+- **BUG FIX**: People page edit error — added missing `editMember` useState declaration
+- **BUG FIX**: Confirmed Admin Import Users feature works (backend + frontend verified)
+- **NEW**: Team Calendar view for Kanban — toggle Board/Calendar at bottom of sidebar
+  - Monthly grid showing tasks with due dates color-coded by board/priority
+  - Workload sidebar: assignee progress bars, overdue count
+  - Filters: by board, by assignee
+  - Today highlight, past-due coloring, unscheduled task badge
+- **ENHANCED**: Due-date scheduler now sends push for same-day AND tomorrow tasks
+- Iteration 16: 100%/100% (edit member + admin import fix)
+- Iteration 17: 100%/100% (Team Calendar + all features verified)
 
 ---
 
 ## Prioritized Backlog
 
-### P0 — None currently
+### P0 — None
 
 ### P1
-- [x] Badge Printing via Bluetooth + ZPL (DONE)
 - [ ] Wire object storage properly for production attachment uploads
+- [ ] Replace native date input in card detail with shadcn DatePicker
 
 ### P2
-- [ ] SMS notification integration via Twilio
-- [ ] Replace native date input in card detail with shadcn DatePicker
 - [ ] Verify kiosk recent-visitors section works end-to-end after check-in
+- [ ] SMS notification integration via Twilio (user deprioritized)
 
 ### P3 — Future
-- [ ] Card due-date reminders via VAPID push (infrastructure done; needs VAPID keys)
 - [ ] Board sharing / external guest access
 - [ ] Recurring task cards
 - [ ] Bulk card operations (multi-select, bulk archive/move)
+- [ ] "Team Calendar" weekly/daily view modes
