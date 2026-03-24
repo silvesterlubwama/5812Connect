@@ -1,7 +1,7 @@
 # 58:12 Global Connect - Comprehensive Application Exploration Report
 
 **Date:** March 23, 2026  
-**Application URL:** https://people-hub-nfc.preview.emergentagent.com/  
+**Application URL:** https://staff-self-service-1.preview.emergentagent.com/  
 **Testing Agent:** E2 (Testing Sub-Agent)
 
 ---
