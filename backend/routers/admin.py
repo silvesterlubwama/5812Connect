@@ -28,18 +28,47 @@ async def get_user(user_id: str, current_user: dict = Depends(require_admin)):
     return user
 
 
+@router.get("/users/{user_id}/profile")
+async def get_user_full_profile(user_id: str, current_user: dict = Depends(require_admin)):
+    """Return merged user + member profile for admin full-edit"""
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    # Merge with member record
+    member = await db.members.find_one(
+        {"$or": [{"id": user_id}, {"email": user.get("email", "__none__")}]},
+        {"_id": 0}
+    )
+    if member:
+        # member data takes precedence for profile fields; user for account fields
+        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status", "pin"}}}
+        merged["member_id"] = member.get("id")
+        return merged
+    return user
+
+
 @router.put("/users/{user_id}")
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    allowed = {"name", "email", "phone", "national_id", "role", "status", "address", "emergency_contact", "department", "notes", "secondary_roles", "is_parent", "is_customer", "is_donor", "pin"}
-    update = {k: v for k, v in data.items() if k in allowed and v is not None}
+    ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
+                      "address", "emergency_contact", "department", "notes",
+                      "secondary_roles", "is_parent", "is_customer", "is_donor", "pin"}
+    MEMBER_ONLY_FIELDS = {"gender", "date_of_birth", "group", "location_id", "program"}
+    all_allowed = ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS
+    update = {k: v for k, v in data.items() if k in all_allowed and v is not None}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.users.update_one({"id": user_id}, {"$set": update})
+    # Update users collection (account fields only)
+    user_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
+    if user_update:
+        await db.users.update_one({"id": user_id}, {"$set": user_update})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    # Update members collection (all profile fields)
     if user and user.get("email"):
-        member_update = {k: v for k, v in update.items() if k in {"name", "phone", "email", "role", "status", "address", "emergency_contact", "department", "notes", "secondary_roles", "is_parent", "is_customer", "is_donor", "pin"}}
+        member_update = {k: v for k, v in update.items() if k in (ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS)}
         if member_update:
-            await db.members.update_one({"email": user["email"]}, {"$set": member_update})
+            await db.members.update_one(
+                {"$or": [{"id": user_id}, {"email": user["email"]}]},
+                {"$set": member_update}
+            )
     await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
     return user
 

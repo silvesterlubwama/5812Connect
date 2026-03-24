@@ -289,15 +289,30 @@ async def portal_checkins(current_user: dict = Depends(get_current_user)):
 
 @router.get("/documents")
 async def portal_documents(current_user: dict = Depends(get_current_user)):
-    """My documents"""
+    """My documents — returns docs + pending requests for the logged-in member"""
     email = current_user.get("email", "")
     member = await db.members.find_one({"email": email}, {"_id": 0, "id": 1}) if email else None
     member_id = member["id"] if member else current_user["id"]
 
     docs = await db.files.find(
         {"member_id": member_id, "is_deleted": {"$ne": True}}, {"_id": 0}
-    ).sort("uploaded_at", -1).to_list(50)
-    return docs
+    ).sort("created_at", -1).to_list(50)
+    requests = await db.document_requests.find(
+        {"member_id": member_id}, {"_id": 0}
+    ).sort("requested_at", -1).to_list(50)
+    return {"documents": docs, "requests": requests, "member_id": member_id}
+
+
+@router.post("/documents/upload")
+async def portal_upload_document(
+    file = None,
+    doc_type: str = None,
+    request_id: str = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Portal self-upload — handled by /api/members/{id}/documents in documents router"""
+    from fastapi import UploadFile, File, Form
+    raise HTTPException(status_code=405, detail="Use /api/members/{member_id}/documents for uploads")
 
 
 @router.get("/sales")

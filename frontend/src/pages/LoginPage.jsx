@@ -121,7 +121,7 @@ export default function LoginPage() {
             </div>
           </CardContent>
         </Card>
-        <p className="text-center text-xs text-muted-foreground mt-6">58:12 Global • Uganda CRM System</p>
+        <p className="text-center text-xs text-muted-foreground mt-6">58:12 Global • Central System</p>
       </div>
     </div>
   );

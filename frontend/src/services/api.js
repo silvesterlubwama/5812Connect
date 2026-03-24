@@ -378,6 +378,7 @@ export const portalApi = {
 export const adminApi = {
   users: (params) => api.get('/admin/users', { params }),
   getUser: (id) => api.get(`/admin/users/${id}`),
+  getUserFullProfile: (id) => api.get(`/admin/users/${id}/profile`),
   updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
   resetPassword: (id, new_password) => api.post(`/admin/users/${id}/reset-password`, { new_password }),
   deleteUser: (id) => api.delete(`/admin/users/${id}`),
@@ -386,6 +387,19 @@ export const adminApi = {
   bulkUpdateMembers: (member_ids, updates) => api.post('/admin/members/bulk-update', { member_ids, updates }),
   bulkDeleteMembers: (member_ids) => api.post('/admin/members/bulk-delete', { member_ids }),
   audit: (params) => api.get('/admin/audit', { params }),
+};
+
+// ---- DOCUMENTS ----
+export const documentsApi = {
+  idTypes: () => api.get('/documents/id-types'),
+  list: (memberId) => api.get(`/members/${memberId}/documents`),
+  upload: (memberId, formData) => api.post(`/members/${memberId}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  fileUrl: (docId) => `${BACKEND_URL}/api/documents/${docId}/file`,
+  delete: (docId) => api.delete(`/documents/${docId}`),
+  // Requests
+  listRequests: (params) => api.get('/document-requests', { params }),
+  createRequest: (data) => api.post('/document-requests', data),
+  cancelRequest: (id) => api.delete(`/document-requests/${id}`),
 };
 
 // ---- LOCATION VENUES (Event Location Picker) ----

@@ -1,0 +1,77 @@
+{
+  "summary": "Iteration 11 — Full test of: Footer 'Central System' text, Admin full profile edit (4 tabs), Document workflow (upload, serve, requests), Badge print, Portal Documents endpoint. All 33 backend tests passed (100%). All frontend tests passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "LoginPage.jsx",
+        "issue": "Duplicate 'Forgot password?' link — appears twice: once above Submit button (line 65) and again below Submit button (line 73). Minor UX redundancy.",
+        "selector": "a[href='/reset-password']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_documents_admin.py",
+    "/app/test_reports/pytest/pytest_results_iteration11.xml"
+  ],
+  "action_items": [
+    "Optional: Remove duplicate 'Forgot password?' link on LoginPage.jsx (line 73 is redundant)"
+  ],
+  "critical_code_review_comments": [
+    "LoginPage.jsx: 'Forgot your password?' link duplicated in form — one at line 65 and one at line 73. Remove one.",
+    "documents.py: The `_save_file` function stores files relative to /app/backend, but returns path relative to /app/backend parent. If the server ever restarts and UPLOAD_DIR changes, orphaned files may occur. Low risk in current setup.",
+    "admin.py: PUT /api/admin/users/{id} — if user has no member record, member-only fields (gender, date_of_birth, group, location_id, program) silently succeed on user update but won't be stored on member (since no member exists). This is acceptable fallback behavior but worth noting.",
+    "portal.py: GET /api/portal/documents now returns dict with {documents, requests, member_id} — frontend PortalDocuments.jsx correctly handles both new dict format and legacy flat array. Good backward compatibility."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_documents_admin.py"
+  ],
+  "success_rate": {
+    "backend": "100% (33/33 passed)",
+    "frontend": "100% (all features verified working)"
+  },
+  "test_credentials": {
+    "admin": "admin@5812global.org / Admin@1234"
+  },
+  "seed_data_creation": "Backend tests created TEST_ document requests and uploaded test PDF/PNG files to first member. TEST data created: document requests (auto-cancelled in cleanup test), uploaded docs (test_doc.pdf, id_card.png, serve_test.pdf) to member m_7a7d0b75.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iteration 11 features fully working: footer 'Central System' on Login/Register pages, Admin full profile edit with 4 tabs (Profile/Account/Flags/Documents), document upload/serve endpoints, document requests CRUD, portal documents dict response, badge print preview. Backend document storage at /app/backend/uploads/{member_id}/. Admin edit credentials: admin@5812global.org / Admin@1234.",
+  "features_tested": {
+    "backend": {
+      "document_id_types": "GET /api/documents/id-types — PASS, returns list of 11 types",
+      "document_requests_list": "GET /api/document-requests — PASS, returns empty list for clean admin",
+      "document_request_create": "POST /api/document-requests — PASS, creates with member_id, doc_type, status=pending",
+      "document_request_filter": "GET /api/document-requests?member_id= — PASS, filters correctly",
+      "document_request_cancel": "DELETE /api/document-requests/{id} — PASS, status set to cancelled",
+      "document_upload_pdf": "POST /api/members/{id}/documents — PASS, accepts PDF, returns doc record",
+      "document_upload_png": "POST /api/members/{id}/documents — PASS, accepts PNG image",
+      "document_upload_invalid": "POST /api/members/{id}/documents — PASS, rejects .exe with 400",
+      "document_list": "GET /api/members/{id}/documents — PASS, returns list after upload",
+      "document_file_serve": "GET /api/documents/{doc_id}/file — PASS, serves bytes from local storage",
+      "admin_full_profile": "GET /api/admin/users/{id}/profile — PASS, returns merged user+member data without password_hash",
+      "admin_update_user": "PUT /api/admin/users/{id} — PASS, updates basic, member-only, and flag fields",
+      "portal_documents": "GET /api/portal/documents — PASS, returns {documents, requests, member_id} dict"
+    },
+    "frontend": {
+      "login_footer": "Shows '58:12 Global • Central System' — PASS",
+      "register_footer": "Shows 'Central System' — PASS (verified in code)",
+      "admin_page_load": "User list with 3 users, Edit/Print/Key/Delete buttons — PASS",
+      "admin_edit_dialog": "Opens on Edit click — PASS",
+      "edit_4_tabs": "Profile, Account, Flags, Documents tabs all present — PASS",
+      "profile_tab_fields": "Full Name, Email, Phone, DOB, Gender, National ID, Address, Emergency Contact, Group, Programme — PASS",
+      "account_tab_fields": "Primary Role, Status, Department, PIN Code, Notes — PASS",
+      "flags_tab_toggles": "Is Parent (ON), Is Customer (OFF), Is Donor (ON) toggles — PASS",
+      "documents_tab": "Scanner, Request Doc, Upload buttons + Upload type selector — PASS",
+      "save_profile": "Saves and shows 'Profile updated' toast — PASS",
+      "print_badge_dialog": "Badge preview with logo, CENTRAL SYSTEM, member info, Print Badge button — PASS",
+      "portal_documents_page": "My Documents page loads with Upload Document button and Documents on File section — PASS"
+    }
+  }
+}

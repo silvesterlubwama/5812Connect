@@ -137,7 +137,10 @@ export default function ResourcesPage() {
           <h1 className="text-2xl font-semibold font-heading" data-testid="resources-title">Resources</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{resources.length} total resources across {locations.length} locations</p>
         </div>
-        <Button className="gap-2" onClick={openAdd} data-testid="add-resource-btn"><Plus size={16} /> Add Resource</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowTypeManager(true)}>Resource Types</Button>
+          <Button className="gap-2" onClick={openAdd} data-testid="add-resource-btn"><Plus size={16} /> Add Resource</Button>
+        </div>
       </div>
 
       {/* Type Stats */}
@@ -323,6 +326,25 @@ export default function ResourcesPage() {
                   toast.error(err.response?.data?.detail || 'Booking failed');
                 }
               }}>Confirm Booking</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Resource Type Manager */}
+      <Dialog open={showTypeManager} onOpenChange={setShowTypeManager}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Manage Resource Types</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            {resourceTypes.map(t => (
+              <div key={t.value || t.id} className="flex items-center justify-between p-2 rounded border border-border">
+                <span className="text-sm font-medium">{t.label}</span>
+                {t.id && <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={async () => { try { await resourcesApi.deleteType(t.id); setResourceTypes(prev => prev.filter(rt => rt.id !== t.id)); toast.success('Deleted'); } catch { toast.error('Failed'); } }}><Trash2 size={13} /></Button>}
+              </div>
+            ))}
+            <div className="flex gap-2 pt-2 border-t border-border">
+              <Input placeholder="New resource type" value={newTypeName} onChange={e => setNewTypeName(e.target.value)} className="flex-1" />
+              <Button size="sm" onClick={async () => { if (!newTypeName.trim()) return; try { const r = await resourcesApi.createType({ name: newTypeName, label: newTypeName }); setResourceTypes(prev => [...prev, { value: r.data.name, label: r.data.label, id: r.data.id }]); setNewTypeName(''); toast.success('Added'); } catch { toast.error('Failed'); } }} disabled={!newTypeName.trim()}>Add</Button>
             </div>
           </div>
         </DialogContent>
