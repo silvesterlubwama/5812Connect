@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X } from 'lucide-react';
+import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { KanbanList } from './kanban/KanbanList';
 import { ArchivePanel } from './kanban/ArchivePanel';
 import { CardDetailDialog } from './kanban/CardDetailDialog';
+import { TeamCalendar } from './kanban/TeamCalendar';
 
 export default function TasksPage() {
   const { user } = useAuth();
@@ -42,6 +43,8 @@ export default function TasksPage() {
   const [showArchive, setShowArchive] = useState(false);
   const [boardViewers, setBoardViewers] = useState([]);
   const trelloFileRef = useRef(null);
+  const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'calendar'
+  const [allTasks, setAllTasks] = useState([]);
 
   const isAdmin = ['admin', 'system_admin', 'executive director', 'director'].includes((user?.role || '').toLowerCase());
   const canEdit = isAdmin || ['manager', 'coordinator'].includes((user?.role || '').toLowerCase());
@@ -69,6 +72,12 @@ export default function TasksPage() {
   }, [activeBoardId]);
 
   useEffect(() => { fetchBoards(); }, []);
+
+  // Fetch all tasks for Team Calendar view
+  useEffect(() => {
+    if (viewMode !== 'calendar') return;
+    tasksApi.list().then(res => setAllTasks(res.data || [])).catch(() => {});
+  }, [viewMode]);
 
   const fetchBoardDetail = useCallback(async () => {
     if (!activeBoardId) return;
@@ -335,16 +344,30 @@ export default function TasksPage() {
             </button>
           ))}
         </div>
-        <div className="p-3 border-t border-white/10">
+        <div className="p-3 border-t border-white/10 space-y-1">
           <button onClick={() => setShowTrelloImport(true)}
             className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-slate-400 hover:bg-white/10 hover:text-white transition-colors">
             <Download size={12} /> Import Trello
           </button>
+          <div className="flex gap-1 mt-2">
+            <button onClick={() => setViewMode('kanban')} data-testid="view-kanban-btn"
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'kanban' ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'}`}>
+              <LayoutGrid size={12} /> Board
+            </button>
+            <button onClick={() => setViewMode('calendar')} data-testid="view-calendar-btn"
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors ${viewMode === 'calendar' ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'}`}>
+              <CalendarDays size={12} /> Calendar
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
+        {viewMode === 'calendar' ? (
+          <TeamCalendar boards={boards} allTasks={allTasks} staffUsers={staffUsers} onCardClick={setOpenCard} />
+        ) : (
+        <>
         {currentBoard && (
           <div className="flex items-center justify-between px-5 py-3 flex-shrink-0 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
             <div className="flex items-center gap-3">
@@ -410,6 +433,8 @@ export default function TasksPage() {
               </div>
             )}
           </div>
+        )}
+        </>
         )}
       </div>
 

@@ -668,12 +668,15 @@ async def _send_push_to_user(user_id: str, title: str, body: str, url: str = "/t
 
 
 async def _run_due_date_reminder_scheduler():
-    """Hourly background task: notify assignees when their task is due tomorrow."""
+    """Hourly background task: notify assignees when their task is due tomorrow or today."""
     from datetime import date, timedelta
     await asyncio.sleep(30)  # short initial delay to let startup finish
     while True:
         try:
             tomorrow = (date.today() + timedelta(days=1)).isoformat()
+            today_str = date.today().isoformat()
+            
+            # Tasks due tomorrow
             due_tasks = await db.tasks.find({
                 "due_date": tomorrow,
                 "is_archived": {"$ne": True},
@@ -686,8 +689,24 @@ async def _run_due_date_reminder_scheduler():
                     assignees.append(task["assignee"])
                 for uid in assignees:
                     await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', "/tasks")
-            if due_tasks:
-                logger.info(f"Sent due-date reminders for {len(due_tasks)} tasks")
+            
+            # Tasks due today
+            today_tasks = await db.tasks.find({
+                "due_date": today_str,
+                "is_archived": {"$ne": True},
+                "status": {"$ne": "done"},
+            }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
+
+            for task in today_tasks:
+                assignees = list(task.get("assignees") or [])
+                if task.get("assignee") and task["assignee"] not in assignees:
+                    assignees.append(task["assignee"])
+                for uid in assignees:
+                    await _send_push_to_user(uid, "Task Due Today", f'"{task["title"]}" is due today!', "/tasks")
+
+            total = len(due_tasks) + len(today_tasks)
+            if total:
+                logger.info(f"Sent due-date reminders for {total} tasks ({len(today_tasks)} today, {len(due_tasks)} tomorrow)")
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
