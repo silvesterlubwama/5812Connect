@@ -259,10 +259,14 @@ async def seed_extended():
 # ========== DASHBOARD ==========
 
 @api_router.get("/dashboard/stats")
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc)
     month_start_str = now.replace(day=1).isoformat()[:7]
-    campus = get_campus_filter(current_user)
+    # System admins can override with a specific campus_id; non-admins always use their own
+    if campus_id and is_system_admin(current_user):
+        campus = {"location_id": campus_id}
+    else:
+        campus = get_campus_filter(current_user)
     total_members = await db.members.count_documents({**campus})
     active_members = await db.members.count_documents({"status": "active", **campus})
     total_families = await db.families.count_documents({**campus})
@@ -616,6 +620,7 @@ try:
     from routers.misc import router as misc_router
     from routers.webauthn import router as webauthn_router
     from routers.boards import router as boards_router
+    from routers.email import router as email_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -635,6 +640,7 @@ try:
     app.include_router(misc_router)
     app.include_router(webauthn_router)
     app.include_router(boards_router)
+    app.include_router(email_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

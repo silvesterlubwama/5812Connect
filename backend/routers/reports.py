@@ -61,6 +61,132 @@ async def report_summary(location_id: Optional[str] = None, date_from: Optional[
     }
 
 
+@router.get("/reports/campus-comparison")
+async def campus_comparison(date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Advanced campus-by-campus comparison report for system admins."""
+    campus_filter = {}
+    if not is_system_admin(current_user):
+        campus_filter = {"location_id": current_user.get("location_id")}
+
+    locations = await db.locations.find({}, {"_id": 0}).to_list(100)
+    date_match = {}
+    if date_from:
+        date_match["$gte"] = date_from
+    if date_to:
+        date_match["$lte"] = date_to
+
+    results = []
+    for loc in locations:
+        lid = loc["id"]
+        if campus_filter and campus_filter.get("location_id") != lid:
+            continue
+        lf = {"location_id": lid}
+
+        members = await db.members.count_documents(lf)
+        active = await db.members.count_documents({**lf, "status": "active"})
+        children = await db.children.count_documents(lf)
+        families = await db.families.count_documents(lf)
+        guests = await db.guests.count_documents(lf)
+
+        don_q = {**lf}
+        exp_q = {**lf}
+        if date_match:
+            don_q["date"] = date_match
+            exp_q["date"] = date_match
+
+        don_r = await db.donations.aggregate([{"$match": don_q}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        exp_r = await db.expenses.aggregate([{"$match": exp_q}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        donations = don_r[0]["total"] if don_r else 0
+        expenses = exp_r[0]["total"] if exp_r else 0
+
+        ev_q = {**lf}
+        checkins = await db.checkins.count_documents(lf)
+        events = await db.events.count_documents(ev_q)
+
+        results.append({
+            "location_id": lid,
+            "location_name": loc.get("name", lid),
+            "location_type": loc.get("type", ""),
+            "members": members,
+            "active_members": active,
+            "children": children,
+            "families": families,
+            "guests": guests,
+            "donations": donations,
+            "expenses": expenses,
+            "net": donations - expenses,
+            "events": events,
+            "checkins": checkins,
+        })
+
+    results.sort(key=lambda x: x["members"], reverse=True)
+    totals = {
+        "members": sum(r["members"] for r in results),
+        "children": sum(r["children"] for r in results),
+        "families": sum(r["families"] for r in results),
+        "donations": sum(r["donations"] for r in results),
+        "expenses": sum(r["expenses"] for r in results),
+        "net": sum(r["net"] for r in results),
+        "events": sum(r["events"] for r in results),
+        "checkins": sum(r["checkins"] for r in results),
+    }
+
+    return {"campuses": results, "totals": totals, "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/reports/campus/{location_id}")
+async def campus_detail_report(location_id: str, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Detailed report for a single campus."""
+    if not is_system_admin(current_user) and current_user.get("location_id") != location_id:
+        raise HTTPException(status_code=403, detail="No access to this campus")
+
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
+    if not loc:
+        raise HTTPException(status_code=404, detail="Campus not found")
+
+    lf = {"location_id": location_id}
+    date_match = {}
+    if date_from:
+        date_match["$gte"] = date_from
+    if date_to:
+        date_match["$lte"] = date_to
+
+    members = await db.members.find(lf, {"_id": 0, "name": 1, "status": 1, "role": 1, "group": 1}).to_list(500)
+    children = await db.children.find(lf, {"_id": 0, "name": 1, "class_group": 1}).to_list(500)
+
+    # Group breakdown
+    groups = {}
+    for m in members:
+        g = m.get("group") or m.get("role") or "Unassigned"
+        groups[g] = groups.get(g, 0) + 1
+
+    # Monthly trends (last 6 months)
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    monthly = []
+    for i in range(5, -1, -1):
+        d = now - timedelta(days=i * 30)
+        month_str = d.strftime("%Y-%m")
+        don_q = {**lf, "date": {"$regex": f"^{month_str}"}}
+        exp_q = {**lf, "date": {"$regex": f"^{month_str}"}}
+        don_r = await db.donations.aggregate([{"$match": don_q}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        exp_r = await db.expenses.aggregate([{"$match": exp_q}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        checkins_month = await db.checkins.count_documents({**lf, "check_in_time": {"$regex": f"^{month_str}"}})
+        monthly.append({
+            "month": month_str,
+            "donations": don_r[0]["total"] if don_r else 0,
+            "expenses": exp_r[0]["total"] if exp_r else 0,
+            "checkins": checkins_month,
+        })
+
+    return {
+        "campus": loc,
+        "member_count": len(members),
+        "children_count": len(children),
+        "group_breakdown": groups,
+        "monthly_trends": monthly,
+    }
+
 @router.get("/reports/pdf")
 async def export_pdf_report(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Generate and download a PDF report"""

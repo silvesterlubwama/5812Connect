@@ -43,7 +43,7 @@ export default function ReportsPage() {
       if (locationId) params.location_id = locationId;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
-      const res = await reportsApi.downloadPdf(params);
+      const res = await reportsApi.pdf(params);
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;

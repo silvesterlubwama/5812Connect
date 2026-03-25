@@ -1,1 +1,22 @@
 /* App-level styles */
+
+/* Mobile optimizations */
+@media (max-width: 640px) {
+  .shadow-soft { box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04); }
+  table { font-size: 0.8125rem; }
+  th, td { padding: 0.5rem 0.625rem; }
+  .dialog-content { max-width: calc(100vw - 2rem); }
+}
+
+/* Smooth page transitions */
+main { scroll-behavior: smooth; }
+
+/* Better touch targets on mobile */
+@media (max-width: 768px) {
+  button, a, [role="button"] { min-height: 36px; }
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* Horizontal scroll for tables on mobile */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+

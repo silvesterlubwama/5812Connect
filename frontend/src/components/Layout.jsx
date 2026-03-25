@@ -61,6 +61,7 @@ const NAV_SECTIONS = [
       { to: '/sales-analytics', icon: TrendingUp, labelKey: 'nav.salesAnalytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
       { to: '/location-analytics', icon: BarChart3, labelKey: 'nav.locationStats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
       { to: '/reports', icon: FileText, labelKey: 'nav.reports', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/campus-reports', icon: Building2, labelKey: 'nav.campusReports', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
     ]
   },
   {
@@ -281,19 +282,19 @@ export default function Layout() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="flex items-center gap-3 px-4 py-3 bg-card border-b border-border shrink-0">
-          <button className="lg:hidden text-muted-foreground" onClick={() => setSidebarOpen(true)}>
+        <header className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-3 bg-card border-b border-border shrink-0">
+          <button className="lg:hidden text-muted-foreground p-1" onClick={() => setSidebarOpen(true)} data-testid="mobile-menu-btn">
             <Menu size={20} />
           </button>
 
-          {/* Search trigger */}
+          {/* Search trigger — icon only on mobile */}
           <button
-            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/60 text-sm text-muted-foreground hover:bg-secondary transition-colors flex-1 max-w-64"
+            className="flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-secondary/60 text-sm text-muted-foreground hover:bg-secondary transition-colors sm:flex-1 sm:max-w-64"
             onClick={() => setSearchOpen(true)}
             data-testid="global-search-trigger"
           >
             <Search size={13} />
-            <span className="text-xs">Search... (Ctrl+K)</span>
+            <span className="text-xs hidden sm:inline">Search... (Ctrl+K)</span>
           </button>
 
           <div className="flex-1" />

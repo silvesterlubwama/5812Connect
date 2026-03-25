@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap } from 'lucide-react';
+import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi } from '../services/api';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -30,6 +31,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isParent = user?.role === 'parent';
+  const isSystemAdmin = ['admin', 'system_admin', 'Director', 'Executive Director'].includes(user?.role);
   const [stats, setStats] = useState(null);
   const [events, setEvents] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -40,20 +42,29 @@ export default function DashboardPage() {
   const [parentData, setParentData] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [deptData, setDeptData] = useState([]);
+  const [campuses, setCampuses] = useState([]);
+  const [selectedCampus, setSelectedCampus] = useState('all');
+
+  useEffect(() => {
+    if (isSystemAdmin) {
+      locationsApi.list().then(res => setCampuses(res.data || [])).catch(() => {});
+    }
+  }, [isSystemAdmin]);
 
   const fetchAll = async () => {
     setLoadingStats(true);
     try {
+      const campusParam = selectedCampus !== 'all' ? { campus_id: selectedCampus } : {};
       if (isParent) {
         const [dashRes, evRes] = await Promise.all([parentApi.dashboard(), eventsApi.list({ status: 'upcoming' })]);
         setParentData(dashRes.data);
         setEvents(evRes.data.slice(0, 5));
       } else {
         const [statsRes, eventsRes, tasksRes, finRes, famRes, chdRes, prodRes] = await Promise.all([
-          dashboardApi.stats(),
+          dashboardApi.stats(campusParam),
           eventsApi.list({ status: 'upcoming' }),
           tasksApi.list(),
-          financialApi.summary(),
+          financialApi.summary(campusParam),
           familiesApi.list(),
           childrenApi.list(),
           productsApi.list(),
@@ -66,7 +77,6 @@ export default function DashboardPage() {
         setChildrenCount(Array.isArray(chdRes.data) ? chdRes.data.length : 0);
         const prods = Array.isArray(prodRes.data) ? prodRes.data : [];
         setLowStockProducts(prods.filter(p => p.stock <= (p.reorder_level || 5)));
-        // Build department chart data from stats
         if (statsRes.data?.group_breakdown) {
           setDeptData(Object.entries(statsRes.data.group_breakdown).map(([name, count]) => ({ name, count })));
         }
@@ -78,7 +88,7 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => { fetchAll(); }, [isParent]);
+  useEffect(() => { fetchAll(); }, [isParent, selectedCampus]);
 
   // ---- PARENT VIEW ----
   if (isParent) {
@@ -151,18 +161,44 @@ export default function DashboardPage() {
   }
 
   // ---- ADMIN/STAFF VIEW ----
+  const campusName = selectedCampus === 'all' ? 'All Campuses' : (campuses.find(c => c.id === selectedCampus)?.name || '');
+
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold font-heading">Dashboard</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold font-heading">Dashboard</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Welcome back, {user?.name?.split(' ')[0]}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>
+        <div className="flex items-center gap-2">
+          {isSystemAdmin && campuses.length > 0 && (
+            <Select value={selectedCampus} onValueChange={setSelectedCampus} data-testid="campus-switcher">
+              <SelectTrigger className="w-[200px] h-9 text-sm" data-testid="campus-switcher-trigger">
+                <Building2 size={14} className="mr-1.5 shrink-0 text-muted-foreground" />
+                <SelectValue placeholder="All Campuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Campuses</SelectItem>
+                {campuses.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>
+        </div>
       </div>
 
+      {selectedCampus !== 'all' && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20">
+          <Building2 size={14} className="text-primary" />
+          <span className="text-sm font-medium text-primary">Viewing: {campusName}</span>
+          <Button variant="ghost" size="sm" className="ml-auto text-xs h-7" onClick={() => setSelectedCampus('all')}>Show All</Button>
+        </div>
+      )}
+
       {/* Primary stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard title="Total Members" value={stats?.total_members?.toLocaleString()} sub={`${stats?.active_members ?? 0} active`} icon={Users} color="bg-primary" loading={loadingStats} onClick={() => navigate('/people')} />
         <StatCard title="Families" value={familyCount} sub={`${childrenCount} children`} icon={Heart} color="bg-pink-500" loading={loadingStats} onClick={() => navigate('/people')} />
         <StatCard title="Check-ins Today" value={stats?.checkins_today} sub="Across all venues" icon={UserCheck} color="bg-green-500" loading={loadingStats} onClick={() => navigate('/check-ins')} />
@@ -170,7 +206,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Financial summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-2.5 rounded-lg bg-green-500"><DollarSign size={18} className="text-white" /></div>
@@ -222,7 +258,7 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-5">
+      <div className="grid lg:grid-cols-3 gap-4 sm:gap-5">
         {/* Upcoming Events */}
         <div className="lg:col-span-2 space-y-4">
           <Card className="shadow-soft rounded-xl">

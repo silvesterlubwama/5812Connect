@@ -93,7 +93,7 @@ export const venuesApi = {
 
 // ---- DASHBOARD ----
 export const dashboardApi = {
-  stats: () => api.get('/dashboard/stats'),
+  stats: (params) => api.get('/dashboard/stats', { params }),
 };
 
 // ---- PUBLIC ----
@@ -329,10 +329,7 @@ export const accessApi = {
 };
 
 // ---- REPORTS ----
-export const reportsApi = {
-  summary: (params) => api.get('/reports/summary', { params }),
-  downloadPdf: (params) => api.get('/reports/pdf', { params, responseType: 'blob' }),
-};
+// (consolidated in advanced reports below)
 
 // ---- CSV FILE UPLOAD ----
 export const csvUploadApi = {
@@ -460,4 +457,19 @@ export const documentsApi = {
 // ---- LOCATION VENUES (Event Location Picker) ----
 export const locationVenuesApi = {
   get: (locationId) => api.get(`/locations/${locationId}/venues`),
+};
+
+// ---- EMAIL ----
+export const emailApi = {
+  send: (data) => api.post('/email/send', data),
+  log: (params) => api.get('/email/log', { params }),
+  templates: () => api.get('/email/templates'),
+};
+
+// ---- ADVANCED REPORTS ----
+export const reportsApi = {
+  summary: (params) => api.get('/reports/summary', { params }),
+  campusComparison: (params) => api.get('/reports/campus-comparison', { params }),
+  campusDetail: (locationId, params) => api.get(`/reports/campus/${locationId}`, { params }),
+  pdf: (params) => api.get('/reports/pdf', { params, responseType: 'blob' }),
 };
