@@ -24,15 +24,16 @@ const TIMEZONES = [
   'Australia/Sydney', 'Pacific/Auckland',
 ];
 
-const typeLabels = { main: 'Main', compass: 'Compass', 'sub-location': 'Sub-Location' };
+const typeLabels = { main: 'Main', campus: 'Campus', compass: 'Campus', 'sub-location': 'Sub-Location' };
 const typeColors = {
   main: 'bg-primary/10 text-primary border-primary/20',
+  campus: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800',
   compass: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800',
   'sub-location': 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700',
 };
 
 const emptyForm = {
-  name: '', code: '', type: 'compass', parent_id: '', address: '', country: '',
+  name: '', code: '', type: 'campus', parent_id: '', address: '', country: '',
   currency: 'USD', timezone: 'Africa/Kampala', contact_name: '', contact_phone: '', director_id: '',
   is_venue: false, is_bookable: false, is_restricted: false, departments: [],
 };
@@ -66,7 +67,7 @@ export default function LocationsPage() {
 
   const toggleExpand = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const openAdd = (parentId = '', type = 'compass') => {
+  const openAdd = (parentId = '', type = 'campus') => {
     setEditing(null);
     setForm({ ...emptyForm, parent_id: parentId, type });
     setDeptInput('');
@@ -76,7 +77,7 @@ export default function LocationsPage() {
   const openEdit = (loc) => {
     setEditing(loc);
     setForm({
-      name: loc.name || '', code: loc.code || '', type: loc.type || 'compass',
+      name: loc.name || '', code: loc.code || '', type: loc.type || 'campus',
       parent_id: loc.parent_id || '', address: loc.address || '', country: loc.country || '',
       currency: loc.currency || 'USD', timezone: loc.timezone || 'Africa/Kampala', contact_name: loc.contact_name || '',
       contact_phone: loc.contact_phone || '', director_id: loc.director_id || '',
@@ -136,7 +137,7 @@ export default function LocationsPage() {
   };
 
   const mainLocs = locations.filter(l => l.type === 'main');
-  const compassLocs = locations.filter(l => l.type === 'compass');
+  const campusLocs = locations.filter(l => l.type === 'campus' || l.type === 'compass');
   const subLocs = locations.filter(l => l.type === 'sub-location');
 
   const renderLocationTree = (parent, depth = 0) => {
@@ -151,7 +152,7 @@ export default function LocationsPage() {
           onToggle={() => toggleExpand(parent.id)}
           onEdit={() => openEdit(parent)}
           onDelete={() => deleteLocation(parent.id)}
-          onAddChild={() => openAdd(parent.id, parent.type === 'main' ? 'compass' : 'sub-location')}
+          onAddChild={() => openAdd(parent.id, parent.type === 'main' ? 'campus' : 'sub-location')}
           directorName={getDirectorName(parent.director_id)}
         />
         {isExpanded && children.length > 0 && (
@@ -172,7 +173,7 @@ export default function LocationsPage() {
         <div>
           <h1 className="text-2xl font-semibold font-heading" data-testid="locations-title">Locations</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {mainLocs.length} main · {compassLocs.length} compasses · {subLocs.length} sub-locations
+            {mainLocs.length} main · {campusLocs.length} campuses · {subLocs.length} sub-locations
           </p>
         </div>
         <Button className="gap-2" onClick={() => openAdd()} data-testid="add-location-btn">
@@ -201,7 +202,7 @@ export default function LocationsPage() {
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Location' : 'Add Location'}</DialogTitle>
             <DialogDescription>
-              {editing ? 'Update location details' : 'Compasses are regional branches. Sub-locations are venues or areas within a compass.'}
+              {editing ? 'Update location details' : 'Campuses are regional branches. Sub-locations are venues or areas within a campus.'}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 mt-2">
@@ -217,7 +218,7 @@ export default function LocationsPage() {
                   <SelectTrigger data-testid="location-type-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="main">Main Organisation</SelectItem>
-                    <SelectItem value="compass">Compass</SelectItem>
+                    <SelectItem value="campus">Campus</SelectItem>
                     <SelectItem value="sub-location">Sub-Location</SelectItem>
                   </SelectContent>
                 </Select>
@@ -352,7 +353,7 @@ function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete,
           )}
           <div className="p-2 rounded-lg bg-secondary mt-0.5">
             {loc.type === 'main' ? <Globe size={14} className="text-primary" /> :
-             loc.type === 'compass' ? <MapPin size={14} className="text-blue-600" /> :
+             loc.type === 'campus' || loc.type === 'compass' ? <MapPin size={14} className="text-blue-600" /> :
              loc.is_venue ? <Building2 size={14} className="text-amber-600" /> :
              <MapPin size={14} className="text-muted-foreground" />}
           </div>
@@ -387,7 +388,7 @@ function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete,
             </div>
           </div>
           <div className="flex gap-1 shrink-0">
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={onAddChild} title={loc.type === 'main' ? 'Add Compass' : 'Add Sub-Location'} data-testid="add-child-btn">
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={onAddChild} title={loc.type === 'main' ? 'Add Campus' : 'Add Sub-Location'} data-testid="add-child-btn">
               <Plus size={12} />
             </Button>
             <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={onEdit} data-testid="edit-location-btn">

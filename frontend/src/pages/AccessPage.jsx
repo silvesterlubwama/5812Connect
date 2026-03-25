@@ -183,7 +183,7 @@ export default function AccessPage() {
           <CardContent className="py-16 text-center">
             <Shield size={48} className="mx-auto mb-3 opacity-30 text-muted-foreground" />
             <p className="text-muted-foreground">No restricted locations configured.</p>
-            <p className="text-xs text-muted-foreground mt-1">Mark a sub-location as "restricted" in Compasses & Locations to enable access control.</p>
+            <p className="text-xs text-muted-foreground mt-1">Mark a sub-location as "restricted" in Locations to enable access control.</p>
           </CardContent>
         </Card>
       ) : (

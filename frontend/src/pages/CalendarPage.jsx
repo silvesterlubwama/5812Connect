@@ -6,7 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { eventsApi, exportApi } from '../services/api';
+import { eventsApi, exportApi, outreachApi } from '../services/api';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -17,6 +17,10 @@ const typeColors = {
   conference: 'bg-amber-500',
   meeting: 'bg-slate-500',
   community: 'bg-teal-500',
+  outreach: 'bg-pink-500',
+  workshop: 'bg-violet-500',
+  training: 'bg-cyan-500',
+  social: 'bg-orange-500',
 };
 
 export default function CalendarPage() {
@@ -28,14 +32,40 @@ export default function CalendarPage() {
   const [recurForm, setRecurForm] = useState({
     title: '', type: 'service', location: '', time: '09:00',
     recurrence: 'weekly', day_of_week: '0', start_date: today.toISOString().split('T')[0],
-    weeks: 12,
+    weeks: 12, interval: 1, nth_week: 1, nth_month_day: 'first',
   });
   const [creatingRecurring, setCreatingRecurring] = useState(false);
 
   useEffect(() => {
-    eventsApi.list()
-      .then(res => setEvents(res.data))
-      .catch(() => {})
+    Promise.all([
+      eventsApi.list(),
+      outreachApi.sessions().catch(() => ({ data: [] })),
+      outreachApi.programs().catch(() => ({ data: [] })),
+    ]).then(([evtRes, sessRes, progRes]) => {
+      const allEvents = evtRes.data || [];
+      // Convert outreach sessions to event-like objects for the calendar
+      const programs = progRes.data || [];
+      const progMap = Object.fromEntries(programs.map(p => [p.id, p]));
+      const sessionEvents = (sessRes.data || []).filter(s => s.date).map(s => {
+        const prog = progMap[s.program_id];
+        return {
+          id: s.id,
+          title: prog ? `${prog.name} (Session)` : 'Outreach Session',
+          type: 'outreach',
+          date: s.date,
+          time: s.time || '',
+          location: s.location || prog?.location || '',
+          status: 'completed',
+          registered: s.attendees || 0,
+          capacity: prog?.target || 100,
+          _isSession: true,
+        };
+      });
+      // Merge: avoid duplicating sessions that already have a matching event
+      const existingDates = new Set(allEvents.map(e => `${e.title}_${e.date}`));
+      const newSessions = sessionEvents.filter(s => !existingDates.has(`${s.title}_${s.date}`));
+      setEvents([...allEvents, ...newSessions]);
+    }).catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
@@ -81,28 +111,79 @@ export default function CalendarPage() {
     try {
       const startDate = new Date(recurForm.start_date);
       const created = [];
-      for (let i = 0; i < recurForm.weeks; i++) {
-        const eventDate = new Date(startDate);
-        if (recurForm.recurrence === 'weekly') {
-          eventDate.setDate(startDate.getDate() + i * 7);
-        } else if (recurForm.recurrence === 'biweekly') {
-          eventDate.setDate(startDate.getDate() + i * 14);
-        } else {
-          eventDate.setMonth(startDate.getMonth() + i);
+      const interval = recurForm.interval || 1;
+
+      if (recurForm.recurrence === 'nth_week') {
+        // Nth week of month pattern: e.g. "2nd Saturday of every month"
+        const dayMap = { '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6 };
+        const targetDay = dayMap[recurForm.day_of_week] ?? 0;
+        const nthWeek = recurForm.nth_week || 1;
+
+        for (let i = 0; i < recurForm.weeks; i++) {
+          const month = startDate.getMonth() + i * interval;
+          const year = startDate.getFullYear() + Math.floor(month / 12);
+          const actualMonth = ((month % 12) + 12) % 12;
+
+          // Find nth occurrence of target weekday in month
+          let count = 0;
+          let eventDate = null;
+          const daysInMonth = new Date(year, actualMonth + 1, 0).getDate();
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dt = new Date(year, actualMonth, d);
+            if (dt.getDay() === targetDay) {
+              count++;
+              if (nthWeek === -1) {
+                eventDate = dt; // keep overwriting for "last"
+              } else if (count === nthWeek) {
+                eventDate = dt;
+                break;
+              }
+            }
+          }
+          if (!eventDate) continue;
+          const dateStr = eventDate.toISOString().split('T')[0];
+          const res = await eventsApi.create({
+            title: recurForm.title, type: recurForm.type, location: recurForm.location,
+            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
+            is_recurring: true, recurrence_pattern: `nth_week_${nthWeek}_day_${targetDay}_interval_${interval}`,
+          });
+          created.push(res.data);
         }
-        const dateStr = eventDate.toISOString().split('T')[0];
-        const res = await eventsApi.create({
-          title: recurForm.title,
-          type: recurForm.type,
-          location: recurForm.location,
-          time: recurForm.time,
-          date: dateStr,
-          status: 'upcoming',
-          capacity: 100,
-          is_recurring: true,
-          recurrence_pattern: recurForm.recurrence,
-        });
-        created.push(res.data);
+      } else if (recurForm.recurrence === 'nth_month') {
+        // Nth day of month pattern: e.g. "15th of every 2 months"
+        const dayOfMonth = parseInt(recurForm.nth_month_day) || 1;
+        for (let i = 0; i < recurForm.weeks; i++) {
+          const eventDate = new Date(startDate);
+          eventDate.setMonth(startDate.getMonth() + i * interval);
+          const daysInMonth = new Date(eventDate.getFullYear(), eventDate.getMonth() + 1, 0).getDate();
+          eventDate.setDate(Math.min(dayOfMonth, daysInMonth));
+          const dateStr = eventDate.toISOString().split('T')[0];
+          const res = await eventsApi.create({
+            title: recurForm.title, type: recurForm.type, location: recurForm.location,
+            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
+            is_recurring: true, recurrence_pattern: `nth_month_day_${dayOfMonth}_interval_${interval}`,
+          });
+          created.push(res.data);
+        }
+      } else {
+        // Standard weekly/biweekly/monthly
+        for (let i = 0; i < recurForm.weeks; i++) {
+          const eventDate = new Date(startDate);
+          if (recurForm.recurrence === 'weekly') {
+            eventDate.setDate(startDate.getDate() + i * 7 * interval);
+          } else if (recurForm.recurrence === 'biweekly') {
+            eventDate.setDate(startDate.getDate() + i * 14);
+          } else {
+            eventDate.setMonth(startDate.getMonth() + i * interval);
+          }
+          const dateStr = eventDate.toISOString().split('T')[0];
+          const res = await eventsApi.create({
+            title: recurForm.title, type: recurForm.type, location: recurForm.location,
+            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
+            is_recurring: true, recurrence_pattern: recurForm.recurrence,
+          });
+          created.push(res.data);
+        }
       }
       setEvents(prev => [...prev, ...created]);
       setShowRecurring(false);
@@ -218,6 +299,7 @@ export default function CalendarPage() {
                     <SelectItem value="meeting">Meeting</SelectItem>
                     <SelectItem value="conference">Conference</SelectItem>
                     <SelectItem value="community">Community</SelectItem>
+                    <SelectItem value="outreach">Outreach</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -229,13 +311,15 @@ export default function CalendarPage() {
               <Input placeholder="Where will it be?" value={recurForm.location} onChange={e => setRecurForm({...recurForm, location: e.target.value})} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Recurrence</Label>
+              <div className="space-y-2"><Label>Recurrence Pattern</Label>
                 <Select value={recurForm.recurrence} onValueChange={v => setRecurForm({...recurForm, recurrence: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="weekly">Every N Weeks</SelectItem>
                     <SelectItem value="biweekly">Bi-weekly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="monthly">Every N Months</SelectItem>
+                    <SelectItem value="nth_week">Nth Weekday of Month</SelectItem>
+                    <SelectItem value="nth_month">Nth Day of Month</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -243,6 +327,54 @@ export default function CalendarPage() {
                 <Input type="number" min={1} max={52} value={recurForm.weeks} onChange={e => setRecurForm({...recurForm, weeks: parseInt(e.target.value) || 1})} />
               </div>
             </div>
+            {(recurForm.recurrence === 'weekly' || recurForm.recurrence === 'monthly') && (
+              <div className="space-y-2"><Label>Every N {recurForm.recurrence === 'weekly' ? 'weeks' : 'months'}</Label>
+                <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
+              </div>
+            )}
+            {recurForm.recurrence === 'nth_week' && (
+              <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
+                <div className="space-y-2"><Label>Which Week</Label>
+                  <Select value={String(recurForm.nth_week)} onValueChange={v => setRecurForm({...recurForm, nth_week: parseInt(v)})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1st</SelectItem>
+                      <SelectItem value="2">2nd</SelectItem>
+                      <SelectItem value="3">3rd</SelectItem>
+                      <SelectItem value="4">4th</SelectItem>
+                      <SelectItem value="-1">Last</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Day of Week</Label>
+                  <Select value={recurForm.day_of_week} onValueChange={v => setRecurForm({...recurForm, day_of_week: v})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Sunday</SelectItem>
+                      <SelectItem value="1">Monday</SelectItem>
+                      <SelectItem value="2">Tuesday</SelectItem>
+                      <SelectItem value="3">Wednesday</SelectItem>
+                      <SelectItem value="4">Thursday</SelectItem>
+                      <SelectItem value="5">Friday</SelectItem>
+                      <SelectItem value="6">Saturday</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2 space-y-2"><Label>Every N months</Label>
+                  <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
+                </div>
+              </div>
+            )}
+            {recurForm.recurrence === 'nth_month' && (
+              <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
+                <div className="space-y-2"><Label>Day of Month</Label>
+                  <Input type="number" min={1} max={31} value={recurForm.nth_month_day} onChange={e => setRecurForm({...recurForm, nth_month_day: e.target.value})} placeholder="e.g. 15" />
+                </div>
+                <div className="space-y-2"><Label>Every N months</Label>
+                  <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
+                </div>
+              </div>
+            )}
             <div className="space-y-2"><Label>Start Date</Label>
               <Input type="date" value={recurForm.start_date} onChange={e => setRecurForm({...recurForm, start_date: e.target.value})} />
             </div>

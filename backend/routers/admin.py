@@ -138,7 +138,7 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
     if not user: raise HTTPException(status_code=404, detail="User not found")
     # Merge with member record
     member = await db.members.find_one(
-        {"$or": [{"id": user_id}, {"email": user.get("email", "__none__")}]},
+        {"$or": [{"user_id": user_id}, {"id": user_id}, {"email": user.get("email", "__none__")}]},
         {"_id": 0}
     )
     if member:

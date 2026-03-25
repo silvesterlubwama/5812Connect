@@ -64,11 +64,25 @@ async def upload_member_document(
     request_id: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Upload a document for a member. Staff/admin can upload for any member.
-    Members can only upload their own documents."""
+    """Upload a document for a member or user. Accepts both member_id and user_id.
+    Staff/admin can upload for any member. Members can only upload their own documents."""
+    # Try members collection first
     member = await db.members.find_one({"id": member_id}, {"_id": 0, "role": 1, "group": 1, "name": 1, "email": 1})
     if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+        # Fallback: check if this is a user_id and find their linked member record
+        user = await db.users.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "email": 1})
+        if user:
+            member = await db.members.find_one(
+                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
+                {"_id": 0, "id": 1, "role": 1, "group": 1, "name": 1, "email": 1}
+            )
+            if member:
+                member_id = member["id"]
+            else:
+                # No member profile exists, use user data directly
+                member = {"name": user.get("name"), "email": user.get("email"), "role": "user"}
+        else:
+            raise HTTPException(status_code=404, detail="Member not found")
 
     # Access check: member can only upload their own docs
     role = (current_user.get("role") or "").lower()
@@ -118,7 +132,19 @@ async def upload_member_document(
 
 @router.get("/members/{member_id}/documents")
 async def list_member_documents(member_id: str, current_user: dict = Depends(get_current_user)):
-    docs = await db.files.find({"member_id": member_id, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # Also check if member_id is actually a user_id and resolve the real member_id
+    resolved_id = member_id
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "id": 1})
+    if not member:
+        user = await db.users.find_one({"id": member_id}, {"_id": 0, "email": 1})
+        if user:
+            linked = await db.members.find_one(
+                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
+                {"_id": 0, "id": 1}
+            )
+            if linked:
+                resolved_id = linked["id"]
+    docs = await db.files.find({"member_id": {"$in": [member_id, resolved_id]}, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
 
 
@@ -166,9 +192,22 @@ async def create_document_request(data: dict, current_user: dict = Depends(get_c
     if not member_id:
         raise HTTPException(status_code=400, detail="member_id is required")
 
-    member = await db.members.find_one({"id": member_id}, {"_id": 0, "name": 1})
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "name": 1, "id": 1})
     if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+        # Fallback: resolve user_id to member
+        user = await db.users.find_one({"id": member_id}, {"_id": 0, "name": 1, "email": 1})
+        if user:
+            linked = await db.members.find_one(
+                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
+                {"_id": 0, "name": 1, "id": 1}
+            )
+            if linked:
+                member = linked
+                member_id = linked["id"]
+            else:
+                member = {"name": user.get("name")}
+        else:
+            raise HTTPException(status_code=404, detail="Member not found")
 
     doc_type = data.get("doc_type", "other")
     if doc_type not in ID_TYPES:
