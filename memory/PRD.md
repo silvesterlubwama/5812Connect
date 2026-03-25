@@ -21,7 +21,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
         ├── context/
         ├── pages/
         │   ├── kanban/ (KanbanCard, KanbanList, ArchivePanel, CardDetailDialog, TeamCalendar)
-        │   ├── TasksPage, UnifiedPeoplePage, AdminPage, CalendarPage, etc.
+        │   ├── TasksPage, UnifiedPeoplePage, AdminPage, CalendarPage, AuditPage, etc.
         └── services/api.js
 ```
 
@@ -32,9 +32,12 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - `documents`, `document_requests`
 - `outreach_programs`, `outreach_sessions`
 - `locations` (type: main, campus, sub-location)
+- `families`, `children`, `guests`
+- `deleted_items` (soft-delete recycle bin, 30-day retention)
 
 ## Credentials
 - Admin: `admin@5812uganda.org` / `Admin@5812`
+- System Admin: `silvester@lubwamas.org` / `Admin@5812`
 
 ## Completed Features (All Verified)
 - Full Kanban board with WebSocket real-time updates
@@ -45,50 +48,70 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - Network badge printing (NFC)
 - Due-date reminder notifications
 - People/Members management with bulk operations
-- Family, Children, Guest management
+- Family, Children, Guest management with FULL CRUD
 - Events, Check-ins, Venues management
 - Financial management (donations, expenses)
 - Outreach programmes with recurring event generation
 - AI Assistant (Gemini)
 - CSV import/export
 - Public booking system
+- Document upload (works with both user_id and member_id)
+- Enhanced event recurrence (Nth week/month patterns)
+- Calendar shows outreach sessions
+- "Compasses" renamed to "Campus" globally
+- Duplicate prevention on all entity creation
+- Soft-delete with 30-day recycle bin + restore
+- Parents import as guests (not members)
+- Auto-admin promotion for silvester@lubwamas.org
 
-## Recently Completed (Session 2026-03-25)
+## Session 2026-03-25 Changes
 
 ### P0 Bug Fix: Document Upload "Member not found"
-- **Root cause**: Admin page sent `user_id` to endpoint that only accepted `member_id`
-- **Fix**: Backend now resolves user_id → member_id via `users` → `members` collection fallback
-- **Files**: `/app/backend/routers/documents.py`, `/app/backend/routers/admin.py`
-- **Status**: VERIFIED (iteration_18, 100% pass)
+- Backend resolves user_id → member_id via users → members collection fallback
+- Status: VERIFIED (iteration_18)
 
-### P2: Rename "Compasses" → "Campus"
-- Renamed all UI text, type labels, seed data, and i18n strings
-- Navigation tab renamed from "Compasses & Locations" to "Locations"
-- Backend handles both "campus" and "compass" types for backward compatibility
-- **Files**: LocationsPage.jsx, AccessPage.jsx, en.json, server.py
-- **Status**: VERIFIED (iteration_18, 100% pass)
+### P2: Rename "Compasses" → "Campus" + Nav tab → "Locations"
+- Status: VERIFIED (iteration_18)
 
 ### P1: Enhanced Event Recurrence
-- Added 5 recurrence patterns: Weekly, Bi-weekly, Monthly, Nth Weekday of Month, Nth Day of Month
-- Nth Week: pick which week (1st-4th/Last) + day of week + interval
-- Nth Month: pick day of month number + interval
-- All patterns support custom interval multiplier
-- **Files**: CalendarPage.jsx
-- **Status**: VERIFIED (iteration_18, 100% pass)
+- 5 recurrence patterns: Weekly, Bi-weekly, Monthly, Nth Weekday of Month, Nth Day of Month
+- Status: VERIFIED (iteration_18)
 
 ### Calendar Shows Outreach Events
-- Calendar now fetches both events AND outreach sessions
-- Outreach sessions displayed as event-like objects with type "outreach" (pink)
-- Legend includes: Service, Conference, Meeting, Community, Outreach, Workshop, Training, Social
-- **Files**: CalendarPage.jsx
-- **Status**: VERIFIED (iteration_18, 100% pass)
+- Calendar fetches both events and outreach sessions
+- Status: VERIFIED (iteration_18)
+
+### Family & Child Editing
+- Added family edit dialog (edit button + form)
+- Child editing already existed, verified working
+- Status: VERIFIED (iteration_19)
+
+### Duplicate Prevention
+- Members: 409 on duplicate email/phone/national_id
+- Families: 409 on duplicate family_name
+- Children: 409 on duplicate name+family_id
+- Guests: 409 on duplicate name+email
+- Status: VERIFIED (iteration_19)
+
+### Soft-Delete & Recycle Bin
+- All deletes (members, families, children, guests, users) move to `deleted_items` collection
+- Recycle bin tab in Audit Trail page with restore + permanent delete
+- 30-day retention window
+- Status: VERIFIED (iteration_19)
+
+### Parents Import as Guests
+- Children/Parents CSV import now creates parents in `guests` collection with `is_parent: true`
+- Status: VERIFIED (iteration_19)
+
+### silvester@lubwamas.org Auto-Admin
+- Auto-created/promoted to admin on server startup
+- Status: VERIFIED (iteration_19)
 
 ## Pending / Not Yet Started
 
 ### P1: Unify People & User Administration UIs
 - Staff marked in People UI should appear in User Admin
 - All users from both UIs should be visible in People UI
-- Requires backend + frontend refactoring of users/members data models
 
 ## Future/Backlog
 - Card due-date reminders via push notifications (enhancement)
