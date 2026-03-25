@@ -230,6 +230,78 @@ async def checkout_person(checkin_id: str, current_user: dict = Depends(require_
     return {"message": "Checked out successfully"}
 
 
+@router.post("/checkins/parent-lookup")
+async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_current_user)):
+    """Look up children by parent phone, ID, email, or QR code and optionally check them in.
+    Returns list of children linked to the parent.
+    If 'checkin' is true, creates check-in records for selected children."""
+    lookup = (data.get("lookup", "") or "").strip()
+    event_id = data.get("event_id", "")
+    event_name = data.get("event_name", "")
+    do_checkin = data.get("checkin", False)
+    child_ids = data.get("child_ids", [])  # specific children to check in
+
+    if not lookup:
+        raise HTTPException(status_code=400, detail="Parent phone, email, or ID required")
+
+    # Search for parent in guests (parents) by phone, email, or id
+    import re
+    safe_lookup = re.escape(lookup)
+    parent_or = [
+        {"phone": {"$regex": safe_lookup, "$options": "i"}},
+        {"email": {"$regex": f"^{safe_lookup}$", "$options": "i"}},
+        {"id": lookup},
+        {"name": {"$regex": safe_lookup, "$options": "i"}},
+    ]
+    parent = await db.guests.find_one({"$or": parent_or, "is_parent": True}, {"_id": 0})
+    if not parent:
+        # Fallback: search guests without is_parent filter (may have been created without the flag)
+        parent = await db.guests.find_one({"$or": parent_or}, {"_id": 0})
+    if not parent:
+        # Also check members/users with parent flag or phone
+        parent = await db.members.find_one({"$or": parent_or}, {"_id": 0})
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent not found. Check the phone number or ID.")
+
+    # Find children linked to this parent
+    children_query = {"$or": []}
+    if parent.get("family_id"):
+        children_query["$or"].append({"family_id": parent["family_id"]})
+    if parent.get("id"):
+        children_query["$or"].append({"parent_ids": parent["id"]})
+    if not children_query["$or"]:
+        return {"parent": parent, "children": [], "checked_in": []}
+
+    children = await db.children.find(children_query, {"_id": 0}).to_list(50)
+
+    if not do_checkin:
+        return {"parent": parent, "children": children, "checked_in": []}
+
+    # Check in specified children (or all if no child_ids provided)
+    checked_in = []
+    targets = children if not child_ids else [c for c in children if c["id"] in child_ids]
+    for child in targets:
+        ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+        checkin = {
+            "id": ci_id,
+            "member_name": child["name"],
+            "member_id": child["id"],
+            "type": "child",
+            "event_id": event_id,
+            "event_name": event_name,
+            "method": "parent_id",
+            "check_in_time": datetime.now(timezone.utc).isoformat(),
+            "checked_in_by": current_user["id"],
+            "parent_id": parent["id"],
+            "parent_name": parent.get("name", ""),
+        }
+        await db.checkins.insert_one(checkin)
+        checkin.pop("_id", None)
+        checked_in.append(checkin)
+
+    return {"parent": parent, "children": children, "checked_in": checked_in}
+
+
 @router.get("/checkins/stats")
 async def get_checkin_stats(current_user: dict = Depends(get_current_user)):
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0).isoformat()
@@ -239,6 +311,7 @@ async def get_checkin_stats(current_user: dict = Depends(get_current_user)):
         "members": await db.checkins.count_documents({"type": "member"}),
         "visitors": await db.checkins.count_documents({"type": "visitor"}),
         "staff": await db.checkins.count_documents({"type": "staff"}),
+        "children": await db.checkins.count_documents({"type": "child"}),
     }
 
 

@@ -263,7 +263,7 @@ export default function UnifiedPeoplePage() {
   const openEditChild = (c, e) => {
     if (e) e.stopPropagation();
     setEditChild(c);
-    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' });
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [] });
   };
   const saveEditChild = async () => {
     if (!editChild) return;
@@ -810,6 +810,28 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5"><Label>Medical Notes</Label><Textarea rows={2} value={editChildForm.medical_notes || ''} onChange={e => setEditChildForm({ ...editChildForm, medical_notes: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Allergies</Label><Input value={editChildForm.allergies || ''} onChange={e => setEditChildForm({ ...editChildForm, allergies: e.target.value })} /></div>
+            <div className="space-y-1.5">
+              <Label>Linked Parents</Label>
+              <p className="text-xs text-muted-foreground">Select parents (from guests) who can check in this child</p>
+              <div className="max-h-32 overflow-y-auto border rounded-lg p-2 space-y-1">
+                {guests.filter(g => g.is_parent || g.family_id).length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-2">No parents found in guests</p>
+                ) : guests.filter(g => g.is_parent || g.family_id).map(g => (
+                  <label key={g.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-accent/30 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={(editChildForm.parent_ids || []).includes(g.id)}
+                      onChange={(e) => {
+                        const ids = editChildForm.parent_ids || [];
+                        setEditChildForm({ ...editChildForm, parent_ids: e.target.checked ? [...ids, g.id] : ids.filter(id => id !== g.id) });
+                      }}
+                      className="rounded"
+                    />
+                    {g.name} {g.phone ? `(${g.phone})` : ''}
+                  </label>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-child-btn" onClick={saveEditChild} disabled={savingChild}>{savingChild ? 'Saving...' : 'Save'}</Button>

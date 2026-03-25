@@ -88,6 +88,7 @@ class ChildCreate(BaseModel):
     allergies: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    parent_ids: Optional[List[str]] = []
 
 class GuestCreate(BaseModel):
     name: str
@@ -97,6 +98,8 @@ class GuestCreate(BaseModel):
     referred_by: Optional[str] = None
     address: Optional[str] = None
     notes: Optional[str] = None
+    is_parent: Optional[bool] = False
+    family_id: Optional[str] = None
 
 class EventCreate(BaseModel):
     title: str

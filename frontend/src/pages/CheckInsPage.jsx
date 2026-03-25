@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi, Baby, QrCode, Phone } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -7,11 +7,12 @@ import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
+import { Checkbox } from '../components/ui/checkbox';
 import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
 
-const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700', pin: 'bg-green-100 text-green-700', biometric: 'bg-indigo-100 text-indigo-700', nfc: 'bg-cyan-100 text-cyan-700' };
-const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600' };
+const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700', pin: 'bg-green-100 text-green-700', biometric: 'bg-indigo-100 text-indigo-700', nfc: 'bg-cyan-100 text-cyan-700', parent_id: 'bg-pink-100 text-pink-700' };
+const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600', child: 'border-emerald-500 text-emerald-600' };
 
 export default function CheckInsPage() {
   const [checkins, setCheckins] = useState([]);
@@ -30,6 +31,19 @@ export default function CheckInsPage() {
   const [nfcStatus, setNfcStatus] = useState('idle'); // idle | scanning | connected | unsupported | success | error
   const [nfcMember, setNfcMember] = useState(null);
   const [nfcEventId, setNfcEventId] = useState('');
+
+  // Parent check-in state
+  const [showParentCheckin, setShowParentCheckin] = useState(false);
+  const [parentLookup, setParentLookup] = useState('');
+  const [parentEventId, setParentEventId] = useState('');
+  const [parentData, setParentData] = useState(null);
+  const [parentChildren, setParentChildren] = useState([]);
+  const [selectedChildIds, setSelectedChildIds] = useState([]);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [checkingInChildren, setCheckingInChildren] = useState(false);
+  const [showQrScanner, setShowQrScanner] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
 
   const handleNfcScan = async () => {
     if (!('NDEFReader' in window)) {
@@ -100,6 +114,116 @@ export default function CheckInsPage() {
     } catch { toast.error('Check-in failed'); }
   };
 
+  // Parent check-in handlers
+  const handleParentLookup = async () => {
+    if (!parentLookup.trim()) return;
+    setLookingUp(true);
+    setParentData(null);
+    setParentChildren([]);
+    try {
+      const res = await checkinsApi.parentLookup({ lookup: parentLookup.trim(), event_id: parentEventId });
+      setParentData(res.data.parent);
+      setParentChildren(res.data.children || []);
+      setSelectedChildIds((res.data.children || []).map(c => c.id)); // select all by default
+      if ((res.data.children || []).length === 0) {
+        toast.info('No children found for this parent');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Parent not found');
+    } finally { setLookingUp(false); }
+  };
+
+  const handleCheckinChildren = async () => {
+    if (!parentData || selectedChildIds.length === 0) return;
+    setCheckingInChildren(true);
+    const eventObj = events.find(ev => ev.id === parentEventId);
+    try {
+      const res = await checkinsApi.parentLookup({
+        lookup: parentData.id || parentData.phone || parentData.email,
+        event_id: parentEventId,
+        event_name: eventObj?.title || '',
+        checkin: true,
+        child_ids: selectedChildIds,
+      });
+      const count = (res.data.checked_in || []).length;
+      toast.success(`${count} child${count > 1 ? 'ren' : ''} checked in!`);
+      setShowParentCheckin(false);
+      resetParentCheckin();
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Check-in failed');
+    } finally { setCheckingInChildren(false); }
+  };
+
+  const resetParentCheckin = () => {
+    setParentLookup('');
+    setParentData(null);
+    setParentChildren([]);
+    setSelectedChildIds([]);
+  };
+
+  const toggleChildSelection = (childId) => {
+    setSelectedChildIds(prev =>
+      prev.includes(childId) ? prev.filter(id => id !== childId) : [...prev, childId]
+    );
+  };
+
+  const startQrScan = async () => {
+    setShowQrScanner(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+      // Use BarcodeDetector API if available
+      if ('BarcodeDetector' in window) {
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        const scanLoop = async () => {
+          if (!videoRef.current || videoRef.current.readyState !== 4) {
+            requestAnimationFrame(scanLoop);
+            return;
+          }
+          try {
+            const barcodes = await detector.detect(videoRef.current);
+            if (barcodes.length > 0) {
+              const code = barcodes[0].rawValue;
+              stopQrScan();
+              setParentLookup(code);
+              // Auto-lookup
+              setLookingUp(true);
+              try {
+                const res = await checkinsApi.parentLookup({ lookup: code, event_id: parentEventId });
+                setParentData(res.data.parent);
+                setParentChildren(res.data.children || []);
+                setSelectedChildIds((res.data.children || []).map(c => c.id));
+              } catch (err) { toast.error(err.response?.data?.detail || 'Not found'); }
+              finally { setLookingUp(false); }
+              return;
+            }
+          } catch {}
+          requestAnimationFrame(scanLoop);
+        };
+        requestAnimationFrame(scanLoop);
+      } else {
+        toast.info('QR scanning requires BarcodeDetector API. Try entering phone/ID manually.');
+        stopQrScan();
+      }
+    } catch (err) {
+      toast.error('Camera access denied');
+      setShowQrScanner(false);
+    }
+  };
+
+  const stopQrScan = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setShowQrScanner(false);
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -166,6 +290,7 @@ export default function CheckInsPage() {
           <Button variant="outline" size="sm" asChild><a href="/kiosk" target="_blank" className="gap-2 flex items-center"><UserCheck size={15} />Kiosk</a></Button>
           <Button variant="outline" onClick={() => setShowPin(true)} className="gap-2"><KeyRound size={15} /> PIN</Button>
           <Button variant="outline" onClick={() => { setShowNfc(true); setNfcStatus('idle'); setNfcMember(null); }} className="gap-2" data-testid="nfc-scan-btn"><Wifi size={15} /> NFC</Button>
+          <Button variant="outline" onClick={() => { setShowParentCheckin(true); resetParentCheckin(); }} className="gap-2" data-testid="parent-checkin-btn"><Baby size={15} /> Parent Check-In</Button>
           <Button variant="outline" size="sm" onClick={fetchData}><RefreshCw size={14} /></Button>
           <Button onClick={() => setShowAdd(true)} className="gap-2"><Plus size={16} /> Manual Check-In</Button>
         </div>
@@ -178,6 +303,7 @@ export default function CheckInsPage() {
           { label: 'Today', value: stats.today, color: 'text-primary' },
           { label: 'Members', value: stats.members, color: 'text-green-600' },
           { label: 'Visitors', value: stats.visitors, color: 'text-orange-500' },
+          { label: 'Children', value: stats.children || 0, color: 'text-emerald-500' },
         ].map(s => (
           <Card key={s.label} className="shadow-soft rounded-xl">
             <CardContent className="p-4 text-center">
@@ -201,6 +327,7 @@ export default function CheckInsPage() {
             <SelectItem value="member">Member</SelectItem>
             <SelectItem value="staff">Staff</SelectItem>
             <SelectItem value="visitor">Visitor</SelectItem>
+            <SelectItem value="child">Child</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -395,6 +522,112 @@ export default function CheckInsPage() {
                   <Button className="flex-1" onClick={() => { setNfcStatus('idle'); handleNfcScan(); }}>Retry</Button>
                 </div>
               </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Parent Check-In Dialog */}
+      <Dialog open={showParentCheckin} onOpenChange={(o) => { if (!o) { setShowParentCheckin(false); stopQrScan(); } }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Baby size={18} className="text-emerald-500" /> Parent Check-In</DialogTitle>
+            <DialogDescription>Look up a parent by phone, email, ID, or QR code to check in their children</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label>Event (optional)</Label>
+              <Select value={parentEventId || '_none'} onValueChange={v => setParentEventId(v === '_none' ? '' : v)}>
+                <SelectTrigger data-testid="parent-event-select"><SelectValue placeholder="Select event" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">No event</SelectItem>
+                  {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {!parentData && (
+              <>
+                <div className="space-y-2">
+                  <Label>Parent Phone, Email, or ID *</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      data-testid="parent-lookup-input"
+                      placeholder="e.g. +256 700 123456"
+                      value={parentLookup}
+                      onChange={e => setParentLookup(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleParentLookup(); } }}
+                      className="flex-1"
+                    />
+                    <Button variant="outline" size="icon" onClick={startQrScan} title="Scan QR" data-testid="qr-scan-btn"><QrCode size={16} /></Button>
+                  </div>
+                </div>
+
+                {showQrScanner && (
+                  <div className="relative rounded-lg overflow-hidden border border-border bg-black">
+                    <video ref={videoRef} className="w-full h-48 object-cover" muted playsInline />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-40 h-40 border-2 border-white/60 rounded-lg" />
+                    </div>
+                    <Button size="sm" variant="secondary" className="absolute bottom-2 right-2" onClick={stopQrScan}>Close</Button>
+                  </div>
+                )}
+
+                <Button className="w-full gap-2" onClick={handleParentLookup} disabled={lookingUp || !parentLookup.trim()} data-testid="lookup-parent-btn">
+                  <Phone size={14} /> {lookingUp ? 'Looking up...' : 'Find Children'}
+                </Button>
+              </>
+            )}
+
+            {parentData && (
+              <>
+                <div className="p-3 rounded-lg bg-accent/30 border border-border">
+                  <p className="text-xs text-muted-foreground">Parent Found</p>
+                  <p className="font-medium">{parentData.name}</p>
+                  <div className="flex gap-3 text-xs text-muted-foreground mt-0.5">
+                    {parentData.phone && <span>{parentData.phone}</span>}
+                    {parentData.email && <span>{parentData.email}</span>}
+                  </div>
+                </div>
+
+                {parentChildren.length > 0 ? (
+                  <div className="space-y-2">
+                    <Label>Select Children to Check In</Label>
+                    {parentChildren.map(child => (
+                      <div key={child.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/20 transition-colors" data-testid={`parent-child-${child.id}`}>
+                        <Checkbox
+                          checked={selectedChildIds.includes(child.id)}
+                          onCheckedChange={() => toggleChildSelection(child.id)}
+                          data-testid={`select-child-${child.id}`}
+                        />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{child.name}</p>
+                          <div className="flex gap-2 text-xs text-muted-foreground">
+                            {child.class_group && <span>{child.class_group}</span>}
+                            {child.gender && <span className="capitalize">{child.gender}</span>}
+                          </div>
+                          {child.allergies && <Badge variant="destructive" className="text-[10px] mt-1">{child.allergies}</Badge>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">No children found for this parent</p>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <Button variant="outline" className="flex-1" onClick={resetParentCheckin} data-testid="parent-checkin-back">Back</Button>
+                  <Button
+                    className="flex-1 gap-1.5"
+                    onClick={handleCheckinChildren}
+                    disabled={checkingInChildren || selectedChildIds.length === 0}
+                    data-testid="checkin-children-btn"
+                  >
+                    <UserCheck size={14} />
+                    {checkingInChildren ? 'Checking in...' : `Check In ${selectedChildIds.length} Child${selectedChildIds.length > 1 ? 'ren' : ''}`}
+                  </Button>
+                </div>
+              </>
             )}
           </div>
         </DialogContent>

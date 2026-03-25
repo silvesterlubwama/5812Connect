@@ -80,6 +80,7 @@ export const checkinsApi = {
   stats: () => api.get('/checkins/stats'),
   pinCheckin: (data) => api.post('/checkins/pin', data),
   checkout: (id) => api.post(`/checkins/${id}/checkout`),
+  parentLookup: (data) => api.post('/checkins/parent-lookup', data),
 };
 
 // ---- VENUES ----
