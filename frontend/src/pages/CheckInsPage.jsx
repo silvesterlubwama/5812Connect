@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi, Baby, QrCode, Phone } from 'lucide-react';
+import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi, Baby, QrCode, Phone, Printer } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
+import { ChildTag, ParentBadge } from '../components/PrintableBadges';
 import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
 
@@ -42,6 +43,9 @@ export default function CheckInsPage() {
   const [lookingUp, setLookingUp] = useState(false);
   const [checkingInChildren, setCheckingInChildren] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
+  const [showChildTags, setShowChildTags] = useState(false);
+  const [checkedInData, setCheckedInData] = useState(null);
+  const [showParentBadge, setShowParentBadge] = useState(false);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -147,8 +151,13 @@ export default function CheckInsPage() {
       });
       const count = (res.data.checked_in || []).length;
       toast.success(`${count} child${count > 1 ? 'ren' : ''} checked in!`);
+      setCheckedInData({
+        parent: res.data.parent,
+        children: parentChildren.filter(c => selectedChildIds.includes(c.id)),
+        eventName: eventObj?.title || '',
+      });
       setShowParentCheckin(false);
-      resetParentCheckin();
+      setShowChildTags(true);
       fetchData();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Check-in failed');
@@ -630,6 +639,40 @@ export default function CheckInsPage() {
               </>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* Child Tags Print Dialog */}
+      <Dialog open={showChildTags} onOpenChange={(o) => { if (!o) { setShowChildTags(false); setCheckedInData(null); } }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Printer size={18} /> Print Child Tags</DialogTitle>
+            <DialogDescription>{checkedInData?.children?.length || 0} child tag{(checkedInData?.children?.length || 0) > 1 ? 's' : ''} ready to print</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            {(checkedInData?.children || []).map(child => (
+              <ChildTag
+                key={child.id}
+                child={child}
+                parentPhone={checkedInData?.parent?.phone}
+                eventName={checkedInData?.eventName}
+              />
+            ))}
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowChildTags(false); setCheckedInData(null); }}>Done</Button>
+              <Button className="flex-1 gap-1.5" onClick={() => setShowParentBadge(true)} data-testid="show-parent-badge-btn"><QrCode size={13} /> Print Parent Badge</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Parent Badge Dialog */}
+      <Dialog open={showParentBadge} onOpenChange={setShowParentBadge}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Parent Badge</DialogTitle></DialogHeader>
+          {checkedInData?.parent && (
+            <ParentBadge parent={checkedInData.parent} children={checkedInData.children} />
+          )}
+          <Button variant="outline" className="w-full mt-2" onClick={() => setShowParentBadge(false)}>Close</Button>
         </DialogContent>
       </Dialog>
     </div>

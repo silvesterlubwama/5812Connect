@@ -4,6 +4,8 @@ import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Avatar, AvatarFallback } from '../../components/ui/avatar';
+import { tasksApi } from '../../services/api';
+import { toast } from 'sonner';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -17,11 +19,24 @@ function userColor(name) {
   return `hsl(${(name.charCodeAt(0) * 37) % 360}, 55%, 42%)`;
 }
 
-export function TeamCalendar({ boards, allTasks, staffUsers, onCardClick }) {
+export function TeamCalendar({ boards, allTasks, staffUsers, onCardClick, onRefresh }) {
   const today = new Date();
   const [current, setCurrent] = useState({ month: today.getMonth(), year: today.getFullYear() });
   const [filterAssignee, setFilterAssignee] = useState('all');
   const [filterBoard, setFilterBoard] = useState('all');
+  const [dragTask, setDragTask] = useState(null);
+  const [dragOverDate, setDragOverDate] = useState(null);
+
+  const handleDrop = async (dateStr) => {
+    if (!dragTask || dragTask.due_date === dateStr) { setDragTask(null); setDragOverDate(null); return; }
+    try {
+      await tasksApi.update(dragTask.id, { due_date: dateStr });
+      toast.success(`Rescheduled to ${dateStr}`);
+      if (onRefresh) onRefresh();
+    } catch { toast.error('Failed to reschedule'); }
+    setDragTask(null);
+    setDragOverDate(null);
+  };
 
   const prev = () => setCurrent(c => c.month === 0 ? { month: 11, year: c.year - 1 } : { ...c, month: c.month - 1 });
   const next = () => setCurrent(c => c.month === 11 ? { month: 0, year: c.year + 1 } : { ...c, month: c.month + 1 });
@@ -147,9 +162,12 @@ export function TeamCalendar({ boards, allTasks, staffUsers, onCardClick }) {
               const isPast = new Date(dateStr) < new Date(todayStr);
 
               return (
-                <div key={day} className={`min-h-[100px] p-1.5 transition-colors ${isToday ? 'ring-1 ring-inset ring-blue-500' : ''}`}
-                  style={{ background: isToday ? 'rgba(59,130,246,0.08)' : '#0f172a' }}
+                <div key={day} className={`min-h-[100px] p-1.5 transition-colors ${isToday ? 'ring-1 ring-inset ring-blue-500' : ''} ${dragOverDate === dateStr ? 'ring-2 ring-inset ring-green-400 bg-green-500/10' : ''}`}
+                  style={{ background: isToday && dragOverDate !== dateStr ? 'rgba(59,130,246,0.08)' : dragOverDate === dateStr ? undefined : '#0f172a' }}
                   data-testid={`calendar-day-${dateStr}`}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverDate(dateStr); }}
+                  onDragLeave={() => setDragOverDate(null)}
+                  onDrop={(e) => { e.preventDefault(); handleDrop(dateStr); }}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : isPast ? 'text-slate-600' : 'text-slate-400'}`}>
@@ -166,6 +184,9 @@ export function TeamCalendar({ boards, allTasks, staffUsers, onCardClick }) {
                       return (
                         <button key={task.id}
                           onClick={() => onCardClick(task)}
+                          draggable
+                          onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragTask(task); }}
+                          onDragEnd={() => { setDragTask(null); setDragOverDate(null); }}
                           className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate transition-colors hover:brightness-125 ${
                             task.status === 'done' ? 'line-through opacity-50' : ''
                           }`}

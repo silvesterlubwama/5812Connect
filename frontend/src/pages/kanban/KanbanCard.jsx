@@ -2,7 +2,7 @@ import { Archive, Paperclip, CheckSquare, Calendar } from 'lucide-react';
 
 const PRIORITY_COLORS = { low: '#10b981', medium: '#f59e0b', high: '#f97316', urgent: '#ef4444' };
 
-export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, onDragStart, onDragEnd, onClick, onArchive, canEdit }) {
+export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, onDragStart, onDragEnd, onClick, onArchive, canEdit, bulkMode, isSelected }) {
   const assignedMembers = (task.assignees || [])
     .map(id => staffUsers.find(u => u.id === id))
     .filter(Boolean);
@@ -21,6 +21,7 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
       className={`rounded-lg p-3 cursor-pointer transition-all group relative select-none
         ${isDragging ? 'opacity-40 rotate-1 scale-95' : ''}
         ${isDragOver ? 'border-t-2 border-t-blue-400' : ''}
+        ${isSelected ? 'ring-2 ring-blue-400' : ''}
       `}
       style={{
         background: '#0f172a',
@@ -29,6 +30,13 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
         boxShadow: isDragging ? 'none' : '0 1px 4px rgba(0,0,0,0.3)',
       }}
     >
+      {bulkMode && (
+        <div className="absolute top-1.5 right-1.5 z-10">
+          <div className={`w-4 h-4 rounded border-2 flex items-center justify-center text-[10px] ${isSelected ? 'bg-blue-500 border-blue-500 text-white' : 'border-white/30 bg-transparent'}`}>
+            {isSelected && '✓'}
+          </div>
+        </div>
+      )}
       {/* Labels */}
       {(task.labels || []).length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
@@ -46,6 +54,11 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
         {task.due_date && (
           <span className={`flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 ${isOverdue ? 'bg-red-500/20 text-red-400' : 'text-slate-500'}`}>
             <Calendar size={9} /> {task.due_date}
+          </span>
+        )}
+        {task.is_recurring && (
+          <span className="flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 bg-violet-500/20 text-violet-400" title={`Recurring: ${task.recurrence_pattern}`}>
+            repeat
           </span>
         )}
         {checklist.length > 0 && (

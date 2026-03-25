@@ -10,6 +10,7 @@ export function KanbanList({
   dragging, dragOver, onDragStart, onDragEnd, onDragOver, onDrop,
   onCardClick, onCardArchive, onAddCard,
   onArchiveList, onDeleteList, onRenameList,
+  bulkMode, selectedCards, toggleBulkCard, selectAllInList,
 }) {
   const [openMenu, setOpenMenu] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -61,6 +62,9 @@ export function KanbanList({
         )}
         <div className="flex items-center gap-1 ml-2 flex-shrink-0">
           <span className="text-xs text-slate-500">{listTasks.length}</span>
+          {bulkMode && listTasks.length > 0 && (
+            <button className="text-[10px] text-blue-400 hover:text-blue-300 px-1" onClick={() => selectAllInList(list.id)} data-testid={`select-all-${list.id}`}>All</button>
+          )}
           {canEdit && (
             <div className="relative" ref={menuRef}>
               <button className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white"
@@ -101,9 +105,11 @@ export function KanbanList({
             isDragOver={dragOver?.listId === list.id && dragOver?.idx === idx}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
-            onClick={() => onCardClick(task)}
+            onClick={() => bulkMode ? toggleBulkCard(task.id) : onCardClick(task)}
             onArchive={() => onCardArchive(task)}
             canEdit={canEdit}
+            bulkMode={bulkMode}
+            isSelected={selectedCards?.has(task.id)}
           />
         ))}
         {listTasks.length === 0 && (

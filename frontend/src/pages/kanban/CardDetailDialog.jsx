@@ -23,6 +23,9 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
   const [newCheckItem, setNewCheckItem] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [isRecurring, setIsRecurring] = useState(card?.is_recurring || false);
+  const [recurrencePattern, setRecurrencePattern] = useState(card?.recurrence_pattern || 'weekly');
+  const [recurrenceInterval, setRecurrenceInterval] = useState(card?.recurrence_interval || 1);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -42,7 +45,7 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
     if (!card) return;
     setSaving(true);
     try {
-      const res = await tasksApi.update(card.id, { title, description, priority, due_date: dueDate, assignees, labels, checklist, attachments });
+      const res = await tasksApi.update(card.id, { title, description, priority, due_date: dueDate, assignees, labels, checklist, attachments, is_recurring: isRecurring, recurrence_pattern: isRecurring ? recurrencePattern : null, recurrence_interval: isRecurring ? recurrenceInterval : null });
       onSaved?.(res.data);
       toast.success('Saved');
     } catch { toast.error('Save failed'); }
@@ -200,6 +203,30 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
               <Label className="text-xs text-slate-400 flex items-center gap-1.5"><Calendar size={11} /> Due Date</Label>
               <Input type="date" className="h-8 text-xs bg-[#0f172a] border-white/15 text-slate-200"
                 value={dueDate} onChange={e => setDueDate(e.target.value)} />
+            </div>
+
+            {/* Recurring */}
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400">
+                <input type="checkbox" className="h-3 w-3 accent-blue-500" checked={isRecurring}
+                  onChange={e => setIsRecurring(e.target.checked)} data-testid="recurring-toggle" />
+                Recurring Task
+              </label>
+              {isRecurring && (
+                <div className="flex gap-2">
+                  <Select value={recurrencePattern} onValueChange={setRecurrencePattern}>
+                    <SelectTrigger className="h-7 text-[11px] bg-[#0f172a] border-white/15 text-slate-200 flex-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input type="number" min={1} max={12} className="h-7 w-16 text-[11px] bg-[#0f172a] border-white/15 text-slate-200"
+                    value={recurrenceInterval} onChange={e => setRecurrenceInterval(parseInt(e.target.value) || 1)} placeholder="N" />
+                </div>
+              )}
             </div>
 
             {/* Location-filtered members */}

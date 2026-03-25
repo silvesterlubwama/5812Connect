@@ -42,6 +42,7 @@ import PortalExpenses from './pages/PortalExpenses';
 import PortalEvents from './pages/PortalEvents';
 import PortalProfile from './pages/PortalProfile';
 import PortalDocuments from './pages/PortalDocuments';
+import SharedBoardPage from './pages/SharedBoardPage';
 import PortalSales from './pages/PortalSales';
 import PortalFamily from './pages/PortalFamily';
 
@@ -69,6 +70,7 @@ function AppRoutes() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/kiosk" element={<KioskPage />} />
       <Route path="/public-bookings" element={<PublicBookingsPage />} />
+      <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />

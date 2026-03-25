@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays } from 'lucide-react';
+import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays, CheckSquare } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -311,6 +311,55 @@ export default function TasksPage() {
   const [addingList, setAddingList] = useState(false);
   const [newListName, setNewListName] = useState('');
 
+  // ===== BULK OPERATIONS =====
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedCards, setSelectedCards] = useState(new Set());
+
+  const toggleBulkCard = (taskId) => {
+    setSelectedCards(prev => {
+      const next = new Set(prev);
+      next.has(taskId) ? next.delete(taskId) : next.add(taskId);
+      return next;
+    });
+  };
+  const selectAllInList = (listId) => {
+    const listTasks = tasks.filter(t => t.list_id === listId && !t.is_archived);
+    setSelectedCards(prev => {
+      const next = new Set(prev);
+      listTasks.forEach(t => next.add(t.id));
+      return next;
+    });
+  };
+  const bulkArchive = async () => {
+    if (selectedCards.size === 0) return;
+    try {
+      await Promise.all([...selectedCards].map(id => tasksApi.update(id, { is_archived: true })));
+      toast.success(`${selectedCards.size} cards archived`);
+      setSelectedCards(new Set());
+      setBulkMode(false);
+      fetchBoards();
+    } catch { toast.error('Bulk archive failed'); }
+  };
+  const bulkMoveToList = async (targetListId, targetListName) => {
+    if (selectedCards.size === 0) return;
+    try {
+      await Promise.all([...selectedCards].map(id => tasksApi.update(id, { list_id: targetListId, list_name: targetListName })));
+      toast.success(`${selectedCards.size} cards moved`);
+      setSelectedCards(new Set());
+      fetchBoards();
+    } catch { toast.error('Bulk move failed'); }
+  };
+  const bulkDelete = async () => {
+    if (selectedCards.size === 0 || !window.confirm(`Delete ${selectedCards.size} cards permanently?`)) return;
+    try {
+      await Promise.all([...selectedCards].map(id => tasksApi.delete(id)));
+      toast.success(`${selectedCards.size} cards deleted`);
+      setSelectedCards(new Set());
+      setBulkMode(false);
+      fetchBoards();
+    } catch { toast.error('Bulk delete failed'); }
+  };
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
@@ -365,7 +414,7 @@ export default function TasksPage() {
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {viewMode === 'calendar' ? (
-          <TeamCalendar boards={boards} allTasks={allTasks} staffUsers={staffUsers} onCardClick={setOpenCard} />
+          <TeamCalendar boards={boards} allTasks={allTasks} staffUsers={staffUsers} onCardClick={setOpenCard} onRefresh={fetchBoards} />
         ) : (
         <>
         {currentBoard && (
@@ -375,8 +424,48 @@ export default function TasksPage() {
               <h2 className="text-base font-semibold text-white">{currentBoard.name}</h2>
               {currentBoard.location_name && <span className="flex items-center gap-1 text-xs text-slate-400"><MapPin size={11} /> {currentBoard.location_name}</span>}
               {boardViewers.length > 1 && <span className="flex items-center gap-1 text-xs text-emerald-400"><Wifi size={11} /> {boardViewers.length} viewing</span>}
+              {currentBoard.is_shared && <span className="text-xs text-blue-400 px-2 py-0.5 bg-blue-500/10 rounded">Shared</span>}
             </div>
             <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" className="text-slate-400 hover:text-white hover:bg-white/10 gap-1.5 h-8 text-xs"
+                data-testid="share-board-btn"
+                onClick={async () => {
+                  try {
+                    const res = await boardsApi.update(currentBoard.id, { is_shared: !currentBoard.is_shared });
+                    const updated = res.data;
+                    if (updated.is_shared) {
+                      const url = `${window.location.origin}/shared/${updated.share_token}`;
+                      navigator.clipboard.writeText(url).catch(() => {});
+                      toast.success('Share link copied! Anyone with the link can view this board.');
+                    } else {
+                      toast.success('Sharing disabled');
+                    }
+                    fetchBoards();
+                  } catch { toast.error('Failed to update sharing'); }
+                }}>
+                <Globe size={13} /> {currentBoard.is_shared ? 'Unshare' : 'Share'}
+              </Button>
+              <Button size="sm" variant="ghost" className={`text-xs h-8 gap-1.5 ${bulkMode ? 'bg-blue-500/20 text-blue-400' : 'text-slate-400 hover:text-white hover:bg-white/10'}`}
+                onClick={() => { setBulkMode(!bulkMode); setSelectedCards(new Set()); }} data-testid="bulk-mode-btn">
+                <CheckSquare size={13} /> {bulkMode ? `${selectedCards.size} selected` : 'Multi-select'}
+              </Button>
+              {bulkMode && selectedCards.size > 0 && (
+                <>
+                  <Button size="sm" variant="ghost" className="text-amber-400 hover:bg-amber-500/10 h-8 text-xs gap-1.5" onClick={bulkArchive} data-testid="bulk-archive-btn">
+                    <Archive size={13} /> Archive
+                  </Button>
+                  <Select onValueChange={(v) => {
+                    const list = lists.find(l => l.id === v);
+                    if (list) bulkMoveToList(list.id, list.name);
+                  }}>
+                    <SelectTrigger className="h-8 w-auto text-xs bg-transparent border-white/10 text-slate-300" data-testid="bulk-move-select"><SelectValue placeholder="Move to..." /></SelectTrigger>
+                    <SelectContent>{lists.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button size="sm" variant="ghost" className="text-red-400 hover:bg-red-500/10 h-8 text-xs" onClick={bulkDelete} data-testid="bulk-delete-btn">
+                    <Trash2 size={13} />
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="ghost" className="text-slate-400 hover:text-white hover:bg-white/10 gap-1.5 h-8 text-xs" onClick={() => setShowArchive(true)}>
                 <Archive size={13} /> Archive
               </Button>
@@ -406,7 +495,8 @@ export default function TasksPage() {
                 dragging={dragging} dragOver={dragOver}
                 onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
                 onCardClick={setOpenCard} onCardArchive={archiveCard} onAddCard={addCard}
-                onArchiveList={archiveList} onDeleteList={deleteList} onRenameList={renameList} />
+                onArchiveList={archiveList} onDeleteList={deleteList} onRenameList={renameList}
+                bulkMode={bulkMode} selectedCards={selectedCards} toggleBulkCard={toggleBulkCard} selectAllInList={selectAllInList} />
             ))}
 
             {canEdit && (

@@ -109,8 +109,10 @@ async def get_board(board_id: str, current_user: dict = Depends(get_current_user
 
 @router.put("/boards/{board_id}")
 async def update_board(board_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    allowed = {"name", "description", "background", "location_id", "location_name", "is_global"}
+    allowed = {"name", "description", "background", "location_id", "location_name", "is_global", "is_shared"}
     update = {k: v for k, v in data.items() if k in allowed}
+    if data.get("is_shared") and not (await db.boards.find_one({"id": board_id})).get("share_token"):
+        update["share_token"] = str(uuid.uuid4())[:12]
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -360,3 +362,17 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
     board_doc.pop("_id", None)
     await _audit(current_user["id"], "create", "trello_import", board_id, {"board": board_name, "cards": imported})
     return {"board_id": board_id, "board_name": board_name, "lists": len(list_id_map), "imported": imported}
+
+
+
+# =================== PUBLIC SHARED BOARD ===================
+
+@router.get("/public/boards/{share_token}")
+async def get_shared_board(share_token: str):
+    """Public read-only access to a shared board."""
+    board = await db.boards.find_one({"share_token": share_token, "is_shared": True}, {"_id": 0})
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found or sharing disabled")
+    lists = await db.board_lists.find({"board_id": board["id"], "is_archived": {"$ne": True}}, {"_id": 0}).sort("position", 1).to_list(100)
+    tasks = await db.tasks.find({"board_id": board["id"], "is_archived": {"$ne": True}}, {"_id": 0}).to_list(500)
+    return {"board": board, "lists": lists, "tasks": tasks}

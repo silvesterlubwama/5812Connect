@@ -158,6 +158,9 @@ class TaskCreate(BaseModel):
     list_name: Optional[str] = None
     position: Optional[int] = 0
     is_archived: bool = False
+    is_recurring: bool = False
+    recurrence_pattern: Optional[str] = None
+    recurrence_interval: Optional[int] = 1
 
 
 class TaskUpdate(BaseModel):
@@ -177,6 +180,9 @@ class TaskUpdate(BaseModel):
     list_name: Optional[str] = None
     position: Optional[int] = None
     is_archived: Optional[bool] = None
+    is_recurring: Optional[bool] = None
+    recurrence_pattern: Optional[str] = None
+    recurrence_interval: Optional[int] = None
 
 class CheckInCreate(BaseModel):
     member_id: Optional[str] = None

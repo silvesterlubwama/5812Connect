@@ -352,8 +352,8 @@ export default function AdminPage() {
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> User Administration</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{users.length} users · Manage profiles, roles, passwords & documents</p>
+          <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> Staff Administration</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{users.length} staff members · Manage profiles, roles, passwords & documents</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           {selectedIds.size > 0 && <Button variant="outline" onClick={() => setShowBulk(true)} className="gap-2"><UserCog size={16} /> Bulk ({selectedIds.size})</Button>}
@@ -844,7 +844,7 @@ export default function AdminPage() {
 // ===== BADGE PRINT COMPONENT =====
 function BadgePrintView({ user, onClose }) {
   const badgeRef = useRef(null);
-  const [btStatus, setBtStatus] = useState('idle'); // idle | connecting | connected | error
+  const [btStatus, setBtStatus] = useState('idle');
   const [btDevice, setBtDevice] = useState(null);
   const [showZpl, setShowZpl] = useState(false);
 
@@ -872,7 +872,6 @@ function BadgePrintView({ user, onClose }) {
     setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
   };
 
-  // Generate ZPL for Zebra label printers (2.125" × 3.375" landscape label)
   const generateZpl = () => {
     const nameLines = (user.name || '').split(' ');
     const firstName = nameLines[0] || '';
@@ -884,6 +883,7 @@ function BadgePrintView({ user, onClose }) {
 ^FO20,130^A0N,36,36^FD${lastName}^FS
 ^FO20,175^A0N,22,22^FD${(user.role || '').toUpperCase()}^FS
 ^FO20,205^A0N,18,18^FDID: ${memberId}^FS
+^FO400,80^BQN,2,4^FDQA,${user.id || 'N/A'}^FS
 ^FO20,230^GB570,2,2^FS
 ^FO20,238^A0N,16,16^FD58:12 Global · ${new Date().getFullYear()}^FS
 ^XZ`;
@@ -896,18 +896,17 @@ function BadgePrintView({ user, onClose }) {
     }
     setBtStatus('connecting');
     try {
-      // Generic access profile — works with most BLE-capable printers
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [
-          '000018f0-0000-1000-8000-00805f9b34fb', // Generic Printer Service
-          '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC BLE UART service (common in thermal printers)
-          '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART
+          '000018f0-0000-1000-8000-00805f9b34fb',
+          '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+          '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
         ],
       });
       setBtDevice(device);
       setBtStatus('connected');
-      toast.success(`Connected: ${device.name || 'Bluetooth Printer'}. Use the ZPL code to print via your printer's software.`);
+      toast.success(`Connected: ${device.name || 'Bluetooth Printer'}.`);
     } catch (err) {
       if (err.name !== 'NotFoundError') {
         setBtStatus('error');
@@ -922,26 +921,26 @@ function BadgePrintView({ user, onClose }) {
 
   return (
     <div className="space-y-4">
-      {/* Preview */}
       <div ref={badgeRef}>
         <div style={{ width: '324px', height: '204px', border: '2px solid #1a1a2e', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', boxShadow: '0 2px 8px rgba(0,0,0,0.15)', margin: '0 auto' }}>
-          <div style={{ background: '#1a1a2e', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ background: '#1a1a2e', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global"
-              style={{ height: '20px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ color: 'white', fontSize: '9px', fontWeight: 600, letterSpacing: '0.5px', marginLeft: 'auto' }}>CENTRAL SYSTEM</span>
+              style={{ height: '18px', filter: 'brightness(0) invert(1)' }} />
+            <span style={{ color: '#fbbf24', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>STAFF</span>
           </div>
-          <div style={{ flex: 1, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '52px', height: '52px', borderRadius: '50%', background: '#e8e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, color: '#1a1a2e', border: '2px solid #1a1a2e', flexShrink: 0 }}>
-              {initials}
+          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+              <div style={{ width: '46px', height: '46px', borderRadius: '50%', background: '#e8e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 700, color: '#1a1a2e', border: '2px solid #1a1a2e' }}>{initials}</div>
+              <svg id="qr-staff" style={{ width: '48px', height: '48px' }} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '15px', fontWeight: 700, color: '#1a1a2e', lineHeight: 1.2 }}>{user.name}</div>
-              <div style={{ fontSize: '10px', color: '#555', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{user.role}</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#1a1a2e', lineHeight: 1.2 }}>{user.name}</div>
+              <div style={{ fontSize: '10px', color: '#555', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{user.role}</div>
               {user.department && <div style={{ fontSize: '9px', color: '#888', marginTop: '2px' }}>{user.department}</div>}
-              <div style={{ fontSize: '9px', color: '#aaa', marginTop: '5px' }}>ID: {memberId}</div>
+              <div style={{ fontSize: '9px', color: '#aaa', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
           </div>
-          <div style={{ background: '#f0f0f0', padding: '5px 14px', textAlign: 'center', fontSize: '8px', color: '#777', borderTop: '1px solid #ddd' }}>
+          <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
             58:12 Global Connect · Central System · {new Date().getFullYear()}
           </div>
         </div>
