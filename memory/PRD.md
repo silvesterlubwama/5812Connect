@@ -7,24 +7,7 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - **Frontend**: React, Tailwind CSS, Shadcn/UI, WebAuthn, NFC, WebSockets, PWA
 - **Backend**: FastAPI, Motor (Async MongoDB), modular APIRouters
 - **Database**: MongoDB
-- **Integrations**: Emergent LLM Key (Gemini AI Assistant), Resend (Emails), Object Storage
-
-## Architecture
-```
-/app/
-├── backend/
-│   ├── deps.py, models.py, server.py, storage.py
-│   ├── routers/ (all API route modules)
-└── frontend/
-    └── src/
-        ├── components/ (Layout, PortalLayout, ui/)
-        ├── context/
-        ├── pages/
-        │   ├── kanban/
-        │   ├── Portal pages (PortalDashboard, PortalFamily, PortalTasks, etc.)
-        │   ├── Admin pages (AdminPage, AuditPage, UnifiedPeoplePage, etc.)
-        └── services/api.js
-```
+- **Integrations**: Emergent LLM Key (Gemini AI), Resend (Emails), Object Storage
 
 ## Key DB Collections
 - `boards`, `tasks` (Kanban + Team Calendar)
@@ -34,81 +17,63 @@ Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make th
 - `outreach_programs`, `outreach_sessions`
 - `locations` (type: main, campus, sub-location)
 - `families` (parent_ids, guardians[], linked to children & guests)
-- `children` (linked to families via family_id)
-- `guests` (is_parent flag for parent-guests)
+- `children` (family_id, parent_ids[] — linkage for check-in)
+- `guests` (is_parent, family_id flags)
 - `deleted_items` (soft-delete recycle bin, 30-day retention)
+- `checkins` (type: member/staff/visitor/child, method: parent_id/qr/nfc/pin)
 
 ## Credentials
 - Admin: `admin@5812uganda.org` / `Admin@5812`
 - System Admin: `silvester@lubwamas.org` / `Admin@5812`
 
-## Completed Features (All Verified)
+## All Completed Features
+
 ### Core CRM
 - Full Kanban board with WebSocket real-time updates
 - Team Calendar view for workload management
 - Kiosk mode for guest registration
 - Admin controls (user CRUD, manual creation, import)
-- WebAuthn passkey authentication
-- Network badge printing (NFC)
-- Due-date reminder notifications
-- CSV import/export
-- Public booking system
-- AI Assistant (Gemini)
+- WebAuthn passkey authentication, NFC badge printing
+- Due-date reminders, CSV import/export
+- Public booking system, AI Assistant (Gemini)
 
 ### People Management
-- Members CRUD with duplicate prevention (email/phone/national_id)
-- Family management with parents, children, AND guardians
-- Family editing from admin People page
-- Child editing from admin People page
-- Guest CRUD with duplicate prevention
-- Parents import as guests (via CSV)
-- Soft-delete + 30-day recycle bin for all entities
+- Members, Families, Children, Guests — full CRUD with duplicate prevention
+- Family editing + guardian management (add/edit/remove)
+- Soft-delete with 30-day recycle bin + admin restore
+- Parents import as guests via CSV
 
 ### Family Self-Service (Portal)
-- "My Family" page in staff/member portal
-- Parents view their own family details
-- Parents add/edit children
-- Parents add/remove guardians (with relationship types)
-- Parents update family info (name, phone, address)
-- Guardian CRUD: add, update, remove from families
-- Family detail endpoint returns parents + children + guardians
+- "My Family" portal page — parents view/edit family, add children + guardians
+- Guardian relationship types (Guardian, Grandparent, Aunt/Uncle, Sibling, Nanny)
+
+### Parent-Child Check-In System (NEW - Session 2026-03-25)
+- **Child → Parent association**: `parent_ids` field on children links them to specific parent guests
+- **Parent Check-In flow**: Staff enter parent phone/email/ID/name or scan QR → see linked children → check in
+- **QR code scanning**: BarcodeDetector API integration for camera-based QR lookup
+- **Flexible lookup**: Searches by phone, email, guest ID, or name in guests + members
+- **Check-in records**: type=child, method=parent_id, parent_name, parent_id fields
+- **Stats**: Check-in stats include children count
+- **Admin UI**: Child edit dialog has "Linked Parents" checkboxes for parent association
 
 ### Events & Calendar
-- Events CRUD with enhanced recurrence (Nth week/month patterns)
+- Enhanced recurrence (5 patterns: weekly, biweekly, monthly, nth_week, nth_month)
 - Calendar shows outreach sessions alongside regular events
-- Outreach programme event generation
 
 ### Data Integrity
-- Duplicate prevention on all entity creation endpoints
+- Duplicate prevention on all entity creation
 - Soft-delete with 30-day recycle bin + admin restore
-- Audit trail with paginated log viewing
-- Auto-promote silvester@lubwamas.org to admin
-
-### UI Fixes
+- Audit trail with paginated log + recycle bin UI
 - "Compasses" renamed to "Campus" globally
-- Nav tab renamed to "Locations"
-- Document upload works with both user_id and member_id
 
-## Session 2026-03-25 Changes (Verified via iterations 18-20)
-1. P0: Document upload "Member not found" fix
-2. P2: Compasses → Campus rename + Locations nav tab
-3. P1: Enhanced event recurrence (5 patterns)
-4. Calendar shows outreach events
-5. Family & child editing
-6. Duplicate prevention on all entities
-7. Soft-delete + recycle bin + restore
-8. Parents import as guests
-9. silvester@lubwamas.org auto-admin
-10. **Family self-service portal (parents manage families with children + guardians)**
+## Verified via Testing Iterations 17-21 (All 100% pass)
 
-## Pending / Not Yet Started
-### P1: Unify People & User Administration UIs
-- Staff marked in People UI should appear in User Admin
-- All users from both UIs should be visible in People UI
+## Pending
+### P1: Unify People & User Admin UIs
+- Staff in People should appear in User Admin; all users visible in People UI
 
 ## Future/Backlog
-- Card due-date push notification enhancements
+- Card due-date push notifications (enhancement)
 - Team Calendar drag-and-drop rescheduling
 - Board sharing / external guest access
-- Recurring task cards
-- Bulk card operations (multi-select, bulk archive/move)
+- Recurring task cards, Bulk card operations
