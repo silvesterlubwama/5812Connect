@@ -139,9 +139,13 @@ export const salesApi = {
 // ---- FAMILIES ----
 export const familiesApi = {
   list: (params) => api.get('/families', { params }),
+  get: (id) => api.get(`/families/${id}`),
   create: (data) => api.post('/families', data),
   update: (id, data) => api.put(`/families/${id}`, data),
   delete: (id) => api.delete(`/families/${id}`),
+  addGuardian: (familyId, data) => api.post(`/families/${familyId}/guardians`, data),
+  updateGuardian: (familyId, guardianId, data) => api.put(`/families/${familyId}/guardians/${guardianId}`, data),
+  removeGuardian: (familyId, guardianId) => api.delete(`/families/${familyId}/guardians/${guardianId}`),
 };
 export const childrenApi = {
   list: (params) => api.get('/children', { params }),
@@ -412,6 +416,10 @@ export const portalApi = {
   checkins: () => api.get('/portal/checkins'),
   documents: () => api.get('/portal/documents'),
   sales: () => api.get('/portal/sales'),
+  family: () => api.get('/portal/family'),
+  updateFamily: (data) => api.put('/portal/family', data),
+  addChild: (data) => api.post('/portal/family/children', data),
+  addGuardian: (data) => api.post('/portal/family/guardians', data),
 };
 
 // ---- ADMIN ----

@@ -177,6 +177,187 @@ async def delete_family(family_id: str, current_user: dict = Depends(get_current
     return {"message": "Family deleted"}
 
 
+@router.get("/families/{family_id}")
+async def get_family_detail(family_id: str, current_user: dict = Depends(get_current_user)):
+    """Get family with all members: parents (guests), children, guardians."""
+    family = await db.families.find_one({"id": family_id}, {"_id": 0})
+    if not family:
+        raise HTTPException(status_code=404, detail="Family not found")
+    # Get children for this family
+    family_children = await db.children.find({"family_id": family_id}, {"_id": 0}).to_list(50)
+    # Get parents (guests with is_parent=True and this family_id)
+    parents = await db.guests.find({"family_id": family_id, "is_parent": True}, {"_id": 0}).to_list(20)
+    family["children"] = family_children
+    family["parents"] = parents
+    return family
+
+
+@router.post("/families/{family_id}/guardians")
+async def add_guardian(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Add a guardian to a family."""
+    family = await db.families.find_one({"id": family_id})
+    if not family:
+        raise HTTPException(status_code=404, detail="Family not found")
+    guardian = {
+        "id": f"gdn_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "phone": data.get("phone", ""),
+        "email": data.get("email", ""),
+        "relationship": data.get("relationship", "Guardian"),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    return guardian
+
+
+@router.put("/families/{family_id}/guardians/{guardian_id}")
+async def update_guardian(family_id: str, guardian_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Update a guardian in a family."""
+    await db.families.update_one(
+        {"id": family_id, "guardians.id": guardian_id},
+        {"$set": {
+            "guardians.$.name": data.get("name", ""),
+            "guardians.$.phone": data.get("phone", ""),
+            "guardians.$.email": data.get("email", ""),
+            "guardians.$.relationship": data.get("relationship", "Guardian"),
+        }}
+    )
+    return {"message": "Guardian updated"}
+
+
+@router.delete("/families/{family_id}/guardians/{guardian_id}")
+async def remove_guardian(family_id: str, guardian_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove a guardian from a family."""
+    await db.families.update_one({"id": family_id}, {"$pull": {"guardians": {"id": guardian_id}}})
+    return {"message": "Guardian removed"}
+
+
+# ========== PORTAL: PARENT FAMILY MANAGEMENT ==========
+
+@router.get("/portal/family")
+async def get_my_family(current_user: dict = Depends(get_current_user)):
+    """Get the logged-in parent's family. Searches by user email in guests/parents."""
+    email = current_user.get("email", "")
+    name = current_user.get("name", "")
+    # Find parent guest record linked to a family
+    parent_guest = await db.guests.find_one(
+        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
+        {"_id": 0}
+    )
+    family = None
+    if parent_guest and parent_guest.get("family_id"):
+        family = await db.families.find_one({"id": parent_guest["family_id"]}, {"_id": 0})
+    if not family:
+        # Also check if user has a family directly
+        family = await db.families.find_one(
+            {"$or": [
+                {"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}},
+                {"parent_ids": current_user["id"]},
+            ]},
+            {"_id": 0}
+        )
+    if not family:
+        return {"family": None, "children": [], "parents": [], "message": "No family found. Contact admin to link your account."}
+    children = await db.children.find({"family_id": family["id"]}, {"_id": 0}).to_list(50)
+    parents = await db.guests.find({"family_id": family["id"], "is_parent": True}, {"_id": 0}).to_list(20)
+    return {"family": family, "children": children, "parents": parents}
+
+
+@router.put("/portal/family")
+async def update_my_family(data: dict, current_user: dict = Depends(get_current_user)):
+    """Parent updates their own family details."""
+    email = current_user.get("email", "")
+    name = current_user.get("name", "")
+    parent_guest = await db.guests.find_one(
+        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
+        {"_id": 0}
+    )
+    family_id = None
+    if parent_guest and parent_guest.get("family_id"):
+        family_id = parent_guest["family_id"]
+    if not family_id:
+        family = await db.families.find_one(
+            {"$or": [{"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}}, {"parent_ids": current_user["id"]}]},
+            {"_id": 0}
+        )
+        if family:
+            family_id = family["id"]
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No family found")
+    allowed_fields = {"family_name", "address", "notes", "primary_contact_phone"}
+    update = {k: v for k, v in data.items() if k in allowed_fields}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.families.update_one({"id": family_id}, {"$set": update})
+    return await db.families.find_one({"id": family_id}, {"_id": 0})
+
+
+@router.post("/portal/family/children")
+async def parent_add_child(data: ChildCreate, current_user: dict = Depends(get_current_user)):
+    """Parent adds a child to their own family."""
+    email = current_user.get("email", "")
+    name = current_user.get("name", "")
+    parent_guest = await db.guests.find_one(
+        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
+        {"_id": 0}
+    )
+    family_id = None
+    if parent_guest and parent_guest.get("family_id"):
+        family_id = parent_guest["family_id"]
+    if not family_id:
+        family = await db.families.find_one(
+            {"$or": [{"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}}, {"parent_ids": current_user["id"]}]},
+            {"_id": 0}
+        )
+        if family:
+            family_id = family["id"]
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No family found. Contact admin.")
+    child_data = data.model_dump()
+    child_data["family_id"] = family_id
+    doc = {
+        "id": f"chd_{str(uuid.uuid4())[:8]}",
+        **child_data,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.children.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.post("/portal/family/guardians")
+async def parent_add_guardian(data: dict, current_user: dict = Depends(get_current_user)):
+    """Parent adds a guardian to their family."""
+    email = current_user.get("email", "")
+    name = current_user.get("name", "")
+    parent_guest = await db.guests.find_one(
+        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
+        {"_id": 0}
+    )
+    family_id = None
+    if parent_guest and parent_guest.get("family_id"):
+        family_id = parent_guest["family_id"]
+    if not family_id:
+        family = await db.families.find_one(
+            {"$or": [{"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}}, {"parent_ids": current_user["id"]}]},
+            {"_id": 0}
+        )
+        if family:
+            family_id = family["id"]
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No family found. Contact admin.")
+    guardian = {
+        "id": f"gdn_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "phone": data.get("phone", ""),
+        "email": data.get("email", ""),
+        "relationship": data.get("relationship", "Guardian"),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    return guardian
+
+
 # ========== CHILDREN ==========
 
 @router.get("/children")

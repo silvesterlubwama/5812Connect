@@ -535,6 +535,9 @@ export default function UnifiedPeoplePage() {
                     {childrenForFamily(f.id).length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mt-2">{childrenForFamily(f.id).map(c => <Badge key={c.id} variant="outline" className="text-[10px]">{c.name} ({c.class_group})</Badge>)}</div>
                     )}
+                    {(f.guardians || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">{f.guardians.map(g => <Badge key={g.id} variant="secondary" className="text-[10px]">{g.name} ({g.relationship})</Badge>)}</div>
+                    )}
                   </CardContent>
                 </Card>
               ))}

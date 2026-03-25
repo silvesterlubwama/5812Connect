@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft } from 'lucide-react';
+import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 
@@ -12,6 +12,7 @@ const NAV = [
   { to: '/portal/events', icon: Calendar, label: 'Events' },
   { to: '/portal/sales', icon: ShoppingBag, label: 'My Sales' },
   { to: '/portal/documents', icon: FileText, label: 'Documents' },
+  { to: '/portal/family', icon: Heart, label: 'My Family' },
   { to: '/portal/profile', icon: User, label: 'Profile' },
 ];
 

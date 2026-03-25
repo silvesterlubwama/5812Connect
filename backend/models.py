@@ -75,6 +75,8 @@ class FamilyCreate(BaseModel):
     primary_contact_phone: Optional[str] = None
     address: Optional[str] = None
     notes: Optional[str] = None
+    parent_ids: Optional[List[str]] = []
+    guardians: Optional[List[dict]] = []
 
 class ChildCreate(BaseModel):
     name: str

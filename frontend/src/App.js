@@ -43,6 +43,7 @@ import PortalEvents from './pages/PortalEvents';
 import PortalProfile from './pages/PortalProfile';
 import PortalDocuments from './pages/PortalDocuments';
 import PortalSales from './pages/PortalSales';
+import PortalFamily from './pages/PortalFamily';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -101,6 +102,7 @@ function AppRoutes() {
         <Route path="events" element={<PortalEvents />} />
         <Route path="sales" element={<PortalSales />} />
         <Route path="documents" element={<PortalDocuments />} />
+        <Route path="family" element={<PortalFamily />} />
         <Route path="profile" element={<PortalProfile />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
