@@ -603,6 +603,17 @@ export default function AdminPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Department</Label><Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} /></div>
+                <div className="space-y-2"><Label>Campus / Location</Label>
+                  <Select value={editForm.location_id || '_none'} onValueChange={v => setEditForm({...editForm, location_id: v === '_none' ? '' : v})}>
+                    <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">None</SelectItem>
+                      {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>PIN Code (4 digits)</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
               </div>
               <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})} /></div>
@@ -941,7 +952,7 @@ function BadgePrintView({ user, onClose }) {
             </div>
           </div>
           <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            58:12 Global Connect · Central System · {new Date().getFullYear()}
+            58:12 Global Connect · {user.location_name || 'Headquarters'} · {new Date().getFullYear()}
           </div>
         </div>
       </div>

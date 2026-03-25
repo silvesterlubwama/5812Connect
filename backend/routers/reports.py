@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional
 from datetime import datetime, timezone
 import io
-from deps import db, get_current_user
+from deps import db, get_current_user, is_system_admin, get_campus_filter
 
 router = APIRouter(prefix="/api", tags=["reports"])
 
@@ -12,6 +12,10 @@ router = APIRouter(prefix="/api", tags=["reports"])
 @router.get("/reports/summary")
 async def report_summary(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Generate a comprehensive summary report"""
+    # Enforce campus filter for non-system-admins
+    campus = get_campus_filter(current_user)
+    if campus and not location_id:
+        location_id = current_user.get("location_id")
     loc_filter = {"location_id": location_id} if location_id else {}
     date_filter = {}
     if date_from:

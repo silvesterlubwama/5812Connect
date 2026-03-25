@@ -1,6 +1,6 @@
 """Kanban Boards — Trello-like boards per location, with lists and tasks"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, _audit, logger
+from deps import db, get_current_user, _audit, logger, is_system_admin, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -9,8 +9,7 @@ router = APIRouter(prefix="/api", tags=["boards"])
 
 
 def _is_admin(user: dict) -> bool:
-    role = (user.get("role") or "").lower()
-    return role in {"admin", "system_admin", "executive director", "director"}
+    return is_system_admin(user)
 
 
 async def _can_access_board(board: dict, user: dict) -> bool:

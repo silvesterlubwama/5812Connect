@@ -1,7 +1,7 @@
 """Financial routes: donations, expenses, products, sales, cashflow, balance, approval workflow"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, require_manager, require_director, _audit, logger
+from deps import db, get_current_user, require_staff, require_manager, require_director, _audit, logger, is_system_admin, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -36,6 +36,10 @@ class SaleCreate(BaseModel):
 async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).isoformat()[:7]
+    # Enforce campus filter for non-system-admins
+    campus = get_campus_filter(current_user)
+    if campus and not location_id:
+        location_id = current_user.get("location_id")
     loc_match = {"location_id": location_id} if location_id else {}
     donations_result = await db.donations.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     expenses_result = await db.expenses.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
@@ -67,7 +71,7 @@ async def distribute_funds(data: dict, current_user: dict = Depends(require_dire
 
 @router.get("/financial/donations")
 async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if date_from or date_to:
         query["date"] = {}
@@ -88,7 +92,7 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
 
 @router.get("/financial/expenses")
 async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if status: query["status"] = status
     if date_from or date_to:
@@ -150,7 +154,8 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
 
 @router.get("/products")
 async def list_products(current_user: dict = Depends(get_current_user)):
-    return await db.products.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    query = {**get_campus_filter(current_user)}
+    return await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
 
 @router.post("/products")
 async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
@@ -172,7 +177,8 @@ async def delete_product(product_id: str, current_user: dict = Depends(get_curre
 
 @router.get("/sales")
 async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
-    return await db.sales.find({}, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    query = {**get_campus_filter(current_user)}
+    return await db.sales.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 @router.post("/sales")
 async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):

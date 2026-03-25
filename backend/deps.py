@@ -84,8 +84,29 @@ ROLE_LEVELS = {
     "Customer": 1, "Guest": 1,
 }
 
+# Roles that bypass campus isolation (see everything)
+SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director", "director"}
+
 def get_role_level(role: str) -> int:
     return ROLE_LEVELS.get(role, 0)
+
+
+def is_system_admin(user: dict) -> bool:
+    """Returns True if user role grants cross-campus (global) visibility."""
+    return (user.get("role") or "").lower() in SYSTEM_ADMIN_ROLES
+
+
+def get_campus_filter(user: dict, field: str = "location_id") -> dict:
+    """Return a MongoDB query fragment that restricts results to the user's campus.
+    System admins get an empty dict (no restriction).
+    Non-admin users without a location_id assigned also get no restriction
+    (they'd see nothing if we filtered on an empty value)."""
+    if is_system_admin(user):
+        return {}
+    loc = user.get("location_id")
+    if not loc:
+        return {}
+    return {field: loc}
 
 
 def require_role(min_level: int):

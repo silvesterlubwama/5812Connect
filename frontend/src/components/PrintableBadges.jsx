@@ -23,6 +23,7 @@ export function StaffBadge({ user, onPrint }) {
   const ref = useRef(null);
   const initials = (user.name || '').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const memberId = user.id?.slice(-8).toUpperCase() || 'N/A';
+  const locationName = user.location_name || user.campus_name || '';
 
   return (
     <div className="space-y-3">
@@ -45,7 +46,7 @@ export function StaffBadge({ user, onPrint }) {
             </div>
           </div>
           <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {ORG} · {new Date().getFullYear()}
+            {locationName || ORG} · {new Date().getFullYear()}
           </div>
         </div>
       </div>
@@ -59,6 +60,7 @@ export function StaffBadge({ user, onPrint }) {
 export function ParentBadge({ parent, children: childList }) {
   const ref = useRef(null);
   const phone4 = (parent.phone || '').slice(-4);
+  const locationName = parent.location_name || parent.campus_name || '';
 
   return (
     <div className="space-y-3">
@@ -80,7 +82,7 @@ export function ParentBadge({ parent, children: childList }) {
             </div>
           </div>
           <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {ORG} · {new Date().getFullYear()}
+            {locationName || ORG} · {new Date().getFullYear()}
           </div>
         </div>
       </div>
@@ -91,10 +93,11 @@ export function ParentBadge({ parent, children: childList }) {
   );
 }
 
-export function ChildTag({ child, parentPhone, eventName }) {
+export function ChildTag({ child, parentPhone, eventName, locationName }) {
   const ref = useRef(null);
   const firstName = (child.name || '').split(' ')[0];
   const phone4 = (parentPhone || '').slice(-4);
+  const campusName = locationName || child.location_name || '';
 
   return (
     <div className="space-y-3">
@@ -114,7 +117,7 @@ export function ChildTag({ child, parentPhone, eventName }) {
             </div>
           </div>
           <div style={{ background: '#f0f0f0', padding: '3px 10px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {ORG} · {new Date().toLocaleDateString()}
+            {campusName || ORG} · {new Date().toLocaleDateString()}
           </div>
         </div>
       </div>

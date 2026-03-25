@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from deps import (
     db, get_current_user, _audit, require_coordinator, require_manager,
-    normalize_gender, resolve_department, logger
+    normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter
 )
 from models import MemberCreate, MemberUpdate, FamilyCreate, ChildCreate, GuestCreate
 from datetime import datetime, timezone
@@ -24,7 +24,7 @@ async def list_members(
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
@@ -40,6 +40,15 @@ async def list_members(
         query["role"] = role
     total = await db.members.count_documents(query)
     members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
+    # Enrich with location names
+    loc_cache = {}
+    for m in members:
+        lid = m.get("location_id")
+        if lid and lid not in loc_cache:
+            loc = await db.locations.find_one({"id": lid}, {"_id": 0, "name": 1})
+            loc_cache[lid] = loc.get("name") if loc else ""
+        if lid:
+            m["location_name"] = loc_cache.get(lid, "")
     return {"members": members, "total": total}
 
 
@@ -79,7 +88,8 @@ async def create_member(data: MemberCreate, current_user: dict = Depends(get_cur
 
 @router.get("/members/pending")
 async def list_pending_members(current_user: dict = Depends(get_current_user)):
-    members = await db.members.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    query = {**get_campus_filter(current_user), "status": "pending"}
+    members = await db.members.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return {"members": members, "total": len(members)}
 
 
@@ -130,7 +140,7 @@ async def delete_member(member_id: str, current_user: dict = Depends(require_coo
 
 @router.get("/families")
 async def list_families(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"family_name": {"$regex": search, "$options": "i"}},
@@ -362,11 +372,25 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
 
 @router.get("/children")
 async def list_children(family_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if family_id:
         query["family_id"] = family_id
     if search:
         query["name"] = {"$regex": search, "$options": "i"}
+    # Children in restricted sub-locations: only visible to staff assigned to that exact location
+    if not is_system_admin(current_user):
+        user_loc = current_user.get("location_id")
+        # Get restricted sub-location IDs
+        restricted_locs = await db.locations.find(
+            {"type": "sub-location", "is_restricted": True},
+            {"_id": 0, "id": 1}
+        ).to_list(100)
+        restricted_ids = [r["id"] for r in restricted_locs]
+        if restricted_ids:
+            # Exclude children in restricted locations that aren't the user's location
+            other_restricted = [rid for rid in restricted_ids if rid != user_loc]
+            if other_restricted:
+                query["location_id"] = {"$nin": other_restricted}
     children = await db.children.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     return children
 
@@ -416,7 +440,7 @@ async def delete_child(child_id: str, current_user: dict = Depends(get_current_u
 
 @router.get("/guests")
 async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},

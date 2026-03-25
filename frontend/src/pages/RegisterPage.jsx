@@ -86,7 +86,7 @@ export default function RegisterPage() {
             </form>
           </CardContent>
         </Card>
-        <p className="text-center text-xs text-muted-foreground mt-4">58:12 Global • Central System</p>
+        <p className="text-center text-xs text-muted-foreground mt-4">58:12 Global</p>
       </div>
     </div>
   );

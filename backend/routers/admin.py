@@ -1,6 +1,6 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin, require_manager, require_staff, hash_password, _audit, logger
+from deps import db, get_current_user, require_admin, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -13,13 +13,14 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 @router.get("/users")
 async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if search:
         query["$or"] = [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]
     if role and role != "all": query["role"] = role
     if status and status != "all": query["status"] = status
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
-    # Enrich with member profile existence
+    # Enrich with member profile existence and location name
+    loc_cache = {}
     for u in users:
         member = await db.members.find_one(
             {"$or": [{"user_id": u["id"]}, {"email": u.get("email", "__none__")}]},
@@ -28,6 +29,13 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
         u["has_member_profile"] = bool(member)
         if member:
             u["member_id"] = member["id"]
+        # Resolve location name
+        lid = u.get("location_id")
+        if lid:
+            if lid not in loc_cache:
+                loc = await db.locations.find_one({"id": lid}, {"_id": 0, "name": 1})
+                loc_cache[lid] = loc.get("name") if loc else ""
+            u["location_name"] = loc_cache[lid]
     return users
 
 
@@ -153,8 +161,9 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "notes",
-                      "secondary_roles", "is_parent", "is_customer", "is_donor", "pin"}
-    MEMBER_ONLY_FIELDS = {"gender", "date_of_birth", "group", "location_id", "program"}
+                      "secondary_roles", "is_parent", "is_customer", "is_donor", "pin",
+                      "location_id"}
+    MEMBER_ONLY_FIELDS = {"gender", "date_of_birth", "group", "program"}
     all_allowed = ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS
     update = {k: v for k, v in data.items() if k in all_allowed and v is not None}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -164,14 +173,33 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     if user_update:
         await db.users.update_one({"id": user_id}, {"$set": user_update})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    # Update members collection (all profile fields)
+    # Update members collection (all profile fields) — auto-create if missing
     if user and user.get("email"):
         member_update = {k: v for k, v in update.items() if k in (ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS)}
         if member_update:
-            await db.members.update_one(
-                {"$or": [{"id": user_id}, {"email": user["email"]}]},
-                {"$set": member_update}
+            member_exists = await db.members.find_one(
+                {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
+                {"_id": 0, "id": 1}
             )
+            if member_exists:
+                await db.members.update_one(
+                    {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
+                    {"$set": member_update}
+                )
+            else:
+                # Auto-sync: create linked member record
+                member_id = str(uuid.uuid4())
+                await db.members.insert_one({
+                    "id": member_id, "user_id": user_id,
+                    "name": user.get("name", ""), "email": user.get("email", ""),
+                    "phone": user.get("phone", ""),
+                    "role": "member", "membership_type": (user.get("role") or "Staff").lower(),
+                    "status": "active",
+                    "location_id": user.get("location_id", ""),
+                    "department": user.get("department", ""),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    **{k: v for k, v in member_update.items() if k in MEMBER_ONLY_FIELDS},
+                })
     await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
     return user
 

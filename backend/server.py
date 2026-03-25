@@ -2,7 +2,7 @@ from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from storage import init_storage
-from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff, get_current_user, hash_password, verify_password, create_token
+from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff, get_current_user, hash_password, verify_password, create_token, is_system_admin, get_campus_filter
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -262,48 +262,52 @@ async def seed_extended():
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc)
     month_start_str = now.replace(day=1).isoformat()[:7]
-    total_members = await db.members.count_documents({})
-    active_members = await db.members.count_documents({"status": "active"})
-    total_families = await db.families.count_documents({})
-    total_children = await db.children.count_documents({})
-    events_this_month = await db.events.count_documents({"date": {"$regex": f"^{month_start_str}"}})
-    upcoming_events = await db.events.count_documents({"status": "upcoming"})
+    campus = get_campus_filter(current_user)
+    total_members = await db.members.count_documents({**campus})
+    active_members = await db.members.count_documents({"status": "active", **campus})
+    total_families = await db.families.count_documents({**campus})
+    total_children = await db.children.count_documents({**campus})
+    events_this_month = await db.events.count_documents({"date": {"$regex": f"^{month_start_str}"}, **campus})
+    upcoming_events = await db.events.count_documents({"status": "upcoming", **campus})
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}})
+    checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}, **campus})
     now_str = now.isoformat()[:10]
     tasks_overdue = await db.tasks.count_documents({"status": {"$nin": ["done"]}, "due_date": {"$lt": now_str, "$ne": ""}})
-    new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}})
-    sales_result = await db.sales.aggregate([{"$match": {"created_at": {"$regex": f"^{month_start_str}"}}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
+    new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}, **campus})
+    sales_result = await db.sales.aggregate([{"$match": {"created_at": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     monthly_sales = sales_result[0]["total"] if sales_result else 0
-    donations_result = await db.donations.aggregate([{"$match": {"date": {"$regex": f"^{month_start_str}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    donations_result = await db.donations.aggregate([{"$match": {"date": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     monthly_donations = donations_result[0]["total"] if donations_result else 0
-    low_stock = await db.products.count_documents({"$expr": {"$lte": ["$stock", "$reorder_level"]}})
-    recent_checkins = await db.checkins.find({}, {"_id": 0}).sort("check_in_time", -1).limit(3).to_list(3)
-    recent_members = await db.members.find({}, {"_id": 0}).sort("created_at", -1).limit(2).to_list(2)
+    low_stock = await db.products.count_documents({"$expr": {"$lte": ["$stock", "$reorder_level"]}, **campus})
+    recent_checkins = await db.checkins.find({**campus}, {"_id": 0}).sort("check_in_time", -1).limit(3).to_list(3)
+    recent_members = await db.members.find({**campus}, {"_id": 0}).sort("created_at", -1).limit(2).to_list(2)
     activity = []
     for ci in recent_checkins:
         activity.append({"type": "checkin", "message": f"{ci.get('member_name')} checked in" + (f" to {ci.get('event_name', '')}" if ci.get('event_name') else ""), "time": ci.get("check_in_time", "")})
     for m in recent_members:
         activity.append({"type": "member", "message": f"New member: {m.get('name')} registered", "time": m.get("created_at", "")})
     activity.sort(key=lambda x: x.get("time", ""), reverse=True)
+    expenses_result = await db.expenses.aggregate([{"$match": {"date": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
     return {
         "total_members": total_members, "active_members": active_members, "total_families": total_families,
         "total_children": total_children, "events_this_month": events_this_month, "upcoming_events": upcoming_events,
         "checkins_today": checkins_today, "tasks_overdue": tasks_overdue, "new_members_this_month": new_members_this_month,
         "monthly_sales": monthly_sales, "monthly_donations": monthly_donations, "low_stock_count": low_stock,
-        "recent_activity": activity[:5],
+        "monthly_expenses": monthly_expenses, "recent_activity": activity[:5],
     }
 
 
 @api_router.get("/people/stats")
 async def people_stats(current_user: dict = Depends(get_current_user)):
+    campus = get_campus_filter(current_user)
     return {
-        "total_members": await db.members.count_documents({}),
-        "active_members": await db.members.count_documents({"status": "active"}),
-        "total_families": await db.families.count_documents({}),
-        "total_children": await db.children.count_documents({}),
-        "total_guests": await db.guests.count_documents({}),
-        "pending_approvals": await db.users.count_documents({"status": "pending"}),
+        "total_members": await db.members.count_documents({**campus}),
+        "active_members": await db.members.count_documents({"status": "active", **campus}),
+        "total_families": await db.families.count_documents({**campus}),
+        "total_children": await db.children.count_documents({**campus}),
+        "total_guests": await db.guests.count_documents({**campus}),
+        "pending_approvals": await db.users.count_documents({"status": "pending", **campus}),
     }
 
 

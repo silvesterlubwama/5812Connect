@@ -163,7 +163,7 @@ export default function UnifiedPeoplePage() {
   const [showChild, setShowChild] = useState(false);
   const [showGuest, setShowGuest] = useState(false);
   const [familyForm, setFamilyForm] = useState({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' });
-  const [childForm, setChildForm] = useState({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' });
+  const [childForm, setChildForm] = useState({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '', location_id: '' });
   const [guestForm, setGuestForm] = useState({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' });
 
   // Edit family
@@ -263,7 +263,7 @@ export default function UnifiedPeoplePage() {
   const openEditChild = (c, e) => {
     if (e) e.stopPropagation();
     setEditChild(c);
-    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [] });
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '' });
   };
   const saveEditChild = async () => {
     if (!editChild) return;
@@ -381,7 +381,7 @@ export default function UnifiedPeoplePage() {
 
   // Family/Child/Guest handlers
   const handleAddFamily = async (e) => { e.preventDefault(); setSaving(true); try { await familiesApi.create(familyForm); toast.success('Family added!'); setShowFamily(false); setFamilyForm({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
-  const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
+  const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '', location_id: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
   const handleAddGuest = async (e) => { e.preventDefault(); setSaving(true); try { await guestsApi.create(guestForm); toast.success('Guest recorded!'); setShowGuest(false); setGuestForm({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
 
   const openEditFamily = (f) => {
@@ -736,6 +736,12 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5"><Label>Medical Notes</Label><Textarea rows={2} value={childForm.medical_notes} onChange={e => setChildForm({ ...childForm, medical_notes: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Allergies</Label><Input value={childForm.allergies} onChange={e => setChildForm({ ...childForm, allergies: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Campus / Location</Label>
+              <Select value={childForm.location_id || ''} onValueChange={v => setChildForm({ ...childForm, location_id: v })}>
+                <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                <SelectContent>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
             <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowChild(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : 'Add Child'}</Button></div>
           </form>
         </DialogContent>
@@ -810,6 +816,12 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5"><Label>Medical Notes</Label><Textarea rows={2} value={editChildForm.medical_notes || ''} onChange={e => setEditChildForm({ ...editChildForm, medical_notes: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Allergies</Label><Input value={editChildForm.allergies || ''} onChange={e => setEditChildForm({ ...editChildForm, allergies: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Campus / Location</Label>
+              <Select value={editChildForm.location_id || ''} onValueChange={v => setEditChildForm({ ...editChildForm, location_id: v })}>
+                <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                <SelectContent>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1.5">
               <Label>Linked Parents</Label>
               <p className="text-xs text-muted-foreground">Select parents (from guests) who can check in this child</p>

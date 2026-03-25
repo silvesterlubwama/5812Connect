@@ -77,6 +77,7 @@ class FamilyCreate(BaseModel):
     notes: Optional[str] = None
     parent_ids: Optional[List[str]] = []
     guardians: Optional[List[dict]] = []
+    location_id: Optional[str] = None
 
 class ChildCreate(BaseModel):
     name: str
@@ -89,6 +90,7 @@ class ChildCreate(BaseModel):
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
     parent_ids: Optional[List[str]] = []
+    location_id: Optional[str] = None
 
 class GuestCreate(BaseModel):
     name: str
@@ -100,6 +102,7 @@ class GuestCreate(BaseModel):
     notes: Optional[str] = None
     is_parent: Optional[bool] = False
     family_id: Optional[str] = None
+    location_id: Optional[str] = None
 
 class EventCreate(BaseModel):
     title: str

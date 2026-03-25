@@ -107,6 +107,10 @@ async def login(data: UserLogin):
 @router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     user_out = {k: v for k, v in current_user.items() if k not in ("password_hash", "_id")}
+    # Enrich with location name for campus display
+    if user_out.get("location_id"):
+        loc = await db.locations.find_one({"id": user_out["location_id"]}, {"_id": 0, "name": 1})
+        user_out["location_name"] = loc.get("name") if loc else ""
     return user_out
 
 

@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from deps import db, get_current_user, require_admin, require_manager, _audit, logger
+from deps import db, get_current_user, require_admin, require_manager, _audit, logger, is_system_admin, get_campus_filter
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid, csv, io
@@ -88,7 +88,8 @@ class ResourceBookingCreate(BaseModel):
 
 @router.get("/resources")
 async def list_resources(current_user: dict = Depends(get_current_user)):
-    return await db.resources.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    query = {**get_campus_filter(current_user)}
+    return await db.resources.find(query, {"_id": 0}).sort("name", 1).to_list(200)
 
 @router.post("/resources")
 async def create_resource(data: ResourceCreate, current_user: dict = Depends(get_current_user)):

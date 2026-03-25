@@ -1,6 +1,6 @@
 """Events, Check-ins, Venues, Event Types, Public Events routes"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger
+from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter
 from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -66,7 +66,11 @@ async def delete_event_type(type_id: str, current_user: dict = Depends(require_a
 
 @router.get("/events")
 async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    campus = get_campus_filter(current_user)
     query = {}
+    if campus:
+        # Non-admin: see campus events + public events
+        query["$or"] = [{**campus}, {"is_public": True}]
     if search:
         query["title"] = {"$regex": search, "$options": "i"}
     if type and type != "all":
@@ -156,7 +160,7 @@ async def duplicate_event(event_id: str, current_user: dict = Depends(get_curren
 
 @router.get("/checkins")
 async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str] = None, type: Optional[str] = None, search: Optional[str] = None, location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    query = {**get_campus_filter(current_user)}
     if event_id: query["event_id"] = event_id
     if member_id: query["member_id"] = member_id
     if type and type != "all": query["type"] = type
