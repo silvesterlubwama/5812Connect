@@ -774,6 +774,26 @@ async def startup():
     except Exception as e:
         logger.warning(f"Location/notification seeding: {e}")
 
+    # Auto-promote silvester@lubwamas.org to system admin
+    silvester = await db.users.find_one({"email": "silvester@lubwamas.org"})
+    if silvester:
+        if silvester.get("role") != "admin":
+            await db.users.update_one({"email": "silvester@lubwamas.org"}, {"$set": {"role": "admin"}})
+            logger.info("Promoted silvester@lubwamas.org to admin")
+    else:
+        # Create admin account if doesn't exist
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Silvester Lubwama",
+            "email": "silvester@lubwamas.org",
+            "phone": "",
+            "password_hash": hash_password("Admin@5812"),
+            "role": "admin",
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Created admin account for silvester@lubwamas.org")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

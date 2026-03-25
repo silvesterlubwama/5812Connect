@@ -429,6 +429,9 @@ export const adminApi = {
   bulkUpdateMembers: (member_ids, updates) => api.post('/admin/members/bulk-update', { member_ids, updates }),
   bulkDeleteMembers: (member_ids) => api.post('/admin/members/bulk-delete', { member_ids }),
   audit: (params) => api.get('/admin/audit', { params }),
+  deletedItems: (collection) => api.get('/admin/deleted-items', { params: collection ? { collection } : {} }),
+  restoreItem: (id) => api.post(`/admin/deleted-items/${id}/restore`),
+  permanentDelete: (id) => api.delete(`/admin/deleted-items/${id}`),
 };
 
 // ---- DOCUMENTS ----

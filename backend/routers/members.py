@@ -48,6 +48,21 @@ async def create_member(data: MemberCreate, current_user: dict = Depends(get_cur
     payload = data.model_dump()
     payload["gender"] = normalize_gender(payload.get("gender"))
     payload["department"] = await resolve_department(payload.get("location_id"), payload.get("department"))
+    # Duplicate check by email, phone, or national_id
+    email = (payload.get("email") or "").strip().lower()
+    phone = (payload.get("phone") or "").strip()
+    national_id = (payload.get("national_id") or "").strip()
+    dedup_or = []
+    if email:
+        dedup_or.append({"email": {"$regex": f"^{email}$", "$options": "i"}})
+    if phone:
+        dedup_or.append({"phone": phone})
+    if national_id:
+        dedup_or.append({"national_id": national_id})
+    if dedup_or:
+        existing = await db.members.find_one({"$or": dedup_or}, {"_id": 0, "name": 1, "email": 1})
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Duplicate: a member with this email/phone/ID already exists ({existing.get('name', '')})")
     member_id = f"mem_{str(uuid.uuid4())[:8]}"
     member = {
         "id": member_id,
@@ -98,9 +113,16 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
 
 @router.delete("/members/{member_id}")
 async def delete_member(member_id: str, current_user: dict = Depends(require_coordinator)):
-    result = await db.members.delete_one({"id": member_id})
-    if result.deleted_count == 0:
+    member = await db.members.find_one({"id": member_id}, {"_id": 0})
+    if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    # Soft-delete: move to deleted_items collection
+    member["_deleted_from"] = "members"
+    member["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    member["deleted_by"] = current_user["id"]
+    await db.deleted_items.insert_one(member)
+    await db.members.delete_one({"id": member_id})
+    await _audit(current_user["id"], "delete", "member", member_id, {"name": member.get("name")})
     return {"message": "Member deleted"}
 
 
@@ -120,6 +142,10 @@ async def list_families(search: Optional[str] = None, current_user: dict = Depen
 
 @router.post("/families")
 async def create_family(data: FamilyCreate, current_user: dict = Depends(get_current_user)):
+    # Duplicate check by family_name
+    existing = await db.families.find_one({"family_name": {"$regex": f"^{data.family_name.strip()}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=409, detail=f"A family named '{data.family_name}' already exists")
     doc = {
         "id": f"fam_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -139,7 +165,15 @@ async def update_family(family_id: str, data: FamilyCreate, current_user: dict =
 
 @router.delete("/families/{family_id}")
 async def delete_family(family_id: str, current_user: dict = Depends(get_current_user)):
+    family = await db.families.find_one({"id": family_id}, {"_id": 0})
+    if not family:
+        raise HTTPException(status_code=404, detail="Family not found")
+    family["_deleted_from"] = "families"
+    family["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    family["deleted_by"] = current_user["id"]
+    await db.deleted_items.insert_one(family)
     await db.families.delete_one({"id": family_id})
+    await _audit(current_user["id"], "delete", "family", family_id, {"name": family.get("family_name")})
     return {"message": "Family deleted"}
 
 
@@ -158,6 +192,14 @@ async def list_children(family_id: Optional[str] = None, search: Optional[str] =
 
 @router.post("/children")
 async def create_child(data: ChildCreate, current_user: dict = Depends(get_current_user)):
+    # Duplicate check by name + family_id
+    name = data.name.strip()
+    dedup_q = {"name": {"$regex": f"^{name}$", "$options": "i"}}
+    if data.family_id:
+        dedup_q["family_id"] = data.family_id
+    existing = await db.children.find_one(dedup_q)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"A child named '{name}' already exists in this family")
     doc = {
         "id": f"chd_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -177,7 +219,15 @@ async def update_child(child_id: str, data: ChildCreate, current_user: dict = De
 
 @router.delete("/children/{child_id}")
 async def delete_child(child_id: str, current_user: dict = Depends(get_current_user)):
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    child["_deleted_from"] = "children"
+    child["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    child["deleted_by"] = current_user["id"]
+    await db.deleted_items.insert_one(child)
     await db.children.delete_one({"id": child_id})
+    await _audit(current_user["id"], "delete", "child", child_id, {"name": child.get("name")})
     return {"message": "Child deleted"}
 
 
@@ -197,6 +247,14 @@ async def list_guests(search: Optional[str] = None, current_user: dict = Depends
 
 @router.post("/guests")
 async def create_guest(data: GuestCreate, current_user: dict = Depends(get_current_user)):
+    # Duplicate check by name + email or phone
+    name = data.name.strip()
+    dedup_or = [{"name": {"$regex": f"^{name}$", "$options": "i"}, "email": (data.email or "").strip().lower()}]
+    if data.phone:
+        dedup_or.append({"name": {"$regex": f"^{name}$", "$options": "i"}, "phone": data.phone.strip()})
+    existing = await db.guests.find_one({"$or": dedup_or})
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Guest '{name}' already recorded")
     doc = {
         "id": f"gst_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -208,9 +266,25 @@ async def create_guest(data: GuestCreate, current_user: dict = Depends(get_curre
     return doc
 
 
+@router.put("/guests/{guest_id}")
+async def update_guest(guest_id: str, data: GuestCreate, current_user: dict = Depends(get_current_user)):
+    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.guests.update_one({"id": guest_id}, {"$set": update})
+    return await db.guests.find_one({"id": guest_id}, {"_id": 0})
+
+
+
 @router.delete("/guests/{guest_id}")
 async def delete_guest(guest_id: str, current_user: dict = Depends(get_current_user)):
+    guest = await db.guests.find_one({"id": guest_id}, {"_id": 0})
+    if not guest:
+        raise HTTPException(status_code=404, detail="Guest not found")
+    guest["_deleted_from"] = "guests"
+    guest["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    guest["deleted_by"] = current_user["id"]
+    await db.deleted_items.insert_one(guest)
     await db.guests.delete_one({"id": guest_id})
+    await _audit(current_user["id"], "delete", "guest", guest_id, {"name": guest.get("name")})
     return {"message": "Guest deleted"}
 
 

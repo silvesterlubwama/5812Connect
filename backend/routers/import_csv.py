@@ -77,63 +77,67 @@ async def import_children_parents(data: dict, current_user: dict = Depends(get_c
                 await db.children.insert_one(child_doc)
                 imported_children += 1
 
-            # --- Father: goes to db.members (parent) ---
+            # --- Father: goes to db.guests (parent) ---
             father_name = str(row.get("fathers_names") or row.get("father_name") or "").strip()
             father_phone = str(row.get("fathers_phone") or row.get("father_phone") or "").strip()
+            father_email = str(row.get("fathers_email") or "").strip().lower()
             if father_name:
-                # Dedup by name + phone combination
-                dedup_q = {"name": {"$regex": f"^{father_name}$", "$options": "i"}, "is_parent": True}
+                # Dedup by name + phone/email in guests
+                dedup_or = [{"name": {"$regex": f"^{father_name}$", "$options": "i"}}]
                 if father_phone:
-                    dedup_q["$or"] = [{"phone": father_phone}, {"name": {"$regex": f"^{father_name}$", "$options": "i"}}]
-                existing_father = await db.members.find_one(dedup_q)
+                    dedup_or.append({"phone": father_phone})
+                if father_email:
+                    dedup_or.append({"email": father_email})
+                existing_father = await db.guests.find_one({"$or": dedup_or})
                 if not existing_father:
-                    await db.members.insert_one({
-                        "id": f"m_{str(uuid.uuid4())[:8]}",
+                    await db.guests.insert_one({
+                        "id": f"gst_{str(uuid.uuid4())[:8]}",
                         "name": father_name,
                         "phone": father_phone,
-                        "email": str(row.get("fathers_email") or "").strip().lower(),
-                        "role": "Parent",
+                        "email": father_email,
                         "is_parent": True,
-                        "gender": "male",
                         "family_id": family_id,
-                        "group": "General",
-                        "status": "active",
-                        "join_date": datetime.now(timezone.utc).date().isoformat(),
+                        "visit_date": datetime.now(timezone.utc).date().isoformat(),
+                        "referred_by": f"Parent of {child_full_name}",
+                        "address": str(row.get("address") or "").strip(),
+                        "notes": "Imported as parent/guest",
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     })
                     imported_parents += 1
                 else:
-                    # Update family_id if missing
+                    # Link family_id if missing
                     if not existing_father.get("family_id"):
-                        await db.members.update_one({"id": existing_father["id"]}, {"$set": {"family_id": family_id}})
+                        await db.guests.update_one({"id": existing_father["id"]}, {"$set": {"family_id": family_id}})
 
-            # --- Mother ---
+            # --- Mother: goes to db.guests (parent) ---
             mother_name = str(row.get("mothers_names") or row.get("mother_name") or "").strip()
             mother_phone = str(row.get("mothers_phone") or row.get("mother_phone") or "").strip()
+            mother_email = str(row.get("mothers_email") or "").strip().lower()
             if mother_name:
-                dedup_q = {"name": {"$regex": f"^{mother_name}$", "$options": "i"}, "is_parent": True}
+                dedup_or = [{"name": {"$regex": f"^{mother_name}$", "$options": "i"}}]
                 if mother_phone:
-                    dedup_q["$or"] = [{"phone": mother_phone}, {"name": {"$regex": f"^{mother_name}$", "$options": "i"}}]
-                existing_mother = await db.members.find_one(dedup_q)
+                    dedup_or.append({"phone": mother_phone})
+                if mother_email:
+                    dedup_or.append({"email": mother_email})
+                existing_mother = await db.guests.find_one({"$or": dedup_or})
                 if not existing_mother:
-                    await db.members.insert_one({
-                        "id": f"m_{str(uuid.uuid4())[:8]}",
+                    await db.guests.insert_one({
+                        "id": f"gst_{str(uuid.uuid4())[:8]}",
                         "name": mother_name,
                         "phone": mother_phone,
-                        "email": str(row.get("mothers_email") or "").strip().lower(),
-                        "role": "Parent",
+                        "email": mother_email,
                         "is_parent": True,
-                        "gender": "female",
                         "family_id": family_id,
-                        "group": "General",
-                        "status": "active",
-                        "join_date": datetime.now(timezone.utc).date().isoformat(),
+                        "visit_date": datetime.now(timezone.utc).date().isoformat(),
+                        "referred_by": f"Parent of {child_full_name}",
+                        "address": str(row.get("address") or "").strip(),
+                        "notes": "Imported as parent/guest",
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     })
                     imported_parents += 1
                 else:
                     if not existing_mother.get("family_id"):
-                        await db.members.update_one({"id": existing_mother["id"]}, {"$set": {"family_id": family_id}})
+                        await db.guests.update_one({"id": existing_mother["id"]}, {"$set": {"family_id": family_id}})
 
         except Exception as e:
             logger.error(f"Import row {i+1}: {e}")

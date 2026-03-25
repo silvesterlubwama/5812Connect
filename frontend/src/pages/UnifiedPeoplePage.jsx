@@ -166,6 +166,11 @@ export default function UnifiedPeoplePage() {
   const [childForm, setChildForm] = useState({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' });
   const [guestForm, setGuestForm] = useState({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' });
 
+  // Edit family
+  const [editFamily, setEditFamily] = useState(null);
+  const [editFamilyForm, setEditFamilyForm] = useState({});
+  const [savingFamily, setSavingFamily] = useState(false);
+
   const [allLocations, setAllLocations] = useState([]);
   const [activeTab, setActiveTab] = useState('members');
   const [saving, setSaving] = useState(false);
@@ -375,9 +380,25 @@ export default function UnifiedPeoplePage() {
   };
 
   // Family/Child/Guest handlers
-  const handleAddFamily = async (e) => { e.preventDefault(); setSaving(true); try { await familiesApi.create(familyForm); toast.success('Family added!'); setShowFamily(false); setFamilyForm({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' }); fetchPeople(); } catch { toast.error('Failed'); } finally { setSaving(false); } };
-  const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' }); fetchPeople(); } catch { toast.error('Failed'); } finally { setSaving(false); } };
-  const handleAddGuest = async (e) => { e.preventDefault(); setSaving(true); try { await guestsApi.create(guestForm); toast.success('Guest recorded!'); setShowGuest(false); setGuestForm({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' }); fetchPeople(); } catch { toast.error('Failed'); } finally { setSaving(false); } };
+  const handleAddFamily = async (e) => { e.preventDefault(); setSaving(true); try { await familiesApi.create(familyForm); toast.success('Family added!'); setShowFamily(false); setFamilyForm({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
+  const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
+  const handleAddGuest = async (e) => { e.preventDefault(); setSaving(true); try { await guestsApi.create(guestForm); toast.success('Guest recorded!'); setShowGuest(false); setGuestForm({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
+
+  const openEditFamily = (f) => {
+    setEditFamily(f);
+    setEditFamilyForm({ family_name: f.family_name || '', primary_contact_name: f.primary_contact_name || '', primary_contact_email: f.primary_contact_email || '', primary_contact_phone: f.primary_contact_phone || '', address: f.address || '', notes: f.notes || '' });
+  };
+  const saveEditFamily = async () => {
+    if (!editFamily) return;
+    setSavingFamily(true);
+    try {
+      await familiesApi.update(editFamily.id, editFamilyForm);
+      setFamilies(prev => prev.map(f => f.id === editFamily.id ? { ...f, ...editFamilyForm } : f));
+      setEditFamily(null);
+      toast.success('Family updated');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+    finally { setSavingFamily(false); }
+  };
 
   const handleExportCsv = async () => { try { const url = exportApi.members(); const a = document.createElement('a'); a.href = url; a.download = 'members.csv'; a.click(); toast.success('Exporting members CSV...'); } catch { toast.error('Export failed'); } };
 
@@ -501,7 +522,15 @@ export default function UnifiedPeoplePage() {
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between mb-2">
                       <div><p className="font-medium">{f.family_name}</p><p className="text-xs text-muted-foreground">{f.primary_contact_name} &middot; {f.primary_contact_phone}</p></div>
-                      <Badge variant="secondary" className="text-xs">{childrenForFamily(f.id).length} children</Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="text-xs">{childrenForFamily(f.id).length} children</Badge>
+                        {isCoordinator && (
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-family-${f.id}`} onClick={() => openEditFamily(f)} title="Edit"><Eye size={13} /></Button>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-family-${f.id}`} onClick={() => familiesApi.delete(f.id).then(() => { toast.success('Family deleted'); fetchPeople(); }).catch(err => toast.error(err.response?.data?.detail || 'Failed'))}><Trash2 size={13} /></Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     {childrenForFamily(f.id).length > 0 && (
                       <div className="flex flex-wrap gap-1.5 mt-2">{childrenForFamily(f.id).map(c => <Badge key={c.id} variant="outline" className="text-[10px]">{c.name} ({c.class_group})</Badge>)}</div>
@@ -781,6 +810,26 @@ export default function UnifiedPeoplePage() {
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-child-btn" onClick={saveEditChild} disabled={savingChild}>{savingChild ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* EDIT FAMILY DIALOG */}
+      <Dialog open={!!editFamily} onOpenChange={(o) => { if (!o) setEditFamily(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Family: {editFamily?.family_name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label>Family Name *</Label><Input data-testid="edit-family-name" value={editFamilyForm.family_name || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, family_name: e.target.value })} required /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Contact Name</Label><Input value={editFamilyForm.primary_contact_name || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, primary_contact_name: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Contact Phone</Label><Input value={editFamilyForm.primary_contact_phone || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, primary_contact_phone: e.target.value })} /></div>
+            </div>
+            <div className="space-y-1.5"><Label>Contact Email</Label><Input type="email" value={editFamilyForm.primary_contact_email || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, primary_contact_email: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Address</Label><Input value={editFamilyForm.address || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, address: e.target.value })} /></div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditFamily(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="save-family-btn" onClick={saveEditFamily} disabled={savingFamily}>{savingFamily ? 'Saving...' : 'Save'}</Button>
             </div>
           </div>
         </DialogContent>

@@ -194,10 +194,17 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
 async def admin_delete_user(user_id: str, current_user: dict = Depends(require_admin)):
     if user_id == current_user["id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    result = await db.users.delete_one({"id": user_id})
-    if result.deleted_count == 0:
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    await _audit(current_user["id"], "delete", "user", user_id)
+    # Soft-delete: move to deleted_items
+    user.pop("password_hash", None)
+    user["_deleted_from"] = "users"
+    user["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    user["deleted_by"] = current_user["id"]
+    await db.deleted_items.insert_one(user)
+    await db.users.delete_one({"id": user_id})
+    await _audit(current_user["id"], "delete", "user", user_id, {"name": user.get("name")})
     return {"message": "User deleted"}
 
 
@@ -268,3 +275,51 @@ async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depen
     logs = await db.audit_log.find({}, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
     total = await db.audit_log.count_documents({})
     return {"logs": logs, "total": total}
+
+
+# ========== DELETED ITEMS (Recycle Bin / Restore) ==========
+
+@router.get("/deleted-items")
+async def list_deleted_items(collection: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """List items deleted in the last 30 days, optionally filtered by collection."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    query = {"deleted_at": {"$gte": cutoff}}
+    if collection:
+        query["_deleted_from"] = collection
+    items = await db.deleted_items.find(query, {"_id": 0}).sort("deleted_at", -1).to_list(500)
+    return items
+
+
+@router.post("/deleted-items/{item_id}/restore")
+async def restore_deleted_item(item_id: str, current_user: dict = Depends(require_admin)):
+    """Restore a soft-deleted item back to its original collection."""
+    item = await db.deleted_items.find_one({"id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Deleted item not found")
+    collection_name = item.pop("_deleted_from", None)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail="Cannot determine original collection")
+    item.pop("deleted_at", None)
+    item.pop("deleted_by", None)
+    target = db[collection_name]
+    # Check if item with same id already exists (shouldn't, but be safe)
+    existing = await target.find_one({"id": item_id})
+    if existing:
+        raise HTTPException(status_code=409, detail="An item with this ID already exists in the collection")
+    await target.insert_one(item)
+    await db.deleted_items.delete_one({"id": item_id})
+    await _audit(current_user["id"], "restore", collection_name, item_id, {"name": item.get("name") or item.get("family_name", "")})
+    # Clean _id from response
+    item.pop("_id", None)
+    return {"message": f"Restored to {collection_name}", "item": item}
+
+
+@router.delete("/deleted-items/{item_id}")
+async def permanently_delete_item(item_id: str, current_user: dict = Depends(require_admin)):
+    """Permanently delete an item from the recycle bin."""
+    result = await db.deleted_items.delete_one({"id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    await _audit(current_user["id"], "permanent_delete", "deleted_items", item_id)
+    return {"message": "Permanently deleted"}
