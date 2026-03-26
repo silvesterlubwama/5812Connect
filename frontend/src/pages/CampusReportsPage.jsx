@@ -15,7 +15,7 @@ const COLORS = ['#e97316', '#3b82f6', '#22c55e', '#a855f7', '#ef4444', '#06b6d4'
 
 export default function CampusReportsPage() {
   const { user } = useAuth();
-  const isSystemAdmin = ['admin', 'system_admin', 'Director', 'Executive Director'].includes(user?.role);
+  const isSystemAdmin = ['admin', 'system_admin', 'Director', 'Adviser', 'Executive Director'].includes(user?.role);
   const [comparison, setComparison] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState('');

@@ -19,7 +19,8 @@ import { adminApi, documentsApi, membersApi, locationsApi } from '../services/ap
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
-const ROLES = ['admin', 'Executive Director', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
+const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
+const SYSTEM_ADMIN_ROLES = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'];
 const GROUPS = ['General', 'Staff', 'Volunteers', 'Youth', 'Women', 'Men', 'Children', 'Leadership'];
 const ID_TYPE_LABELS = {
   national_id: 'National ID',
@@ -56,7 +57,7 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   // New User
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true });
+  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false });
   const [createdUser, setCreatedUser] = useState(null);
   // Import Users
   const [showImport, setShowImport] = useState(false);
@@ -94,7 +95,12 @@ export default function AdminPage() {
   const handleCreateUser = async () => {
     if (!createForm.name.trim() || !createForm.email.trim()) { toast.error('Name and email are required'); return; }
     try {
-      const res = await adminApi.createUser(createForm);
+      const payload = { ...createForm };
+      if (payload.is_admin) {
+        payload.role = 'admin';
+      }
+      delete payload.is_admin;
+      const res = await adminApi.createUser(payload);
       setCreatedUser(res.data);
       setUsers(prev => [res.data, ...prev]);
       toast.success(`User "${res.data.name}" created`);
@@ -156,13 +162,14 @@ export default function AdminPage() {
         name: profile.name || '',
         email: profile.email || '',
         phone: profile.phone || '',
-        role: profile.role || 'Member',
+        role: (profile.role === 'admin' || profile.role === 'system_admin') ? (profile.secondary_roles?.[0] || 'Staff') : (profile.role || 'Member'),
         status: profile.status || 'active',
         department: profile.department || '',
         notes: profile.notes || '',
         is_parent: profile.is_parent || false,
         is_customer: profile.is_customer || false,
         is_donor: profile.is_donor || false,
+        is_admin: profile.role === 'admin' || profile.role === 'system_admin',
         secondary_roles: profile.secondary_roles || [],
         pin: profile.pin || '',
         // Member-specific profile fields
@@ -180,12 +187,14 @@ export default function AdminPage() {
       // Fallback to basic user data
       setEditForm({
         name: user.name || '', email: user.email || '', phone: user.phone || '',
-        role: user.role || 'Member', status: user.status || 'active',
+        role: (user.role === 'admin' || user.role === 'system_admin') ? 'Staff' : (user.role || 'Member'),
+        status: user.status || 'active',
         department: user.department || '', notes: user.notes || '',
         is_parent: user.is_parent || false, is_customer: user.is_customer || false,
-        is_donor: user.is_donor || false, pin: user.pin || '',
+        is_donor: user.is_donor || false, is_admin: user.role === 'admin' || user.role === 'system_admin',
+        pin: user.pin || '',
         gender: '', date_of_birth: '', national_id: '', address: '',
-        emergency_contact: '', group: '', location_id: '', program: '', member_id: '',
+        emergency_contact: '', group: '', location_id: user.location_id || '', program: '', member_id: '',
       });
     }
     setShowEdit(true);
@@ -211,6 +220,11 @@ export default function AdminPage() {
     try {
       const payload = { ...editForm };
       delete payload.member_id;
+      // If admin toggle is on, set role to 'admin'; otherwise keep the selected role
+      if (payload.is_admin) {
+        payload.role = 'admin';
+      }
+      delete payload.is_admin;
       const res = await adminApi.updateUser(selectedUser.id, payload);
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, ...res.data } : u));
       toast.success('Profile updated');
@@ -342,7 +356,7 @@ export default function AdminPage() {
   };
 
   const roleColor = (role) => {
-    const colors = { admin: 'bg-red-100 text-red-700', 'Executive Director': 'bg-purple-100 text-purple-700', Director: 'bg-indigo-100 text-indigo-700', Manager: 'bg-blue-100 text-blue-700', Staff: 'bg-teal-100 text-teal-700', HR: 'bg-orange-100 text-orange-700', Volunteer: 'bg-green-100 text-green-700', Member: 'bg-slate-100 text-slate-700' };
+    const colors = { admin: 'bg-red-100 text-red-700', 'Executive Director': 'bg-purple-100 text-purple-700', Adviser: 'bg-violet-100 text-violet-700', Director: 'bg-indigo-100 text-indigo-700', Manager: 'bg-blue-100 text-blue-700', Staff: 'bg-teal-100 text-teal-700', HR: 'bg-orange-100 text-orange-700', Volunteer: 'bg-green-100 text-green-700', Member: 'bg-slate-100 text-slate-700' };
     return colors[role] || 'bg-slate-100 text-slate-600';
   };
 
@@ -358,7 +372,7 @@ export default function AdminPage() {
         <div className="flex gap-2 flex-wrap">
           {selectedIds.size > 0 && <Button variant="outline" onClick={() => setShowBulk(true)} className="gap-2"><UserCog size={16} /> Bulk ({selectedIds.size})</Button>}
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setShowImport(true); setImportResult(null); setImportJson(''); }}><Download size={14} /> Import</Button>
-          <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
+          <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
           <Button variant="outline" size="sm" onClick={fetchUsers}><RefreshCw size={14} /></Button>
         </div>
       </div>
@@ -393,7 +407,8 @@ export default function AdminPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-medium text-sm">{user.name}</p>
-                    <Badge className={`text-xs ${roleColor(user.role)}`}>{user.role}</Badge>
+                    <Badge className={`text-xs ${roleColor(user.role)}`}>{user.role === 'admin' || user.role === 'system_admin' ? 'Admin' : user.role}</Badge>
+                    {(user.role === 'admin' || user.role === 'system_admin') && <Badge className="text-xs bg-red-500 text-white"><Shield size={10} className="mr-0.5" /> System Admin</Badge>}
                     {user.status === 'inactive' && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
                     {user.has_member_profile && <Badge variant="outline" className="text-xs border-indigo-300 text-indigo-600 bg-indigo-50" title="Has People profile">People</Badge>}
                     {user.is_parent && <Badge variant="outline" className="text-xs border-pink-300 text-pink-600">Parent</Badge>}
@@ -467,6 +482,14 @@ export default function AdminPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              {/* Admin Access Toggle */}
+              <div className="flex items-center justify-between p-3 rounded-lg border border-amber-200 bg-amber-50/50">
+                <div>
+                  <Label className="text-xs font-medium">System Admin Access</Label>
+                  <p className="text-[10px] text-muted-foreground">Full cross-campus visibility</p>
+                </div>
+                <Switch data-testid="create-admin-toggle" checked={createForm.is_admin || false} onCheckedChange={v => setCreateForm({ ...createForm, is_admin: v })} />
               </div>
               <label className="flex items-center gap-2 cursor-pointer text-sm">
                 <input type="checkbox" className="accent-primary" checked={createForm.also_create_member} onChange={e => setCreateForm({ ...createForm, also_create_member: e.target.checked })} />
@@ -585,8 +608,8 @@ export default function AdminPage() {
             <TabsContent value="account" className="space-y-4 mt-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Primary Role</Label>
-                  <Select value={editForm.role || 'Member'} onValueChange={v => setEditForm({...editForm, role: v})}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={editForm.role === 'admin' || editForm.role === 'system_admin' ? 'Staff' : (editForm.role || 'Member')} onValueChange={v => setEditForm({...editForm, role: v})}>
+                    <SelectTrigger data-testid="edit-role-select"><SelectValue /></SelectTrigger>
                     <SelectContent>{ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -601,11 +624,23 @@ export default function AdminPage() {
                   </Select>
                 </div>
               </div>
+              {/* Admin Access Toggle */}
+              <div className="flex items-center justify-between p-3 rounded-lg border border-amber-200 bg-amber-50/50">
+                <div>
+                  <Label className="text-sm font-medium">System Admin Access</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Grants full cross-campus visibility and admin privileges</p>
+                </div>
+                <Switch
+                  data-testid="admin-access-toggle"
+                  checked={editForm.is_admin === true}
+                  onCheckedChange={v => setEditForm({...editForm, is_admin: v})}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Department</Label><Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} /></div>
                 <div className="space-y-2"><Label>Campus / Location</Label>
                   <Select value={editForm.location_id || '_none'} onValueChange={v => setEditForm({...editForm, location_id: v === '_none' ? '' : v})}>
-                    <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                    <SelectTrigger data-testid="edit-location-select"><SelectValue placeholder="Select campus" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="_none">None</SelectItem>
                       {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}

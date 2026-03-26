@@ -31,7 +31,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isParent = user?.role === 'parent';
-  const isSystemAdmin = ['admin', 'system_admin', 'Director', 'Executive Director'].includes(user?.role);
+  const isSystemAdmin = ['admin', 'system_admin', 'Director', 'Adviser', 'Executive Director'].includes(user?.role);
   const [stats, setStats] = useState(null);
   const [events, setEvents] = useState([]);
   const [tasks, setTasks] = useState([]);

@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration 25: Verified staff role management features - Admin toggle, Adviser role, Location dropdowns. Backend: 17/17 tests pass (100%). Frontend: All UI features verified via Playwright.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results_by_feature": {
+    "admin_role_not_in_dropdown": "PASS - ROLES constant in AdminPage.jsx does NOT include 'admin' or 'system_admin'",
+    "adviser_role_in_dropdown": "PASS - 'Adviser' appears in ROLES between 'Executive Director' and 'Director'",
+    "admin_toggle_create_user": "PASS - System Admin Access toggle visible in Create User form with amber border",
+    "admin_toggle_edit_account": "PASS - System Admin Access toggle visible in Account tab of Edit Profile dialog",
+    "admin_toggle_saves_admin_role": "PASS - When toggle ON, user role is set to 'admin' on save (backend test)",
+    "admin_toggle_off_keeps_role": "PASS - When toggle OFF, user keeps their selected role (backend test)",
+    "location_dropdown_admin_edit": "PASS - Campus/Location dropdown visible in Account tab of Edit Profile",
+    "location_dropdown_create_user": "PASS - Location dropdown visible in Create User form",
+    "location_dropdown_member_edit": "PASS - Location dropdown visible in MemberForm (People edit)",
+    "location_dropdown_child_add": "PASS - Campus/Location dropdown visible in Add Child form",
+    "location_dropdown_child_edit": "PASS - Campus/Location dropdown visible in Edit Child form",
+    "adviser_role_level_8_5": "PASS - ROLE_LEVELS in deps.py has 'Adviser': 8.5 (between Director 8 and ED 9)",
+    "adviser_in_system_admin_roles": "PASS - SYSTEM_ADMIN_ROLES in deps.py includes 'adviser'",
+    "dashboard_campus_switcher_adviser": "PASS - isSystemAdmin in DashboardPage.jsx includes 'Adviser'",
+    "campus_reports_adviser_access": "PASS - isSystemAdmin in CampusReportsPage.jsx includes 'Adviser'",
+    "system_admin_badge_display": "PASS - Admin users show 'System Admin' badge in user list",
+    "mock_roles_includes_adviser": "PASS - MOCK_ROLES in mock.js includes 'Adviser' (not 'Advisor')"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration25_role_management.py",
+    "/app/test_reports/pytest/pytest_results_iteration25.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "VERIFIED: ROLES constant excludes 'admin' and 'system_admin' - users select role from dropdown, admin access via toggle",
+    "VERIFIED: Admin toggle (is_admin) in Create/Edit forms sets role='admin' when ON, keeps selected role when OFF",
+    "VERIFIED: Location dropdown present in: AdminPage (Create/Edit), UnifiedPeoplePage (MemberForm, Child Add/Edit)",
+    "VERIFIED: Adviser role at level 8.5 in ROLE_LEVELS - between Director (8) and Executive Director (9)",
+    "VERIFIED: 'adviser' in SYSTEM_ADMIN_ROLES set - grants cross-campus visibility",
+    "VERIFIED: isSystemAdmin checks in Dashboard and CampusReports include 'Adviser' for campus switcher access",
+    "VERIFIED: System Admin badge displays for users with role='admin' or 'system_admin'"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration25_role_management.py"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17 tests pass)",
+    "frontend": "100% (all 17 features verified)"
+  },
+  "test_credentials": {
+    "admin": "admin@5812uganda.org / Admin@5812"
+  },
+  "seed_data_creation": "Test users created and cleaned up during backend tests",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 25 complete. Role management features verified: (1) Admin/system_admin NOT in role dropdowns - instead there's a 'System Admin Access' toggle with amber border, (2) Adviser role added at level 8.5 with cross-campus visibility, (3) Location dropdowns present in AdminPage (Create/Edit Account tab), UnifiedPeoplePage (MemberForm, Child Add/Edit). Key code locations: AdminPage.jsx line 22 (ROLES), line 487-493 (create admin toggle), line 627-638 (edit admin toggle), line 639-650 (edit location). deps.py line 78-85 (ROLE_LEVELS), line 88 (SYSTEM_ADMIN_ROLES).",
+  "rca_of_issue": "No issues found. All requested features are working correctly."
+}

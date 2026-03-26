@@ -60,8 +60,8 @@ const NAV_SECTIONS = [
       { to: '/attendance', icon: UserCheck, labelKey: 'nav.attendance' },
       { to: '/sales-analytics', icon: TrendingUp, labelKey: 'nav.salesAnalytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
       { to: '/location-analytics', icon: BarChart3, labelKey: 'nav.locationStats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
-      { to: '/reports', icon: FileText, labelKey: 'nav.reports', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
-      { to: '/campus-reports', icon: Building2, labelKey: 'nav.campusReports', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/reports', icon: FileText, labelKey: 'nav.reports', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
+      { to: '/campus-reports', icon: Building2, labelKey: 'nav.campusReports', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
     ]
   },
   {

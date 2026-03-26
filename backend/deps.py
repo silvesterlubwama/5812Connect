@@ -77,7 +77,7 @@ async def _audit(user_id: str, action: str, resource: str, resource_id: str = No
 
 ROLE_LEVELS = {
     "system_admin": 10, "admin": 10,
-    "Executive Director": 9, "Director": 8,
+    "Executive Director": 9, "Adviser": 8.5, "Director": 8,
     "Manager": 7, "Coordinator": 6,
     "Staff": 5, "Volunteer": 4,
     "Member": 3, "Parent": 2,
@@ -85,7 +85,7 @@ ROLE_LEVELS = {
 }
 
 # Roles that bypass campus isolation (see everything)
-SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director", "director"}
+SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director", "adviser", "director"}
 
 def get_role_level(role: str) -> int:
     return ROLE_LEVELS.get(role, 0)
