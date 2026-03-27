@@ -321,3 +321,82 @@ async def import_sales(data: dict, current_user: dict = Depends(require_manager)
         imported += 1
     await _audit(current_user["id"], "create", "sales_import", None, {"count": imported})
     return {"imported": imported}
+
+
+# ========== FINANCIAL EXPORT / IMPORT ==========
+
+@router.get("/financial/export")
+async def export_financial_data(
+    location_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Export donations and expenses as JSON."""
+    query = {**_financial_campus_filter(current_user)}
+    if location_id:
+        query["location_id"] = location_id
+    date_filter = {}
+    if date_from:
+        date_filter["$gte"] = date_from
+    if date_to:
+        date_filter["$lte"] = date_to
+    don_q = {**query}
+    exp_q = {**query}
+    if date_filter:
+        don_q["date"] = date_filter
+        exp_q["date"] = date_filter
+    donations = await db.donations.find(don_q, {"_id": 0}).sort("date", -1).to_list(5000)
+    expenses = await db.expenses.find(exp_q, {"_id": 0}).sort("date", -1).to_list(5000)
+    return {
+        "donations": donations,
+        "expenses": expenses,
+        "donations_count": len(donations),
+        "expenses_count": len(expenses),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/financial/import")
+async def import_financial_data(data: dict, current_user: dict = Depends(require_manager)):
+    """Import donations and/or expenses from JSON."""
+    don_data = data.get("donations", [])
+    exp_data = data.get("expenses", [])
+    if not don_data and not exp_data:
+        raise HTTPException(status_code=400, detail="No financial data provided")
+    don_imported = 0
+    for d in don_data:
+        doc = {
+            "id": f"don_{str(uuid.uuid4())[:8]}",
+            "donor_name": d.get("donor_name", "Imported"),
+            "amount": float(d.get("amount", 0)),
+            "currency": d.get("currency", "UGX"),
+            "type": d.get("type", "donation"),
+            "date": d.get("date", datetime.now(timezone.utc).isoformat()[:10]),
+            "notes": d.get("notes", "Imported"),
+            "location_id": d.get("location_id", current_user.get("location_id", "")),
+            "member_id": d.get("member_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.donations.insert_one(doc)
+        don_imported += 1
+    exp_imported = 0
+    for e in exp_data:
+        doc = {
+            "id": f"exp_{str(uuid.uuid4())[:8]}",
+            "title": e.get("title", "Imported"),
+            "amount": float(e.get("amount", 0)),
+            "currency": e.get("currency", "UGX"),
+            "category": e.get("category", "general"),
+            "date": e.get("date", datetime.now(timezone.utc).isoformat()[:10]),
+            "notes": e.get("notes", "Imported"),
+            "status": "approved",
+            "location_id": e.get("location_id", current_user.get("location_id", "")),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.expenses.insert_one(doc)
+        exp_imported += 1
+    await _audit(current_user["id"], "create", "financial_import", None, {"donations": don_imported, "expenses": exp_imported})
+    return {"donations_imported": don_imported, "expenses_imported": exp_imported}

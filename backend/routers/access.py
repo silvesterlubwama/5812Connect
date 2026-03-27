@@ -235,6 +235,7 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
             {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}]},
             {"_id": 0, "id": 1}
         )
+        visit_time = req.get("visit_time", "")
         guest_pass = {
             "id": pass_id,
             "guest_request_id": request_id,
@@ -244,6 +245,8 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
             "visit_date": req.get("visit_date"),
             "valid_from": req.get("visit_date"),
             "valid_until": req.get("visit_date"),  # Single day by default
+            "valid_from_time": visit_time or "06:00",
+            "valid_until_time": "22:00",  # Default end of day
             "qr_value": pass_id,
             "has_existing_badge": bool(existing_badge),
             "existing_member_id": existing_badge.get("id") if existing_badge else None,
@@ -371,7 +374,78 @@ async def list_guest_passes(location_id: Optional[str] = None, status: Optional[
     if status:
         query["status"] = status
     passes = await db.guest_passes.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # Auto-expire passes past their valid_until date
+    today = datetime.now(timezone.utc).isoformat()[:10]
+    for p in passes:
+        if p.get("status") == "active" and p.get("valid_until") and p["valid_until"] < today:
+            p["status"] = "expired"
+            await db.guest_passes.update_one({"id": p["id"]}, {"$set": {"status": "expired"}})
     return passes
+
+
+@router.get("/access/guest-passes/{pass_id}/validate")
+async def validate_guest_pass(pass_id: str):
+    """Public QR validation endpoint — scan a guest pass QR to check validity."""
+    gp = await db.guest_passes.find_one({"$or": [{"id": pass_id}, {"qr_value": pass_id}]}, {"_id": 0})
+    if not gp:
+        raise HTTPException(status_code=404, detail="Guest pass not found")
+    today = datetime.now(timezone.utc).isoformat()[:10]
+    now_time = datetime.now(timezone.utc).strftime("%H:%M")
+    is_valid_date = (gp.get("valid_from", "") <= today <= gp.get("valid_until", ""))
+    # Check time bounds if set
+    is_valid_time = True
+    if gp.get("valid_from_time") and gp.get("valid_until_time"):
+        is_valid_time = gp["valid_from_time"] <= now_time <= gp["valid_until_time"]
+    is_active = gp.get("status") == "active"
+    valid = is_valid_date and is_valid_time and is_active
+    if not valid and is_active and not is_valid_date:
+        await db.guest_passes.update_one({"id": gp["id"]}, {"$set": {"status": "expired"}})
+        gp["status"] = "expired"
+    loc = await db.locations.find_one({"id": gp.get("location_id")}, {"_id": 0, "name": 1})
+    if valid:
+        msg = "Access granted"
+    elif not is_active:
+        msg = f"Pass is {gp.get('status', 'inactive')}"
+    elif not is_valid_date:
+        msg = "Pass expired"
+    elif not is_valid_time:
+        msg = f"Outside valid hours ({gp.get('valid_from_time', '')} - {gp.get('valid_until_time', '')})"
+    else:
+        msg = "Pass inactive"
+    return {
+        "valid": valid,
+        "pass": gp,
+        "location_name": loc.get("name") if loc else "",
+        "message": msg,
+    }
+
+
+@router.put("/access/guest-passes/{pass_id}/extend")
+async def extend_guest_pass(pass_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Extend a guest pass validity period."""
+    ROLE_HIERARCHY_LOCAL = {"system_admin": 10, "admin": 10, "Executive Director": 10, "Advisor": 9, "Director": 8, "Manager": 7}
+    if ROLE_HIERARCHY_LOCAL.get(current_user.get("role", ""), 0) < 7:
+        raise HTTPException(status_code=403, detail="Manager or above required")
+    gp = await db.guest_passes.find_one({"id": pass_id}, {"_id": 0})
+    if not gp:
+        raise HTTPException(status_code=404, detail="Guest pass not found")
+    update = {}
+    if data.get("valid_until"):
+        update["valid_until"] = data["valid_until"]
+    if data.get("valid_until_time"):
+        update["valid_until_time"] = data["valid_until_time"]
+    if data.get("valid_from_time"):
+        update["valid_from_time"] = data["valid_from_time"]
+    if data.get("valid_days"):
+        from datetime import timedelta
+        new_end = (datetime.now(timezone.utc) + timedelta(days=int(data["valid_days"]))).isoformat()[:10]
+        update["valid_until"] = new_end
+    update["status"] = "active"
+    update["extended_by"] = current_user["id"]
+    update["extended_at"] = datetime.now(timezone.utc).isoformat()
+    await db.guest_passes.update_one({"id": pass_id}, {"$set": update})
+    await _audit(current_user["id"], "update", "guest_pass_extend", pass_id)
+    return {**gp, **update}
 
 
 @router.get("/access/eligible-residents/{location_id}")

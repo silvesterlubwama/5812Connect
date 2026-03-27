@@ -216,7 +216,9 @@ export const exportApi = {
   members: () => `${BACKEND_URL}/api/export/members`,
   financial: () => `${BACKEND_URL}/api/export/financial`,
   events: () => `${BACKEND_URL}/api/export/events`,
-  ical: () => `${BACKEND_URL}/api/export/events.ics`,
+  ical: () => `${BACKEND_URL}/api/events/export/ical`,
+  icalImport: (data) => api.post('/events/import/ical', data),
+  generateRecurring: (data) => api.post('/events/generate-recurring', data),
 };
 
 // ---- OUTREACH ----
@@ -293,6 +295,8 @@ export const financialExtrasApi = {
   cashflow: (months) => api.get('/financial/cashflow', { params: { months } }),
   getBalance: () => api.get('/financial/balance'),
   setBalance: (opening_balance) => api.put('/financial/balance', null, { params: { opening_balance } }),
+  export: (params) => api.get('/financial/export', { params }),
+  import: (data) => api.post('/financial/import', data),
 };
 
 // ---- PARENT ----
@@ -337,6 +341,10 @@ export const accessApi = {
   rejectGuest: (id) => api.put(`/access/guest-requests/${id}/reject`),
   scan: (data) => api.post('/access/scan', data),
   scanLog: (params) => api.get('/access/scan-log', { params }),
+  guestPasses: (params) => api.get('/access/guest-passes', { params }),
+  validateGuestPass: (passId) => api.get(`/access/guest-passes/${passId}/validate`),
+  extendGuestPass: (passId, data) => api.put(`/access/guest-passes/${passId}/extend`, data),
+  eligibleResidents: (locationId) => api.get(`/access/eligible-residents/${locationId}`),
 };
 
 // ---- REPORTS ----

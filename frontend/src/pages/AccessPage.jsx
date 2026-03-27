@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Shield, ScanLine, UserPlus, KeyRound, Users, Clock, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { Shield, ScanLine, UserPlus, KeyRound, Users, Clock, CheckCircle, XCircle, AlertTriangle, QrCode, Timer } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -27,6 +27,12 @@ export default function AccessPage() {
   const [showAssignStaff, setShowAssignStaff] = useState(false);
   const [showGuestRequest, setShowGuestRequest] = useState(false);
   const [showScanDialog, setShowScanDialog] = useState(false);
+  const [guestPasses, setGuestPasses] = useState([]);
+  const [showQrPass, setShowQrPass] = useState(null);
+  const [showExtendPass, setShowExtendPass] = useState(null);
+  const [extendDays, setExtendDays] = useState('7');
+  const [validateResult, setValidateResult] = useState(null);
+  const [showValidateResult, setShowValidateResult] = useState(false);
 
   const [residentForm, setResidentForm] = useState({ member_id: '', tags: '' });
   const [staffForm, setStaffForm] = useState({ staff_id: '' });
@@ -59,16 +65,18 @@ export default function AccessPage() {
   const fetchLocationData = useCallback(async () => {
     if (!selectedLocation) return;
     try {
-      const [resRes, staffRes, guestRes, scanRes] = await Promise.all([
+      const [resRes, staffRes, guestRes, scanRes, passRes] = await Promise.all([
         accessApi.residents({ location_id: selectedLocation }),
         accessApi.staffPasses({ location_id: selectedLocation }),
         accessApi.guestRequests({ location_id: selectedLocation }),
         accessApi.scanLog({ location_id: selectedLocation }),
+        accessApi.guestPasses({ location_id: selectedLocation }),
       ]);
       setResidents(resRes.data);
       setStaffPasses(staffRes.data);
       setGuestRequests(guestRes.data);
       setScanLog(scanRes.data);
+      setGuestPasses(passRes.data || []);
     } catch { toast.error('Failed to load access data'); }
   }, [selectedLocation]);
 
@@ -160,6 +168,31 @@ export default function AccessPage() {
     catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
 
+  const validateGuestPass = async (passId) => {
+    try {
+      const res = await accessApi.validateGuestPass(passId);
+      setValidateResult(res.data);
+      setShowValidateResult(true);
+    } catch { toast.error('Validation failed'); }
+  };
+
+  const handleExtendPass = async () => {
+    if (!showExtendPass) return;
+    try {
+      await accessApi.extendGuestPass(showExtendPass.id, { valid_days: parseInt(extendDays) || 7 });
+      toast.success(`Pass extended by ${extendDays} days`);
+      setShowExtendPass(null);
+      fetchLocationData();
+    } catch { toast.error('Extension failed'); }
+  };
+
+  const generateQrDataUrl = (value) => {
+    // Simple QR-like visual using SVG with the pass ID
+    const size = 200;
+    const encoded = encodeURIComponent(value);
+    return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}`;
+  };
+
   const locName = (id) => locations.find(l => l.id === id)?.name || id;
 
   if (loading) return <div className="p-6"><div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-24 bg-muted animate-pulse rounded-xl" />)}</div></div>;
@@ -210,6 +243,7 @@ export default function AccessPage() {
               <TabsTrigger value="residents" data-testid="tab-residents"><Users size={13} className="mr-1.5" /> Residents</TabsTrigger>
               <TabsTrigger value="staff" data-testid="tab-staff"><KeyRound size={13} className="mr-1.5" /> Staff Access</TabsTrigger>
               <TabsTrigger value="guests" data-testid="tab-guests"><UserPlus size={13} className="mr-1.5" /> Guest Requests</TabsTrigger>
+              <TabsTrigger value="passes" data-testid="tab-passes"><QrCode size={13} className="mr-1.5" /> Guest Passes</TabsTrigger>
               <TabsTrigger value="log" data-testid="tab-scan-log"><Clock size={13} className="mr-1.5" /> Scan Log</TabsTrigger>
             </TabsList>
 
@@ -288,6 +322,50 @@ export default function AccessPage() {
                                 <XCircle size={13} className="mr-1" /> Reject
                               </Button>
                             </>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Guest Passes Tab */}
+            <TabsContent value="passes" className="mt-4">
+              {guestPasses.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-10">No guest passes issued yet. Approve a guest request to generate a pass.</p>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {guestPasses.map(gp => (
+                    <Card key={gp.id} className={`shadow-soft rounded-xl border-2 ${gp.status === 'active' ? 'border-green-200' : 'border-border'}`} data-testid={`guest-pass-${gp.id}`}>
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <p className="font-semibold text-sm">{gp.guest_name}</p>
+                            <p className="text-xs text-muted-foreground">{gp.guest_phone}</p>
+                          </div>
+                          <Badge variant={gp.status === 'active' ? 'outline' : 'secondary'}
+                            className={`text-xs ${gp.status === 'active' ? 'border-green-500 text-green-600' : gp.status === 'expired' ? 'border-red-400 text-red-500' : 'border-border'}`}>
+                            {gp.status}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-y-0.5 mb-3">
+                          <p className="flex items-center gap-1"><Clock size={10} /> Valid: {gp.valid_from} to {gp.valid_until}</p>
+                          {gp.valid_from_time && <p className="flex items-center gap-1"><Timer size={10} /> Time: {gp.valid_from_time} - {gp.valid_until_time || '22:00'}</p>}
+                          <p>Pass ID: <span className="font-mono text-primary">{gp.id}</span></p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => setShowQrPass(gp)} data-testid={`view-qr-${gp.id}`}>
+                            <QrCode size={12} /> View QR
+                          </Button>
+                          <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => validateGuestPass(gp.id)} data-testid={`validate-pass-${gp.id}`}>
+                            <CheckCircle size={12} /> Validate
+                          </Button>
+                          {gp.status === 'active' && (
+                            <Button size="sm" variant="outline" className="text-xs gap-1" onClick={() => { setShowExtendPass(gp); setExtendDays('7'); }} data-testid={`extend-pass-${gp.id}`}>
+                              <Timer size={12} /> Extend
+                            </Button>
                           )}
                         </div>
                       </CardContent>
@@ -460,6 +538,80 @@ export default function AccessPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* QR Pass View Modal */}
+      <Dialog open={!!showQrPass} onOpenChange={() => setShowQrPass(null)}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><QrCode size={16} /> Guest Pass QR</DialogTitle></DialogHeader>
+          {showQrPass && (
+            <div className="text-center space-y-4">
+              <div className="bg-white p-4 rounded-xl inline-block">
+                <img src={generateQrDataUrl(showQrPass.id)} alt="Guest Pass QR Code" className="w-48 h-48 mx-auto" data-testid="guest-pass-qr-image" />
+              </div>
+              <div className="space-y-1">
+                <p className="font-semibold">{showQrPass.guest_name}</p>
+                <p className="text-xs text-muted-foreground font-mono">{showQrPass.id}</p>
+                <p className="text-xs text-muted-foreground">{locName(showQrPass.location_id)}</p>
+                <p className="text-xs">Valid: {showQrPass.valid_from} to {showQrPass.valid_until}</p>
+                {showQrPass.valid_from_time && (
+                  <p className="text-xs">Time: {showQrPass.valid_from_time} - {showQrPass.valid_until_time || '22:00'}</p>
+                )}
+              </div>
+              <Badge variant={showQrPass.status === 'active' ? 'outline' : 'secondary'}
+                className={showQrPass.status === 'active' ? 'border-green-500 text-green-600' : 'border-red-400 text-red-500'}>
+                {showQrPass.status?.toUpperCase()}
+              </Badge>
+              <p className="text-xs text-muted-foreground">Scan this QR code at the entry gate</p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Validate Result Modal */}
+      <Dialog open={showValidateResult} onOpenChange={setShowValidateResult}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Pass Validation Result</DialogTitle></DialogHeader>
+          {validateResult && (
+            <div className="text-center space-y-4 py-4">
+              <div className={`w-20 h-20 rounded-full mx-auto flex items-center justify-center ${validateResult.valid ? 'bg-green-100' : 'bg-red-100'}`}>
+                {validateResult.valid ? <CheckCircle size={40} className="text-green-600" /> : <XCircle size={40} className="text-red-500" />}
+              </div>
+              <p className={`text-lg font-bold ${validateResult.valid ? 'text-green-600' : 'text-red-500'}`}>
+                {validateResult.message}
+              </p>
+              {validateResult.pass && (
+                <div className="text-sm space-y-1 text-muted-foreground">
+                  <p>Guest: <span className="font-medium text-foreground">{validateResult.pass.guest_name}</span></p>
+                  <p>Location: <span className="font-medium text-foreground">{validateResult.location_name}</span></p>
+                  <p>Valid: {validateResult.pass.valid_from} to {validateResult.pass.valid_until}</p>
+                  <p>Status: <Badge variant="outline" className="text-xs">{validateResult.pass.status}</Badge></p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Extend Pass Modal */}
+      <Dialog open={!!showExtendPass} onOpenChange={() => setShowExtendPass(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Extend Guest Pass</DialogTitle></DialogHeader>
+          {showExtendPass && (
+            <div className="space-y-4 mt-2">
+              <p className="text-sm">Extend pass for <span className="font-semibold">{showExtendPass.guest_name}</span></p>
+              <p className="text-xs text-muted-foreground">Currently valid until: {showExtendPass.valid_until}</p>
+              <div className="space-y-2">
+                <Label>Extend by (days)</Label>
+                <Input type="number" min={1} max={365} value={extendDays} onChange={e => setExtendDays(e.target.value)} data-testid="extend-days-input" />
+              </div>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1" onClick={() => setShowExtendPass(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={handleExtendPass} data-testid="confirm-extend-btn">Extend Pass</Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

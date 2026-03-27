@@ -491,12 +491,12 @@ async def export_calendar_ical(current_user: dict = Depends(get_current_user)):
 
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//58:12 Global Connect//CRM//EN"]
     for ev in events:
-        uid = ev.get("id", "")
-        dtstart = ev.get("date", "").replace("-", "")
-        time_str = ev.get("time", "0900").replace(":", "")
-        summary = ev.get("title", "")
-        desc = ev.get("description", "").replace("\n", "\\n")
-        location = ev.get("location", "")
+        uid = ev.get("id") or ""
+        dtstart = (ev.get("date") or "").replace("-", "")
+        time_str = (ev.get("time") or "0900").replace(":", "")
+        summary = ev.get("title") or ""
+        desc = (ev.get("description") or "").replace("\n", "\\n")
+        location = ev.get("location") or ""
         lines.extend([
             "BEGIN:VEVENT",
             f"UID:{uid}@5812global",
@@ -568,3 +568,105 @@ async def import_calendar_ical(data: dict, current_user: dict = Depends(get_curr
         await db.events.insert_many(events)
 
     return {"imported": imported, "message": f"Imported {imported} events"}
+
+
+# ========== RECURRING EVENT GENERATION ==========
+
+@router.post("/events/generate-recurring")
+async def generate_recurring_events(data: dict, current_user: dict = Depends(get_current_user)):
+    """Generate recurring events from a pattern specification.
+    Supports: daily, weekly, biweekly, monthly, yearly, nth_week, nth_month patterns."""
+    import calendar as cal_module
+
+    pattern = data.get("pattern", "weekly")  # daily, weekly, biweekly, monthly, yearly, nth_week, nth_month
+    title = data.get("title", "Recurring Event")
+    event_type = data.get("type", "service")
+    location = data.get("location", "")
+    location_id = data.get("location_id", "")
+    time_str = data.get("time", "09:00")
+    end_time = data.get("end_time", "")
+    start_date = data.get("start_date", datetime.now(timezone.utc).isoformat()[:10])
+    occurrences = min(int(data.get("occurrences", 12)), 52)
+    interval = max(int(data.get("interval", 1)), 1)
+    capacity = int(data.get("capacity", 100))
+    is_public = data.get("is_public", True)
+    day_of_week = int(data.get("day_of_week", 0))
+    nth_week = int(data.get("nth_week", 1))
+    day_of_month = int(data.get("day_of_month", 1))
+    end_date = data.get("end_date")  # optional hard stop date
+
+    from datetime import timedelta
+    start = datetime.fromisoformat(start_date)
+    created = []
+
+    for i in range(occurrences):
+        event_date = None
+
+        if pattern == "daily":
+            event_date = start + timedelta(days=i * interval)
+
+        elif pattern == "weekly":
+            event_date = start + timedelta(weeks=i * interval)
+
+        elif pattern == "biweekly":
+            event_date = start + timedelta(weeks=i * 2)
+
+        elif pattern == "monthly":
+            month = start.month + i * interval - 1
+            year = start.year + month // 12
+            month = month % 12 + 1
+            day = min(start.day, cal_module.monthrange(year, month)[1])
+            event_date = start.replace(year=year, month=month, day=day)
+
+        elif pattern == "yearly":
+            try:
+                event_date = start.replace(year=start.year + i * interval)
+            except ValueError:
+                # Feb 29 on non-leap year
+                event_date = start.replace(year=start.year + i * interval, day=28)
+
+        elif pattern == "nth_week":
+            month = start.month + i * interval - 1
+            year = start.year + month // 12
+            month = month % 12 + 1
+            weeks = cal_module.monthcalendar(year, month)
+            matching = [w[day_of_week] for w in weeks if w[day_of_week] != 0]
+            if nth_week == -1 and matching:
+                day = matching[-1]
+            elif 1 <= nth_week <= len(matching):
+                day = matching[nth_week - 1]
+            else:
+                continue
+            event_date = datetime(year, month, day)
+
+        elif pattern == "nth_month":
+            month = start.month + i * interval - 1
+            year = start.year + month // 12
+            month = month % 12 + 1
+            max_day = cal_module.monthrange(year, month)[1]
+            day = min(day_of_month, max_day)
+            event_date = datetime(year, month, day)
+
+        if event_date is None:
+            continue
+
+        date_str = event_date.strftime("%Y-%m-%d")
+        if end_date and date_str > end_date:
+            break
+
+        event_id = f"evt_{str(uuid.uuid4())[:8]}"
+        doc = {
+            "id": event_id, "title": title, "type": event_type,
+            "date": date_str, "time": time_str, "end_time": end_time,
+            "location": location, "location_id": location_id,
+            "capacity": capacity, "registered": 0, "status": "upcoming",
+            "is_public": is_public, "is_free": True, "visibility": "external",
+            "is_recurring": True, "recurrence_pattern": pattern,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.events.insert_one(doc)
+        doc.pop("_id", None)
+        created.append(doc)
+
+    return {"created": len(created), "events": created}

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Download, Repeat } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { eventsApi, exportApi, outreachApi } from '../services/api';
@@ -35,6 +36,9 @@ export default function CalendarPage() {
     weeks: 12, interval: 1, nth_week: 1, nth_month_day: 'first',
   });
   const [creatingRecurring, setCreatingRecurring] = useState(false);
+  const [showImportCal, setShowImportCal] = useState(false);
+  const [icalContent, setIcalContent] = useState('');
+  const [importingCal, setImportingCal] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -105,89 +109,50 @@ export default function CalendarPage() {
       }).catch(() => toast.error('Export failed'));
   };
 
+  const handleImportIcal = async () => {
+    if (!icalContent.trim()) return;
+    setImportingCal(true);
+    try {
+      const res = await exportApi.icalImport({ ical_content: icalContent });
+      toast.success(res.data.message || `Imported ${res.data.imported} events`);
+      setShowImportCal(false); setIcalContent('');
+      // Refresh events
+      const evRes = await eventsApi.list();
+      setEvents(evRes.data);
+    } catch (err) { toast.error('Import failed — check iCal format'); }
+    finally { setImportingCal(false); }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setIcalContent(ev.target.result);
+    reader.readAsText(file);
+  };
+
   const handleCreateRecurring = async (e) => {
     e.preventDefault();
     setCreatingRecurring(true);
     try {
-      const startDate = new Date(recurForm.start_date);
-      const created = [];
-      const interval = recurForm.interval || 1;
-
-      if (recurForm.recurrence === 'nth_week') {
-        // Nth week of month pattern: e.g. "2nd Saturday of every month"
-        const dayMap = { '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6 };
-        const targetDay = dayMap[recurForm.day_of_week] ?? 0;
-        const nthWeek = recurForm.nth_week || 1;
-
-        for (let i = 0; i < recurForm.weeks; i++) {
-          const month = startDate.getMonth() + i * interval;
-          const year = startDate.getFullYear() + Math.floor(month / 12);
-          const actualMonth = ((month % 12) + 12) % 12;
-
-          // Find nth occurrence of target weekday in month
-          let count = 0;
-          let eventDate = null;
-          const daysInMonth = new Date(year, actualMonth + 1, 0).getDate();
-          for (let d = 1; d <= daysInMonth; d++) {
-            const dt = new Date(year, actualMonth, d);
-            if (dt.getDay() === targetDay) {
-              count++;
-              if (nthWeek === -1) {
-                eventDate = dt; // keep overwriting for "last"
-              } else if (count === nthWeek) {
-                eventDate = dt;
-                break;
-              }
-            }
-          }
-          if (!eventDate) continue;
-          const dateStr = eventDate.toISOString().split('T')[0];
-          const res = await eventsApi.create({
-            title: recurForm.title, type: recurForm.type, location: recurForm.location,
-            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
-            is_recurring: true, recurrence_pattern: `nth_week_${nthWeek}_day_${targetDay}_interval_${interval}`,
-          });
-          created.push(res.data);
-        }
-      } else if (recurForm.recurrence === 'nth_month') {
-        // Nth day of month pattern: e.g. "15th of every 2 months"
-        const dayOfMonth = parseInt(recurForm.nth_month_day) || 1;
-        for (let i = 0; i < recurForm.weeks; i++) {
-          const eventDate = new Date(startDate);
-          eventDate.setMonth(startDate.getMonth() + i * interval);
-          const daysInMonth = new Date(eventDate.getFullYear(), eventDate.getMonth() + 1, 0).getDate();
-          eventDate.setDate(Math.min(dayOfMonth, daysInMonth));
-          const dateStr = eventDate.toISOString().split('T')[0];
-          const res = await eventsApi.create({
-            title: recurForm.title, type: recurForm.type, location: recurForm.location,
-            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
-            is_recurring: true, recurrence_pattern: `nth_month_day_${dayOfMonth}_interval_${interval}`,
-          });
-          created.push(res.data);
-        }
-      } else {
-        // Standard weekly/biweekly/monthly
-        for (let i = 0; i < recurForm.weeks; i++) {
-          const eventDate = new Date(startDate);
-          if (recurForm.recurrence === 'weekly') {
-            eventDate.setDate(startDate.getDate() + i * 7 * interval);
-          } else if (recurForm.recurrence === 'biweekly') {
-            eventDate.setDate(startDate.getDate() + i * 14);
-          } else {
-            eventDate.setMonth(startDate.getMonth() + i * interval);
-          }
-          const dateStr = eventDate.toISOString().split('T')[0];
-          const res = await eventsApi.create({
-            title: recurForm.title, type: recurForm.type, location: recurForm.location,
-            time: recurForm.time, date: dateStr, status: 'upcoming', capacity: 100,
-            is_recurring: true, recurrence_pattern: recurForm.recurrence,
-          });
-          created.push(res.data);
-        }
-      }
-      setEvents(prev => [...prev, ...created]);
+      const payload = {
+        title: recurForm.title,
+        type: recurForm.type,
+        location: recurForm.location,
+        time: recurForm.time,
+        pattern: recurForm.recurrence,
+        start_date: recurForm.start_date,
+        occurrences: parseInt(recurForm.weeks) || 12,
+        interval: parseInt(recurForm.interval) || 1,
+        day_of_week: parseInt(recurForm.day_of_week) || 0,
+        nth_week: parseInt(recurForm.nth_week) || 1,
+        day_of_month: parseInt(recurForm.nth_month_day) || 1,
+        end_date: recurForm.end_date || undefined,
+      };
+      const res = await exportApi.generateRecurring(payload);
+      setEvents(prev => [...prev, ...(res.data.events || [])]);
       setShowRecurring(false);
-      toast.success(`Created ${created.length} recurring events!`);
+      toast.success(`Created ${res.data.created} recurring events!`);
     } catch { toast.error('Failed to create recurring events'); }
     finally { setCreatingRecurring(false); }
   };
@@ -199,6 +164,9 @@ export default function CalendarPage() {
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="gap-2 hidden sm:flex" onClick={downloadIcal} data-testid="ical-export-btn">
             <Download size={13} /> Export iCal
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2 hidden sm:flex" onClick={() => setShowImportCal(true)} data-testid="ical-import-btn">
+            <Upload size={13} /> Import iCal
           </Button>
           <Button variant="outline" size="icon" onClick={prev}><ChevronLeft size={16} /></Button>
           <span className="text-sm font-semibold min-w-[150px] text-center">{MONTHS[current.month]} {current.year}</span>
@@ -315,9 +283,11 @@ export default function CalendarPage() {
                 <Select value={recurForm.recurrence} onValueChange={v => setRecurForm({...recurForm, recurrence: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
                     <SelectItem value="weekly">Every N Weeks</SelectItem>
                     <SelectItem value="biweekly">Bi-weekly</SelectItem>
                     <SelectItem value="monthly">Every N Months</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
                     <SelectItem value="nth_week">Nth Weekday of Month</SelectItem>
                     <SelectItem value="nth_month">Nth Day of Month</SelectItem>
                   </SelectContent>
@@ -327,11 +297,15 @@ export default function CalendarPage() {
                 <Input type="number" min={1} max={52} value={recurForm.weeks} onChange={e => setRecurForm({...recurForm, weeks: parseInt(e.target.value) || 1})} />
               </div>
             </div>
-            {(recurForm.recurrence === 'weekly' || recurForm.recurrence === 'monthly') && (
-              <div className="space-y-2"><Label>Every N {recurForm.recurrence === 'weekly' ? 'weeks' : 'months'}</Label>
-                <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
+            {['daily', 'weekly', 'monthly', 'yearly'].includes(recurForm.recurrence) && (
+              <div className="space-y-2"><Label>Every N {recurForm.recurrence === 'weekly' ? 'weeks' : recurForm.recurrence === 'daily' ? 'days' : recurForm.recurrence === 'yearly' ? 'years' : 'months'}</Label>
+                <Input type="number" min={1} max={recurForm.recurrence === 'yearly' ? 5 : 12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
               </div>
             )}
+            <div className="space-y-2"><Label>End Date (optional)</Label>
+              <Input type="date" value={recurForm.end_date || ''} onChange={e => setRecurForm({...recurForm, end_date: e.target.value})} data-testid="recurrence-end-date" />
+              <p className="text-xs text-muted-foreground">Events won't be created past this date</p>
+            </div>
             {recurForm.recurrence === 'nth_week' && (
               <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
                 <div className="space-y-2"><Label>Which Week</Label>
@@ -383,6 +357,29 @@ export default function CalendarPage() {
               <Button type="submit" className="flex-1" disabled={creatingRecurring} data-testid="create-recurring-btn">{creatingRecurring ? 'Creating...' : 'Create Events'}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import iCal Modal */}
+      <Dialog open={showImportCal} onOpenChange={setShowImportCal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Import Calendar (iCal)</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label>Upload .ics file</Label>
+              <Input type="file" accept=".ics,.ical,.ifb,.icalendar" onChange={handleImportFile} data-testid="ical-file-input" />
+            </div>
+            <div className="space-y-2">
+              <Label>Or paste iCal content</Label>
+              <Textarea rows={8} placeholder="BEGIN:VCALENDAR&#10;VERSION:2.0&#10;..." value={icalContent} onChange={e => setIcalContent(e.target.value)} data-testid="ical-content-input" />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowImportCal(false)}>Cancel</Button>
+              <Button className="flex-1 gap-2" onClick={handleImportIcal} disabled={importingCal || !icalContent.trim()} data-testid="import-ical-btn">
+                <Upload size={14} /> {importingCal ? 'Importing...' : 'Import Events'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

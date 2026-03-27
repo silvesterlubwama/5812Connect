@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, RefreshCw } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, Upload, RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { financialApi, financialExtrasApi, exportApi, locationsApi } from '../services/api';
@@ -67,6 +68,9 @@ export default function FinancialPage() {
   const [pendingExpenses, setPendingExpenses] = useState([]);
   const [showApprovalComment, setShowApprovalComment] = useState(null);
   const [approvalComment, setApprovalComment] = useState('');
+  const [showImportExport, setShowImportExport] = useState(false);
+  const [importData, setImportData] = useState('');
+  const [importingData, setImportingData] = useState(false);
   const today = new Date().toISOString().split('T')[0];
 
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
@@ -152,6 +156,33 @@ export default function FinancialPage() {
       }).catch(() => toast.error('Export failed'));
   };
 
+  const handleFinancialExport = async () => {
+    try {
+      const params = {};
+      if (locationFilter) params.location_id = locationFilter;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const res = await financialExtrasApi.export(params);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url;
+      a.download = `financial_export_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      toast.success(`Exported ${res.data.donations_count} donations & ${res.data.expenses_count} expenses`);
+    } catch { toast.error('Export failed'); }
+  };
+
+  const handleFinancialImport = async () => {
+    if (!importData.trim()) return;
+    setImportingData(true);
+    try {
+      const parsed = JSON.parse(importData);
+      const res = await financialExtrasApi.import(parsed);
+      toast.success(`Imported ${res.data.donations_imported} donations & ${res.data.expenses_imported} expenses`);
+      setShowImportExport(false); setImportData(''); fetchAll();
+    } catch (err) { toast.error(err.message || 'Import failed - check JSON format'); }
+    finally { setImportingData(false); }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -171,6 +202,9 @@ export default function FinancialPage() {
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="financial-refresh"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-2" data-testid="financial-export">
             <Download size={14} /> Export CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImportExport(true)} className="gap-2" data-testid="financial-import-export-btn">
+            <Upload size={14} /> Import/Export
           </Button>
         </div>
       </div>
@@ -501,6 +535,29 @@ export default function FinancialPage() {
                     fetchAll();
                   } catch { toast.error('Transfer failed'); }
                 }}>Transfer Funds</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Financial Import/Export Modal */}
+      <Dialog open={showImportExport} onOpenChange={setShowImportExport}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Financial Data Import / Export</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Button className="w-full gap-2" variant="outline" onClick={handleFinancialExport} data-testid="financial-json-export-btn">
+                <Download size={14} /> Export Donations & Expenses (JSON)
+              </Button>
+              <p className="text-xs text-muted-foreground">Downloads all financial data{locationFilter ? ' for selected location' : ''} as JSON</p>
+            </div>
+            <div className="border-t border-border pt-4 space-y-2">
+              <Label>Import Financial Data (JSON)</Label>
+              <Textarea rows={6} placeholder={'{\n  "donations": [{"donor_name": "John", "amount": 50000, "currency": "UGX", "date": "2026-01-15"}],\n  "expenses": [{"title": "Office Rent", "amount": 200000, "category": "rent", "date": "2026-01-15"}]\n}'}
+                value={importData} onChange={e => setImportData(e.target.value)} data-testid="financial-import-input" />
+              <Button className="w-full gap-2" onClick={handleFinancialImport} disabled={importingData || !importData.trim()} data-testid="financial-import-btn">
+                <Upload size={14} /> {importingData ? 'Importing...' : 'Import Financial Data'}
+              </Button>
             </div>
           </div>
         </DialogContent>

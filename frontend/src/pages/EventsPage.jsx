@@ -263,16 +263,43 @@ export default function EventsPage() {
               <Switch checked={newEvent.is_recurring} onCheckedChange={v => setNewEvent({...newEvent, is_recurring: v})} />
             </div>
             {newEvent.is_recurring && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2"><Label>Day of Week</Label>
-                  <Select value={newEvent.recurrence_pattern || 'sunday'} onValueChange={v => setNewEvent({...newEvent, recurrence_pattern: v})}><SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(d => <SelectItem key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</SelectItem>)}</SelectContent>
+              <div className="space-y-3 p-3 rounded-lg bg-muted/50">
+                <div className="space-y-2"><Label>Recurrence Type</Label>
+                  <Select value={newEvent.recurrence_type || 'weekly'} onValueChange={v => setNewEvent({...newEvent, recurrence_type: v})}>
+                    <SelectTrigger data-testid="recurrence-type-select"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly (specific day)</SelectItem>
+                      <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly (same date)</SelectItem>
+                      <SelectItem value="nth_weekday">Monthly (nth weekday)</SelectItem>
+                      <SelectItem value="yearly">Yearly (same date)</SelectItem>
+                    </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2"><Label>Nth Occurrence</Label>
-                  <Select value={String(newEvent.recurrence_day || 1)} onValueChange={v => setNewEvent({...newEvent, recurrence_day: parseInt(v)})}><SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent>
-                  </Select>
+                {(newEvent.recurrence_type === 'weekly' || newEvent.recurrence_type === 'nth_weekday' || !newEvent.recurrence_type) && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2"><Label>Day of Week</Label>
+                      <Select value={newEvent.recurrence_pattern || 'sunday'} onValueChange={v => setNewEvent({...newEvent, recurrence_pattern: v})}><SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(d => <SelectItem key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    {newEvent.recurrence_type === 'nth_weekday' && (
+                      <div className="space-y-2"><Label>Which Occurrence</Label>
+                        <Select value={String(newEvent.recurrence_day || 1)} onValueChange={v => setNewEvent({...newEvent, recurrence_day: parseInt(v)})}><SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {['daily', 'weekly', 'monthly', 'yearly'].includes(newEvent.recurrence_type) && (
+                  <div className="space-y-2"><Label>Repeat every N {newEvent.recurrence_type === 'daily' ? 'days' : newEvent.recurrence_type === 'weekly' ? 'weeks' : newEvent.recurrence_type === 'yearly' ? 'years' : 'months'}</Label>
+                    <Input type="number" min={1} max={12} value={newEvent.recurrence_interval || 1} onChange={e => setNewEvent({...newEvent, recurrence_interval: parseInt(e.target.value) || 1})} />
+                  </div>
+                )}
+                <div className="space-y-2"><Label>End Date (optional)</Label>
+                  <Input type="date" value={newEvent.recurrence_end_date || ''} onChange={e => setNewEvent({...newEvent, recurrence_end_date: e.target.value})} data-testid="event-recurrence-end" />
                 </div>
               </div>
             )}
