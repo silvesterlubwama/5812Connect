@@ -589,3 +589,56 @@ export const webcalApi = {
   feedUrl: (userId) => `${BACKEND_URL}/api/webcal/${userId}.ics`,
 };
 
+// ---- CALLING ----
+export const callingApi = {
+  // Extensions
+  listExtensions: () => api.get('/calling/extensions'),
+  createExtension: (data) => api.post('/calling/extensions', data),
+  updateExtension: (ext, data) => api.put(`/calling/extensions/${ext}`, data),
+  deleteExtension: (ext) => api.delete(`/calling/extensions/${ext}`),
+  getUserExtension: (userId) => api.get(`/calling/extensions/user/${userId}`),
+  
+  // PBX Configuration
+  listPbxConfigs: () => api.get('/calling/pbx-configs'),
+  createPbxConfig: (data) => api.post('/calling/pbx-configs', data),
+  updatePbxConfig: (id, data) => api.put(`/calling/pbx-configs/${id}`, data),
+  deletePbxConfig: (id) => api.delete(`/calling/pbx-configs/${id}`),
+  testPbxConnection: (id) => api.post(`/calling/pbx-configs/${id}/test`),
+  
+  // Calls
+  initiateCall: (data, userId) => api.post(`/calling/calls/initiate?user_id=${userId}`, data),
+  callAction: (callId, data, userId) => api.post(`/calling/calls/${callId}/action?user_id=${userId}`, data),
+  getActiveCalls: (userId) => api.get(`/calling/calls/active?user_id=${userId}`),
+  startRecording: (callId) => api.post(`/calling/calls/${callId}/recording/start`),
+  stopRecording: (callId) => api.post(`/calling/calls/${callId}/recording/stop`),
+  
+  // Call History
+  getHistory: (userId, params = {}) => api.get(`/calling/history?user_id=${userId}`, { params }),
+  getCallDetail: (callId) => api.get(`/calling/history/${callId}`),
+  deleteCallRecord: (callId) => api.delete(`/calling/history/${callId}`),
+  
+  // Voicemail
+  getVoicemails: (userId, unreadOnly = false) => api.get(`/calling/voicemail?user_id=${userId}&unread_only=${unreadOnly}`),
+  markVoicemailRead: (id) => api.put(`/calling/voicemail/${id}/read`),
+  deleteVoicemail: (id) => api.delete(`/calling/voicemail/${id}`),
+  getUnreadVoicemailCount: (userId) => api.get(`/calling/voicemail/unread-count?user_id=${userId}`),
+  
+  // Recordings
+  getRecordings: (userId, limit = 50) => api.get(`/calling/recordings?user_id=${userId}&limit=${limit}`),
+  saveRecording: (callId, url) => api.post(`/calling/recordings/${callId}/save`, { recording_url: url }),
+  
+  // Status
+  updateStatus: (userId, status) => api.put(`/calling/status?user_id=${userId}&status=${status}`),
+  getUserStatus: (userId) => api.get(`/calling/status/${userId}`),
+  
+  // Missed Calls
+  getMissedCalls: (userId) => api.get(`/calling/missed?user_id=${userId}`),
+  getMissedCallCount: (userId) => api.get(`/calling/missed/count?user_id=${userId}`),
+  markMissedCallsSeen: (userId) => api.put(`/calling/missed/mark-seen?user_id=${userId}`),
+  
+  // Contacts
+  getCallableContacts: (userId) => api.get(`/calling/contacts?user_id=${userId}`),
+  
+  // ICE Servers
+  getIceServers: () => api.get('/calling/ice-servers'),
+};

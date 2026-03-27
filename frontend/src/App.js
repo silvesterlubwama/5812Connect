@@ -54,6 +54,14 @@ import VolunteerSchedulingPage from './pages/VolunteerSchedulingPage';
 import EmailTemplatesPage from './pages/EmailTemplatesPage';
 import FinancialApisPage from './pages/FinancialApisPage';
 import GdprSettingsPage from './pages/GdprSettingsPage';
+// Calling Feature Pages
+import CallHistoryPage from './pages/CallHistoryPage';
+import ExtensionsPage from './pages/ExtensionsPage';
+import PbxSettingsPage from './pages/PbxSettingsPage';
+// Calling Components
+import { CallProvider } from './context/CallContext';
+import CallInterface from './components/CallInterface';
+import IncomingCallModal from './components/IncomingCallModal';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -112,6 +120,10 @@ function AppRoutes() {
         <Route path="email-templates" element={<EmailTemplatesPage />} />
         <Route path="financial-apis" element={<FinancialApisPage />} />
         <Route path="gdpr" element={<GdprSettingsPage />} />
+        {/* Calling Feature Routes */}
+        <Route path="call-history" element={<CallHistoryPage />} />
+        <Route path="extensions" element={<ExtensionsPage />} />
+        <Route path="pbx-settings" element={<PbxSettingsPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
@@ -135,10 +147,14 @@ function App() {
     <I18nProvider>
       <AuthProvider>
         <WebSocketProvider>
-          <BrowserRouter>
-            <AppRoutes />
-            <Toaster />
-          </BrowserRouter>
+          <CallProvider>
+            <BrowserRouter>
+              <AppRoutes />
+              <CallInterface />
+              <IncomingCallModal />
+              <Toaster />
+            </BrowserRouter>
+          </CallProvider>
         </WebSocketProvider>
       </AuthProvider>
     </I18nProvider>

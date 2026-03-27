@@ -1,6 +1,6 @@
-"""WebSocket real-time notifications and chat"""
+"""WebSocket real-time notifications, chat, and call signaling"""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, List
+from typing import Dict, List, Set
 import json
 import logging
 from datetime import datetime, timezone
@@ -12,6 +12,10 @@ router = APIRouter()
 
 # ── Board room presence ─────────────────────────────────────────────────────
 board_rooms: Dict[str, set] = {}   # board_id → {user_id, ...}
+
+# ── Call signaling ──────────────────────────────────────────────────────────
+active_calls: Dict[str, Dict] = {}  # call_id → call info
+call_participants: Dict[str, Set[str]] = {}  # call_id → set of user_ids
 
 
 class ConnectionManager:
@@ -205,6 +209,214 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                                 "message_id": message_id,
                                 "user_id": user_id,
                             })
+
+                # ══════════════════════════════════════════════════════════════
+                # CALL SIGNALING
+                # ══════════════════════════════════════════════════════════════
+                elif msg_type == "call_offer":
+                    # Initiating a call - send offer to target
+                    call_id = msg.get("call_id")
+                    target_user_id = msg.get("target_user_id")
+                    sdp = msg.get("sdp")
+                    call_type = msg.get("call_type", "audio")
+                    caller_name = msg.get("caller_name", "Unknown")
+                    caller_extension = msg.get("caller_extension")
+                    
+                    if target_user_id and sdp:
+                        # Store call info
+                        active_calls[call_id] = {
+                            "id": call_id,
+                            "caller_id": user_id,
+                            "caller_name": caller_name,
+                            "caller_extension": caller_extension,
+                            "target_user_id": target_user_id,
+                            "call_type": call_type,
+                            "status": "ringing",
+                            "started_at": datetime.now(timezone.utc).isoformat()
+                        }
+                        call_participants[call_id] = {user_id, target_user_id}
+                        
+                        # Send offer to target
+                        await manager.send_to_user(target_user_id, {
+                            "type": "incoming_call",
+                            "call_id": call_id,
+                            "caller_id": user_id,
+                            "caller_name": caller_name,
+                            "caller_extension": caller_extension,
+                            "call_type": call_type,
+                            "sdp": sdp
+                        })
+                        logger.info(f"Call offer from {user_id} to {target_user_id}")
+
+                elif msg_type == "call_answer":
+                    # Answering a call - send answer back to caller
+                    call_id = msg.get("call_id")
+                    sdp = msg.get("sdp")
+                    caller_id = msg.get("caller_id")
+                    
+                    if call_id in active_calls:
+                        active_calls[call_id]["status"] = "connected"
+                        active_calls[call_id]["answered_at"] = datetime.now(timezone.utc).isoformat()
+                    
+                    if caller_id and sdp:
+                        await manager.send_to_user(caller_id, {
+                            "type": "call_answered",
+                            "call_id": call_id,
+                            "sdp": sdp,
+                            "answerer_id": user_id
+                        })
+                        logger.info(f"Call {call_id} answered by {user_id}")
+
+                elif msg_type == "ice_candidate":
+                    # ICE candidate exchange
+                    call_id = msg.get("call_id")
+                    candidate = msg.get("candidate")
+                    target_user_id = msg.get("target_user_id")
+                    
+                    if target_user_id and candidate:
+                        await manager.send_to_user(target_user_id, {
+                            "type": "ice_candidate",
+                            "call_id": call_id,
+                            "candidate": candidate,
+                            "from_user_id": user_id
+                        })
+
+                elif msg_type == "call_reject":
+                    # Rejecting an incoming call
+                    call_id = msg.get("call_id")
+                    caller_id = msg.get("caller_id")
+                    reason = msg.get("reason", "rejected")
+                    
+                    if call_id in active_calls:
+                        active_calls[call_id]["status"] = "rejected"
+                        del active_calls[call_id]
+                    if call_id in call_participants:
+                        del call_participants[call_id]
+                    
+                    if caller_id:
+                        await manager.send_to_user(caller_id, {
+                            "type": "call_rejected",
+                            "call_id": call_id,
+                            "rejected_by": user_id,
+                            "reason": reason
+                        })
+                        logger.info(f"Call {call_id} rejected by {user_id}")
+
+                elif msg_type == "call_hangup":
+                    # Ending a call
+                    call_id = msg.get("call_id")
+                    
+                    if call_id in call_participants:
+                        # Notify all participants
+                        for pid in call_participants[call_id]:
+                            if pid != user_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "call_ended",
+                                    "call_id": call_id,
+                                    "ended_by": user_id
+                                })
+                        del call_participants[call_id]
+                    if call_id in active_calls:
+                        del active_calls[call_id]
+                    logger.info(f"Call {call_id} ended by {user_id}")
+
+                elif msg_type == "call_hold":
+                    call_id = msg.get("call_id")
+                    is_held = msg.get("is_held", True)
+                    
+                    if call_id in call_participants:
+                        for pid in call_participants[call_id]:
+                            if pid != user_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "call_hold_changed",
+                                    "call_id": call_id,
+                                    "is_held": is_held,
+                                    "by_user_id": user_id
+                                })
+
+                elif msg_type == "call_mute":
+                    call_id = msg.get("call_id")
+                    is_muted = msg.get("is_muted", True)
+                    media_type = msg.get("media_type", "audio")  # audio or video
+                    
+                    if call_id in call_participants:
+                        for pid in call_participants[call_id]:
+                            if pid != user_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "call_mute_changed",
+                                    "call_id": call_id,
+                                    "is_muted": is_muted,
+                                    "media_type": media_type,
+                                    "by_user_id": user_id
+                                })
+
+                elif msg_type == "call_transfer":
+                    # Transfer call to another user
+                    call_id = msg.get("call_id")
+                    transfer_to_user_id = msg.get("transfer_to_user_id")
+                    sdp = msg.get("sdp")
+                    
+                    if transfer_to_user_id:
+                        call_info = active_calls.get(call_id, {})
+                        await manager.send_to_user(transfer_to_user_id, {
+                            "type": "incoming_transfer",
+                            "call_id": call_id,
+                            "from_user_id": user_id,
+                            "original_call": call_info,
+                            "sdp": sdp
+                        })
+                        logger.info(f"Call {call_id} transfer initiated to {transfer_to_user_id}")
+
+                elif msg_type == "conference_add":
+                    # Add participant to conference
+                    call_id = msg.get("call_id")
+                    new_participant_id = msg.get("participant_id")
+                    sdp = msg.get("sdp")
+                    
+                    if call_id and new_participant_id:
+                        if call_id not in call_participants:
+                            call_participants[call_id] = set()
+                        call_participants[call_id].add(new_participant_id)
+                        
+                        call_info = active_calls.get(call_id, {})
+                        await manager.send_to_user(new_participant_id, {
+                            "type": "conference_invite",
+                            "call_id": call_id,
+                            "from_user_id": user_id,
+                            "participants": list(call_participants[call_id]),
+                            "sdp": sdp
+                        })
+                        
+                        # Notify existing participants
+                        for pid in call_participants[call_id]:
+                            if pid != user_id and pid != new_participant_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "conference_participant_added",
+                                    "call_id": call_id,
+                                    "new_participant_id": new_participant_id
+                                })
+
+                elif msg_type == "screen_share_start":
+                    call_id = msg.get("call_id")
+                    if call_id in call_participants:
+                        for pid in call_participants[call_id]:
+                            if pid != user_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "screen_share_started",
+                                    "call_id": call_id,
+                                    "by_user_id": user_id
+                                })
+
+                elif msg_type == "screen_share_stop":
+                    call_id = msg.get("call_id")
+                    if call_id in call_participants:
+                        for pid in call_participants[call_id]:
+                            if pid != user_id:
+                                await manager.send_to_user(pid, {
+                                    "type": "screen_share_stopped",
+                                    "call_id": call_id,
+                                    "by_user_id": user_id
+                                })
 
             except json.JSONDecodeError:
                 pass

@@ -7,7 +7,7 @@ import {
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
-  PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock
+  PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -20,6 +20,8 @@ import { useWebSocket } from '../context/WebSocketContext';
 import { useI18n } from '../context/I18nContext';
 import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
+import Dialer from './Dialer';
+import { useCall } from '../context/CallContext';
 
 const NAV_SECTIONS = [
   {
@@ -75,6 +77,14 @@ const NAV_SECTIONS = [
     ]
   },
   {
+    label: 'Calling',
+    items: [
+      { to: '/call-history', icon: PhoneCall, label: 'Call History' },
+      { to: '/extensions', icon: Phone, label: 'Extensions', adminOnly: true },
+      { to: '/pbx-settings', icon: Server, label: 'PBX Settings', adminOnly: true },
+    ]
+  },
+  {
     label: 'Admin',
     items: [
       { to: '/admin', icon: Shield, labelKey: 'nav.admin', adminOnly: true },
@@ -102,6 +112,7 @@ export default function Layout() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [dialerOpen, setDialerOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('5812_dark_mode') === 'true' || document.documentElement.classList.contains('dark');
@@ -110,6 +121,15 @@ export default function Layout() {
   });
   const searchRef = useRef(null);
   const searchTimeout = useRef(null);
+  
+  // Call context for missed call badge
+  let missedCallCount = 0;
+  try {
+    const callCtx = useCall();
+    missedCallCount = callCtx?.missedCallCount || 0;
+  } catch (e) {
+    // CallContext not available
+  }
 
   const toggleDarkMode = () => {
     const next = !darkMode;
@@ -312,6 +332,17 @@ export default function Layout() {
 
           <div className="flex-1" />
 
+          {/* Call Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 w-9 p-0 text-green-600 hover:bg-green-100 dark:hover:bg-green-950"
+            onClick={() => setDialerOpen(true)}
+            data-testid="call-button"
+          >
+            <Phone size={18} />
+          </Button>
+
           {/* Language Switcher */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -473,6 +504,9 @@ export default function Layout() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Dialer Modal */}
+      <Dialer open={dialerOpen} onClose={() => setDialerOpen(false)} />
     </div>
   );
 }

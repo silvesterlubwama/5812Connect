@@ -898,6 +898,7 @@ try:
     from routers.analytics import router as analytics_router
     from routers.scheduling import router as scheduling_router
     from routers.templates import router as templates_router
+    from routers.calling import router as calling_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -921,6 +922,7 @@ try:
     app.include_router(analytics_router)
     app.include_router(scheduling_router)
     app.include_router(templates_router)
+    app.include_router(calling_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
