@@ -1,55 +1,81 @@
-# 58:12 Global Connect Uganda CRM — Product Requirements
+# 58:12 Global Connect Uganda CRM - Product Requirements
 
-## Original Problem Statement
-Clone and rewrite the 58:12 Global Connect Uganda CRM with ALL features. Make the app production-ready.
+## Overview
+A multi-tenant CRM for 58:12 Global Connect Uganda, managing campuses, members, events, check-ins, finances, sales, outreach, and resources with deep RBAC rules.
 
-## Architecture
-- **Frontend**: React 18 + Tailwind CSS + Shadcn/UI + Recharts + qrcode.react
-- **Backend**: FastAPI + Motor (Async MongoDB) + Resend (Email)
-- **Auth**: JWT-based, role-based access control (RBAC) with admin toggle
-- **DB**: MongoDB (users, members, families, children, guests, events, checkins, tasks, boards, donations, expenses, products, sales, locations, conversations, messages, deleted_items, email_log)
+## Core Architecture
+- **Frontend**: React + Tailwind CSS + Shadcn/UI
+- **Backend**: FastAPI + Motor (Async MongoDB)
+- **Database**: MongoDB (collections: users, members, locations, events, families, check_ins, donations, expenses, products, sales, outreach_programs, outreach_sessions, tasks, boards, resources, guest_requests, app_settings, store_settings, financial_settings, audit_log, deleted_items)
+- **Auth**: JWT with role-based access
+- **Integrations**: Resend (email), Gemini AI (assistant via Emergent LLM Key)
 
-## Role Hierarchy
-1. System Admin (admin/system_admin) — toggle, not selectable role
-2. Executive Director (level 9)
-3. Adviser (level 8.5) — cross-campus visibility
-4. Director (level 8) — cross-campus visibility
-5. Manager (level 7)
-6. Coordinator (level 6)
-7. Staff (level 5)
-8. HR, Volunteer, Member, Parent, Customer, Guest
+## Roles & RBAC
+- System Admin (full access, all campuses)
+- Executive Director, Adviser (org-wide view)
+- Director, Manager (campus-level management)
+- Coordinator (location-level, can edit people in their location)
+- Staff, Volunteer, Member (limited access)
+- Admin is a toggle, not a separate role
 
-## Campus-Based RBAC — IMPLEMENTED
-- System admins (admin, Executive Director, Adviser, Director): see ALL data
-- Non-admin users: see only their campus data
-- Admin is a toggle (not a role in dropdown) — enables cross-campus admin access
-- Campus switcher for system admins on Dashboard and Reports
+## Completed Features (as of 2026-03-27)
 
-## Features (All Complete)
-- Dashboard with campus-scoped stats & Campus Switcher
-- People Management (Members, Families, Children, Guests) with location assignment
-- Events & Calendar with recurrence
-- Kanban Task Boards with Team Calendar
-- Check-In System (QR-based)
-- Chat/Communications with AI Assistant
-- Financial Management (Donations, Expenses, Sales, Products)
-- Badge/Tag Printing (Staff, Parent, Child) with QR codes & campus names
-- Self-Service Portal for families
-- Audit Trail with Soft-Delete (Recycle Bin)
-- Access Control with restricted locations
-- Reports & PDF generation
-- Advanced Campus Reports (comparison, detail, trends)
-- Email Integration (Resend) with templates
-- Import/Export (CSV/JSON)
-- PWA support
-- Mobile-optimized responsive views
+### Phase 1 — Core
+- [x] Authentication (JWT login/register)
+- [x] Dashboard with campus switcher
+- [x] People/Members management with families & children
+- [x] Events with CRUD, check-ins, QR attendance
+- [x] Calendar with iCal export/import
+- [x] Task Boards (Kanban) with campus tagging
+- [x] Check-in system with stats
+- [x] Outreach programmes & sessions
+- [x] Communications (announcements, email via Resend)
+- [x] Resources management
+- [x] Access Control with guest passes
+- [x] Financial module (donations, expenses, approval workflows)
+- [x] Sales & Products (POS, inventory, receipts)
+- [x] Attendance tracking
+- [x] Location management with sublocations
 
-## 3rd Party Integrations
-- Emergent LLM Key (Gemini AI Assistant)
-- Resend (Email) — configured
+### Phase 2 — Advanced
+- [x] Mobile-optimized responsive views
+- [x] Advanced reporting by campus + PDF export
+- [x] Campus Dashboard Switcher for system admins
+- [x] "Enable Admin Access" toggle (not dropdown role)
+- [x] Adviser role added
+- [x] Multi-location staff assignment
+- [x] Sublocation → campus user inheritance
+- [x] Automatic staff title generation (e.g., "Operations Manager of 58:12 Uganda")
+- [x] Global App Settings (app name, currency, footer, contact info)
+- [x] Audit Trail with bulk select & delete
 
-## Credentials
-- Admin: admin@5812uganda.org / Admin@5812
+### Phase 3 — Sales & Outreach Enhancements (NEW)
+- [x] Location-scoped products (location_id on products)
+- [x] Location filter on Sales & Products page
+- [x] Store Settings per location (payment methods, tax rate, currency, receipt footer, API integrations)
+- [x] Sales Import/Export (JSON format)
+- [x] Outreach sessions auto-create calendar events
+- [x] Recurring outreach programmes auto-generate future events
+- [x] Customer directory from sales data
+
+## Upcoming / Backlog
+- [ ] Financial live import/export API
+- [ ] Calendar live import/export for regular users
+- [ ] Restricted residents & guest pass QR enhancements
+- [ ] Event recurrence customizations (monthly, yearly, weekly)
+- [ ] AdminPage.jsx component splitting (refactoring)
+- [ ] server.py modular router refactoring
+
+## Key API Endpoints
+- POST /api/auth/login — Login
+- GET/PUT /api/global-settings — App settings
+- GET/PUT /api/store-settings/{location_id} — Store config per location
+- GET /api/sales/export — Export sales JSON
+- POST /api/sales/import — Import sales JSON
+- POST /api/outreach/sessions — Create session (auto-creates calendar event)
+- PUT /api/admin/users/{id} — Staff editing with auto-titles
+- DELETE /api/admin/deleted-items — Bulk delete from audit trail
 
 ## Test Reports
-- Iterations 18-25 all passed (100%)
+- Iterations 1-25: All passed (previous sessions)
+- Iteration 26: 100% pass (28/28 backend, all frontend flows)
