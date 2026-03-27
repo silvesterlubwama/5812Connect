@@ -4,6 +4,7 @@
 - **Email**: admin@5812uganda.org
 - **Password**: Admin@5812
 - **Role**: admin
+- **Extension**: 2450 (assigned during testing)
 
 ## Login Notes
 - Login uses `identifier` field (not `email` directly)
@@ -17,3 +18,8 @@
 ## Google OAuth
 - Available via "Sign in with Google" button on login page
 - Uses Emergent-managed Google OAuth integration
+
+## Calling System
+- Extension 2450 assigned to admin user
+- Dialer accessible via green phone icon in header
+- Extensions must be assigned before users appear in dialer contacts
