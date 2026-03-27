@@ -61,6 +61,15 @@ export default function CommsPage() {
   // Reactions
   const [showEmojiFor, setShowEmojiFor] = useState(null);
 
+  // Thread panel
+  const [activeThread, setActiveThread] = useState(null);
+  const [threadMessages, setThreadMessages] = useState([]);
+  const [threadMsg, setThreadMsg] = useState('');
+
+  // Conference
+  const [showConference, setShowConference] = useState(false);
+  const [confForm, setConfForm] = useState({ title: '', description: '', scheduled_at: '', duration_minutes: 60, user_ids: [], external_emails: '', is_video_enabled: true, password: '', create_calendar_event: true, send_email_invites: true });
+
   const messagesEndRef = useRef(null);
   const typingTimeout = useRef(null);
   const scrollToBottom = () => setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
@@ -236,6 +245,42 @@ export default function CommsPage() {
 
   const getUserPresence = (userId) => presenceMap[userId] || (onlineUsers.includes(userId) ? 'online' : 'offline');
 
+  // Thread support
+  const openThread = async (msg) => {
+    setActiveThread(msg);
+    try {
+      const res = await chatApi.messages(msg.conversation_id, { thread_id: msg.id });
+      setThreadMessages(res.data || []);
+    } catch { setThreadMessages([]); }
+  };
+
+  const sendThreadMessage = async () => {
+    if (!threadMsg.trim() || !activeThread) return;
+    try {
+      const res = await chatApi.sendMessage(activeThread.conversation_id, threadMsg, activeThread.id);
+      setThreadMessages(prev => [...prev, res.data]);
+      setThreadMsg('');
+      // Update thread count in main messages
+      setMessages(prev => prev.map(m => m.id === activeThread.id ? { ...m, thread_count: (m.thread_count || 0) + 1 } : m));
+    } catch { toast.error('Failed to send'); }
+  };
+
+  // Conference scheduling
+  const handleCreateConference = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        ...confForm,
+        external_emails: confForm.external_emails ? confForm.external_emails.split(',').map(e => e.trim()).filter(Boolean) : [],
+        scheduled_at: confForm.scheduled_at ? new Date(confForm.scheduled_at).toISOString() : null,
+      };
+      const res = await conferencesApi.create(payload, user?.id);
+      toast.success(`Conference "${res.data.title}" created! Code: ${res.data.meeting_code}`);
+      setShowConference(false);
+      setConfForm({ title: '', description: '', scheduled_at: '', duration_minutes: 60, user_ids: [], external_emails: '', is_video_enabled: true, password: '', create_calendar_event: true, send_email_invites: true });
+    } catch { toast.error('Failed to create conference'); }
+  };
+
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(user?.role);
   const isStaff = isAdmin || ['Manager', 'Coordinator', 'Staff'].includes(user?.role);
   const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -382,10 +427,19 @@ export default function CommsPage() {
                   {isMine && readStatus === 'sent' && <Check size={12} className="opacity-50" />}
                 </div>
                 {renderReactions(msg)}
-                {/* Reply + Reaction buttons */}
-                <div className="absolute -left-16 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                {/* Thread indicator */}
+                {msg.thread_count > 0 && (
+                  <button onClick={() => openThread(msg)} className="flex items-center gap-1.5 mt-1 text-[11px] text-primary hover:underline" data-testid={`thread-${msg.id}`}>
+                    <MessageSquare size={11} /> {msg.thread_count} {msg.thread_count === 1 ? 'reply' : 'replies'}
+                  </button>
+                )}
+                {/* Reply + Reaction + Thread buttons */}
+                <div className="absolute -left-20 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                   <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" onClick={() => setReplyTo(msg)} data-testid={`reply-btn-${msg.id}`}>
                     <Reply size={12} />
+                  </button>
+                  <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" onClick={() => openThread(msg)} title="Thread">
+                    <MessageSquare size={12} />
                   </button>
                   <Popover open={showEmojiFor === msg.id} onOpenChange={(open) => setShowEmojiFor(open ? msg.id : null)}>
                     <PopoverTrigger asChild>
@@ -440,6 +494,7 @@ export default function CommsPage() {
         </div>
         {/* My status selector */}
         <div className="flex items-center gap-2">
+          {isStaff && <Button size="sm" variant="outline" className="gap-1.5 text-xs h-8" onClick={() => setShowConference(true)} data-testid="schedule-conference-btn"><Video size={13} /> Conference</Button>}
           <Select value={myStatus} onValueChange={handleSetMyStatus}>
             <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="my-status-select">
               <div className="flex items-center gap-2">
@@ -584,7 +639,90 @@ export default function CommsPage() {
             </div>
           )}
         </div>
+
+        {/* Thread Panel (slide-out) */}
+        {activeThread && (
+          <div className="w-80 border-l border-border flex flex-col shrink-0 bg-card" data-testid="thread-panel">
+            <div className="p-3 border-b border-border flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold">Thread</p>
+                <p className="text-[11px] text-muted-foreground truncate">{activeThread.sender_name}: {activeThread.text?.slice(0, 40)}...</p>
+              </div>
+              <button onClick={() => setActiveThread(null)} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
+            </div>
+            {/* Original message */}
+            <div className="p-3 border-b border-border bg-secondary/30">
+              <p className="text-[10px] font-semibold text-muted-foreground">{activeThread.sender_name}</p>
+              <p className="text-sm">{activeThread.text}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">{activeThread.created_at?.slice(0, 16).replace('T', ' ')}</p>
+            </div>
+            {/* Thread replies */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {threadMessages.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No replies yet</p>}
+              {threadMessages.map(tm => (
+                <div key={tm.id} className={`flex ${tm.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-xl px-3 py-1.5 ${tm.sender_id === user?.id ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
+                    {tm.sender_id !== user?.id && <p className="text-[10px] font-semibold opacity-70">{tm.sender_name}</p>}
+                    <p className="text-xs">{tm.text}</p>
+                    <p className="text-[9px] opacity-50 mt-0.5 text-right">{tm.created_at?.slice(11, 16)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Thread input */}
+            <div className="p-2 border-t border-border flex gap-2">
+              <Input className="flex-1 text-xs h-8" placeholder="Reply in thread..." value={threadMsg} onChange={e => setThreadMsg(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); sendThreadMessage(); } }} data-testid="thread-input" />
+              <Button size="icon" className="h-8 w-8" onClick={sendThreadMessage} disabled={!threadMsg.trim()} data-testid="thread-send-btn"><Send size={14} /></Button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Schedule Conference Dialog */}
+      <Dialog open={showConference} onOpenChange={setShowConference}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Schedule Conference</DialogTitle></DialogHeader>
+          <form onSubmit={handleCreateConference} className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Title *</Label><Input placeholder="Team Standup" value={confForm.title} onChange={e => setConfForm({...confForm, title: e.target.value})} required data-testid="conf-title" /></div>
+            <div className="space-y-2"><Label>Description</Label><Textarea rows={2} placeholder="Meeting agenda..." value={confForm.description} onChange={e => setConfForm({...confForm, description: e.target.value})} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Date & Time</Label><Input type="datetime-local" value={confForm.scheduled_at} onChange={e => setConfForm({...confForm, scheduled_at: e.target.value})} data-testid="conf-datetime" /></div>
+              <div className="space-y-2"><Label>Duration (min)</Label><Input type="number" min={15} max={480} value={confForm.duration_minutes} onChange={e => setConfForm({...confForm, duration_minutes: parseInt(e.target.value) || 60})} /></div>
+            </div>
+            <div className="space-y-2">
+              <Label>Invite Staff</Label>
+              <Select onValueChange={v => { if (v && !confForm.user_ids.includes(v)) setConfForm({...confForm, user_ids: [...confForm.user_ids, v]}); }}>
+                <SelectTrigger><SelectValue placeholder="Add participants..." /></SelectTrigger>
+                <SelectContent>{allStaff.filter(s => s.id !== user?.id && !confForm.user_ids.includes(s.id)).map(s => (
+                  <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
+                ))}</SelectContent>
+              </Select>
+              <div className="flex flex-wrap gap-1">{confForm.user_ids.map(uid => {
+                const s = allStaff.find(x => x.id === uid);
+                return <Badge key={uid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => setConfForm({...confForm, user_ids: confForm.user_ids.filter(i => i !== uid)})}>{s?.name || uid} <X size={10} /></Badge>;
+              })}</div>
+            </div>
+            <div className="space-y-2">
+              <Label>External Email Invites</Label>
+              <Input placeholder="email1@example.com, email2@example.com" value={confForm.external_emails} onChange={e => setConfForm({...confForm, external_emails: e.target.value})} data-testid="conf-ext-emails" />
+              <p className="text-[10px] text-muted-foreground">Comma-separated emails for non-users</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Password (optional)</Label><Input placeholder="Meeting password" value={confForm.password} onChange={e => setConfForm({...confForm, password: e.target.value})} /></div>
+              <div className="flex items-center gap-2 pt-6"><input type="checkbox" id="conf-video" checked={confForm.is_video_enabled} onChange={e => setConfForm({...confForm, is_video_enabled: e.target.checked})} /><Label htmlFor="conf-video" className="cursor-pointer text-xs">Video enabled</Label></div>
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={confForm.create_calendar_event} onChange={e => setConfForm({...confForm, create_calendar_event: e.target.checked})} />Add to Calendar</label>
+              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={confForm.send_email_invites} onChange={e => setConfForm({...confForm, send_email_invites: e.target.checked})} />Send Email Invites</label>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowConference(false)}>Cancel</Button>
+              <Button type="submit" className="flex-1" data-testid="create-conf-btn">Schedule</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* New Conversation Dialog */}
       <Dialog open={showNewConv} onOpenChange={setShowNewConv}>

@@ -321,7 +321,7 @@ export const chatApi = {
   conversations: () => api.get('/chat/conversations'),
   createConversation: (data) => api.post('/chat/conversations', data),
   messages: (convId, params) => api.get(`/chat/conversations/${convId}/messages`, { params }),
-  sendMessage: (convId, text) => api.post(`/chat/conversations/${convId}/messages`, { text }),
+  sendMessage: (convId, text, threadId = null) => api.post(`/chat/conversations/${convId}/messages`, { text, thread_id: threadId }),
   aiAssistant: (message, session_id) => api.post('/chat/ai-assistant', { message, session_id }),
   users: () => api.get('/chat/users'),
 };

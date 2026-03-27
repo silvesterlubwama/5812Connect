@@ -49,19 +49,38 @@ async def create_conversation(data: dict, current_user: dict = Depends(get_curre
 
 
 @router.get("/chat/conversations/{conv_id}/messages")
-async def get_messages(conv_id: str, skip: int = 0, limit: int = 50, current_user: dict = Depends(get_current_user)):
-    return await db.chat_messages.find({"conversation_id": conv_id}, {"_id": 0}).sort("created_at", 1).skip(skip).limit(limit).to_list(limit)
+async def get_messages(conv_id: str, skip: int = 0, limit: int = 50, thread_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {"conversation_id": conv_id}
+    if thread_id:
+        query["thread_id"] = thread_id
+    else:
+        # Top-level messages only (no thread_id or is the thread root)
+        query["$or"] = [{"thread_id": {"$exists": False}}, {"thread_id": None}]
+    msgs = await db.chat_messages.find(query, {"_id": 0}).sort("created_at", 1).skip(skip).limit(limit).to_list(limit)
+    # Attach thread reply counts for top-level messages
+    if not thread_id:
+        for m in msgs:
+            count = await db.chat_messages.count_documents({"thread_id": m["id"]})
+            if count > 0:
+                m["thread_count"] = count
+    return msgs
 
 
 @router.post("/chat/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, data: dict, current_user: dict = Depends(get_current_user)):
     text = data.get("text", "").strip()
     if not text: raise HTTPException(status_code=400, detail="Message text required")
+    thread_id = data.get("thread_id")
+    reply_to = data.get("reply_to")
     msg = {
         "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
         "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"),
         "text": text, "type": "text", "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if thread_id:
+        msg["thread_id"] = thread_id
+    if reply_to:
+        msg["reply_to"] = reply_to
     await db.chat_messages.insert_one(msg); msg.pop("_id", None)
     await db.conversations.update_one({"id": conv_id}, {"$set": {"updated_at": msg["created_at"], "last_message": text[:100]}})
     try:
