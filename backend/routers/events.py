@@ -477,3 +477,94 @@ async def check_booking_status(booking_id: Optional[str] = None, email: Optional
         raise HTTPException(status_code=400, detail="Provide booking_id, email, or phone")
     bookings = await db.public_bookings.find(query, {"_id": 0}).to_list(20)
     return bookings
+
+
+
+# ========== CALENDAR IMPORT/EXPORT ==========
+
+@router.get("/events/export/ical")
+async def export_calendar_ical(current_user: dict = Depends(get_current_user)):
+    """Export user's events as iCal (.ics) format for calendar apps."""
+    campus = get_campus_filter(current_user)
+    query = {**campus} if campus else {}
+    events = await db.events.find(query, {"_id": 0}).to_list(500)
+
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//58:12 Global Connect//CRM//EN"]
+    for ev in events:
+        uid = ev.get("id", "")
+        dtstart = ev.get("date", "").replace("-", "")
+        time_str = ev.get("time", "0900").replace(":", "")
+        summary = ev.get("title", "")
+        desc = ev.get("description", "").replace("\n", "\\n")
+        location = ev.get("location", "")
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{uid}@5812global",
+            f"DTSTART:{dtstart}T{time_str}00",
+            f"SUMMARY:{summary}",
+            f"DESCRIPTION:{desc}",
+            f"LOCATION:{location}",
+            "END:VEVENT",
+        ])
+    lines.append("END:VCALENDAR")
+
+    from fastapi.responses import Response
+    ical_text = "\r\n".join(lines)
+    return Response(
+        content=ical_text,
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=5812_calendar.ics"}
+    )
+
+
+@router.post("/events/import/ical")
+async def import_calendar_ical(data: dict, current_user: dict = Depends(get_current_user)):
+    """Import events from iCal text content."""
+    ical_text = data.get("ical_content", "")
+    if not ical_text:
+        raise HTTPException(status_code=400, detail="No iCal content provided")
+
+    imported = 0
+    events = []
+    current_event = {}
+    for line in ical_text.split("\n"):
+        line = line.strip()
+        if line == "BEGIN:VEVENT":
+            current_event = {}
+        elif line == "END:VEVENT":
+            if current_event.get("title"):
+                event_id = f"evt_{str(uuid.uuid4())[:8]}"
+                event_doc = {
+                    "id": event_id,
+                    "title": current_event.get("title", "Imported Event"),
+                    "date": current_event.get("date", ""),
+                    "time": current_event.get("time", ""),
+                    "description": current_event.get("description", ""),
+                    "location": current_event.get("location", ""),
+                    "location_id": current_user.get("location_id", ""),
+                    "type": "imported",
+                    "status": "upcoming",
+                    "is_public": False,
+                    "created_by": current_user["id"],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                events.append(event_doc)
+                imported += 1
+            current_event = {}
+        elif line.startswith("SUMMARY:"):
+            current_event["title"] = line[8:]
+        elif line.startswith("DTSTART:"):
+            dt = line[8:].replace("T", " ")[:15]
+            if len(dt) >= 8:
+                current_event["date"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]}"
+                if len(dt) >= 12:
+                    current_event["time"] = f"{dt[9:11]}:{dt[11:13]}"
+        elif line.startswith("DESCRIPTION:"):
+            current_event["description"] = line[12:].replace("\\n", "\n")
+        elif line.startswith("LOCATION:"):
+            current_event["location"] = line[9:]
+
+    if events:
+        await db.events.insert_many(events)
+
+    return {"imported": imported, "message": f"Imported {imported} events"}

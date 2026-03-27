@@ -1,17 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search } from 'lucide-react';
+import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
+import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { productsApi, salesApi } from '../services/api';
+import { productsApi, salesApi, locationsApi, storeSettingsApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
-const fmt = (n) => `UGX ${(n || 0).toLocaleString()}`;
+const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
 const stockColor = (stock, reorder) => {
   if (stock === 0) return 'bg-red-100 text-red-700 border-red-200';
@@ -25,11 +28,13 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5' };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '' };
 
 export default function ProductsPage() {
+  const { user } = useAuth();
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState([]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
@@ -43,14 +48,26 @@ export default function ProductsPage() {
   const [lastReceipt, setLastReceipt] = useState(null);
   const [showReceipt, setShowReceipt] = useState(false);
   const [customers, setCustomers] = useState([]);
+  const [locationFilter, setLocationFilter] = useState('all');
+  // Store settings
+  const [showStoreSettings, setShowStoreSettings] = useState(false);
+  const [storeSettingsLoc, setStoreSettingsLoc] = useState('');
+  const [storeSettings, setStoreSettings] = useState({});
+  const [savingStore, setSavingStore] = useState(false);
+  // Import/Export
+  const [showImportExport, setShowImportExport] = useState(false);
+  const [importData, setImportData] = useState('');
+  const [importingData, setImportingData] = useState(false);
+
+  const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [prodRes, salesRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 50 })]);
+      const [prodRes, salesRes, locRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 50 }), locationsApi.list()]);
       setProducts(prodRes.data);
       setSales(salesRes.data);
-      // Derive customer list from sales
+      setLocations(locRes.data || []);
       const custMap = {};
       salesRes.data.forEach(s => {
         const name = s.customer_name || 'Walk-in Customer';
@@ -66,7 +83,21 @@ export default function ProductsPage() {
 
   useEffect(() => { fetchAll(); }, []);
 
-  // ---- Cart operations ----
+  const filteredProducts = products.filter(p => {
+    const matchSearch = p.name?.toLowerCase().includes(productSearch.toLowerCase());
+    const matchLoc = locationFilter === 'all' || p.location_id === locationFilter || !p.location_id;
+    return matchSearch && matchLoc;
+  });
+
+  const activeCurrency = (() => {
+    if (locationFilter && locationFilter !== 'all') {
+      const loc = locations.find(l => l.id === locationFilter);
+      return loc?.currency || 'UGX';
+    }
+    return 'UGX';
+  })();
+
+  // Cart operations
   const addToCart = (product) => {
     if (product.stock === 0) { toast.error('Product is out of stock'); return; }
     setCart(prev => {
@@ -80,42 +111,35 @@ export default function ProductsPage() {
   };
 
   const updateQty = (productId, delta) => {
-    setCart(prev => {
-      const updated = prev.map(i => i.product_id === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i);
-      return updated.filter(i => i.qty > 0);
-    });
+    setCart(prev => prev.map(i => i.product_id === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter(i => i.qty > 0));
   };
 
   const removeFromCart = (productId) => setCart(prev => prev.filter(i => i.product_id !== productId));
-
   const cartTotal = cart.reduce((sum, i) => sum + i.unit_price * i.qty, 0);
 
   const handleCheckout = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return; }
     setCheckoutLoading(true);
     try {
-      const res = await salesApi.create({ items: cart, customer_name: customerName, payment_method: paymentMethod, total: cartTotal });
-      setLastReceipt(res.data);
-      setShowReceipt(true);
-      setCart([]);
-      setCustomerName('Walk-in Customer');
-      toast.success(`Sale recorded! Invoice: ${res.data.id}`);
-      fetchAll();
+      const payload = { items: cart, customer_name: customerName, payment_method: paymentMethod, total: cartTotal };
+      if (locationFilter !== 'all') payload.location_id = locationFilter;
+      const res = await salesApi.create(payload);
+      setLastReceipt(res.data); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
+      toast.success(`Sale recorded! Invoice: ${res.data.id}`); fetchAll();
     } catch { toast.error('Checkout failed'); }
     finally { setCheckoutLoading(false); }
   };
 
-  // ---- Product CRUD ----
-  const openAddProduct = () => { setEditingProduct(null); setProductForm(emptyProduct); setShowProductModal(true); };
+  // Product CRUD
+  const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price), currency: p.currency || 'UGX', stock: String(p.stock), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5) });
+    setProductForm({ name: p.name, price: String(p.price), currency: p.currency || 'UGX', stock: String(p.stock), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '' });
     setShowProductModal(true);
   };
 
   const handleSaveProduct = async (e) => {
-    e.preventDefault();
-    setSaving(true);
+    e.preventDefault(); setSaving(true);
     try {
       const data = { ...productForm, price: parseFloat(productForm.price), stock: parseInt(productForm.stock), reorder_level: parseInt(productForm.reorder_level) || 5 };
       if (editingProduct) {
@@ -139,16 +163,87 @@ export default function ProductsPage() {
     toast.success('Product deleted');
   };
 
-  const filteredProducts = products.filter(p => p.name?.toLowerCase().includes(productSearch.toLowerCase()));
+  // Store settings
+  const openStoreSettings = async (locId) => {
+    setStoreSettingsLoc(locId);
+    try {
+      const res = await storeSettingsApi.get(locId);
+      setStoreSettings(res.data || {});
+    } catch { setStoreSettings({}); }
+    setShowStoreSettings(true);
+  };
+
+  const saveStoreSettings = async () => {
+    setSavingStore(true);
+    try {
+      await storeSettingsApi.update(storeSettingsLoc, storeSettings);
+      toast.success('Store settings saved');
+      setShowStoreSettings(false);
+    } catch { toast.error('Failed to save store settings'); }
+    finally { setSavingStore(false); }
+  };
+
+  // Import/Export
+  const handleExport = async () => {
+    try {
+      const params = {};
+      if (locationFilter !== 'all') params.location_id = locationFilter;
+      const res = await salesApi.export(params);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `sales_export_${new Date().toISOString().slice(0,10)}.json`; a.click();
+      toast.success(`Exported ${res.data.count} sales`);
+    } catch { toast.error('Export failed'); }
+  };
+
+  const handleImport = async () => {
+    if (!importData.trim()) return;
+    setImportingData(true);
+    try {
+      const parsed = JSON.parse(importData);
+      const salesArr = Array.isArray(parsed) ? parsed : parsed.sales || [];
+      const res = await salesApi.import({ sales: salesArr });
+      toast.success(`Imported ${res.data.imported} sales`);
+      setShowImportExport(false); setImportData(''); fetchAll();
+    } catch (err) { toast.error(err.message || 'Import failed - check JSON format'); }
+    finally { setImportingData(false); }
+  };
+
+  const locName = (id) => locations.find(l => l.id === id)?.name || '';
+
+  // Available payment methods based on store settings or defaults
+  const getPaymentMethods = () => {
+    if (locationFilter !== 'all' && storeSettings?.payment_methods?.length) {
+      return storeSettings.payment_methods;
+    }
+    return ['cash', 'mobile_money', 'card'];
+  };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold font-heading">Sales & Products</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{products.length} products · {sales.length} sales recorded</p>
+          <h1 className="text-xl sm:text-2xl font-semibold font-heading" data-testid="sales-page-title">Sales & Products</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{products.length} products &middot; {sales.length} sales recorded</p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchAll} data-testid="sales-refresh"><RefreshCw size={14} /></Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={locationFilter} onValueChange={v => { setLocationFilter(v); setCart([]); }}>
+            <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="sales-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Locations</SelectItem>
+              {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {isAdmin && locationFilter !== 'all' && (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => openStoreSettings(locationFilter)} data-testid="store-settings-btn">
+              <Settings size={12} /> Store
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowImportExport(true)} data-testid="import-export-btn">
+            <Download size={12} /> Import/Export
+          </Button>
+          <Button variant="outline" size="icon" className="h-8 w-8" onClick={fetchAll} data-testid="sales-refresh"><RefreshCw size={14} /></Button>
+        </div>
       </div>
 
       <Tabs defaultValue="pos">
@@ -159,10 +254,9 @@ export default function ProductsPage() {
           <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
         </TabsList>
 
-        {/* ---- POS TAB ---- */}
+        {/* POS TAB */}
         <TabsContent value="pos" className="mt-4">
-          <div className="grid lg:grid-cols-3 gap-5 h-[calc(100vh-280px)] min-h-[500px]">
-            {/* Product grid */}
+          <div className="grid lg:grid-cols-3 gap-5 h-[calc(100vh-320px)] min-h-[500px]">
             <div className="lg:col-span-2 flex flex-col gap-4">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -170,35 +264,25 @@ export default function ProductsPage() {
               </div>
               <div className="overflow-y-auto flex-1">
                 {loading ? (
-                  <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                    {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}
-                  </div>
+                  <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">{[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
                 ) : (
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     {filteredProducts.map(p => (
-                      <button
-                        key={p.id}
-                        data-testid={`product-card-${p.id}`}
-                        onClick={() => addToCart(p)}
-                        disabled={p.stock === 0}
-                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${p.stock === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}
-                      >
+                      <button key={p.id} data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={p.stock === 0}
+                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${p.stock === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
                         <div className="flex items-start justify-between mb-2">
-                          <div className="p-2 rounded-lg bg-secondary">
-                            <Package size={16} className="text-muted-foreground" />
-                          </div>
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>
-                            {stockLabel(p.stock, p.reorder_level)}
-                          </span>
+                          <div className="p-2 rounded-lg bg-secondary"><Package size={16} className="text-muted-foreground" /></div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>{stockLabel(p.stock, p.reorder_level)}</span>
                         </div>
                         <p className="font-semibold text-sm leading-tight">{p.name}</p>
-                        {p.category && <p className="text-xs text-muted-foreground mt-0.5">{p.category}</p>}
-                        <p className="text-primary font-bold mt-2 text-sm">{fmt(p.price)}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
+                          {p.location_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground"><MapPin size={8} className="inline mr-0.5" />{locName(p.location_id)}</span>}
+                        </div>
+                        <p className="text-primary font-bold mt-2 text-sm">{fmt(p.price, p.currency || activeCurrency)}</p>
                       </button>
                     ))}
-                    {filteredProducts.length === 0 && (
-                      <div className="col-span-3 text-center py-12 text-sm text-muted-foreground">No products found.</div>
-                    )}
+                    {filteredProducts.length === 0 && <div className="col-span-3 text-center py-12 text-sm text-muted-foreground">No products found.</div>}
                   </div>
                 )}
               </div>
@@ -211,86 +295,57 @@ export default function ProductsPage() {
                 <span className="font-semibold text-sm">Cart</span>
                 <span className="ml-auto text-xs text-muted-foreground">{cart.length} items</span>
               </div>
-
-              {/* Cart items */}
               <div className="flex-1 overflow-y-auto p-3 space-y-2">
                 {cart.length === 0 ? (
-                  <div className="text-center py-8 text-xs text-muted-foreground">
-                    <ShoppingCart size={24} className="mx-auto mb-2 opacity-30" />
-                    Tap products to add them
-                  </div>
+                  <div className="text-center py-8 text-xs text-muted-foreground"><ShoppingCart size={24} className="mx-auto mb-2 opacity-30" />Tap products to add them</div>
                 ) : cart.map(item => (
                   <div key={item.product_id} className="flex items-center gap-2 p-2.5 rounded-lg bg-secondary/40 hover:bg-secondary/60 transition-colors">
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{item.name}</p>
-                      <p className="text-xs text-muted-foreground">{fmt(item.unit_price)} each</p>
+                      <p className="text-xs text-muted-foreground">{fmt(item.unit_price, activeCurrency)} each</p>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border transition-colors" onClick={() => updateQty(item.product_id, -1)}>
-                        <Minus size={10} />
-                      </button>
+                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item.product_id, -1)}><Minus size={10} /></button>
                       <span className="text-xs font-semibold w-5 text-center">{item.qty}</span>
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border transition-colors" onClick={() => updateQty(item.product_id, 1)}>
-                        <Plus size={10} />
-                      </button>
+                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item.product_id, 1)}><Plus size={10} /></button>
                     </div>
-                    <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(item.unit_price * item.qty)}</span>
+                    <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(item.unit_price * item.qty, activeCurrency)}</span>
                     <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item.product_id)}><X size={12} /></button>
                   </div>
                 ))}
               </div>
-
-              {/* Cart footer */}
               <div className="p-4 border-t border-border space-y-3 bg-card">
                 <div className="space-y-2">
-                  <Input
-                    placeholder="Customer name"
-                    value={customerName}
-                    onChange={e => setCustomerName(e.target.value)}
-                    className="text-sm h-8"
-                    data-testid="customer-name-input"
-                  />
+                  <Input placeholder="Customer name" value={customerName} onChange={e => setCustomerName(e.target.value)} className="text-sm h-8" data-testid="customer-name-input" />
                   <Select value={paymentMethod} onValueChange={setPaymentMethod}>
                     <SelectTrigger className="h-8 text-sm" data-testid="payment-method-select"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cash">Cash</SelectItem>
-                      <SelectItem value="mobile_money">Mobile Money</SelectItem>
-                      <SelectItem value="card">Card</SelectItem>
+                      {getPaymentMethods().map(m => <SelectItem key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Total</span>
-                  <span className="font-bold text-lg text-primary">{fmt(cartTotal)}</span>
+                  <span className="font-bold text-lg text-primary">{fmt(cartTotal, activeCurrency)}</span>
                 </div>
-                <Button
-                  className="w-full gap-2"
-                  disabled={cart.length === 0 || checkoutLoading}
-                  onClick={handleCheckout}
-                  data-testid="checkout-btn"
-                >
-                  <Receipt size={15} />
-                  {checkoutLoading ? 'Processing...' : 'Complete Sale'}
+                <Button className="w-full gap-2" disabled={cart.length === 0 || checkoutLoading} onClick={handleCheckout} data-testid="checkout-btn">
+                  <Receipt size={15} />{checkoutLoading ? 'Processing...' : 'Complete Sale'}
                 </Button>
               </div>
             </div>
           </div>
         </TabsContent>
 
-        {/* ---- PRODUCTS TAB ---- */}
+        {/* PRODUCTS TAB */}
         <TabsContent value="products" className="mt-4">
           <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-2" onClick={openAddProduct} data-testid="add-product-btn">
-              <Plus size={14} /> Add Product
-            </Button>
+            <Button size="sm" className="gap-2" onClick={openAddProduct} data-testid="add-product-btn"><Plus size={14} /> Add Product</Button>
           </div>
           {loading ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1,2,3].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}
-            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[1,2,3].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
           ) : (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {products.map(p => (
+              {filteredProducts.map(p => (
                 <Card key={p.id} className="shadow-soft rounded-xl" data-testid="product-item">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between mb-2">
@@ -300,25 +355,22 @@ export default function ProductsPage() {
                         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => deleteProduct(p.id)} data-testid="delete-product-btn"><Trash2 size={11} /></Button>
                       </div>
                     </div>
-                    {p.category && <p className="text-xs text-muted-foreground mb-2">{p.category}</p>}
-                    <p className="text-primary font-bold text-sm">{fmt(p.price)}</p>
+                    {p.category && <p className="text-xs text-muted-foreground mb-1">{p.category}</p>}
+                    {p.location_id && <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><MapPin size={9} />{locName(p.location_id)}</p>}
+                    <p className="text-primary font-bold text-sm">{fmt(p.price, p.currency || 'UGX')}</p>
                     <div className="mt-2">
-                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>
-                        {stockLabel(p.stock, p.reorder_level)}
-                      </span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>{stockLabel(p.stock, p.reorder_level)}</span>
                     </div>
                     {p.sku && <p className="text-xs text-muted-foreground mt-1.5 font-mono">SKU: {p.sku}</p>}
                   </CardContent>
                 </Card>
               ))}
-              {products.length === 0 && (
-                <div className="col-span-4 text-center py-16 text-sm text-muted-foreground">No products added yet.</div>
-              )}
+              {filteredProducts.length === 0 && <div className="col-span-4 text-center py-16 text-sm text-muted-foreground">No products added yet.</div>}
             </div>
           )}
         </TabsContent>
 
-        {/* ---- HISTORY TAB ---- */}
+        {/* HISTORY TAB */}
         <TabsContent value="history" className="mt-4">
           <Card className="shadow-soft rounded-xl">
             <CardContent className="p-5">
@@ -333,6 +385,7 @@ export default function ProductsPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Items</th>
                       <th className="pb-2 font-medium text-muted-foreground">Total</th>
                       <th className="pb-2 font-medium text-muted-foreground">Payment</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Location</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
                       <th className="pb-2 font-medium text-muted-foreground">Cashier</th>
                     </tr></thead>
@@ -340,27 +393,24 @@ export default function ProductsPage() {
                       {sales.map(sale => (
                         <tr key={sale.id} className="hover:bg-accent/30 transition-colors" data-testid="sale-row">
                           <td className="py-3 font-mono text-xs text-primary font-semibold">{sale.id}</td>
-                          <td className="py-3">{sale.customer_name || '—'}</td>
+                          <td className="py-3">{sale.customer_name || '--'}</td>
                           <td className="py-3 text-muted-foreground">{(sale.items || []).length} items</td>
                           <td className="py-3 font-bold text-primary">{fmt(sale.total)}</td>
-                          <td className="py-3">
-                            <Badge variant="outline" className="text-xs capitalize">{sale.payment_method}</Badge>
-                          </td>
+                          <td className="py-3"><Badge variant="outline" className="text-xs capitalize">{sale.payment_method}</Badge></td>
+                          <td className="py-3 text-xs text-muted-foreground">{sale.location_id ? locName(sale.location_id) : '--'}</td>
                           <td className="py-3 text-muted-foreground text-xs">{sale.created_at?.slice(0, 16).replace('T', ' ')}</td>
-                          <td className="py-3 text-muted-foreground">{sale.cashier || '—'}</td>
+                          <td className="py-3 text-muted-foreground">{sale.cashier || '--'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-12">No sales recorded yet.</p>
-              )}
+              ) : <p className="text-sm text-muted-foreground text-center py-12">No sales recorded yet.</p>}
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* ---- CUSTOMERS TAB ---- */}
+        {/* CUSTOMERS TAB */}
         <TabsContent value="customers" className="mt-4">
           <Card className="shadow-soft rounded-xl">
             <CardHeader className="py-4 px-5"><CardTitle className="text-base font-semibold">Customer Directory</CardTitle></CardHeader>
@@ -388,9 +438,7 @@ export default function ProductsPage() {
                     </tbody>
                   </table>
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-12">No customer data yet. Complete a sale to see customers here.</p>
-              )}
+              ) : <p className="text-sm text-muted-foreground text-center py-12">No customer data yet.</p>}
             </CardContent>
           </Card>
         </TabsContent>
@@ -405,7 +453,7 @@ export default function ProductsPage() {
               <Input placeholder="Product name" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} required data-testid="product-name-input" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Price (UGX) *</Label>
+              <div className="space-y-2"><Label>Price *</Label>
                 <Input type="number" placeholder="0" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} required data-testid="product-price-input" />
               </div>
               <div className="space-y-2"><Label>Stock</Label>
@@ -415,6 +463,23 @@ export default function ProductsPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Category</Label>
                 <Input placeholder="e.g. Farm, Merchandise" value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>Currency</Label>
+                <Select value={productForm.currency || 'UGX'} onValueChange={v => setProductForm({...productForm, currency: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{['UGX','USD','KES','EUR','GBP'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Location</Label>
+                <Select value={productForm.location_id || 'none'} onValueChange={v => setProductForm({...productForm, location_id: v === 'none' ? '' : v})}>
+                  <SelectTrigger data-testid="product-location-select"><SelectValue placeholder="Select location" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No Location</SelectItem>
+                    {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2"><Label>Reorder Level</Label>
                 <Input type="number" placeholder="5" value={productForm.reorder_level} onChange={e => setProductForm({...productForm, reorder_level: e.target.value})} />
@@ -444,28 +509,98 @@ export default function ProductsPage() {
               </div>
               <div className="space-y-1.5">
                 {(lastReceipt.items || []).map((item, i) => (
-                  <div key={i} className="flex justify-between text-xs">
-                    <span>{item.name} x{item.qty}</span>
-                    <span>{fmt(item.unit_price * item.qty)}</span>
-                  </div>
+                  <div key={i} className="flex justify-between text-xs"><span>{item.name} x{item.qty}</span><span>{fmt(item.unit_price * item.qty)}</span></div>
                 ))}
               </div>
-              <div className="border-t border-border pt-3 flex justify-between font-bold">
-                <span>TOTAL</span>
-                <span className="text-primary">{fmt(lastReceipt.total)}</span>
-              </div>
+              <div className="border-t border-border pt-3 flex justify-between font-bold"><span>TOTAL</span><span className="text-primary">{fmt(lastReceipt.total)}</span></div>
               <div className="text-xs text-muted-foreground flex justify-between">
                 <span>Customer: {lastReceipt.customer_name}</span>
                 <span className="capitalize">{lastReceipt.payment_method}</span>
               </div>
-              <div className="text-center text-xs text-muted-foreground border-t border-border pt-3">
-                Thank you for your purchase!
-              </div>
-              <Button className="w-full" onClick={() => { setShowReceipt(false); window.print(); }}>
-                Print Receipt
-              </Button>
+              <div className="text-center text-xs text-muted-foreground border-t border-border pt-3">Thank you for your purchase!</div>
+              <Button className="w-full" onClick={() => { setShowReceipt(false); window.print(); }}>Print Receipt</Button>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Store Settings Modal */}
+      <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Settings size={16} /> Store Settings</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground">{locName(storeSettingsLoc)}</p>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Store Name</Label>
+              <Input placeholder="Store display name" value={storeSettings.store_name || ''} onChange={e => setStoreSettings({...storeSettings, store_name: e.target.value})} data-testid="store-name-input" />
+            </div>
+            <div className="space-y-2">
+              <Label>Payment Methods</Label>
+              <div className="flex flex-wrap gap-2">
+                {['cash', 'mobile_money', 'card', 'bank_transfer', 'cheque'].map(m => (
+                  <label key={m} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input type="checkbox" checked={(storeSettings.payment_methods || []).includes(m)}
+                      onChange={e => {
+                        const methods = storeSettings.payment_methods || [];
+                        setStoreSettings({...storeSettings, payment_methods: e.target.checked ? [...methods, m] : methods.filter(x => x !== m)});
+                      }} className="rounded border-border" />
+                    {m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Mobile Money Providers (comma-separated)</Label>
+              <Input placeholder="MTN, Airtel, ..." value={(storeSettings.mobile_money_providers || []).join(', ')} onChange={e => setStoreSettings({...storeSettings, mobile_money_providers: e.target.value.split(',').map(s => s.trim()).filter(Boolean)})} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Tax Rate (%)</Label>
+                <Input type="number" step="0.01" value={storeSettings.tax_rate || 0} onChange={e => setStoreSettings({...storeSettings, tax_rate: parseFloat(e.target.value) || 0})} />
+              </div>
+              <div className="space-y-2"><Label>Currency</Label>
+                <Select value={storeSettings.currency || 'UGX'} onValueChange={v => setStoreSettings({...storeSettings, currency: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{['UGX','USD','KES','EUR','GBP'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Receipt Footer</Label>
+              <Input placeholder="Thank you for shopping!" value={storeSettings.receipt_footer || ''} onChange={e => setStoreSettings({...storeSettings, receipt_footer: e.target.value})} />
+            </div>
+            <div className="space-y-2">
+              <Label>API Integrations (JSON)</Label>
+              <Textarea rows={3} placeholder='[{"name": "MoMo API", "url": "https://...", "key": "..."}]'
+                value={JSON.stringify(storeSettings.api_integrations || [], null, 2)}
+                onChange={e => { try { setStoreSettings({...storeSettings, api_integrations: JSON.parse(e.target.value)}); } catch {} }}
+              />
+              <p className="text-xs text-muted-foreground">External payment API configurations for this location</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowStoreSettings(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveStoreSettings} disabled={savingStore} data-testid="save-store-settings-btn">{savingStore ? 'Saving...' : 'Save Settings'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import/Export Modal */}
+      <Dialog open={showImportExport} onOpenChange={setShowImportExport}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Sales Import / Export</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Button className="w-full gap-2" variant="outline" onClick={handleExport} data-testid="export-sales-btn">
+                <Download size={14} /> Export Sales (JSON)
+              </Button>
+              <p className="text-xs text-muted-foreground">Downloads all sales{locationFilter !== 'all' ? ` for ${locName(locationFilter)}` : ''} as JSON</p>
+            </div>
+            <div className="border-t border-border pt-4 space-y-2">
+              <Label>Import Sales Data (JSON)</Label>
+              <Textarea rows={5} placeholder='[{"items": [...], "total": 50000, "customer_name": "John", "payment_method": "cash"}]'
+                value={importData} onChange={e => setImportData(e.target.value)} data-testid="import-sales-input" />
+              <Button className="w-full gap-2" onClick={handleImport} disabled={importingData || !importData.trim()} data-testid="import-sales-btn">
+                <Upload size={14} /> {importingData ? 'Importing...' : 'Import Sales'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

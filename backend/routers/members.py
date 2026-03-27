@@ -108,6 +108,16 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    # Coordinators can edit only same-location, non-restricted members
+    role_level = {"admin": 10, "system_admin": 10, "Executive Director": 9, "Adviser": 8.5, "Director": 8, "Manager": 7, "Coordinator": 6}.get(current_user.get("role"), 0)
+    if role_level < 7 and not is_system_admin(current_user):
+        # Coordinator-level check
+        if role_level < 6:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        user_locs = current_user.get("location_ids") or [current_user.get("location_id")]
+        member_loc = member.get("location_id", "")
+        if member_loc and member_loc not in user_locs:
+            raise HTTPException(status_code=403, detail="Cannot edit members outside your campus")
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     if "gender" in update_data:
         update_data["gender"] = normalize_gender(update_data["gender"])

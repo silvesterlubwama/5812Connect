@@ -99,14 +99,46 @@ def is_system_admin(user: dict) -> bool:
 def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
     System admins get an empty dict (no restriction).
-    Non-admin users without a location_id assigned also get no restriction
-    (they'd see nothing if we filtered on an empty value)."""
+    Supports multi-location users via location_ids array."""
     if is_system_admin(user):
         return {}
+    locs = user.get("location_ids") or []
     loc = user.get("location_id")
-    if not loc:
+    if loc and loc not in locs:
+        locs.append(loc)
+    if not locs:
         return {}
-    return {field: loc}
+    if len(locs) == 1:
+        return {field: locs[0]}
+    return {field: {"$in": locs}}
+
+
+async def generate_title(role: str, location_ids: list, department: str = None) -> str:
+    """Auto-generate a human-readable title like 'Director of 58:12 Uganda'."""
+    if not role:
+        return ""
+    loc_names = []
+    for lid in (location_ids or []):
+        loc = await db.locations.find_one({"id": lid}, {"_id": 0, "name": 1})
+        if loc:
+            loc_names.append(loc["name"])
+    dept_prefix = f"{department} " if department and department.lower() not in role.lower() else ""
+    role_str = f"{dept_prefix}{role}"
+    if not loc_names:
+        return role_str
+    if len(loc_names) == 1:
+        return f"{role_str} of {loc_names[0]}"
+    return f"{role_str} of {', '.join(loc_names[:-1])} & {loc_names[-1]}"
+
+
+async def resolve_parent_campus(location_id: str) -> str:
+    """If location_id is a sub-location, return its parent campus ID."""
+    if not location_id:
+        return location_id
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "type": 1, "parent_id": 1})
+    if loc and loc.get("type") == "sub-location" and loc.get("parent_id"):
+        return loc["parent_id"]
+    return location_id
 
 
 def require_role(min_level: int):

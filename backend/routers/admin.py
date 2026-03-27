@@ -1,6 +1,6 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, require_admin, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -160,20 +160,42 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 @router.put("/users/{user_id}")
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
-                      "address", "emergency_contact", "department", "notes",
+                      "address", "emergency_contact", "department", "departments", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "pin",
-                      "location_id"}
+                      "location_id", "location_ids", "title"}
     MEMBER_ONLY_FIELDS = {"gender", "date_of_birth", "group", "program"}
     all_allowed = ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS
     update = {k: v for k, v in data.items() if k in all_allowed and v is not None}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Sub-location → auto-add parent campus to location_ids
+    loc_ids = update.get("location_ids") or data.get("location_ids") or []
+    loc_id = update.get("location_id") or data.get("location_id") or ""
+    if loc_id and loc_id not in loc_ids:
+        loc_ids.append(loc_id)
+    expanded = list(set(loc_ids))
+    for lid in list(expanded):
+        parent = await resolve_parent_campus(lid)
+        if parent and parent not in expanded:
+            expanded.append(parent)
+    if expanded:
+        update["location_ids"] = expanded
+    if loc_id:
+        update["location_id"] = loc_id
+
+    # Auto-generate title if not explicitly provided
+    if "title" not in data or not data.get("title"):
+        role = update.get("role") or (await db.users.find_one({"id": user_id}, {"_id": 0, "role": 1}) or {}).get("role", "")
+        dept = update.get("department") or ""
+        update["title"] = await generate_title(role, expanded or ([loc_id] if loc_id else []), dept)
+
     # Update users collection (account fields only)
     user_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
     if user_update:
         await db.users.update_one({"id": user_id}, {"$set": user_update})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    # Update members collection (all profile fields) — auto-create if missing
+    # Update members collection — auto-create if missing
     if user and user.get("email"):
         member_update = {k: v for k, v in update.items() if k in (ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS)}
         if member_update:
@@ -187,7 +209,6 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                     {"$set": member_update}
                 )
             else:
-                # Auto-sync: create linked member record
                 member_id = str(uuid.uuid4())
                 await db.members.insert_one({
                     "id": member_id, "user_id": user_id,
@@ -195,8 +216,10 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                     "phone": user.get("phone", ""),
                     "role": "member", "membership_type": (user.get("role") or "Staff").lower(),
                     "status": "active",
-                    "location_id": user.get("location_id", ""),
+                    "location_id": loc_id, "location_ids": expanded,
                     "department": user.get("department", ""),
+                    "departments": update.get("departments", []),
+                    "title": update.get("title", ""),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     **{k: v for k, v in member_update.items() if k in MEMBER_ONLY_FIELDS},
                 })
@@ -351,3 +374,39 @@ async def permanently_delete_item(item_id: str, current_user: dict = Depends(req
         raise HTTPException(status_code=404, detail="Item not found")
     await _audit(current_user["id"], "permanent_delete", "deleted_items", item_id)
     return {"message": "Permanently deleted"}
+
+
+@router.post("/deleted-items/bulk-delete")
+async def bulk_delete_items(data: dict, current_user: dict = Depends(require_admin)):
+    """Permanently delete multiple items from recycle bin."""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    result = await db.deleted_items.delete_many({"id": {"$in": ids}})
+    await _audit(current_user["id"], "bulk_permanent_delete", "deleted_items", ",".join(ids[:5]))
+    return {"message": f"Permanently deleted {result.deleted_count} items"}
+
+
+@router.post("/deleted-items/bulk-restore")
+async def bulk_restore_items(data: dict, current_user: dict = Depends(require_admin)):
+    """Restore multiple items from recycle bin."""
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    restored = 0
+    for item_id in ids:
+        item = await db.deleted_items.find_one({"id": item_id}, {"_id": 0})
+        if not item:
+            continue
+        collection_name = item.pop("_deleted_from", None)
+        if not collection_name:
+            continue
+        item.pop("deleted_at", None)
+        item.pop("deleted_by", None)
+        existing = await db[collection_name].find_one({"id": item_id})
+        if existing:
+            continue
+        await db[collection_name].insert_one(item)
+        await db.deleted_items.delete_one({"id": item_id})
+        restored += 1
+    return {"message": f"Restored {restored} items"}

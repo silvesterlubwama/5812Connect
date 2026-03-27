@@ -43,14 +43,30 @@ async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_us
 
 @router.get("/boards")
 async def list_boards(current_user: dict = Depends(get_current_user)):
-    """Return all boards accessible to the current user"""
+    """Return all boards accessible to the current user.
+    Coordinators and below only see boards they are assigned to or in their campus."""
     if _is_admin(current_user):
         boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     else:
         user_loc = current_user.get("location_id")
-        query = {"$or": [{"is_global": True}, {"location_id": user_loc}]}
-        if not user_loc:
-            query = {"is_global": True}
+        user_locs = current_user.get("location_ids") or ([user_loc] if user_loc else [])
+        user_id = current_user["id"]
+        role = (current_user.get("role") or "").lower()
+        is_manager_plus = role in {"manager"}
+
+        if is_manager_plus:
+            # Managers see all boards in their campuses + global
+            query = {"$or": [{"is_global": True}]}
+            if user_locs:
+                query["$or"].append({"location_id": {"$in": user_locs}})
+        else:
+            # Coordinators and below: only assigned boards or their campus boards
+            query = {"$or": [
+                {"tagged_members": user_id},
+                {"created_by": user_id},
+            ]}
+            if user_locs:
+                query["$or"].append({"location_id": {"$in": user_locs}})
         boards = await db.boards.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
 
     for b in boards:
@@ -70,6 +86,7 @@ async def create_board(data: dict, current_user: dict = Depends(get_current_user
         "location_name": data.get("location_name", ""),
         "background": data.get("background", "#0052cc"),
         "is_global": not data.get("location_id"),
+        "tagged_members": data.get("tagged_members", []),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }

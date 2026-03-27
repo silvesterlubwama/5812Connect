@@ -34,6 +34,7 @@ import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
 import CampusReportsPage from './pages/CampusReportsPage';
 import AdminPage from './pages/AdminPage';
+import AppSettingsPage from './pages/AppSettingsPage';
 import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
 import PortalLayout from './components/PortalLayout';
@@ -96,6 +97,7 @@ function AppRoutes() {
         <Route path="reports" element={<ReportsPage />} />
         <Route path="campus-reports" element={<CampusReportsPage />} />
         <Route path="admin" element={<AdminPage />} />
+        <Route path="app-settings" element={<AppSettingsPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>

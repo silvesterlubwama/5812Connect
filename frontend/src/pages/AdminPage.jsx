@@ -172,7 +172,6 @@ export default function AdminPage() {
         is_admin: profile.role === 'admin' || profile.role === 'system_admin',
         secondary_roles: profile.secondary_roles || [],
         pin: profile.pin || '',
-        // Member-specific profile fields
         gender: profile.gender || '',
         date_of_birth: profile.date_of_birth || '',
         national_id: profile.national_id || '',
@@ -180,8 +179,10 @@ export default function AdminPage() {
         emergency_contact: profile.emergency_contact || '',
         group: profile.group || '',
         location_id: profile.location_id || '',
+        location_ids: profile.location_ids || (profile.location_id ? [profile.location_id] : []),
         program: profile.program || '',
         member_id: profile.member_id || '',
+        title: profile.title || '',
       });
     } catch {
       // Fallback to basic user data
@@ -220,11 +221,14 @@ export default function AdminPage() {
     try {
       const payload = { ...editForm };
       delete payload.member_id;
-      // If admin toggle is on, set role to 'admin'; otherwise keep the selected role
       if (payload.is_admin) {
         payload.role = 'admin';
       }
       delete payload.is_admin;
+      // Ensure location_ids is sent
+      if (!payload.location_ids?.length && payload.location_id) {
+        payload.location_ids = [payload.location_id];
+      }
       const res = await adminApi.updateUser(selectedUser.id, payload);
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, ...res.data } : u));
       toast.success('Profile updated');
@@ -624,38 +628,40 @@ export default function AdminPage() {
                   </Select>
                 </div>
               </div>
-              {/* Admin Access Toggle */}
               <div className="flex items-center justify-between p-3 rounded-lg border border-amber-200 bg-amber-50/50">
                 <div>
                   <Label className="text-sm font-medium">System Admin Access</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">Grants full cross-campus visibility and admin privileges</p>
                 </div>
-                <Switch
-                  data-testid="admin-access-toggle"
-                  checked={editForm.is_admin === true}
-                  onCheckedChange={v => setEditForm({...editForm, is_admin: v})}
-                />
+                <Switch data-testid="admin-access-toggle" checked={editForm.is_admin === true} onCheckedChange={v => setEditForm({...editForm, is_admin: v})} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Department</Label><Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} /></div>
-                <div className="space-y-2"><Label>Campus / Location</Label>
-                  <Select value={editForm.location_id || '_none'} onValueChange={v => setEditForm({...editForm, location_id: v === '_none' ? '' : v})}>
-                    <SelectTrigger data-testid="edit-location-select"><SelectValue placeholder="Select campus" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">None</SelectItem>
-                      {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+              {/* Multi-Location Assignment */}
+              <div className="space-y-2">
+                <Label>Campuses / Locations</Label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {(editForm.location_ids || []).map(lid => {
+                    const loc = locations.find(l => l.id === lid);
+                    return loc ? <Badge key={lid} variant="secondary" className="gap-1 text-xs cursor-pointer" onClick={() => { const nl = editForm.location_ids.filter(l => l !== lid); setEditForm({...editForm, location_ids: nl, location_id: nl[0] || ''}); }}>{loc.name} <X size={10} /></Badge> : null;
+                  })}
                 </div>
+                <Select value="" onValueChange={v => { if (v && !(editForm.location_ids || []).includes(v)) { const nl = [...(editForm.location_ids || []), v]; setEditForm({...editForm, location_ids: nl, location_id: nl[0] || v}); } }}>
+                  <SelectTrigger data-testid="edit-location-select"><SelectValue placeholder="Add campus..." /></SelectTrigger>
+                  <SelectContent>{locations.filter(l => !(editForm.location_ids || []).includes(l.id)).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>PIN Code (4 digits)</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
+                <div className="space-y-2"><Label>Department</Label>
+                  {(() => { const pl = locations.find(l => l.id === (editForm.location_ids || [])[0] || l.id === editForm.location_id); const depts = pl?.departments || [];
+                    return depts.length > 0 ? (<Select value={editForm.department || ''} onValueChange={v => setEditForm({...editForm, department: v})}><SelectTrigger><SelectValue placeholder="Select dept" /></SelectTrigger><SelectContent>{depts.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}<SelectItem value="_other">Other...</SelectItem></SelectContent></Select>) : (<Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} placeholder="Department" />);
+                  })()}
+                </div>
+                <div className="space-y-2"><Label>PIN Code</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
+              </div>
+              <div className="space-y-2">
+                <Label>Title <span className="text-xs text-muted-foreground">(auto-suggested, editable)</span></Label>
+                <Input data-testid="edit-title-input" value={editForm.title || ''} onChange={e => setEditForm({...editForm, title: e.target.value})} placeholder={`e.g. ${editForm.role || 'Staff'} of ${locations.find(l => l.id === (editForm.location_ids || [])[0])?.name || 'Location'}`} />
               </div>
               <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})} /></div>
-              <div className="p-3 rounded-lg border border-border/60 bg-muted/30 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground mb-1">Reset Password</p>
-                <p>Use the key icon on the user list to reset the login password.</p>
-              </div>
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setShowEdit(false)}>Cancel</Button>
                 <Button className="flex-1" onClick={saveEdit} disabled={saving}>{saving ? 'Saving...' : 'Save Account'}</Button>

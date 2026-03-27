@@ -6,7 +6,7 @@ import {
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
-  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser
+  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -69,6 +69,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/admin', icon: Shield, labelKey: 'nav.admin', adminOnly: true },
       { to: '/locations', icon: MapPin, labelKey: 'nav.campuses', adminOnly: true },
+      { to: '/app-settings', icon: Sliders, labelKey: 'nav.appSettings', adminOnly: true },
       { to: '/audit', icon: Shield, labelKey: 'nav.audit', adminOnly: true },
       { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
     ]

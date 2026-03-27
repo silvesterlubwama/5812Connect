@@ -99,7 +99,9 @@ class LocationCreate(BaseModel):
     is_venue: bool = False
     is_bookable: bool = False
     is_restricted: bool = False
+    allows_residents: bool = True
     departments: Optional[List[str]] = []
+    payment_apis: Optional[List[dict]] = []
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
@@ -116,7 +118,9 @@ class LocationUpdate(BaseModel):
     is_venue: Optional[bool] = None
     is_bookable: Optional[bool] = None
     is_restricted: Optional[bool] = None
+    allows_residents: Optional[bool] = None
     departments: Optional[List[str]] = None
+    payment_apis: Optional[List[dict]] = None
     active: Optional[bool] = None
 
 class NotificationCreate(BaseModel):
@@ -519,6 +523,51 @@ async def parent_dashboard(current_user: dict = Depends(get_current_user)):
 
 # ========== APP SETTINGS ==========
 
+CURRENCIES = [
+    {"code": "UGX", "name": "Ugandan Shilling", "symbol": "UGX"},
+    {"code": "USD", "name": "US Dollar", "symbol": "$"},
+    {"code": "EUR", "name": "Euro", "symbol": "\u20ac"},
+    {"code": "GBP", "name": "British Pound", "symbol": "\u00a3"},
+    {"code": "KES", "name": "Kenyan Shilling", "symbol": "KES"},
+    {"code": "TZS", "name": "Tanzanian Shilling", "symbol": "TZS"},
+    {"code": "RWF", "name": "Rwandan Franc", "symbol": "RWF"},
+    {"code": "ZAR", "name": "South African Rand", "symbol": "R"},
+    {"code": "NGN", "name": "Nigerian Naira", "symbol": "\u20a6"},
+    {"code": "GHS", "name": "Ghanaian Cedi", "symbol": "GH\u20b5"},
+    {"code": "CAD", "name": "Canadian Dollar", "symbol": "CA$"},
+    {"code": "AUD", "name": "Australian Dollar", "symbol": "A$"},
+    {"code": "INR", "name": "Indian Rupee", "symbol": "\u20b9"},
+    {"code": "HTG", "name": "Haitian Gourde", "symbol": "G"},
+]
+
+@api_router.get("/currencies")
+async def get_currencies():
+    return CURRENCIES
+
+@api_router.get("/global-settings")
+async def get_global_settings(current_user: dict = Depends(get_current_user)):
+    doc = await db.global_settings.find_one({"_key": "global"}, {"_id": 0})
+    return doc or {
+        "_key": "global",
+        "app_name": "58:12 Global Connect",
+        "currency": "UGX",
+        "main_currency": "USD",
+        "footer_text": "58:12 Global Connect",
+        "contact_email": "",
+        "contact_phone": "",
+        "contact_address": "",
+        "logo_url": "",
+    }
+
+@api_router.put("/global-settings")
+async def update_global_settings(settings: dict, current_user: dict = Depends(require_admin)):
+    settings.pop("_id", None)
+    settings["_key"] = "global"
+    settings["updated_by"] = current_user["id"]
+    settings["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.global_settings.update_one({"_key": "global"}, {"$set": settings}, upsert=True)
+    return settings
+
 @api_router.get("/app-settings")
 async def get_app_settings(current_user: dict = Depends(get_current_user)):
     doc = await db.app_settings.find_one({"user_id": current_user["id"]}, {"_id": 0})
@@ -679,7 +728,7 @@ async def _send_push_to_user(user_id: str, title: str, body: str, url: str = "/t
 
 async def _run_due_date_reminder_scheduler():
     """Hourly background task: notify assignees when their task is due tomorrow or today."""
-    from datetime import date, timedelta
+    from datetime import date
     await asyncio.sleep(30)  # short initial delay to let startup finish
     while True:
         try:

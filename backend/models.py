@@ -39,8 +39,11 @@ class MemberCreate(BaseModel):
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
     location_id: Optional[str] = None
+    location_ids: Optional[List[str]] = []
     department: Optional[str] = None
+    departments: Optional[List[str]] = []
     program: Optional[str] = None
+    title: Optional[str] = None
     is_parent: bool = False
     is_customer: bool = False
     is_donor: bool = False
@@ -61,8 +64,11 @@ class MemberUpdate(BaseModel):
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
     location_id: Optional[str] = None
+    location_ids: Optional[List[str]] = None
     department: Optional[str] = None
+    departments: Optional[List[str]] = None
     program: Optional[str] = None
+    title: Optional[str] = None
     is_parent: Optional[bool] = None
     is_customer: Optional[bool] = None
     is_donor: Optional[bool] = None
@@ -120,8 +126,12 @@ class EventCreate(BaseModel):
     price: Optional[float] = None
     visibility: str = "external"
     is_recurring: bool = False
-    recurrence_pattern: Optional[str] = None
+    recurrence_pattern: Optional[str] = None  # daily, weekly, biweekly, monthly, yearly, custom
     recurrence_day: Optional[int] = None
+    recurrence_interval: Optional[int] = 1
+    recurrence_end_date: Optional[str] = None
+    recurrence_days_of_week: Optional[List[int]] = []  # 0=Mon..6=Sun
+    recurrence_week_of_month: Optional[int] = None  # 1st, 2nd, 3rd, 4th, -1=last
     programme_id: Optional[str] = None
 
 class EventUpdate(BaseModel):

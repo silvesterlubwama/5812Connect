@@ -63,6 +63,8 @@ async def assign_resident(data: dict, current_user: dict = Depends(get_current_u
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
     if not loc or not loc.get("is_restricted"):
         raise HTTPException(status_code=400, detail="Location must be restricted")
+    if not loc.get("allows_residents", True):
+        raise HTTPException(status_code=400, detail="This location does not allow residents")
 
     doc = {
         "id": f"res_{str(uuid.uuid4())[:8]}",
@@ -224,6 +226,31 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
         {"$set": {"status": "approved", "approved_by": current_user["id"], "approved_at": datetime.now(timezone.utc).isoformat()}}
     )
     await _audit(current_user["id"], "update", "guest_request", request_id, "approved")
+    # Create limited-time guest pass with QR
+    req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
+    if req:
+        pass_id = f"gp_{str(uuid.uuid4())[:8]}"
+        # Check if the guest already has a badge
+        existing_badge = await db.members.find_one(
+            {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}]},
+            {"_id": 0, "id": 1}
+        )
+        guest_pass = {
+            "id": pass_id,
+            "guest_request_id": request_id,
+            "guest_name": req.get("guest_name"),
+            "guest_phone": req.get("guest_phone", ""),
+            "location_id": req.get("location_id"),
+            "visit_date": req.get("visit_date"),
+            "valid_from": req.get("visit_date"),
+            "valid_until": req.get("visit_date"),  # Single day by default
+            "qr_value": pass_id,
+            "has_existing_badge": bool(existing_badge),
+            "existing_member_id": existing_badge.get("id") if existing_badge else None,
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.guest_passes.insert_one(guest_pass)
     try:
         from routers.notifications import send_notification, NotifyRequest
         req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
@@ -333,3 +360,58 @@ async def get_scan_log(location_id: Optional[str] = None, date: Optional[str] = 
         if member:
             s["member_name"] = member.get("name")
     return scans
+
+
+
+@router.get("/access/guest-passes")
+async def list_guest_passes(location_id: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    if status:
+        query["status"] = status
+    passes = await db.guest_passes.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return passes
+
+
+@router.get("/access/eligible-residents/{location_id}")
+async def list_eligible_residents(location_id: str, current_user: dict = Depends(get_current_user)):
+    """Return people eligible to be added as residents to a restricted sub-location.
+    Only staff, children, or people in that campus can be selected.
+    EDs and Advisers belong to all so are always eligible."""
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    parent_campus_id = loc.get("parent_id") or location_id
+    GLOBAL_ROLES = {"admin", "system_admin", "executive director", "adviser", "director"}
+
+    # Members in the campus or with global roles
+    members = await db.members.find({
+        "$or": [
+            {"location_id": parent_campus_id},
+            {"location_ids": parent_campus_id},
+            {"location_id": location_id},
+            {"location_ids": location_id},
+        ]
+    }, {"_id": 0, "id": 1, "name": 1, "role": 1, "location_id": 1}).to_list(500)
+
+    # Add global role users
+    global_users = await db.users.find(
+        {"role": {"$regex": "^(admin|system_admin|Executive Director|Adviser|Director)$", "$options": "i"}},
+        {"_id": 0, "id": 1, "name": 1, "role": 1}
+    ).to_list(100)
+
+    # Merge unique
+    seen = {m["id"] for m in members}
+    for u in global_users:
+        if u["id"] not in seen:
+            members.append(u)
+            seen.add(u["id"])
+
+    # Also include children in the campus
+    children = await db.children.find({
+        "$or": [{"location_id": parent_campus_id}, {"location_id": location_id}]
+    }, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+
+    return {"members": members, "children": children}

@@ -1,7 +1,7 @@
 # 58:12 Global Connect - Comprehensive Application Exploration Report
 
 **Date:** March 23, 2026  
-**Application URL:** https://rbac-preview-3.preview.emergentagent.com/  
+**Application URL:** https://global-connect-prod.preview.emergentagent.com/  
 **Testing Agent:** E2 (Testing Sub-Agent)
 
 ---

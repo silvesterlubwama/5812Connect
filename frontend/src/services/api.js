@@ -62,6 +62,8 @@ export const eventsApi = {
   createType: (data) => api.post('/event-types', data),
   updateType: (id, data) => api.put(`/event-types/${id}`, data),
   deleteType: (id) => api.delete(`/event-types/${id}`),
+  exportIcal: () => api.get('/events/export/ical', { responseType: 'blob' }),
+  importIcal: (data) => api.post('/events/import/ical', data),
 };
 
 // ---- TASKS ----
@@ -135,6 +137,8 @@ export const productsApi = {
 export const salesApi = {
   list: (params) => api.get('/sales', { params }),
   create: (data) => api.post('/sales', data),
+  export: (params) => api.get('/sales/export', { params }),
+  import: (data) => api.post('/sales/import', data),
 };
 
 // ---- FAMILIES ----
@@ -173,6 +177,13 @@ export const locationsApi = {
 
 export const exchangeApi = {
   getRate: (from, to) => api.get('/exchange-rate', { params: { from_currency: from, to_currency: to } }),
+};
+
+// ---- STORE SETTINGS ----
+export const storeSettingsApi = {
+  get: (locationId) => api.get(`/store-settings/${locationId}`),
+  update: (locationId, data) => api.put(`/store-settings/${locationId}`, data),
+  listAll: () => api.get('/store-settings'),
 };
 
 // ---- NOTIFICATIONS ----
@@ -439,6 +450,11 @@ export const adminApi = {
   deletedItems: (collection) => api.get('/admin/deleted-items', { params: collection ? { collection } : {} }),
   restoreItem: (id) => api.post(`/admin/deleted-items/${id}/restore`),
   permanentDelete: (id) => api.delete(`/admin/deleted-items/${id}`),
+  bulkDeleteItems: (ids) => api.post('/admin/deleted-items/bulk-delete', { ids }),
+  bulkRestoreItems: (ids) => api.post('/admin/deleted-items/bulk-restore', { ids }),
+  globalSettings: () => api.get('/global-settings'),
+  updateGlobalSettings: (data) => api.put('/global-settings', data),
+  currencies: () => api.get('/currencies'),
 };
 
 // ---- DOCUMENTS ----

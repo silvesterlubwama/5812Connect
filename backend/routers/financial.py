@@ -6,6 +6,21 @@ from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
+def _financial_campus_filter(user: dict) -> dict:
+    """Financial data access: finance department staff or managers+ in the location.
+    Advisers/EDs/admins see everything."""
+    if is_system_admin(user):
+        return {}
+    depts = user.get("departments") or []
+    dept = user.get("department") or ""
+    is_finance = "finance" in [d.lower() for d in depts] or "finance" in dept.lower()
+    role_level = {"Manager": 7, "Coordinator": 6, "Staff": 5, "Volunteer": 4}.get(user.get("role"), 0)
+    if role_level >= 7 or is_finance:
+        return get_campus_filter(user)
+    # Staff without finance dept: no financial visibility
+    return {"location_id": "__no_access__"}
+
+
 router = APIRouter(prefix="/api", tags=["financial"])
 
 
@@ -71,7 +86,7 @@ async def distribute_funds(data: dict, current_user: dict = Depends(require_dire
 
 @router.get("/financial/donations")
 async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**_financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if date_from or date_to:
         query["date"] = {}
@@ -92,7 +107,7 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
 
 @router.get("/financial/expenses")
 async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**_financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if status: query["status"] = status
     if date_from or date_to:
@@ -221,3 +236,88 @@ async def set_financial_balance(opening_balance: float, current_user: dict = Dep
     now = datetime.now(timezone.utc).isoformat()
     await db.financial_settings.update_one({}, {"$set": {"opening_balance": opening_balance, "set_at": now, "set_by": current_user["id"]}}, upsert=True)
     return {"opening_balance": opening_balance, "set_at": now}
+
+
+# ========== STORE SETTINGS PER LOCATION ==========
+
+@router.get("/store-settings/{location_id}")
+async def get_store_settings(location_id: str, current_user: dict = Depends(get_current_user)):
+    """Get store configuration for a specific location."""
+    doc = await db.store_settings.find_one({"location_id": location_id}, {"_id": 0})
+    return doc or {
+        "location_id": location_id,
+        "store_name": "",
+        "payment_methods": ["cash", "mobile_money"],
+        "mobile_money_providers": [],
+        "tax_rate": 0,
+        "receipt_footer": "",
+        "api_integrations": [],
+        "currency": "UGX",
+    }
+
+
+@router.put("/store-settings/{location_id}")
+async def update_store_settings(location_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Update store configuration for a specific location."""
+    data.pop("_id", None)
+    data["location_id"] = location_id
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    data["updated_by"] = current_user["id"]
+    await db.store_settings.update_one(
+        {"location_id": location_id},
+        {"$set": data},
+        upsert=True
+    )
+    await _audit(current_user["id"], "update", "store_settings", location_id)
+    return data
+
+
+@router.get("/store-settings")
+async def list_all_store_settings(current_user: dict = Depends(get_current_user)):
+    """List store settings for all locations."""
+    return await db.store_settings.find({}, {"_id": 0}).to_list(100)
+
+
+# ========== SALES EXPORT / IMPORT ==========
+
+@router.get("/sales/export")
+async def export_sales(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Export sales data as JSON for the given location/date range."""
+    query = {**get_campus_filter(current_user)}
+    if location_id:
+        query["location_id"] = location_id
+    if date_from or date_to:
+        query["created_at"] = {}
+        if date_from:
+            query["created_at"]["$gte"] = date_from
+        if date_to:
+            query["created_at"]["$lte"] = date_to + "T23:59:59"
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return {"sales": sales, "count": len(sales)}
+
+
+@router.post("/sales/import")
+async def import_sales(data: dict, current_user: dict = Depends(require_manager)):
+    """Import sales data from JSON array."""
+    sales_data = data.get("sales", [])
+    if not sales_data:
+        raise HTTPException(status_code=400, detail="No sales data provided")
+    imported = 0
+    for sale in sales_data:
+        sale_id = f"inv_{str(uuid.uuid4())[:8].upper()}"
+        doc = {
+            "id": sale_id,
+            "items": sale.get("items", []),
+            "customer_name": sale.get("customer_name", "Imported"),
+            "total": float(sale.get("total", 0)),
+            "payment_method": sale.get("payment_method", "cash"),
+            "location_id": sale.get("location_id", current_user.get("location_id", "")),
+            "notes": sale.get("notes", "Imported"),
+            "created_at": sale.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "created_by": current_user["id"],
+            "cashier": current_user.get("name", "Import"),
+        }
+        await db.sales.insert_one(doc)
+        imported += 1
+    await _audit(current_user["id"], "create", "sales_import", None, {"count": imported})
+    return {"imported": imported}

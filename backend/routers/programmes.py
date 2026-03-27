@@ -109,6 +109,14 @@ async def create_outreach_program(data: ProgrammeCreate, current_user: dict = De
     await db.outreach_programs.insert_one(doc)
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "outreach_program", doc["id"])
+
+    # Auto-generate calendar events if recurring
+    if data.is_recurring and data.recurrence_pattern:
+        try:
+            await _auto_generate_outreach_events(doc, current_user["id"], months_ahead=3)
+        except Exception as e:
+            logger.warning(f"Auto-generate events for outreach failed: {e}")
+
     return doc
 
 
@@ -229,6 +237,56 @@ async def generate_recurring_events(prog_id: str, data: dict, current_user: dict
     return {"created": len(events_created), "events": events_created}
 
 
+# ========== HELPER: Auto-generate outreach events ==========
+
+async def _auto_generate_outreach_events(prog: dict, user_id: str, months_ahead: int = 3):
+    """Auto-create calendar events for a recurring outreach programme."""
+    day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
+    target_weekday = day_map.get(str(prog.get("recurrence_pattern", "saturday")).lower(), 5)
+    nth_day = prog.get("recurrence_day", 1) or 1
+    time_str = prog.get("recurrence_time", "09:00")
+    end_time_str = prog.get("recurrence_end_time", "12:00")
+    now = datetime.now(timezone.utc)
+    events_created = []
+
+    for m_offset in range(months_ahead):
+        month = now.month + m_offset
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        cal = calendar.monthcalendar(year, month)
+        matching_days = [week[target_weekday] for week in cal if week[target_weekday] != 0]
+        if not matching_days:
+            continue
+        if nth_day == -1:
+            day = matching_days[-1]
+        elif 1 <= nth_day <= len(matching_days):
+            day = matching_days[nth_day - 1]
+        else:
+            continue
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        # Check if event already exists for this programme on this date
+        existing = await db.events.find_one({"programme_id": prog["id"], "date": date_str})
+        if existing:
+            continue
+        event_id = f"evt_{str(uuid.uuid4())[:8]}"
+        event = {
+            "id": event_id, "title": prog.get("name", "Outreach Event"),
+            "type": "outreach", "date": date_str, "time": time_str, "end_time": end_time_str,
+            "location": prog.get("location", ""), "location_id": prog.get("location_id"),
+            "capacity": prog.get("target", 100), "description": prog.get("description", ""),
+            "is_public": False, "is_free": True, "visibility": "internal",
+            "is_recurring": True, "programme_id": prog["id"],
+            "registered": 0, "status": "upcoming",
+            "created_at": datetime.now(timezone.utc).isoformat(), "created_by": user_id,
+        }
+        await db.events.insert_one(event)
+        event.pop("_id", None)
+        events_created.append(event)
+    return events_created
+
+
 # ========== SESSIONS ==========
 
 @router.get("/outreach/sessions")
@@ -252,4 +310,32 @@ async def create_outreach_session(data: SessionCreate, current_user: dict = Depe
         {"id": data.program_id},
         {"$inc": {"sessions_count": 1, "total_reached": data.attendees}}
     )
+
+    # Auto-create a calendar event for this session
+    prog = await db.outreach_programs.find_one({"id": data.program_id}, {"_id": 0})
+    if prog:
+        event_id = f"evt_{str(uuid.uuid4())[:8]}"
+        event = {
+            "id": event_id,
+            "title": f"{prog.get('name', 'Outreach')} - Session",
+            "type": "outreach",
+            "date": data.date,
+            "time": data.time or prog.get("recurrence_time", "09:00"),
+            "end_time": prog.get("recurrence_end_time", ""),
+            "location": data.location or prog.get("location", ""),
+            "location_id": prog.get("location_id"),
+            "capacity": prog.get("target", 100),
+            "description": f"Outreach session: {data.notes or prog.get('description', '')}",
+            "is_public": False, "is_free": True, "visibility": "internal",
+            "programme_id": data.program_id,
+            "session_id": doc["id"],
+            "registered": data.attendees,
+            "status": "upcoming" if data.date >= datetime.now(timezone.utc).isoformat()[:10] else "completed",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.events.insert_one(event)
+        event.pop("_id", None)
+        doc["calendar_event_id"] = event_id
+
     return doc
