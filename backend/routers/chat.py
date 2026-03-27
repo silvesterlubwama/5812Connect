@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 @router.get("/chat/conversations")
 async def get_conversations(current_user: dict = Depends(get_current_user)):
     query = {"participants": current_user["id"]}
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     if campus:
         query["$or"] = [
             {"participants": current_user["id"]},
@@ -25,7 +25,7 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
 @router.get("/chat/users")
 async def list_chat_users(current_user: dict = Depends(get_current_user)):
     """Return users that the current user can message — scoped to campus for non-admins."""
-    query = {**get_campus_filter(current_user), "status": "active", "id": {"$ne": current_user["id"]}}
+    query = {**await get_campus_filter(current_user), "status": "active", "id": {"$ne": current_user["id"]}}
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(200)
     # Return only needed fields
     return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "location_id": u.get("location_id")} for u in users]

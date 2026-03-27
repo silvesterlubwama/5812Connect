@@ -17,6 +17,17 @@ board_rooms: Dict[str, set] = {}   # board_id → {user_id, ...}
 active_calls: Dict[str, Dict] = {}  # call_id → call info
 call_participants: Dict[str, Set[str]] = {}  # call_id → set of user_ids
 
+# ── Typing indicators ───────────────────────────────────────────────────────
+typing_users: Dict[str, Set[str]] = {}  # conversation_id → set of user_ids
+
+# ── User presence ───────────────────────────────────────────────────────────
+try:
+    from routers.presence import set_user_online, set_user_offline, update_user_activity
+except ImportError:
+    def set_user_online(user_id): pass
+    def set_user_offline(user_id): pass
+    def update_user_activity(user_id): pass
+
 
 class ConnectionManager:
     """Manages WebSocket connections per user"""
@@ -28,19 +39,52 @@ class ConnectionManager:
         if user_id not in self.active_connections:
             self.active_connections[user_id] = []
         self.active_connections[user_id].append(websocket)
+        # Update presence
+        set_user_online(user_id)
         logger.info(f"WS connected: {user_id} (total: {sum(len(v) for v in self.active_connections.values())})")
+        # Broadcast presence update
+        await self.broadcast_presence(user_id, "online")
 
     def disconnect(self, websocket: WebSocket, user_id: str):
         if user_id in self.active_connections:
             self.active_connections[user_id] = [ws for ws in self.active_connections[user_id] if ws != websocket]
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
+                # Update presence only when all connections closed
+                set_user_offline(user_id)
         # Remove from all board rooms on disconnect
         for board_id in list(board_rooms.keys()):
             board_rooms[board_id].discard(user_id)
             if not board_rooms[board_id]:
                 del board_rooms[board_id]
+        # Remove from typing indicators
+        for conv_id in list(typing_users.keys()):
+            typing_users[conv_id].discard(user_id)
         logger.info(f"WS disconnected: {user_id}")
+
+    async def broadcast_presence(self, user_id: str, status: str):
+        """Broadcast presence change to all connected users"""
+        message = {
+            "type": "presence_update",
+            "user_id": user_id,
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        for uid, connections in self.active_connections.items():
+            if uid != user_id:
+                for ws in connections:
+                    try:
+                        await ws.send_json(message)
+                    except:
+                        pass
+
+    def is_user_online(self, user_id: str) -> bool:
+        """Check if user has active WebSocket connections"""
+        return user_id in self.active_connections and len(self.active_connections[user_id]) > 0
+
+    def get_online_users(self) -> List[str]:
+        """Get list of all online user IDs"""
+        return list(self.active_connections.keys())
 
     async def send_to_user(self, user_id: str, message: dict):
         if user_id in self.active_connections:
@@ -111,8 +155,103 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg = json.loads(data)
                 msg_type = msg.get("type", "")
 
+                # Update activity on any message
+                update_user_activity(user_id)
+
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
+
+                # ══════════════════════════════════════════════════════════════
+                # TYPING INDICATORS
+                # ══════════════════════════════════════════════════════════════
+                elif msg_type == "typing_start":
+                    conv_id = msg.get("conversation_id")
+                    if conv_id:
+                        if conv_id not in typing_users:
+                            typing_users[conv_id] = set()
+                        typing_users[conv_id].add(user_id)
+                        # Get conversation participants and notify them
+                        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                        if conv:
+                            for pid in conv.get("participants", []):
+                                if pid != user_id:
+                                    await manager.send_to_user(pid, {
+                                        "type": "typing_indicator",
+                                        "conversation_id": conv_id,
+                                        "user_id": user_id,
+                                        "is_typing": True
+                                    })
+
+                elif msg_type == "typing_stop":
+                    conv_id = msg.get("conversation_id")
+                    if conv_id and conv_id in typing_users:
+                        typing_users[conv_id].discard(user_id)
+                        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                        if conv:
+                            for pid in conv.get("participants", []):
+                                if pid != user_id:
+                                    await manager.send_to_user(pid, {
+                                        "type": "typing_indicator",
+                                        "conversation_id": conv_id,
+                                        "user_id": user_id,
+                                        "is_typing": False
+                                    })
+
+                # ══════════════════════════════════════════════════════════════
+                # MESSAGE REACTIONS (real-time)
+                # ══════════════════════════════════════════════════════════════
+                elif msg_type == "reaction_add":
+                    message_id = msg.get("message_id")
+                    emoji = msg.get("emoji")
+                    conv_id = msg.get("conversation_id")
+                    if message_id and emoji and conv_id:
+                        # Get user name
+                        u = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+                        user_name = u.get("name", "Unknown") if u else "Unknown"
+                        # Notify conversation participants
+                        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                        if conv:
+                            for pid in conv.get("participants", []):
+                                await manager.send_to_user(pid, {
+                                    "type": "reaction_update",
+                                    "message_id": message_id,
+                                    "conversation_id": conv_id,
+                                    "action": "add",
+                                    "emoji": emoji,
+                                    "user_id": user_id,
+                                    "user_name": user_name
+                                })
+
+                elif msg_type == "reaction_remove":
+                    message_id = msg.get("message_id")
+                    emoji = msg.get("emoji")
+                    conv_id = msg.get("conversation_id")
+                    if message_id and emoji and conv_id:
+                        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+                        if conv:
+                            for pid in conv.get("participants", []):
+                                await manager.send_to_user(pid, {
+                                    "type": "reaction_update",
+                                    "message_id": message_id,
+                                    "conversation_id": conv_id,
+                                    "action": "remove",
+                                    "emoji": emoji,
+                                    "user_id": user_id
+                                })
+
+                # ══════════════════════════════════════════════════════════════
+                # PRESENCE / ACTIVITY
+                # ══════════════════════════════════════════════════════════════
+                elif msg_type == "heartbeat":
+                    # Client sends periodic heartbeats to update activity
+                    update_user_activity(user_id)
+                    await websocket.send_json({"type": "heartbeat_ack"})
+
+                elif msg_type == "set_status":
+                    status = msg.get("status", "online")  # online, away, dnd
+                    status_message = msg.get("status_message", "")
+                    # Broadcast to others
+                    await manager.broadcast_presence(user_id, status)
 
                 elif msg_type == "join_board":
                     board_id = msg.get("board_id")

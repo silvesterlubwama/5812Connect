@@ -270,7 +270,7 @@ async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dic
     if campus_id and is_system_admin(current_user):
         campus = {"location_id": campus_id}
     else:
-        campus = get_campus_filter(current_user)
+        campus = await get_campus_filter(current_user)
     total_members = await db.members.count_documents({**campus})
     active_members = await db.members.count_documents({"status": "active", **campus})
     total_families = await db.families.count_documents({**campus})
@@ -308,7 +308,7 @@ async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dic
 
 @api_router.get("/people/stats")
 async def people_stats(current_user: dict = Depends(get_current_user)):
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     return {
         "total_members": await db.members.count_documents({**campus}),
         "active_members": await db.members.count_documents({"status": "active", **campus}),
@@ -899,6 +899,9 @@ try:
     from routers.scheduling import router as scheduling_router
     from routers.templates import router as templates_router
     from routers.calling import router as calling_router
+    from routers.presence import router as presence_router
+    from routers.conferences import router as conferences_router
+    from routers.reactions import router as reactions_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -923,6 +926,9 @@ try:
     app.include_router(scheduling_router)
     app.include_router(templates_router)
     app.include_router(calling_router)
+    app.include_router(presence_router)
+    app.include_router(conferences_router)
+    app.include_router(reactions_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

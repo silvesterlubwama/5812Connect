@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle } from 'lucide-react';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -9,16 +9,27 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
-import { chatApi, membersApi } from '../services/api';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
+import { chatApi, membersApi, presenceApi, reactionsApi, conferencesApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { toast } from 'sonner';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
 
 const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon: 'bot' };
 const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
+
+const PRESENCE_DOTS = {
+  online: 'bg-green-500', idle: 'bg-yellow-500', pbx_only: 'bg-blue-500',
+  offline: 'bg-red-500', dnd: 'bg-red-600', on_call: 'bg-blue-500 animate-pulse',
+};
+const PRESENCE_LABELS = {
+  online: 'Available', idle: 'Away', pbx_only: 'Phone Only',
+  offline: 'Offline', dnd: 'Do Not Disturb', on_call: 'On a Call',
+};
 
 export default function CommsPage() {
   const { user } = useAuth();
@@ -42,6 +53,13 @@ export default function CommsPage() {
   const [showNewConv, setShowNewConv] = useState(false);
   const [allStaff, setAllStaff] = useState([]);
   const [convForm, setConvForm] = useState({ name: '', participants: [], type: 'direct' });
+
+  // Presence
+  const [presenceMap, setPresenceMap] = useState({});
+  const [myStatus, setMyStatus] = useState('online');
+
+  // Reactions
+  const [showEmojiFor, setShowEmojiFor] = useState(null);
 
   const messagesEndRef = useRef(null);
   const typingTimeout = useRef(null);
@@ -75,6 +93,23 @@ export default function CommsPage() {
     load();
   }, [fetchConversations, user?.id]);
 
+  // Fetch presence for online users
+  useEffect(() => {
+    if (!user?.id) return;
+    const fetchPresence = async () => {
+      try {
+        await presenceApi.heartbeat(user.id);
+        const res = await presenceApi.getOnlineUsers();
+        const map = {};
+        (res.data || []).forEach(u => { map[u.user_id] = u.status; });
+        setPresenceMap(map);
+      } catch {}
+    };
+    fetchPresence();
+    const interval = setInterval(fetchPresence, 30000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
+
   // Listen for WebSocket messages
   useEffect(() => {
     const unsub = addListener('chat_message', (data) => {
@@ -84,12 +119,10 @@ export default function CommsPage() {
           return [...prev, data.message];
         });
         scrollToBottom();
-        // Send read receipt
         if (data.message.sender_id !== user?.id) {
           sendReadReceipt(data.conversation_id, data.message.id);
         }
       }
-      // Update conversation list
       setConversations(prev => prev.map(c => c.id === data.conversation_id ? { ...c, last_message: data.message.text?.slice(0, 100), updated_at: data.message.created_at } : c));
     });
     return unsub;
@@ -113,7 +146,6 @@ export default function CommsPage() {
       const res = await chatApi.messages(room.id);
       setMessages(res.data || []);
       scrollToBottom();
-      // Mark last messages as read
       const unread = (res.data || []).filter(m => m.sender_id !== user?.id && !(m.read_by || []).includes(user?.id));
       if (unread.length > 0) sendReadReceipt(room.id, unread[unread.length - 1].id);
     } catch { toast.error('Failed to load messages'); }
@@ -151,7 +183,6 @@ export default function CommsPage() {
       return;
     }
 
-    // Send via WebSocket for real-time delivery
     sendChatMessage(selectedRoom.id, newMsg, user?.name, replyTo ? { id: replyTo.id, text: replyTo.text, sender_name: replyTo.sender_name } : null);
     setNewMsg('');
     setReplyTo(null);
@@ -180,18 +211,63 @@ export default function CommsPage() {
     } catch { toast.error('Failed to create conversation'); }
   };
 
+  const handleReaction = async (msgId, emoji) => {
+    try {
+      await reactionsApi.addReaction(msgId, emoji, user?.id);
+      setMessages(prev => prev.map(m => {
+        if (m.id !== msgId) return m;
+        const reactions = [...(m.reactions || [])];
+        const existing = reactions.findIndex(r => r.emoji === emoji && r.user_id === user?.id);
+        if (existing >= 0) reactions.splice(existing, 1);
+        else reactions.push({ emoji, user_id: user?.id, user_name: user?.name });
+        return { ...m, reactions };
+      }));
+      setShowEmojiFor(null);
+    } catch { toast.error('Failed to add reaction'); }
+  };
+
+  const handleSetMyStatus = async (status) => {
+    try {
+      await presenceApi.setStatus(user?.id, status);
+      setMyStatus(status);
+      toast.success(`Status set to ${PRESENCE_LABELS[status] || status}`);
+    } catch { toast.error('Failed to update status'); }
+  };
+
+  const getUserPresence = (userId) => presenceMap[userId] || (onlineUsers.includes(userId) ? 'online' : 'offline');
+
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(user?.role);
+  const isStaff = isAdmin || ['Manager', 'Coordinator', 'Staff'].includes(user?.role);
   const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
   const currentTyping = selectedRoom ? typingUsers[selectedRoom.id] : null;
   const typingUserName = currentTyping ? allStaff.find(s => s.id === currentTyping.user_id)?.name?.split(' ')[0] || 'Someone' : null;
-
-  const isUserOnline = (userId) => onlineUsers.includes(userId);
 
   const getReadStatus = (msg) => {
     if (msg.sender_id !== user?.id) return null;
     const readBy = (msg.read_by || []).filter(id => id !== user?.id);
     if (readBy.length > 0) return 'read';
     return 'sent';
+  };
+
+  const renderReactions = (msg) => {
+    const reactions = msg.reactions || [];
+    if (reactions.length === 0) return null;
+    const grouped = {};
+    reactions.forEach(r => {
+      if (!grouped[r.emoji]) grouped[r.emoji] = { emoji: r.emoji, count: 0, mine: false };
+      grouped[r.emoji].count++;
+      if (r.user_id === user?.id) grouped[r.emoji].mine = true;
+    });
+    return (
+      <div className="flex gap-1 mt-1 flex-wrap">
+        {Object.values(grouped).map(r => (
+          <button key={r.emoji} onClick={() => handleReaction(msg.id, r.emoji)}
+            className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${r.mine ? 'bg-primary/10 border-primary/30' : 'bg-muted/50 border-transparent hover:border-border'}`}>
+            {r.emoji} {r.count > 1 && <span className="text-muted-foreground">{r.count}</span>}
+          </button>
+        ))}
+      </div>
+    );
   };
 
   const renderMessages = () => {
@@ -214,7 +290,7 @@ export default function CommsPage() {
             <div className="text-center py-12 text-sm text-muted-foreground">
               <Bot size={40} className="mx-auto mb-3 opacity-20" />
               <p className="font-medium">AI Assistant</p>
-              <p className="text-xs mt-1 mb-4">Powered by Gemini — ask anything about your organization</p>
+              <p className="text-xs mt-1 mb-4">Powered by Gemini</p>
               <div className="flex flex-wrap gap-2 justify-center">
                 {['How do I add a new member?', 'Help me plan an event', 'Summarize financial status'].map(q => (
                   <Button key={q} variant="outline" size="sm" className="text-xs h-7" onClick={() => setNewMsg(q)}>{q}</Button>
@@ -271,7 +347,7 @@ export default function CommsPage() {
       );
     }
 
-    // Normal Chat with reply-to, read receipts
+    // Normal Chat with reply-to, read receipts, reactions
     return (
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
@@ -287,28 +363,45 @@ export default function CommsPage() {
           return (
             <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group`} data-testid={`chat-msg-${msg.id}`}>
               <div className={`max-w-[70%] rounded-2xl px-4 py-2 relative ${isMine ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
-                {/* Reply reference */}
                 {replyRef && (
                   <div className={`text-[10px] mb-1.5 px-2 py-1 rounded-lg border-l-2 ${isMine ? 'border-primary-foreground/40 bg-primary-foreground/10' : 'border-primary/40 bg-primary/5'}`}>
                     <p className="font-semibold opacity-70">{replyRef.sender_name}</p>
                     <p className="truncate opacity-60">{replyRef.text}</p>
                   </div>
                 )}
-                {!isMine && <p className="text-[10px] font-semibold opacity-70 mb-0.5">{msg.sender_name}</p>}
+                {!isMine && (
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <p className="text-[10px] font-semibold opacity-70">{msg.sender_name}</p>
+                    <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[getUserPresence(msg.sender_id)] || 'bg-gray-400'}`} />
+                  </div>
+                )}
                 <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
                 <div className="flex items-center justify-end gap-1 mt-0.5">
                   <p className="text-[10px] opacity-50">{msg.created_at?.slice(11, 16)}</p>
                   {isMine && readStatus === 'read' && <CheckCheck size={12} className="opacity-70 text-blue-300" />}
                   {isMine && readStatus === 'sent' && <Check size={12} className="opacity-50" />}
                 </div>
-                {/* Reply button */}
-                <button
-                  className="absolute -left-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground"
-                  onClick={() => setReplyTo(msg)}
-                  data-testid={`reply-btn-${msg.id}`}
-                >
-                  <Reply size={12} />
-                </button>
+                {renderReactions(msg)}
+                {/* Reply + Reaction buttons */}
+                <div className="absolute -left-16 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                  <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" onClick={() => setReplyTo(msg)} data-testid={`reply-btn-${msg.id}`}>
+                    <Reply size={12} />
+                  </button>
+                  <Popover open={showEmojiFor === msg.id} onOpenChange={(open) => setShowEmojiFor(open ? msg.id : null)}>
+                    <PopoverTrigger asChild>
+                      <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" data-testid={`react-btn-${msg.id}`}>
+                        <Smile size={12} />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-2" side="top" align="start">
+                      <div className="flex flex-wrap gap-1 max-w-[200px]">
+                        {QUICK_EMOJIS.map(emoji => (
+                          <button key={emoji} onClick={() => handleReaction(msg.id, emoji)} className="text-lg hover:scale-125 transition-transform p-0.5">{emoji}</button>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
               </div>
             </div>
           );
@@ -343,7 +436,24 @@ export default function CommsPage() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-semibold font-heading" data-testid="comms-title">Communications</h1>
-          <p className="text-sm text-muted-foreground">Chat, AI assistant & announcements</p>
+          <p className="text-sm text-muted-foreground">Chat, AI assistant, announcements & calling</p>
+        </div>
+        {/* My status selector */}
+        <div className="flex items-center gap-2">
+          <Select value={myStatus} onValueChange={handleSetMyStatus}>
+            <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="my-status-select">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${PRESENCE_DOTS[myStatus]}`} />
+                <SelectValue />
+              </div>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="online"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-green-500" /> Available</div></SelectItem>
+              <SelectItem value="away"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-yellow-500" /> Away</div></SelectItem>
+              <SelectItem value="dnd"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-600" /> Do Not Disturb</div></SelectItem>
+              <SelectItem value="offline"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /> Offline</div></SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -372,25 +482,30 @@ export default function CommsPage() {
               <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
             ) : filteredConvs.length === 0 ? (
               <p className="text-[11px] text-muted-foreground text-center py-6">No conversations yet</p>
-            ) : filteredConvs.map(conv => (
-              <SidebarItem
-                key={conv.id} room={conv} selected={selectedRoom?.id === conv.id}
-                icon={<div className="relative">
-                  {conv.type === 'group' ? <Users size={14} className="text-blue-500" /> : <Hash size={14} className="text-muted-foreground" />}
-                  {conv.type === 'direct' && conv.participants?.some(p => p !== user?.id && isUserOnline(p)) && (
-                    <Circle size={7} className="absolute -bottom-0.5 -right-0.5 fill-green-500 text-green-500" />
-                  )}
-                </div>}
-                subtitle={typingUsers[conv.id] ? <span className="italic text-primary">typing...</span> : (conv.last_message || 'No messages')}
-                onClick={() => selectRoom(conv)}
-              />
-            ))}
+            ) : filteredConvs.map(conv => {
+              // Get presence for participants (direct messages)
+              const otherParticipant = conv.type === 'direct' ? conv.participants?.find(p => p !== user?.id) : null;
+              const otherPresence = otherParticipant ? getUserPresence(otherParticipant) : null;
+              return (
+                <SidebarItem
+                  key={conv.id} room={conv} selected={selectedRoom?.id === conv.id}
+                  icon={<div className="relative">
+                    {conv.type === 'group' ? <Users size={14} className="text-blue-500" /> : <Hash size={14} className="text-muted-foreground" />}
+                    {otherPresence && (
+                      <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-card ${PRESENCE_DOTS[otherPresence] || 'bg-gray-400'}`} />
+                    )}
+                  </div>}
+                  subtitle={typingUsers[conv.id] ? <span className="italic text-primary">typing...</span> : (conv.last_message || 'No messages')}
+                  onClick={() => selectRoom(conv)}
+                />
+              );
+            })}
           </div>
 
           {/* Online count */}
           <div className="p-3 border-t border-border">
             <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-              <Circle size={6} className="fill-green-500 text-green-500" /> {onlineUsers.length} online
+              <Circle size={6} className="fill-green-500 text-green-500" /> {Object.keys(presenceMap).length || onlineUsers.length} online
             </p>
           </div>
         </div>
@@ -408,12 +523,25 @@ export default function CommsPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold truncate">{selectedRoom.name || 'Chat'}</p>
                 <p className="text-xs text-muted-foreground">
-                  {selectedRoom.id === '__ai__' ? 'Gemini AI — ask anything' :
+                  {selectedRoom.id === '__ai__' ? 'Gemini AI' :
                    selectedRoom.id === '__announcements__' ? 'No-reply channel' :
                    currentTyping ? <span className="text-primary italic">{typingUserName} is typing...</span> :
                    `${selectedRoom.participants?.length || 0} participants`}
                 </p>
               </div>
+              {/* Call buttons for staff conversations */}
+              {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && (
+                <div className="flex items-center gap-1">
+                  <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-green-600" data-testid="voice-call-btn"
+                    onClick={() => toast.info('Voice calling via the Dialer (green phone icon in header)')}>
+                    <Phone size={15} />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-blue-600" data-testid="video-call-btn"
+                    onClick={() => toast.info('Video conferencing: use the dialer or conference scheduler')}>
+                    <Video size={15} />
+                  </Button>
+                </div>
+              )}
               {selectedRoom.id === '__announcements__' && isAdmin && (
                 <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={() => setShowNewAnnouncement(true)} data-testid="post-announcement-btn">
                   <Plus size={12} /> Post
@@ -483,7 +611,10 @@ export default function CommsPage() {
                 <SelectContent>
                   {allStaff.filter(s => s.id !== user?.id).map(s => (
                     <SelectItem key={s.id} value={s.id}>
-                      <span className="flex items-center gap-2">{s.name} ({s.role}) {isUserOnline(s.id) && <Circle size={6} className="fill-green-500 text-green-500" />}</span>
+                      <span className="flex items-center gap-2">
+                        {s.name} ({s.role})
+                        <span className={`w-2 h-2 rounded-full ${PRESENCE_DOTS[getUserPresence(s.id)] || 'bg-gray-400'}`} />
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

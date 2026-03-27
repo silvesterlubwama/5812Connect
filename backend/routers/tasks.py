@@ -1,6 +1,6 @@
 """Tasks CRUD routes — archive/restore, assignees, attachments, WebSocket broadcasts"""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from deps import db, get_current_user, _audit, logger
+from deps import db, get_current_user, _audit, logger, get_campus_filter, is_system_admin
 from models import TaskCreate, TaskUpdate
 from datetime import datetime, timezone
 from typing import Optional, List

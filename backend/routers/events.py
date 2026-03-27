@@ -66,7 +66,7 @@ async def delete_event_type(type_id: str, current_user: dict = Depends(require_a
 
 @router.get("/events")
 async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     query = {}
     if campus:
         # Non-admin: see campus events + public events
@@ -186,7 +186,7 @@ async def share_imported_event(event_id: str, data: dict, current_user: dict = D
 
 @router.get("/checkins")
 async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str] = None, type: Optional[str] = None, search: Optional[str] = None, location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if event_id: query["event_id"] = event_id
     if member_id: query["member_id"] = member_id
     if type and type != "all": query["type"] = type
@@ -511,7 +511,7 @@ async def check_booking_status(booking_id: Optional[str] = None, email: Optional
 @router.get("/events/export/ical")
 async def export_calendar_ical(current_user: dict = Depends(get_current_user)):
     """Export user's events as iCal (.ics) format for calendar apps."""
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     query = {**campus} if campus else {}
     events = await db.events.find(query, {"_id": 0}).to_list(500)
 

@@ -47,7 +47,7 @@ export default function TasksPage() {
   const [allTasks, setAllTasks] = useState([]);
 
   const isAdmin = ['admin', 'system_admin', 'executive director', 'director'].includes((user?.role || '').toLowerCase());
-  const canEdit = isAdmin || ['manager', 'coordinator'].includes((user?.role || '').toLowerCase());
+  const canEdit = isAdmin || ['manager', 'coordinator', 'staff'].includes((user?.role || '').toLowerCase());
 
   // Staff filtered by board's location (if set), otherwise all staff
   const boardStaff = useMemo(() => {

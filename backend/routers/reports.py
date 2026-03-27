@@ -61,7 +61,7 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
     filters = report.get("filters", {})
     rtype = report.get("type", "custom")
     data = {}
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     if rtype in ("members", "custom"):
         query = {**campus}
         if filters.get("location_id"): query["location_id"] = filters["location_id"]

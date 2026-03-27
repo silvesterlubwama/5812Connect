@@ -642,3 +642,39 @@ export const callingApi = {
   // ICE Servers
   getIceServers: () => api.get('/calling/ice-servers'),
 };
+
+// ---- PRESENCE ----
+export const presenceApi = {
+  getStatus: (userId) => api.get(`/presence/status/${userId}`),
+  getBulkStatus: (userIds) => api.get(`/presence/bulk?user_ids=${userIds.join(',')}`),
+  heartbeat: (userId) => api.put(`/presence/heartbeat?user_id=${userId}`),
+  setStatus: (userId, status, message = '') => api.put(`/presence/status?user_id=${userId}&status=${status}${message ? `&status_message=${message}` : ''}`),
+  getOnlineUsers: () => api.get('/presence/online-users'),
+};
+
+// ---- CONFERENCES ----
+export const conferencesApi = {
+  list: (userId, includePast = false) => api.get(`/conferences?user_id=${userId}&include_past=${includePast}`),
+  create: (data, userId) => api.post(`/conferences?user_id=${userId}`, data),
+  get: (id) => api.get(`/conferences/${id}`),
+  update: (id, data, userId) => api.put(`/conferences/${id}?user_id=${userId}`, data),
+  delete: (id, userId) => api.delete(`/conferences/${id}?user_id=${userId}`),
+  invite: (id, userIds, externalInvites, userId) => api.post(`/conferences/${id}/invite?user_id=${userId}`, { user_ids: userIds, external_invites: externalInvites }),
+  join: (id, data, userId = null) => api.post(`/conferences/${id}/join${userId ? `?user_id=${userId}` : ''}`, data),
+  leave: (id, userId) => api.post(`/conferences/${id}/leave?user_id=${userId}`),
+  end: (id, userId) => api.post(`/conferences/${id}/end?user_id=${userId}`),
+  getParticipants: (id) => api.get(`/conferences/${id}/participants`),
+  startRecording: (id, userId) => api.post(`/conferences/${id}/recording/start?user_id=${userId}`),
+  stopRecording: (id, userId) => api.post(`/conferences/${id}/recording/stop?user_id=${userId}`),
+  createInstant: (title, userId) => api.post(`/conferences/instant?title=${encodeURIComponent(title)}&user_id=${userId}`),
+  getAvailableSlots: (userIds, date, duration = 60) => api.get(`/conferences/schedule/available-slots?user_ids=${userIds.join(',')}&date=${date}&duration_minutes=${duration}`),
+};
+
+// ---- REACTIONS ----
+export const reactionsApi = {
+  getQuickReactions: () => api.get('/reactions/quick'),
+  addReaction: (messageId, emoji, userId) => api.post(`/reactions/message/${messageId}?emoji=${encodeURIComponent(emoji)}&user_id=${userId}`),
+  removeReaction: (messageId, emoji, userId) => api.delete(`/reactions/message/${messageId}?emoji=${encodeURIComponent(emoji)}&user_id=${userId}`),
+  getMessageReactions: (messageId) => api.get(`/reactions/message/${messageId}`),
+  getRecentReactions: (conversationId, limit = 10) => api.get(`/reactions/conversation/${conversationId}/recent?limit=${limit}`),
+};

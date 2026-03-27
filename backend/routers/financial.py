@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
-def _financial_campus_filter(user: dict) -> dict:
+async def _financial_campus_filter(user: dict) -> dict:
     """Financial data access: finance department staff or managers+ in the location.
     Advisers/EDs/admins see everything."""
     if is_system_admin(user):
@@ -16,7 +16,7 @@ def _financial_campus_filter(user: dict) -> dict:
     is_finance = "finance" in [d.lower() for d in depts] or "finance" in dept.lower()
     role_level = {"Manager": 7, "Coordinator": 6, "Staff": 5, "Volunteer": 4}.get(user.get("role"), 0)
     if role_level >= 7 or is_finance:
-        return get_campus_filter(user)
+        return await get_campus_filter(user)
     # Staff without finance dept: no financial visibility
     return {"location_id": "__no_access__"}
 
@@ -52,7 +52,7 @@ async def financial_summary(location_id: Optional[str] = None, current_user: dic
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).isoformat()[:7]
     # Enforce campus filter for non-system-admins
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     if campus and not location_id:
         location_id = current_user.get("location_id")
     loc_match = {"location_id": location_id} if location_id else {}
@@ -86,7 +86,7 @@ async def distribute_funds(data: dict, current_user: dict = Depends(require_dire
 
 @router.get("/financial/donations")
 async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**_financial_campus_filter(current_user)}
+    query = {**await _financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if date_from or date_to:
         query["date"] = {}
@@ -107,7 +107,7 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
 
 @router.get("/financial/expenses")
 async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**_financial_campus_filter(current_user)}
+    query = {**await _financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if status: query["status"] = status
     if date_from or date_to:
@@ -169,7 +169,7 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
 
 @router.get("/products")
 async def list_products(current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     return await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
 
 @router.post("/products")
@@ -192,7 +192,7 @@ async def delete_product(product_id: str, current_user: dict = Depends(get_curre
 
 @router.get("/sales")
 async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     return await db.sales.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 @router.post("/sales")
@@ -283,7 +283,7 @@ async def list_all_store_settings(current_user: dict = Depends(get_current_user)
 @router.get("/sales/export")
 async def export_sales(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Export sales data as JSON for the given location/date range."""
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if location_id:
         query["location_id"] = location_id
     if date_from or date_to:
@@ -333,7 +333,7 @@ async def export_financial_data(
     current_user: dict = Depends(get_current_user),
 ):
     """Export donations and expenses as JSON."""
-    query = {**_financial_campus_filter(current_user)}
+    query = {**await _financial_campus_filter(current_user)}
     if location_id:
         query["location_id"] = location_id
     date_filter = {}

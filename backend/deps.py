@@ -96,21 +96,28 @@ def is_system_admin(user: dict) -> bool:
     return (user.get("role") or "").lower() in SYSTEM_ADMIN_ROLES
 
 
-def get_campus_filter(user: dict, field: str = "location_id") -> dict:
+async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
     System admins get an empty dict (no restriction).
-    Supports multi-location users via location_ids array."""
+    Supports multi-location users via location_ids array.
+    Automatically includes sub-locations of any campus the user has access to."""
     if is_system_admin(user):
         return {}
-    locs = user.get("location_ids") or []
+    locs = list(user.get("location_ids") or [])
     loc = user.get("location_id")
     if loc and loc not in locs:
         locs.append(loc)
     if not locs:
         return {}
-    if len(locs) == 1:
-        return {field: locs[0]}
-    return {field: {"$in": locs}}
+    # Expand: include child sub-locations of any campus the user is assigned to
+    sub_locs = await db.locations.find(
+        {"parent_id": {"$in": locs}},
+        {"_id": 0, "id": 1}
+    ).to_list(200)
+    all_locs = list(set(locs + [s["id"] for s in sub_locs]))
+    if len(all_locs) == 1:
+        return {field: all_locs[0]}
+    return {field: {"$in": all_locs}}
 
 
 async def generate_title(role: str, location_ids: list, department: str = None) -> str:

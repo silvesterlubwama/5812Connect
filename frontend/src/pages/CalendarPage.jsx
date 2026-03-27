@@ -40,6 +40,9 @@ export default function CalendarPage() {
   const [showImportCal, setShowImportCal] = useState(false);
   const [icalContent, setIcalContent] = useState('');
   const [importingCal, setImportingCal] = useState(false);
+  const [editEvent, setEditEvent] = useState(null);
+  const [editForm, setEditForm] = useState({ title: '', date: '', time: '', end_time: '', location: '', description: '', type: 'service', capacity: 100, is_public: true });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -132,6 +135,38 @@ export default function CalendarPage() {
     reader.readAsText(file);
   };
 
+  const openEditEvent = (ev) => {
+    if (ev._isSession) return; // Don't edit outreach sessions from calendar
+    setEditEvent(ev);
+    setEditForm({
+      title: ev.title || '', date: ev.date || '', time: ev.time || '', end_time: ev.end_time || '',
+      location: ev.location || '', description: ev.description || '', type: ev.type || 'service',
+      capacity: ev.capacity || 100, is_public: ev.is_public ?? true,
+    });
+  };
+
+  const handleSaveEvent = async (e) => {
+    e.preventDefault();
+    setSavingEdit(true);
+    try {
+      const res = await eventsApi.update(editEvent.id, editForm);
+      setEvents(prev => prev.map(ev => ev.id === editEvent.id ? { ...ev, ...res.data } : ev));
+      setEditEvent(null);
+      toast.success('Event updated!');
+    } catch { toast.error('Failed to update event'); }
+    finally { setSavingEdit(false); }
+  };
+
+  const handleDeleteEvent = async (eventId) => {
+    if (!window.confirm('Delete this event?')) return;
+    try {
+      await eventsApi.delete(eventId);
+      setEvents(prev => prev.filter(ev => ev.id !== eventId));
+      setEditEvent(null);
+      toast.success('Event deleted');
+    } catch { toast.error('Failed to delete event'); }
+  };
+
   const handleCreateRecurring = async (e) => {
     e.preventDefault();
     setCreatingRecurring(true);
@@ -207,7 +242,7 @@ export default function CalendarPage() {
                     </span>
                     <div className="space-y-0.5">
                       {dayEvents.slice(0, 2).map(ev => (
-                        <div key={ev.id} className={`text-[10px] px-1 py-0.5 rounded truncate ${ev.type === 'imported' ? 'text-gray-400 bg-transparent border border-gray-200' : `text-white ${typeColors[ev.type] || 'bg-slate-500'}`}`} title={ev.title}>
+                        <div key={ev.id} onClick={() => openEditEvent(ev)} className={`text-[10px] px-1 py-0.5 rounded truncate cursor-pointer hover:opacity-80 ${ev.type === 'imported' ? 'text-gray-400 bg-transparent border border-gray-200' : `text-white ${typeColors[ev.type] || 'bg-slate-500'}`}`} title={ev.title} data-testid={`cal-event-${ev.id}`}>
                           {ev.time && <span className="opacity-80">{ev.time} </span>}{ev.title}
                         </div>
                       ))}
@@ -231,7 +266,7 @@ export default function CalendarPage() {
         ) : (
           <div className="space-y-2">
             {monthEvents.map(event => (
-              <div key={event.id} className={`flex items-center gap-4 p-3 rounded-lg border transition-colors ${event.type === 'imported' ? 'border-gray-200 bg-transparent hover:bg-gray-50' : 'border-border bg-card hover:bg-accent/30'}`}>
+              <div key={event.id} onClick={() => openEditEvent(event)} className={`flex items-center gap-4 p-3 rounded-lg border transition-colors cursor-pointer ${event.type === 'imported' ? 'border-gray-200 bg-transparent hover:bg-gray-50' : 'border-border bg-card hover:bg-accent/30'}`} data-testid={`event-list-${event.id}`}>
                 <div className={`w-3 h-3 rounded-full shrink-0 ${typeColors[event.type] || 'bg-slate-500'}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm font-medium ${event.type === 'imported' ? 'text-gray-400' : ''}`}>{event.title}</p>
@@ -382,6 +417,62 @@ export default function CalendarPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Event Dialog */}
+      <Dialog open={!!editEvent} onOpenChange={(open) => !open && setEditEvent(null)}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Event</DialogTitle></DialogHeader>
+          <form onSubmit={handleSaveEvent} className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Title *</Label>
+              <Input value={editForm.title} onChange={e => setEditForm({...editForm, title: e.target.value})} required data-testid="edit-event-title" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Date</Label>
+                <Input type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} data-testid="edit-event-date" />
+              </div>
+              <div className="space-y-2"><Label>Time</Label>
+                <Input type="time" value={editForm.time} onChange={e => setEditForm({...editForm, time: e.target.value})} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>End Time</Label>
+                <Input type="time" value={editForm.end_time} onChange={e => setEditForm({...editForm, end_time: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>Type</Label>
+                <Select value={editForm.type} onValueChange={v => setEditForm({...editForm, type: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.keys(typeColors).filter(t => t !== 'imported').map(t => (
+                      <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Location</Label>
+              <Input value={editForm.location} onChange={e => setEditForm({...editForm, location: e.target.value})} />
+            </div>
+            <div className="space-y-2"><Label>Description</Label>
+              <Textarea rows={3} value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Capacity</Label>
+                <Input type="number" min={1} value={editForm.capacity} onChange={e => setEditForm({...editForm, capacity: parseInt(e.target.value) || 1})} />
+              </div>
+              <div className="flex items-center gap-2 pt-6">
+                <input type="checkbox" id="edit-public" checked={editForm.is_public} onChange={e => setEditForm({...editForm, is_public: e.target.checked})} />
+                <Label htmlFor="edit-public" className="cursor-pointer">Public Event</Label>
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="destructive" size="sm" onClick={() => handleDeleteEvent(editEvent?.id)} data-testid="delete-event-btn">Delete</Button>
+              <div className="flex-1" />
+              <Button type="button" variant="outline" onClick={() => setEditEvent(null)}>Cancel</Button>
+              <Button type="submit" disabled={savingEdit} data-testid="save-event-btn">{savingEdit ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

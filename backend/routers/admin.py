@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 @router.get("/users")
 async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if search:
         query["$or"] = [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]
     if role and role != "all": query["role"] = role
@@ -179,6 +179,14 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
         parent = await resolve_parent_campus(lid)
         if parent and parent not in expanded:
             expanded.append(parent)
+    # Also expand downward: campus → sub-locations
+    sub_locs = await db.locations.find(
+        {"parent_id": {"$in": expanded}},
+        {"_id": 0, "id": 1}
+    ).to_list(200)
+    for sl in sub_locs:
+        if sl["id"] not in expanded:
+            expanded.append(sl["id"])
     if expanded:
         update["location_ids"] = expanded
     if loc_id:

@@ -88,16 +88,9 @@ class ResourceBookingCreate(BaseModel):
 
 @router.get("/resources")
 async def list_resources(current_user: dict = Depends(get_current_user)):
-    campus = get_campus_filter(current_user)
+    campus = await get_campus_filter(current_user)
     if campus:
-        # Also include resources from sub-locations of user's campus
-        user_locs = current_user.get("location_ids") or []
-        user_loc = current_user.get("location_id")
-        all_locs = list(set(user_locs + ([user_loc] if user_loc else [])))
-        # Find sub-locations of these campuses
-        sub_locs = await db.locations.find({"parent_id": {"$in": all_locs}}, {"_id": 0, "id": 1}).to_list(100)
-        all_locs.extend([s["id"] for s in sub_locs])
-        query = {"location_id": {"$in": all_locs}} if all_locs else campus
+        query = campus
     else:
         query = {}
     return await db.resources.find(query, {"_id": 0}).sort("name", 1).to_list(200)

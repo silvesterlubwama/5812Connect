@@ -17,11 +17,16 @@ async def _can_access_board(board: dict, user: dict) -> bool:
         return True
     if board.get("is_global"):
         return True
-    if board.get("location_id") and user.get("location_id") == board["location_id"]:
+    board_loc = board.get("location_id")
+    user_locs = user.get("location_ids") or []
+    user_loc = user.get("location_id")
+    if user_loc and user_loc not in user_locs:
+        user_locs = user_locs + [user_loc]
+    if board_loc and board_loc in user_locs:
         return True
     role = (user.get("role") or "").lower()
     if role in {"manager", "coordinator", "staff", "hr"}:
-        return board.get("location_id") == user.get("location_id") or not board.get("location_id")
+        return not board_loc or board_loc in user_locs
     return False
 
 
@@ -48,8 +53,18 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
     if _is_admin(current_user):
         boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     else:
+        # Use expanded campus filter (includes sub-locations)
+        campus = await get_campus_filter(current_user)
+        user_locs_raw = current_user.get("location_ids") or []
         user_loc = current_user.get("location_id")
-        user_locs = current_user.get("location_ids") or ([user_loc] if user_loc else [])
+        if user_loc and user_loc not in user_locs_raw:
+            user_locs_raw.append(user_loc)
+        # Expand sub-locations
+        if user_locs_raw:
+            sub_locs = await db.locations.find({"parent_id": {"$in": user_locs_raw}}, {"_id": 0, "id": 1}).to_list(200)
+            user_locs = list(set(user_locs_raw + [s["id"] for s in sub_locs]))
+        else:
+            user_locs = user_locs_raw
         user_id = current_user["id"]
         role = (current_user.get("role") or "").lower()
         is_manager_plus = role in {"manager"}

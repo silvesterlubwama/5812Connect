@@ -25,7 +25,7 @@ async def list_members(
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
@@ -91,7 +91,7 @@ async def create_member(data: MemberCreate, current_user: dict = Depends(get_cur
 
 @router.get("/members/pending")
 async def list_pending_members(current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user), "status": "pending"}
+    query = {**await get_campus_filter(current_user), "status": "pending"}
     members = await db.members.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return {"members": members, "total": len(members)}
 
@@ -153,7 +153,7 @@ async def delete_member(member_id: str, current_user: dict = Depends(require_coo
 
 @router.get("/families")
 async def list_families(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"family_name": {"$regex": search, "$options": "i"}},
@@ -385,7 +385,7 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
 
 @router.get("/children")
 async def list_children(family_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if family_id:
         query["family_id"] = family_id
     if search:
@@ -453,7 +453,7 @@ async def delete_child(child_id: str, current_user: dict = Depends(get_current_u
 
 @router.get("/guests")
 async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**get_campus_filter(current_user)}
+    query = {**await get_campus_filter(current_user)}
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
