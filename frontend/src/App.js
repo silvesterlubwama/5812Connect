@@ -47,6 +47,13 @@ import PortalDocuments from './pages/PortalDocuments';
 import SharedBoardPage from './pages/SharedBoardPage';
 import PortalSales from './pages/PortalSales';
 import PortalFamily from './pages/PortalFamily';
+// New Feature Pages
+import AnalyticsPage from './pages/AnalyticsPage';
+import ReportBuilderPage from './pages/ReportBuilderPage';
+import VolunteerSchedulingPage from './pages/VolunteerSchedulingPage';
+import EmailTemplatesPage from './pages/EmailTemplatesPage';
+import FinancialApisPage from './pages/FinancialApisPage';
+import GdprSettingsPage from './pages/GdprSettingsPage';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -98,6 +105,13 @@ function AppRoutes() {
         <Route path="campus-reports" element={<CampusReportsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="app-settings" element={<AppSettingsPage />} />
+        {/* New Feature Routes */}
+        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="report-builder" element={<ReportBuilderPage />} />
+        <Route path="volunteer-scheduling" element={<VolunteerSchedulingPage />} />
+        <Route path="email-templates" element={<EmailTemplatesPage />} />
+        <Route path="financial-apis" element={<FinancialApisPage />} />
+        <Route path="gdpr" element={<GdprSettingsPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>

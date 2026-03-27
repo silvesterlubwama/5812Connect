@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint } from 'lucide-react';
+import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint, Smartphone } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { venuesApi, authApi, appSettingsApi, pushApi, webAuthnApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import TwoFactorSetup from '../components/TwoFactorSetup';
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -462,6 +463,10 @@ export default function SettingsPage() {
                 </form>
               </CardContent>
             </Card>
+            
+            {/* 2FA Setup Component */}
+            <TwoFactorSetup />
+            
             <Card className="shadow-soft rounded-xl">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base flex items-center gap-2"><Fingerprint size={16} /> Passkeys (Biometric Login)</CardTitle>

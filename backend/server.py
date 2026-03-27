@@ -580,6 +580,231 @@ async def update_app_settings(settings: dict, current_user: dict = Depends(get_c
     return settings
 
 
+# ========== GOOGLE OAUTH ==========
+
+@api_router.post("/auth/google")
+async def google_auth(data: dict):
+    """Authenticate via Google OAuth token."""
+    google_token = data.get("token") or data.get("credential")
+    if not google_token:
+        raise HTTPException(status_code=400, detail="Google token required")
+    try:
+        from emergentintegrations.llm.google_auth import verify_google_token
+        google_user = verify_google_token(google_token)
+    except ImportError:
+        # Fallback: decode JWT manually
+        import base64
+        parts = google_token.split(".")
+        if len(parts) >= 2:
+            payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+            google_user = {"email": payload.get("email"), "name": payload.get("name"), "picture": payload.get("picture")}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid Google token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Google auth failed: {str(e)}")
+    email = google_user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="No email from Google")
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        user = {
+            "id": str(uuid.uuid4()), "name": google_user.get("name", email.split("@")[0]),
+            "email": email, "phone": "", "password_hash": "",
+            "role": "Member", "status": "active", "avatar": google_user.get("picture", ""),
+            "auth_provider": "google",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one({**user})
+        user.pop("_id", None)
+    else:
+        if google_user.get("picture"):
+            await db.users.update_one({"email": email}, {"$set": {"avatar": google_user["picture"]}})
+    token = create_token({"sub": user["id"], "email": email, "role": user.get("role", "Member")})
+    return {"token": token, "user": {k: v for k, v in user.items() if k != "password_hash"}}
+
+
+# ========== 2FA (TOTP) ==========
+
+@api_router.post("/auth/2fa/setup")
+async def setup_2fa(current_user: dict = Depends(get_current_user)):
+    import pyotp
+    secret = pyotp.random_base32()
+    totp = pyotp.TOTP(secret)
+    uri = totp.provisioning_uri(name=current_user.get("email", ""), issuer_name="58:12 Global Connect")
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_secret": secret, "totp_enabled": False}})
+    try:
+        import qrcode, base64
+        from io import BytesIO
+        img = qrcode.make(uri)
+        buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+        qr_base64 = base64.b64encode(buf.read()).decode()
+        return {"secret": secret, "uri": uri, "qr_code": f"data:image/png;base64,{qr_base64}"}
+    except Exception:
+        return {"secret": secret, "uri": uri}
+
+
+@api_router.post("/auth/2fa/verify")
+async def verify_2fa(data: dict, current_user: dict = Depends(get_current_user)):
+    import pyotp
+    code = data.get("code", "")
+    user = await db.users.find_one({"id": current_user["id"]}, {"_id": 0, "totp_secret": 1})
+    secret = user.get("totp_secret") if user else None
+    if not secret:
+        raise HTTPException(status_code=400, detail="2FA not set up")
+    totp = pyotp.TOTP(secret)
+    if totp.verify(code):
+        await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_enabled": True}})
+        return {"verified": True, "message": "2FA enabled successfully"}
+    raise HTTPException(status_code=400, detail="Invalid code")
+
+
+@api_router.post("/auth/2fa/validate")
+async def validate_2fa_login(data: dict):
+    """Validate 2FA code during login."""
+    import pyotp
+    user_id = data.get("user_id")
+    code = data.get("code", "")
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "totp_secret": 1, "totp_enabled": 1})
+    if not user or not user.get("totp_enabled"):
+        return {"valid": True}
+    totp = pyotp.TOTP(user["totp_secret"])
+    if totp.verify(code):
+        return {"valid": True}
+    raise HTTPException(status_code=400, detail="Invalid 2FA code")
+
+
+@api_router.delete("/auth/2fa")
+async def disable_2fa(current_user: dict = Depends(get_current_user)):
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_enabled": False, "totp_secret": None}})
+    return {"message": "2FA disabled"}
+
+
+# ========== GDPR / DATA RETENTION ==========
+
+@api_router.get("/gdpr/settings")
+async def get_gdpr_settings(current_user: dict = Depends(get_current_user)):
+    doc = await db.gdpr_settings.find_one({}, {"_id": 0})
+    return doc or {"retention_months": 36, "auto_archive": False, "anonymize_inactive": False, "consent_required": True, "data_export_enabled": True}
+
+
+@api_router.put("/gdpr/settings")
+async def update_gdpr_settings(data: dict, current_user: dict = Depends(require_admin)):
+    data.pop("_id", None)
+    data["updated_by"] = current_user["id"]
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.gdpr_settings.update_one({}, {"$set": data}, upsert=True)
+    return data
+
+
+@api_router.post("/gdpr/export-my-data")
+async def export_my_data(current_user: dict = Depends(get_current_user)):
+    uid = current_user["id"]
+    user = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0, "totp_secret": 0})
+    members = await db.members.find({"created_by": uid}, {"_id": 0}).to_list(100)
+    checkins = await db.check_ins.find({"user_id": uid}, {"_id": 0}).to_list(500)
+    donations = await db.donations.find({"created_by": uid}, {"_id": 0}).to_list(500)
+    return {"user": user, "members_created": members, "check_ins": checkins, "donations": donations, "exported_at": datetime.now(timezone.utc).isoformat()}
+
+
+@api_router.post("/gdpr/anonymize/{user_id}")
+async def anonymize_user(user_id: str, current_user: dict = Depends(require_admin)):
+    anon = {"name": "Anonymized User", "email": f"anon_{user_id[:8]}@removed.local", "phone": "", "avatar": "", "status": "anonymized", "anonymized_at": datetime.now(timezone.utc).isoformat()}
+    await db.users.update_one({"id": user_id}, {"$set": anon})
+    return {"message": "User anonymized"}
+
+
+# ========== INVENTORY ALERTS ==========
+
+@api_router.get("/inventory/alerts")
+async def inventory_alerts(current_user: dict = Depends(get_current_user)):
+    products = await db.products.find({"$expr": {"$lte": ["$stock", "$reorder_level"]}}, {"_id": 0}).to_list(100)
+    if not products:
+        products = await db.products.find({"stock": {"$lte": 5}}, {"_id": 0}).to_list(100)
+    return {"alerts": products, "count": len(products)}
+
+
+# ========== WEBCAL SUBSCRIPTION ==========
+
+@api_router.get("/webcal/{user_id}.ics")
+async def webcal_feed(user_id: str):
+    """Public webcal feed URL for a user's events."""
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "location_id": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    query = {"$or": [{"is_public": True}, {"created_by": user_id}]}
+    if user.get("location_id"):
+        query["$or"].append({"location_id": user["location_id"]})
+    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(200)
+    ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//58:12 Global Connect//CRM//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
+    for ev in events:
+        date_str = (ev.get("date") or "").replace("-", "")
+        time_str = (ev.get("time") or "0000").replace(":", "")
+        dtstart = f"{date_str}T{time_str}00" if time_str else date_str
+        ical += f"BEGIN:VEVENT\r\nUID:{ev['id']}@5812global\r\nDTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}\r\nDTSTART:{dtstart}\r\nSUMMARY:{ev.get('title','')}\r\nDESCRIPTION:{ev.get('description','')}\r\nLOCATION:{ev.get('location','')}\r\nEND:VEVENT\r\n"
+    ical += "END:VCALENDAR\r\n"
+    from starlette.responses import Response
+    return Response(content=ical, media_type="text/calendar", headers={"Content-Disposition": "attachment; filename=5812global-events.ics"})
+
+
+# ========== FINANCIAL API MANAGEMENT ==========
+
+@api_router.get("/financial-apis")
+async def list_financial_apis(current_user: dict = Depends(get_current_user)):
+    apis = await db.financial_apis.find({}, {"_id": 0}).to_list(50)
+    return apis
+
+
+@api_router.post("/financial-apis")
+async def add_financial_api(data: dict, current_user: dict = Depends(require_admin)):
+    api_id = f"fapi_{str(uuid.uuid4())[:8]}"
+    doc = {
+        "id": api_id, "name": data.get("name", ""), "type": data.get("type", "payment"),
+        "provider": data.get("provider", ""), "api_url": data.get("api_url", ""),
+        "api_key": data.get("api_key", ""), "webhook_url": data.get("webhook_url", ""),
+        "location_id": data.get("location_id"), "enabled": data.get("enabled", True),
+        "config": data.get("config", {}),
+        "created_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.financial_apis.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.put("/financial-apis/{api_id}")
+async def update_financial_api(api_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    data.pop("_id", None); data.pop("id", None)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.financial_apis.update_one({"id": api_id}, {"$set": data})
+    return {"id": api_id, **data}
+
+
+@api_router.delete("/financial-apis/{api_id}")
+async def delete_financial_api(api_id: str, current_user: dict = Depends(require_admin)):
+    await db.financial_apis.delete_one({"id": api_id})
+    return {"message": "API removed"}
+
+
+# ========== I18N / TRANSLATIONS ==========
+
+TRANSLATIONS = {
+    "en": {"dashboard": "Dashboard", "people": "People", "events": "Events", "calendar": "Calendar", "tasks": "Tasks", "checkins": "Check-Ins", "outreach": "Outreach", "communications": "Communications", "resources": "Resources", "access": "Access Control", "financial": "Financial", "sales": "Sales & Products", "analytics": "Analytics", "reports": "Reports", "settings": "Settings", "logout": "Logout", "search": "Search", "save": "Save", "cancel": "Cancel", "delete": "Delete", "edit": "Edit", "add": "Add", "close": "Close", "welcome": "Welcome", "members": "Members", "volunteers": "Volunteers", "shifts": "Shifts", "templates": "Email Templates"},
+    "fr": {"dashboard": "Tableau de bord", "people": "Personnes", "events": "Evenements", "calendar": "Calendrier", "tasks": "Taches", "checkins": "Enregistrements", "outreach": "Sensibilisation", "communications": "Communications", "resources": "Ressources", "access": "Controle d'acces", "financial": "Finances", "sales": "Ventes et Produits", "analytics": "Analyses", "reports": "Rapports", "settings": "Parametres", "logout": "Deconnexion", "search": "Rechercher", "save": "Enregistrer", "cancel": "Annuler", "delete": "Supprimer", "edit": "Modifier", "add": "Ajouter", "close": "Fermer", "welcome": "Bienvenue", "members": "Membres", "volunteers": "Benevoles", "shifts": "Quarts", "templates": "Modeles d'email"},
+    "sw": {"dashboard": "Dashibodi", "people": "Watu", "events": "Matukio", "calendar": "Kalenda", "tasks": "Kazi", "checkins": "Kuingia", "outreach": "Kufikia", "communications": "Mawasiliano", "resources": "Rasilimali", "access": "Udhibiti wa Ufikiaji", "financial": "Fedha", "sales": "Mauzo na Bidhaa", "analytics": "Uchambuzi", "reports": "Ripoti", "settings": "Mipangilio", "logout": "Ondoka", "search": "Tafuta", "save": "Hifadhi", "cancel": "Ghairi", "delete": "Futa", "edit": "Hariri", "add": "Ongeza", "close": "Funga", "welcome": "Karibu", "members": "Wanachama", "volunteers": "Watu wa kujitolea", "shifts": "Zamu", "templates": "Violezo vya barua pepe"},
+    "lg": {"dashboard": "Dashiboodi", "people": "Abantu", "events": "Ebikozesebwa", "calendar": "Kalenda", "tasks": "Emirimu", "checkins": "Okwingira", "outreach": "Okubuulira", "communications": "Amawulire", "resources": "Ebyetaagisa", "access": "Okufuna Emikisa", "financial": "Ensimbi", "sales": "Okutunda", "analytics": "Okusengejja", "reports": "Lipoota", "settings": "Entegeka", "logout": "Fuluma", "search": "Noonya", "save": "Tereka", "cancel": "Sazaamu", "delete": "Sangula", "edit": "Kyusa", "add": "Gatta", "close": "Ggalawo", "welcome": "Tukusanyukidde", "members": "Bameemba", "volunteers": "Abayizi", "shifts": "Emirembe", "templates": "Ekifaananyi"},
+    "th": {"dashboard": "แดชบอร์ด", "people": "ผู้คน", "events": "กิจกรรม", "calendar": "ปฏิทิน", "tasks": "งาน", "checkins": "เช็คอิน", "outreach": "การเผยแพร่", "communications": "การสื่อสาร", "resources": "ทรัพยากร", "access": "การควบคุมการเข้าถึง", "financial": "การเงิน", "sales": "การขายและสินค้า", "analytics": "การวิเคราะห์", "reports": "รายงาน", "settings": "การตั้งค่า", "logout": "ออกจากระบบ", "search": "ค้นหา", "save": "บันทึก", "cancel": "ยกเลิก", "delete": "ลบ", "edit": "แก้ไข", "add": "เพิ่ม", "close": "ปิด", "welcome": "ยินดีต้อนรับ", "members": "สมาชิก", "volunteers": "อาสาสมัคร", "shifts": "กะ", "templates": "เทมเพลตอีเมล"},
+}
+
+
+@api_router.get("/i18n/{lang}")
+async def get_translations(lang: str = "en"):
+    return TRANSLATIONS.get(lang, TRANSLATIONS["en"])
+
+
+@api_router.get("/i18n")
+async def get_all_translations():
+    return {"languages": [{"code": "en", "name": "English"}, {"code": "fr", "name": "Francais"}, {"code": "sw", "name": "Kiswahili"}, {"code": "lg", "name": "Luganda"}, {"code": "th", "name": "ไทย (Thai)"}], "translations": TRANSLATIONS}
+
+
 # ========== SEED LOCATIONS & ALL ==========
 
 @api_router.post("/seed-locations")
@@ -670,6 +895,9 @@ try:
     from routers.webauthn import router as webauthn_router
     from routers.boards import router as boards_router
     from routers.email import router as email_router
+    from routers.analytics import router as analytics_router
+    from routers.scheduling import router as scheduling_router
+    from routers.templates import router as templates_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -690,6 +918,9 @@ try:
     app.include_router(webauthn_router)
     app.include_router(boards_router)
     app.include_router(email_router)
+    app.include_router(analytics_router)
+    app.include_router(scheduling_router)
+    app.include_router(templates_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

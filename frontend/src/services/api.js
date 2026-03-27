@@ -195,6 +195,10 @@ export const notificationsApi = {
   markRead: (id) => api.put(`/notifications/${id}/read`),
   markAllRead: () => api.put('/notifications/read-all'),
   delete: (id) => api.delete(`/notifications/${id}`),
+  // Push notification features
+  vapidKey: () => api.get('/notifications/vapid-key'),
+  subscribe: (data) => api.post('/notifications/subscribe', data),
+  unsubscribe: () => api.delete('/notifications/subscribe'),
 };
 
 // ---- SEARCH ----
@@ -285,8 +289,8 @@ export const importApi = {
   staff: (rows) => api.post('/import/staff', { rows }),
 };
 
-// ---- ANALYTICS ----
-export const analyticsApi = {
+// ---- ANALYTICS (Basic) ----
+export const basicAnalyticsApi = {
   attendance: () => api.get('/analytics/attendance'),
   sales: () => api.get('/analytics/sales'),
   locations: () => api.get('/analytics/locations'),
@@ -499,3 +503,89 @@ export const reportsApi = {
   campusDetail: (locationId, params) => api.get(`/reports/campus/${locationId}`, { params }),
   pdf: (params) => api.get('/reports/pdf', { params, responseType: 'blob' }),
 };
+
+// ---- ANALYTICS ----
+export const analyticsApi = {
+  overview: (months) => api.get('/analytics/overview', { params: { months } }),
+  trends: (months) => api.get('/analytics/trends', { params: { months } }),
+  locationBreakdown: () => api.get('/analytics/location-breakdown'),
+  memberGrowth: (months) => api.get('/analytics/member-growth', { params: { months } }),
+  outreachImpact: () => api.get('/analytics/outreach-impact'),
+};
+
+// ---- REPORT BUILDER ----
+export const reportBuilderApi = {
+  list: () => api.get('/reports'),
+  get: (id) => api.get(`/reports/${id}`),
+  create: (data) => api.post('/reports', data),
+  update: (id, data) => api.put(`/reports/${id}`, data),
+  delete: (id) => api.delete(`/reports/${id}`),
+  generate: (id) => api.post(`/reports/${id}/generate`),
+  exportXlsx: (id) => `${BACKEND_URL}/api/reports/${id}/export/xlsx`,
+};
+
+// ---- VOLUNTEER SCHEDULING ----
+export const volunteerApi = {
+  shifts: (params) => api.get('/volunteer/shifts', { params }),
+  createShift: (data) => api.post('/volunteer/shifts', data),
+  updateShift: (id, data) => api.put(`/volunteer/shifts/${id}`, data),
+  deleteShift: (id) => api.delete(`/volunteer/shifts/${id}`),
+  assignVolunteer: (shiftId, data) => api.post(`/volunteer/shifts/${shiftId}/assign`, data),
+  unassignVolunteer: (shiftId, memberId) => api.delete(`/volunteer/shifts/${shiftId}/assign/${memberId}`),
+  myShifts: () => api.get('/volunteer/my-shifts'),
+};
+
+// ---- EMAIL TEMPLATES ----
+export const emailTemplatesApi = {
+  list: () => api.get('/email-templates'),
+  create: (data) => api.post('/email-templates', data),
+  update: (id, data) => api.put(`/email-templates/${id}`, data),
+  delete: (id) => api.delete(`/email-templates/${id}`),
+  send: (id, data) => api.post(`/email-templates/${id}/send`, data),
+};
+
+// ---- GOOGLE AUTH ----
+export const googleAuthApi = {
+  login: (token) => api.post('/auth/google', { token }),
+};
+
+// ---- 2FA ----
+export const twoFactorApi = {
+  setup: () => api.post('/auth/2fa/setup'),
+  verify: (code) => api.post('/auth/2fa/verify', { code }),
+  validate: (userId, code) => api.post('/auth/2fa/validate', { user_id: userId, code }),
+  disable: () => api.delete('/auth/2fa'),
+};
+
+// ---- GDPR ----
+export const gdprApi = {
+  settings: () => api.get('/gdpr/settings'),
+  updateSettings: (data) => api.put('/gdpr/settings', data),
+  exportMyData: () => api.post('/gdpr/export-my-data'),
+  anonymize: (userId) => api.post(`/gdpr/anonymize/${userId}`),
+};
+
+// ---- INVENTORY ALERTS ----
+export const inventoryApi = {
+  alerts: () => api.get('/inventory/alerts'),
+};
+
+// ---- FINANCIAL APIS ----
+export const financialApisApi = {
+  list: () => api.get('/financial-apis'),
+  create: (data) => api.post('/financial-apis', data),
+  update: (id, data) => api.put(`/financial-apis/${id}`, data),
+  delete: (id) => api.delete(`/financial-apis/${id}`),
+};
+
+// ---- I18N ----
+export const i18nApi = {
+  getTranslations: (lang) => api.get(`/i18n/${lang}`),
+  getAll: () => api.get('/i18n'),
+};
+
+// ---- WEBCAL ----
+export const webcalApi = {
+  feedUrl: (userId) => `${BACKEND_URL}/api/webcal/${userId}.ics`,
+};
+

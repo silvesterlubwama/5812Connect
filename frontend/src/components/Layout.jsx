@@ -6,7 +6,8 @@ import {
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown,
   DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
-  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders
+  Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
+  PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -60,8 +61,17 @@ const NAV_SECTIONS = [
       { to: '/attendance', icon: UserCheck, labelKey: 'nav.attendance' },
       { to: '/sales-analytics', icon: TrendingUp, labelKey: 'nav.salesAnalytics', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
       { to: '/location-analytics', icon: BarChart3, labelKey: 'nav.locationStats', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
+      { to: '/analytics', icon: PieChart, label: 'Advanced Analytics', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
       { to: '/reports', icon: FileText, labelKey: 'nav.reports', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
+      { to: '/report-builder', icon: FileSpreadsheet, label: 'Report Builder', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
       { to: '/campus-reports', icon: Building2, labelKey: 'nav.campusReports', roles: ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'] },
+    ]
+  },
+  {
+    label: 'Operations',
+    items: [
+      { to: '/volunteer-scheduling', icon: Clock, label: 'Volunteer Scheduling', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager', 'Coordinator'] },
+      { to: '/email-templates', icon: Mail, label: 'Email Templates', roles: ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'] },
     ]
   },
   {
@@ -69,8 +79,10 @@ const NAV_SECTIONS = [
     items: [
       { to: '/admin', icon: Shield, labelKey: 'nav.admin', adminOnly: true },
       { to: '/locations', icon: MapPin, labelKey: 'nav.campuses', adminOnly: true },
+      { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', adminOnly: true },
       { to: '/app-settings', icon: Sliders, labelKey: 'nav.appSettings', adminOnly: true },
       { to: '/audit', icon: Shield, labelKey: 'nav.audit', adminOnly: true },
+      { to: '/gdpr', icon: Lock, label: 'Privacy & GDPR', adminOnly: true },
       { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
     ]
   },
@@ -250,7 +262,7 @@ export default function Layout() {
                   if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
                   return true;
                 })
-                .map(({ to, icon: Icon, labelKey }) => (
+                .map(({ to, icon: Icon, labelKey, label }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -261,7 +273,7 @@ export default function Layout() {
                     data-testid={`nav-${to.replace('/', '')}`}
                   >
                     <Icon size={15} className="shrink-0" />
-                    {t(labelKey)}
+                    {labelKey ? t(labelKey) : label}
                   </NavLink>
               ))}
             </div>
