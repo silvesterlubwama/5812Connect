@@ -1,0 +1,19 @@
+# Test Credentials
+
+## Admin Account
+- **Email**: admin@5812uganda.org
+- **Password**: Admin@5812
+- **Role**: admin
+
+## Login Notes
+- Login uses `identifier` field (not `email` directly)
+- Supports: email, phone, or national ID as identifier
+
+## 2FA Testing
+- Admin has TOTP secret stored (for 2FA testing)
+- Use any TOTP authenticator app (Google Authenticator, Authy)
+- 2FA is currently NOT enabled by default - must be enabled via Settings > Security
+
+## Google OAuth
+- Available via "Sign in with Google" button on login page
+- Uses Emergent-managed Google OAuth integration
