@@ -172,18 +172,19 @@ export default function UnifiedPeoplePage() {
   const [savingFamily, setSavingFamily] = useState(false);
 
   const [allLocations, setAllLocations] = useState([]);
+  const [filterLocation, setFilterLocation] = useState('all');
   const [activeTab, setActiveTab] = useState('members');
   const [saving, setSaving] = useState(false);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, limit: 100 });
+      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, limit: 100 });
       setMembers(res.data.members || res.data || []);
       setTotal(res.data.total || (res.data.members || res.data || []).length);
     } catch { toast.error('Failed to load members'); }
     finally { setLoading(false); }
-  }, [search, filterGroup, filterStatus]);
+  }, [search, filterGroup, filterStatus, filterLocation]);
 
   const fetchPeople = useCallback(async () => {
     try {
@@ -452,6 +453,13 @@ export default function UnifiedPeoplePage() {
             <Select value={filterStatus} onValueChange={setFilterStatus}>
               <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent>
+            </Select>
+            <Select value={filterLocation} onValueChange={setFilterLocation}>
+              <SelectTrigger className="w-40 h-9" data-testid="people-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Locations</SelectItem>
+                {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              </SelectContent>
             </Select>
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={fetchMembers}><RefreshCw size={13} /> Refresh</Button>
           </div>

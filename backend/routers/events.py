@@ -82,7 +82,18 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
     if visibility and visibility != "all":
         query["visibility"] = visibility
     events = await db.events.find(query, {"_id": 0}).sort("date", -1).to_list(200)
-    return events
+    # Filter imported events: only show to importer or invited users
+    uid = current_user["id"]
+    filtered = []
+    for ev in events:
+        if ev.get("type") == "imported" and ev.get("imported_by"):
+            if ev["imported_by"] == uid or uid in (ev.get("visible_to") or []):
+                filtered.append(ev)
+            elif is_system_admin(current_user):
+                filtered.append(ev)
+        else:
+            filtered.append(ev)
+    return filtered
 
 
 @router.post("/events")
@@ -154,6 +165,21 @@ async def duplicate_event(event_id: str, current_user: dict = Depends(get_curren
     await db.events.insert_one(new_event)
     new_event.pop("_id", None)
     return new_event
+
+
+@router.put("/events/{event_id}/share")
+async def share_imported_event(event_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Share an imported calendar event with other users."""
+    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if event.get("imported_by") != current_user["id"] and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the importer can share this event")
+    user_ids = data.get("user_ids", [])
+    await db.events.update_one({"id": event_id}, {"$addToSet": {"visible_to": {"$each": user_ids}}})
+    return {"message": f"Event shared with {len(user_ids)} users"}
+
+
 
 
 # ========== CHECK-INS ==========
@@ -545,6 +571,8 @@ async def import_calendar_ical(data: dict, current_user: dict = Depends(get_curr
                     "type": "imported",
                     "status": "upcoming",
                     "is_public": False,
+                    "imported_by": current_user["id"],
+                    "visible_to": [],
                     "created_by": current_user["id"],
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }

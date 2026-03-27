@@ -354,6 +354,9 @@ export default function AccessPage() {
                           <p className="flex items-center gap-1"><Clock size={10} /> Valid: {gp.valid_from} to {gp.valid_until}</p>
                           {gp.valid_from_time && <p className="flex items-center gap-1"><Timer size={10} /> Time: {gp.valid_from_time} - {gp.valid_until_time || '22:00'}</p>}
                           <p>Pass ID: <span className="font-mono text-primary">{gp.id}</span></p>
+                          {gp.has_existing_badge && (
+                            <p className="text-green-600 flex items-center gap-1"><CheckCircle size={10} /> Has existing badge{gp.existing_badge_name ? ` (${gp.existing_badge_name})` : ''}</p>
+                          )}
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => setShowQrPass(gp)} data-testid={`view-qr-${gp.id}`}>
@@ -548,6 +551,7 @@ export default function AccessPage() {
           {showQrPass && (
             <div className="text-center space-y-4">
               <div className="bg-white p-4 rounded-xl inline-block">
+                <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-6 mx-auto mb-3" data-testid="pass-logo" />
                 <img src={generateQrDataUrl(showQrPass.id)} alt="Guest Pass QR Code" className="w-48 h-48 mx-auto" data-testid="guest-pass-qr-image" />
               </div>
               <div className="space-y-1">

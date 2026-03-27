@@ -230,11 +230,17 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
     req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
     if req:
         pass_id = f"gp_{str(uuid.uuid4())[:8]}"
-        # Check if the guest already has a badge
+        # Check if the guest already has a member/staff badge
         existing_badge = await db.members.find_one(
             {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}]},
-            {"_id": 0, "id": 1}
+            {"_id": 0, "id": 1, "name": 1, "badge_id": 1}
         )
+        if not existing_badge:
+            # Also check staff/users table
+            existing_badge = await db.users.find_one(
+                {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}, {"email": req.get("guest_phone")}]},
+                {"_id": 0, "id": 1, "name": 1}
+            )
         visit_time = req.get("visit_time", "")
         guest_pass = {
             "id": pass_id,
@@ -250,6 +256,7 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
             "qr_value": pass_id,
             "has_existing_badge": bool(existing_badge),
             "existing_member_id": existing_badge.get("id") if existing_badge else None,
+            "existing_badge_name": existing_badge.get("name") if existing_badge else None,
             "status": "active",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }

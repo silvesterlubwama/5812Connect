@@ -22,6 +22,7 @@ const typeColors = {
   workshop: 'bg-violet-500',
   training: 'bg-cyan-500',
   social: 'bg-orange-500',
+  imported: 'bg-gray-300',
 };
 
 export default function CalendarPage() {
@@ -206,7 +207,7 @@ export default function CalendarPage() {
                     </span>
                     <div className="space-y-0.5">
                       {dayEvents.slice(0, 2).map(ev => (
-                        <div key={ev.id} className={`text-[10px] text-white px-1 py-0.5 rounded truncate ${typeColors[ev.type] || 'bg-slate-500'}`} title={ev.title}>
+                        <div key={ev.id} className={`text-[10px] px-1 py-0.5 rounded truncate ${ev.type === 'imported' ? 'text-gray-400 bg-transparent border border-gray-200' : `text-white ${typeColors[ev.type] || 'bg-slate-500'}`}`} title={ev.title}>
                           {ev.time && <span className="opacity-80">{ev.time} </span>}{ev.title}
                         </div>
                       ))}
@@ -230,19 +231,20 @@ export default function CalendarPage() {
         ) : (
           <div className="space-y-2">
             {monthEvents.map(event => (
-              <div key={event.id} className="flex items-center gap-4 p-3 rounded-lg border border-border bg-card hover:bg-accent/30 transition-colors">
+              <div key={event.id} className={`flex items-center gap-4 p-3 rounded-lg border transition-colors ${event.type === 'imported' ? 'border-gray-200 bg-transparent hover:bg-gray-50' : 'border-border bg-card hover:bg-accent/30'}`}>
                 <div className={`w-3 h-3 rounded-full shrink-0 ${typeColors[event.type] || 'bg-slate-500'}`} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{event.title}</p>
+                  <p className={`text-sm font-medium ${event.type === 'imported' ? 'text-gray-400' : ''}`}>{event.title}</p>
                   <p className="text-xs text-muted-foreground">
                     {new Date(event.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                     {event.time ? ` · ${event.time}` : ''}
                     {event.location ? ` · ${event.location}` : ''}
+                    {event.type === 'imported' && <span className="ml-1 text-gray-300">· Imported</span>}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground">{event.registered ?? 0}/{event.capacity}</span>
-                  <Badge variant={event.status === 'upcoming' ? 'outline' : 'secondary'} className="text-xs capitalize">{event.status}</Badge>
+                  {event.type !== 'imported' && <span className="text-xs text-muted-foreground">{event.registered ?? 0}/{event.capacity}</span>}
+                  <Badge variant={event.status === 'upcoming' ? 'outline' : 'secondary'} className={`text-xs capitalize ${event.type === 'imported' ? 'border-gray-200 text-gray-400' : ''}`}>{event.type === 'imported' ? 'imported' : event.status}</Badge>
                 </div>
               </div>
             ))}

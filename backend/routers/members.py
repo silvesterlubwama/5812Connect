@@ -20,6 +20,7 @@ async def list_members(
     group: Optional[str] = None,
     status: Optional[str] = None,
     role: Optional[str] = None,
+    location_id: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
@@ -38,6 +39,8 @@ async def list_members(
         query["status"] = status
     if role and role != "all":
         query["role"] = role
+    if location_id and location_id != "all":
+        query["location_id"] = location_id
     total = await db.members.count_documents(query)
     members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
     # Enrich with location names

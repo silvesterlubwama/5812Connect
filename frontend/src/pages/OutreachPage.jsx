@@ -31,7 +31,7 @@ export default function OutreachPage() {
   const emptyProg = { name: '', description: '', category: 'community', status: 'active', location: '', start_date: new Date().toISOString().split('T')[0], target: '', is_recurring: false, recurrence_pattern: 'saturday', recurrence_day: 1, recurrence_time: '09:00', recurrence_end_time: '12:00' };
   const [progForm, setProgForm] = useState({ ...emptyProg });
   const [sessionForm, setSessionForm] = useState({ program_id: '', date: new Date().toISOString().split('T')[0], time: '', location: '', attendees: '', notes: '', led_by: '' });
-  const [recurForm, setRecurForm] = useState({ months_ahead: 3, nth_day: 2, day_of_week: 'saturday', time: '09:00', end_time: '12:00' });
+  const [recurForm, setRecurForm] = useState({ pattern: 'weekly', occurrences: 12, interval: 1, day_of_week: 5, nth_week: 2, day_of_month: 1, time: '09:00', end_time: '12:00', start_date: new Date().toISOString().split('T')[0], end_date: '' });
 
   const fetchAll = async () => {
     setLoading(true);
@@ -96,7 +96,22 @@ export default function OutreachPage() {
     if (!showRecurring) return;
     setSaving(true);
     try {
-      const res = await outreachApi.generateEvents(showRecurring.id, recurForm);
+      const res = await outreachApi.generateRecurring({
+        title: showRecurring.name,
+        type: 'outreach',
+        location: showRecurring.location || '',
+        location_id: showRecurring.location_id || '',
+        pattern: recurForm.pattern,
+        occurrences: parseInt(recurForm.occurrences) || 12,
+        interval: parseInt(recurForm.interval) || 1,
+        start_date: recurForm.start_date,
+        end_date: recurForm.end_date || undefined,
+        time: recurForm.time,
+        end_time: recurForm.end_time,
+        day_of_week: parseInt(recurForm.day_of_week) || 0,
+        nth_week: parseInt(recurForm.nth_week) || 1,
+        day_of_month: parseInt(recurForm.day_of_month) || 1,
+      });
       toast.success(`Generated ${res.data.created} recurring events`);
       setShowRecurring(null);
     } catch { toast.error('Failed to generate events'); }
@@ -250,20 +265,67 @@ export default function OutreachPage() {
 
       {/* Generate Recurring Events */}
       <Dialog open={!!showRecurring} onOpenChange={() => setShowRecurring(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Generate Recurring Events</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">{showRecurring?.name}</p>
           <div className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Months Ahead</Label><Input type="number" value={recurForm.months_ahead} onChange={e => setRecurForm({...recurForm, months_ahead: parseInt(e.target.value) || 3})} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Day</Label><Select value={recurForm.day_of_week} onValueChange={v => setRecurForm({...recurForm, day_of_week: v})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(d => <SelectItem key={d} value={d}>{d.charAt(0).toUpperCase()+d.slice(1)}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Nth</Label><Select value={String(recurForm.nth_day)} onValueChange={v => setRecurForm({...recurForm, nth_day: parseInt(v)})}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent></Select></div>
+              <div className="space-y-2"><Label>Recurrence Pattern</Label>
+                <Select value={recurForm.pattern} onValueChange={v => setRecurForm({...recurForm, pattern: v})}>
+                  <SelectTrigger data-testid="outreach-pattern-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly (same date)</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                    <SelectItem value="nth_week">Nth Weekday of Month</SelectItem>
+                    <SelectItem value="nth_month">Nth Day of Month</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Occurrences</Label><Input type="number" min={1} max={52} value={recurForm.occurrences} onChange={e => setRecurForm({...recurForm, occurrences: parseInt(e.target.value) || 1})} data-testid="outreach-occurrences" /></div>
+            </div>
+            {['daily', 'weekly', 'monthly', 'yearly'].includes(recurForm.pattern) && (
+              <div className="space-y-2"><Label>Every N {recurForm.pattern === 'weekly' ? 'weeks' : recurForm.pattern === 'daily' ? 'days' : recurForm.pattern === 'yearly' ? 'years' : 'months'}</Label>
+                <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
+              </div>
+            )}
+            {['weekly', 'nth_week'].includes(recurForm.pattern) && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2"><Label>Day</Label>
+                  <Select value={String(recurForm.day_of_week)} onValueChange={v => setRecurForm({...recurForm, day_of_week: parseInt(v)})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((d,i) => <SelectItem key={d} value={String(i)}>{d}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                {recurForm.pattern === 'nth_week' && (
+                  <div className="space-y-2"><Label>Which</Label>
+                    <Select value={String(recurForm.nth_week)} onValueChange={v => setRecurForm({...recurForm, nth_week: parseInt(v)})}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="1">1st</SelectItem><SelectItem value="2">2nd</SelectItem><SelectItem value="3">3rd</SelectItem><SelectItem value="4">4th</SelectItem><SelectItem value="-1">Last</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
+            {recurForm.pattern === 'nth_month' && (
+              <div className="space-y-2"><Label>Day of Month</Label>
+                <Input type="number" min={1} max={31} value={recurForm.day_of_month} onChange={e => setRecurForm({...recurForm, day_of_month: parseInt(e.target.value) || 1})} />
+              </div>
+            )}
+            <div className="space-y-2"><Label>Start Date</Label>
+              <Input type="date" value={recurForm.start_date} onChange={e => setRecurForm({...recurForm, start_date: e.target.value})} data-testid="outreach-start-date" />
+            </div>
+            <div className="space-y-2"><Label>End Date (optional)</Label>
+              <Input type="date" value={recurForm.end_date} onChange={e => setRecurForm({...recurForm, end_date: e.target.value})} />
+              <p className="text-xs text-muted-foreground">Events stop at this date</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Time</Label><Input type="time" value={recurForm.time} onChange={e => setRecurForm({...recurForm, time: e.target.value})} /></div>
               <div className="space-y-2"><Label>End Time</Label><Input type="time" value={recurForm.end_time} onChange={e => setRecurForm({...recurForm, end_time: e.target.value})} /></div>
             </div>
-            <div className="flex gap-3"><Button variant="outline" className="flex-1" onClick={() => setShowRecurring(null)}>Cancel</Button><Button className="flex-1" onClick={generateRecurring} disabled={saving}>{saving ? 'Generating...' : 'Generate'}</Button></div>
+            <div className="flex gap-3"><Button variant="outline" className="flex-1" onClick={() => setShowRecurring(null)}>Cancel</Button><Button className="flex-1" onClick={generateRecurring} disabled={saving} data-testid="generate-recurring-btn">{saving ? 'Generating...' : 'Generate Events'}</Button></div>
           </div>
         </DialogContent>
       </Dialog>
