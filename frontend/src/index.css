@@ -98,3 +98,8 @@ body {
 .sidebar-link:hover:not(.sidebar-active) {
   background-color: hsl(var(--accent));
 }
+
+/* Safe area for mobile notch/home indicator */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}

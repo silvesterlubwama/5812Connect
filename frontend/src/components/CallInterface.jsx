@@ -3,7 +3,7 @@ import {
   Phone, PhoneOff, Mic, MicOff, Video, VideoOff, 
   Monitor, MonitorOff, UserPlus, PhoneForwarded, 
   Circle, Pause, Play, MoreVertical, Maximize2, Minimize2,
-  X, Volume2, VolumeX
+  X
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { useCall } from '../context/CallContext';
@@ -16,26 +16,10 @@ import { Badge } from './ui/badge';
 
 export default function CallInterface() {
   const {
-    activeCall,
-    callStatus,
-    isMuted,
-    isVideoEnabled,
-    isScreenSharing,
-    isRecording,
-    formattedDuration,
-    remoteStreams,
-    participants,
-    localStream,
-    endCall,
-    toggleMute,
-    toggleVideo,
-    toggleScreenShare,
-    toggleHold,
-    toggleRecording,
-    transferCall,
-    addParticipant,
-    callableContacts,
-    isInCall
+    activeCall, callStatus, isMuted, isVideoEnabled, isScreenSharing,
+    isRecording, formattedDuration, remoteStreams, participants, localStream,
+    endCall, toggleMute, toggleVideo, toggleScreenShare, toggleHold,
+    toggleRecording, transferCall, addParticipant, callableContacts, isInCall, sipRegistered
   } = useCall();
   
   const localVideoRef = useRef(null);
@@ -45,14 +29,12 @@ export default function CallInterface() {
   const [showAddParticipant, setShowAddParticipant] = useState(false);
   const [showPip, setShowPip] = useState(true);
   
-  // Attach local stream to video element
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
     }
   }, [localStream, isVideoEnabled]);
   
-  // Attach remote stream to video/audio element
   useEffect(() => {
     if (remoteVideoRef.current) {
       const streams = Object.values(remoteStreams);
@@ -63,10 +45,9 @@ export default function CallInterface() {
     }
   }, [remoteStreams]);
   
-  // Toggle fullscreen
   const handleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
+      document.documentElement.requestFullscreen().catch(() => {});
       setIsFullscreen(true);
     } else {
       document.exitFullscreen();
@@ -76,205 +57,124 @@ export default function CallInterface() {
   
   if (!isInCall) return null;
   
-  const remoteParticipant = activeCall?.caller_name || activeCall?.target_user_id || 'Unknown';
+  const remoteParticipant = activeCall?.caller_name || activeCall?.target_name || activeCall?.target_user_id || 'Unknown';
   const isOnHold = callStatus === 'on_hold';
   const isConnecting = callStatus === 'connecting' || callStatus === 'ringing';
+  const isSipCall = activeCall?.call_type === 'sip';
   
   return (
-    <div 
-      className="fixed inset-0 z-50 bg-slate-900 flex flex-col"
-      data-testid="call-interface"
-    >
+    <div className="fixed inset-0 z-50 bg-[#0f1729] flex flex-col" data-testid="call-interface">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700">
-        <div className="flex items-center gap-4">
-          <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center">
-            <Phone size={20} className="text-primary" />
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-[#0f1729]/80 backdrop-blur-sm border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center">
+            <Phone size={20} className="text-green-400" />
           </div>
           <div>
-            <h2 className="text-white font-semibold">{remoteParticipant}</h2>
+            <h2 className="text-white font-semibold text-sm sm:text-base">{remoteParticipant}</h2>
             <div className="flex items-center gap-2">
-              <Badge variant={callStatus === 'connected' ? 'default' : 'secondary'} className="text-xs">
+              <Badge className={`text-[10px] ${callStatus === 'connected' ? 'bg-green-600' : 'bg-amber-600'}`}>
                 {isConnecting ? 'Connecting...' : isOnHold ? 'On Hold' : callStatus}
               </Badge>
-              {callStatus === 'connected' && (
-                <span className="text-sm text-slate-400">{formattedDuration}</span>
-              )}
-              {isRecording && (
-                <Badge variant="destructive" className="text-xs animate-pulse">
-                  <Circle size={8} className="mr-1 fill-current" /> REC
-                </Badge>
-              )}
+              {isSipCall && <Badge className="text-[10px] bg-blue-600">SIP</Badge>}
+              {callStatus === 'connected' && <span className="text-xs text-white/60">{formattedDuration}</span>}
+              {isRecording && <Badge className="text-[10px] bg-red-600 animate-pulse"><Circle size={6} className="mr-1 fill-current" /> REC</Badge>}
             </div>
           </div>
         </div>
-        
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-slate-400 hover:text-white"
-            onClick={handleFullscreen}
-          >
-            {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-          </Button>
-        </div>
+        <Button variant="ghost" size="sm" className="text-white/60 hover:text-white hover:bg-white/10" onClick={handleFullscreen}>
+          {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+        </Button>
       </div>
       
-      {/* Video Area */}
-      <div className="flex-1 relative bg-slate-800 flex items-center justify-center overflow-hidden">
-        {/* Remote Video/Audio - always mounted for audio playback */}
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          className={`w-full h-full object-cover ${Object.keys(remoteStreams).length === 0 ? 'hidden' : ''}`}
-        />
-        {/* Avatar placeholder when no video */}
+      {/* Video/Avatar Area */}
+      <div className="flex-1 relative bg-[#131b2e] flex items-center justify-center overflow-hidden">
+        <video ref={remoteVideoRef} autoPlay playsInline className={`w-full h-full object-cover ${Object.keys(remoteStreams).length === 0 ? 'hidden' : ''}`} />
         {Object.keys(remoteStreams).length === 0 && (
           <div className="flex flex-col items-center justify-center">
-            <div className="h-32 w-32 rounded-full bg-slate-700 flex items-center justify-center mb-4">
-              <span className="text-5xl text-white font-bold">
-                {remoteParticipant.charAt(0).toUpperCase()}
-              </span>
+            <div className="h-24 w-24 sm:h-32 sm:w-32 rounded-full bg-white/10 flex items-center justify-center mb-4">
+              <span className="text-4xl sm:text-5xl text-white font-bold">{remoteParticipant.charAt(0).toUpperCase()}</span>
             </div>
-            <p className="text-white text-xl font-medium">{remoteParticipant}</p>
-            {isConnecting && (
-              <p className="text-slate-400 mt-2 animate-pulse">
-                {callStatus === 'ringing' ? 'Ringing...' : 'Connecting...'}
-              </p>
-            )}
-            {isOnHold && (
-              <p className="text-amber-400 mt-2">Call on hold</p>
-            )}
+            <p className="text-white text-lg sm:text-xl font-medium">{remoteParticipant}</p>
+            {isConnecting && <p className="text-white/50 mt-2 animate-pulse">{callStatus === 'ringing' ? 'Ringing...' : 'Connecting...'}</p>}
+            {isOnHold && <p className="text-amber-400 mt-2">Call on hold</p>}
           </div>
         )}
         
-        {/* Local Video (PiP) */}
+        {/* Local Video PiP */}
         {isVideoEnabled && showPip && (
-          <div className="absolute bottom-4 right-4 w-48 h-36 rounded-lg overflow-hidden border-2 border-slate-600 shadow-lg">
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover mirror"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute top-1 right-1 h-6 w-6 p-0 bg-black/50 hover:bg-black/70 text-white"
-              onClick={() => setShowPip(false)}
-            >
-              <X size={12} />
+          <div className="absolute bottom-4 right-4 w-32 h-24 sm:w-48 sm:h-36 rounded-lg overflow-hidden border-2 border-white/20 shadow-lg">
+            <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+            <Button variant="ghost" size="sm" className="absolute top-1 right-1 h-5 w-5 p-0 bg-black/50 hover:bg-black/70 text-white" onClick={() => setShowPip(false)}>
+              <X size={10} />
             </Button>
           </div>
         )}
         
-        {/* Screen Share Indicator */}
         {isScreenSharing && (
-          <div className="absolute top-4 left-4 bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-2">
-            <Monitor size={14} /> Sharing screen
-          </div>
+          <div className="absolute top-3 left-3 bg-green-600 text-white px-2 py-1 rounded-lg text-xs flex items-center gap-1.5"><Monitor size={12} /> Sharing</div>
         )}
-        
-        {/* Participants count for conference */}
         {participants.length > 2 && (
-          <div className="absolute top-4 right-4 bg-slate-800/90 text-white px-3 py-1.5 rounded-lg text-sm">
-            {participants.length} participants
-          </div>
+          <div className="absolute top-3 right-3 bg-white/10 text-white px-2 py-1 rounded-lg text-xs">{participants.length} participants</div>
         )}
       </div>
       
-      {/* Controls */}
-      <div className="px-6 py-6 bg-slate-900 border-t border-slate-700">
-        <div className="flex items-center justify-center gap-3 max-w-2xl mx-auto">
-          {/* Mute */}
-          <Button
-            variant={isMuted ? 'destructive' : 'secondary'}
-            size="lg"
-            className="h-14 w-14 rounded-full"
-            onClick={toggleMute}
-            data-testid="call-mute-btn"
-          >
-            {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-          </Button>
+      {/* Controls - responsive, always visible */}
+      <div className="px-4 py-4 sm:py-6 bg-[#0a0f1c] border-t border-white/10 shrink-0 safe-bottom">
+        {/* Primary controls row - always visible */}
+        <div className="flex items-center justify-center gap-2 sm:gap-3 max-w-lg mx-auto">
+          {/* Mute - ALWAYS visible */}
+          <button onClick={toggleMute} data-testid="call-mute-btn"
+            className={`h-12 w-12 sm:h-14 sm:w-14 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-600 text-white' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+            {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+          </button>
           
           {/* Video */}
-          <Button
-            variant={isVideoEnabled ? 'secondary' : 'outline'}
-            size="lg"
-            className="h-14 w-14 rounded-full"
-            onClick={toggleVideo}
-            data-testid="call-video-btn"
-          >
-            {isVideoEnabled ? <Video size={24} /> : <VideoOff size={24} />}
-          </Button>
-          
-          {/* Screen Share */}
-          <Button
-            variant={isScreenSharing ? 'default' : 'outline'}
-            size="lg"
-            className="h-14 w-14 rounded-full"
-            onClick={toggleScreenShare}
-            data-testid="call-screenshare-btn"
-          >
-            {isScreenSharing ? <MonitorOff size={24} /> : <Monitor size={24} />}
-          </Button>
+          <button onClick={toggleVideo} data-testid="call-video-btn"
+            className={`h-12 w-12 sm:h-14 sm:w-14 rounded-full flex items-center justify-center transition-colors ${isVideoEnabled ? 'bg-blue-600 text-white' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+            {isVideoEnabled ? <Video size={20} /> : <VideoOff size={20} />}
+          </button>
           
           {/* Hold */}
-          <Button
-            variant={isOnHold ? 'default' : 'outline'}
-            size="lg"
-            className="h-14 w-14 rounded-full"
-            onClick={toggleHold}
-            data-testid="call-hold-btn"
-          >
-            {isOnHold ? <Play size={24} /> : <Pause size={24} />}
-          </Button>
+          <button onClick={toggleHold} data-testid="call-hold-btn"
+            className={`h-12 w-12 sm:h-14 sm:w-14 rounded-full flex items-center justify-center transition-colors ${isOnHold ? 'bg-amber-600 text-white' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+            {isOnHold ? <Play size={20} /> : <Pause size={20} />}
+          </button>
           
-          {/* Record */}
-          <Button
-            variant={isRecording ? 'destructive' : 'outline'}
-            size="lg"
-            className="h-14 w-14 rounded-full"
-            onClick={toggleRecording}
-            data-testid="call-record-btn"
-          >
-            <Circle size={24} className={isRecording ? 'fill-current' : ''} />
-          </Button>
+          {/* Screen Share - hidden on mobile */}
+          <button onClick={toggleScreenShare} data-testid="call-screenshare-btn"
+            className={`hidden sm:flex h-12 w-12 sm:h-14 sm:w-14 rounded-full items-center justify-center transition-colors ${isScreenSharing ? 'bg-green-600 text-white' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+            {isScreenSharing ? <MonitorOff size={20} /> : <Monitor size={20} />}
+          </button>
           
-          {/* More Options */}
+          {/* Record - hidden on mobile */}
+          <button onClick={toggleRecording} data-testid="call-record-btn"
+            className={`hidden sm:flex h-12 w-12 sm:h-14 sm:w-14 rounded-full items-center justify-center transition-colors ${isRecording ? 'bg-red-600 text-white' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+            <Circle size={20} className={isRecording ? 'fill-current' : ''} />
+          </button>
+          
+          {/* More (Transfer/Add) */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="lg" className="h-14 w-14 rounded-full">
-                <MoreVertical size={24} />
-              </Button>
+              <button className="h-12 w-12 sm:h-14 sm:w-14 rounded-full flex items-center justify-center bg-white/15 text-white hover:bg-white/25 transition-colors">
+                <MoreVertical size={20} />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="center" className="w-48">
-              <DropdownMenuItem onClick={() => setShowAddParticipant(true)}>
-                <UserPlus size={16} className="mr-2" /> Add Participant
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowTransfer(true)}>
-                <PhoneForwarded size={16} className="mr-2" /> Transfer Call
-              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowAddParticipant(true)}><UserPlus size={16} className="mr-2" /> Add Participant</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowTransfer(true)}><PhoneForwarded size={16} className="mr-2" /> Transfer Call</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setShowPip(!showPip)}>
-                {showPip ? 'Hide' : 'Show'} Self View
-              </DropdownMenuItem>
+              <DropdownMenuItem className="sm:hidden" onClick={toggleScreenShare}><Monitor size={16} className="mr-2" /> {isScreenSharing ? 'Stop Share' : 'Screen Share'}</DropdownMenuItem>
+              <DropdownMenuItem className="sm:hidden" onClick={toggleRecording}><Circle size={16} className="mr-2" /> {isRecording ? 'Stop Record' : 'Record'}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowPip(!showPip)}>{showPip ? 'Hide' : 'Show'} Self View</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           
-          {/* End Call */}
-          <Button
-            variant="destructive"
-            size="lg"
-            className="h-14 w-14 rounded-full ml-4"
-            onClick={endCall}
-            data-testid="call-end-btn"
-          >
-            <PhoneOff size={24} />
-          </Button>
+          {/* End Call - ALWAYS visible, prominent */}
+          <button onClick={endCall} data-testid="call-end-btn"
+            className="h-12 w-12 sm:h-14 sm:w-14 rounded-full flex items-center justify-center bg-red-600 hover:bg-red-700 text-white transition-colors ml-2 sm:ml-4 shadow-lg shadow-red-600/30">
+            <PhoneOff size={22} />
+          </button>
         </div>
       </div>
       
@@ -284,21 +184,10 @@ export default function CallInterface() {
           <h3 className="font-semibold mb-4">Transfer Call To</h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {callableContacts.filter(c => !participants.includes(c.user_id)).map(contact => (
-              <button
-                key={contact.user_id}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted text-left"
-                onClick={() => {
-                  transferCall(contact.user_id);
-                  setShowTransfer(false);
-                }}
-              >
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  {contact.name?.charAt(0) || contact.extension}
-                </div>
-                <div>
-                  <p className="font-medium text-sm">{contact.name || contact.display_name}</p>
-                  <p className="text-xs text-muted-foreground">Ext. {contact.extension}</p>
-                </div>
+              <button key={contact.user_id} className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted text-left"
+                onClick={() => { transferCall(contact.user_id); setShowTransfer(false); }}>
+                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">{contact.name?.charAt(0) || '?'}</div>
+                <div><p className="font-medium text-sm">{contact.name || contact.display_name}</p><p className="text-xs text-muted-foreground">{contact.extension ? `Ext. ${contact.extension}` : 'WebRTC'}</p></div>
               </button>
             ))}
           </div>
@@ -311,32 +200,15 @@ export default function CallInterface() {
           <h3 className="font-semibold mb-4">Add to Conference</h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {callableContacts.filter(c => !participants.includes(c.user_id)).map(contact => (
-              <button
-                key={contact.user_id}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted text-left"
-                onClick={() => {
-                  addParticipant(contact.user_id);
-                  setShowAddParticipant(false);
-                }}
-              >
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  {contact.name?.charAt(0) || contact.extension}
-                </div>
-                <div>
-                  <p className="font-medium text-sm">{contact.name || contact.display_name}</p>
-                  <p className="text-xs text-muted-foreground">Ext. {contact.extension}</p>
-                </div>
+              <button key={contact.user_id} className="w-full flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted text-left"
+                onClick={() => { addParticipant(contact.user_id); setShowAddParticipant(false); }}>
+                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">{contact.name?.charAt(0) || '?'}</div>
+                <div><p className="font-medium text-sm">{contact.name || contact.display_name}</p><p className="text-xs text-muted-foreground">{contact.extension ? `Ext. ${contact.extension}` : 'WebRTC'}</p></div>
               </button>
             ))}
           </div>
         </DialogContent>
       </Dialog>
-      
-      <style jsx>{`
-        .mirror {
-          transform: scaleX(-1);
-        }
-      `}</style>
     </div>
   );
 }
