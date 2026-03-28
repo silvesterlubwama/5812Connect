@@ -194,9 +194,9 @@ export default function Layout() {
     localStorage.setItem('5812_active_campus', campusId);
     try {
       if (campusId) {
-        await api.put('/api/user/active-campus', { campus_id: campusId });
+        await api.put('/user/active-campus', { campus_id: campusId });
       } else {
-        await api.put('/api/user/active-campus/clear');
+        await api.put('/user/active-campus/clear');
       }
       window.location.reload(); // Reload to apply new filter across all pages
     } catch { toast.error('Failed to switch campus'); }
