@@ -65,6 +65,58 @@ export default function KioskPage() {
   const [todayStats, setTodayStats] = useState({ checkIns: 0, visitors: 0, scans: 0 });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [scanType, setScanType] = useState('manual'); // manual, nfc, biometric
+  const [lockMode, setLockMode] = useState(false);
+  const [showSignup, setShowSignup] = useState(false);
+  const [signupForm, setSignupForm] = useState({ name: '', phone: '', email: '', role: 'Member' });
+
+  // Sound effects for check-in result
+  const playSound = (success) => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      if (success) {
+        osc.frequency.value = 880; gain.gain.value = 0.3;
+        osc.start(); setTimeout(() => { osc.frequency.value = 1100; }, 100);
+        setTimeout(() => { osc.stop(); ctx.close(); }, 250);
+      } else {
+        osc.frequency.value = 200; osc.type = 'square'; gain.gain.value = 0.3;
+        osc.start(); setTimeout(() => { osc.stop(); ctx.close(); }, 400);
+      }
+    } catch {}
+  };
+
+  // QR/ID scanning via device camera
+  const handleIdScan = async (qrData) => {
+    if (!qrData) return;
+    setLookupLoading(true);
+    try {
+      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await api.post('/checkins/qr-scan', { qr_data: qrData }, { headers: authHeader });
+      setFoundMember(res.data.member);
+      playSound(true);
+      toast.success(`${res.data.member?.name} checked in!`);
+      setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 }));
+    } catch (err) {
+      playSound(false);
+      toast.error(err.response?.data?.detail || 'Check-in failed - try signup');
+      setShowSignup(true);
+    }
+    finally { setLookupLoading(false); }
+  };
+
+  const handleQuickSignup = async () => {
+    if (!signupForm.name.trim()) { toast.error('Name is required'); return; }
+    try {
+      const res = await api.post('/auth/visitor-register', signupForm);
+      toast.success(`${signupForm.name} registered! PIN: ${res.data.pin}`);
+      playSound(true);
+      setShowSignup(false);
+      setSignupForm({ name: '', phone: '', email: '', role: 'Member' });
+    } catch (err) { toast.error(err.response?.data?.detail || 'Signup failed'); }
+  };
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -213,19 +265,18 @@ export default function KioskPage() {
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-                <span className="text-primary-foreground font-bold text-sm">58:12</span>
-              </div>
+              <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-10 w-auto" />
               <div>
                 <p className="font-semibold">{staffUser?.name}</p>
-                <p className="text-xs text-muted-foreground">{staffUser?.role} &middot; Kiosk Mode</p>
+                <p className="text-xs text-muted-foreground">{staffUser?.role} &middot; Kiosk {lockMode ? '(Locked)' : ''}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button variant={lockMode ? 'default' : 'outline'} size="sm" className="text-xs h-8" onClick={() => setLockMode(!lockMode)} data-testid="kiosk-lock-btn">{lockMode ? 'Unlock' : 'Lock'}</Button>
               <Badge variant={isOnline ? 'outline' : 'destructive'} className={`text-[10px] gap-1 ${isOnline ? 'border-green-300 text-green-600' : ''}`}>
                 {isOnline ? <Wifi size={10} /> : <WifiOff size={10} />} {isOnline ? 'Online' : 'Offline'}
               </Badge>
-              <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="kiosk-logout"><LogOut size={14} /></Button>
+              {!lockMode && <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="kiosk-logout"><LogOut size={14} /></Button>}
             </div>
           </div>
 
@@ -237,24 +288,48 @@ export default function KioskPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
             <Button className="h-20 text-lg gap-3 flex-col" onClick={() => setView('id')} data-testid="kiosk-id-checkin-btn">
               <CreditCard size={28} />
-              <span className="text-xs">ID Check-In</span>
+              <span className="text-xs">ID / QR Check-In</span>
             </Button>
             <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={() => setView('visitor')} data-testid="kiosk-visitor-btn">
               <UserCheck size={28} />
               <span className="text-xs">Visitor</span>
             </Button>
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => setShowSignup(true)} data-testid="kiosk-signup-btn">
+              <UserPlus size={28} />
+              <span className="text-xs">Quick Signup</span>
+            </Button>
             <Button variant="secondary" className="h-20 text-lg gap-3 flex-col" onClick={() => { setScanType('manual'); setView('scan'); }} data-testid="kiosk-scan-btn">
               <ScanLine size={28} />
               <span className="text-xs">Access Scan</span>
             </Button>
-            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
               <UserPlus size={28} />
               <span className="text-xs">Register Guest</span>
             </Button>
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col text-amber-600 border-amber-200" onClick={() => setView('checkout')} data-testid="kiosk-checkout-btn">
+              <LogOut size={28} />
+              <span className="text-xs">Check Out</span>
+            </Button>
           </div>
+
+          {/* Quick Signup Dialog */}
+          <Dialog open={showSignup} onOpenChange={setShowSignup}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Quick Signup</DialogTitle></DialogHeader>
+              <div className="space-y-3 mt-2">
+                <div className="space-y-1.5"><Label className="text-xs">Full Name *</Label><Input value={signupForm.name} onChange={e => setSignupForm({...signupForm, name: e.target.value})} data-testid="signup-name" /></div>
+                <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={signupForm.phone} onChange={e => setSignupForm({...signupForm, phone: e.target.value})} /></div>
+                <div className="space-y-1.5"><Label className="text-xs">Email (optional)</Label><Input value={signupForm.email} onChange={e => setSignupForm({...signupForm, email: e.target.value})} /></div>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setShowSignup(false)}>Cancel</Button>
+                  <Button className="flex-1" onClick={handleQuickSignup} data-testid="signup-submit-btn">Sign Up</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* Recent Visitors Quick Check-In */}
           {recentVisitors.length > 0 && (

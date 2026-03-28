@@ -15,9 +15,9 @@ async def register(data: UserRegister):
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = str(uuid.uuid4())
     # Allow self-registration as visitor/parent with pending status
-    role = getattr(data, 'role', None) or 'volunteer'
-    if role not in {'volunteer', 'visitor', 'parent'}:
-        role = 'volunteer'  # enforce safe defaults for self-registration
+    role = getattr(data, 'role', None) or 'Member'
+    if role not in {'Member', 'volunteer', 'visitor', 'parent'}:
+        role = 'Member'  # new signups start as members
     expiry = None
     if role == 'visitor':
         # Visitors get 30-day access by default

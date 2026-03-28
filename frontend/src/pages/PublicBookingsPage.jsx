@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Ticket, Building, Search, Calendar, Clock, Users } from 'lucide-react';
+import { Ticket, Building, Search, Calendar, Clock, Users, MapPin, CreditCard, ChevronDown, ExternalLink, Globe, Shield, Lock, ChevronRight } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -8,10 +8,28 @@ import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { publicApi } from '../services/api';
 import { toast } from 'sonner';
 
 const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+const typeLabels = { service: 'Services', conference: 'Conferences', meeting: 'Meetings', community: 'Community', outreach: 'Outreach', workshop: 'Workshops', training: 'Training', social: 'Social' };
+const typeColors = { service: 'bg-purple-500', conference: 'bg-amber-500', meeting: 'bg-slate-500', community: 'bg-teal-500', outreach: 'bg-pink-500', workshop: 'bg-violet-500', training: 'bg-cyan-500', social: 'bg-orange-500' };
+const COUNTRIES = [
+  { code: 'US', label: 'United States (Ohio)', tz: 'America' },
+  { code: 'UG', label: 'Uganda', tz: 'Africa/Kampala' },
+  { code: 'KE', label: 'Kenya', tz: 'Africa/Nairobi' },
+  { code: 'TH', label: 'Thailand', tz: 'Asia/Bangkok' },
+  { code: 'HT', label: 'Haiti', tz: 'America/Port-au-Prince' },
+  { code: 'ALL', label: 'All Locations', tz: '' },
+];
+const PAYMENT_METHODS = [
+  { id: 'card', label: 'Credit/Debit Card', icon: CreditCard },
+  { id: 'mobile_money_mtn', label: 'MTN Mobile Money' },
+  { id: 'mobile_money_airtel', label: 'Airtel Money' },
+  { id: 'venmo', label: 'Venmo' },
+  { id: 'cash', label: 'Cash (in-person)' },
+];
 
 export default function PublicBookingsPage() {
   const [events, setEvents] = useState([]);
@@ -19,44 +37,85 @@ export default function PublicBookingsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedVenue, setSelectedVenue] = useState(null);
-  const [regData, setRegData] = useState({ name: '', email: '', phone: '', num_tickets: 1 });
+  const [regData, setRegData] = useState({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false });
   const [spaceData, setSpaceData] = useState({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
   const [statusQuery, setStatusQuery] = useState({ booking_id: '', email: '', phone: '' });
   const [statusResults, setStatusResults] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [searchStatus, setSearchStatus] = useState(false);
-  const [countryFilter, setCountryFilter] = useState('');
+  const [countryFilter, setCountryFilter] = useState('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showMore, setShowMore] = useState(false);
+  const [showPolicies, setShowPolicies] = useState(false);
+  const [policies, setPolicies] = useState(null);
 
+  // Auto-detect country
   useEffect(() => {
-    // Auto-detect country by timezone
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-      if (tz.includes('America')) setCountryFilter('USA');
-      else if (tz.includes('Africa/Kampala') || tz.includes('Africa/Nairobi')) setCountryFilter('Uganda');
-      else if (tz.includes('Africa')) setCountryFilter('Africa');
+      if (tz.includes('America')) setCountryFilter('US');
+      else if (tz.includes('Kampala')) setCountryFilter('UG');
+      else if (tz.includes('Nairobi')) setCountryFilter('KE');
+      else if (tz.includes('Bangkok')) setCountryFilter('TH');
+      else if (tz.includes('Port-au-Prince')) setCountryFilter('HT');
     } catch {}
+    // Ask for location permission
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(() => {}, () => {}, { timeout: 5000 });
+    }
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     Promise.all([publicApi.events(), publicApi.venues()])
       .then(([evRes, venRes]) => { setEvents(evRes.data); setVenues(venRes.data); })
       .catch(() => toast.error('Failed to load data'))
       .finally(() => setLoading(false));
   }, []);
 
+  // Load policies
+  useEffect(() => {
+    if (showPolicies && !policies) {
+      fetch(`${process.env.REACT_APP_BACKEND_URL}/api/public/policies`)
+        .then(r => r.json()).then(setPolicies).catch(() => {});
+    }
+  }, [showPolicies, policies]);
+
+  // Filter events by country and search
+  const filteredEvents = events.filter(ev => {
+    if (searchQuery && !ev.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    return true;
+  }).sort((a, b) => a.date?.localeCompare(b.date));
+  const displayEvents = showMore ? filteredEvents : filteredEvents.slice(0, 12);
+
+  // Group events by type
+  const eventsByType = {};
+  displayEvents.forEach(ev => {
+    const t = ev.type || 'other';
+    if (!eventsByType[t]) eventsByType[t] = [];
+    eventsByType[t].push(ev);
+  });
+
+  const getDaysUntil = (dateStr) => {
+    try { return Math.ceil((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24)); } catch { return 999; }
+  };
+
   const handleRegister = async (e) => {
     e.preventDefault();
+    if (selectedEvent && !selectedEvent.is_free && selectedEvent.price > 0 && !regData.agreed_to_terms) {
+      toast.error('Please agree to the payment terms'); return;
+    }
     setSubmitting(true);
     try {
       const res = await publicApi.bookEvent({ ...regData, event_id: selectedEvent.id });
-      toast.success(`Registered! Ticket IDs: ${res.data.ticket_ids?.join(', ')}`);
+      const msg = res.data.is_free ? `Registered! Ticket: ${res.data.ticket_ids?.join(', ')}` :
+        `Booking confirmed! Total: ${res.data.total}. ${res.data.payment_status === 'pending' ? 'Payment pending.' : ''}`;
+      toast.success(msg);
       setSelectedEvent(null);
-      setRegData({ name: '', email: '', phone: '', num_tickets: 1 });
-      // Update local event count
+      setRegData({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false });
       setEvents(prev => prev.map(ev => ev.id === selectedEvent.id ? { ...ev, registered: (ev.registered || 0) + regData.num_tickets } : ev));
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to register');
-    } finally { setSubmitting(false); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to register'); }
+    finally { setSubmitting(false); }
   };
 
   const handleSpaceBooking = async (e) => {
@@ -64,12 +123,10 @@ export default function PublicBookingsPage() {
     setSubmitting(true);
     try {
       const res = await publicApi.bookSpace({ ...spaceData, venue_id: selectedVenue.id });
-      toast.success(`Space booking request submitted! ID: ${res.data.id}`);
+      toast.success(`Space booking submitted! ID: ${res.data.id}`);
       setSelectedVenue(null);
-      setSpaceData({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to submit booking');
-    } finally { setSubmitting(false); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to book'); }
+    finally { setSubmitting(false); }
   };
 
   const handleStatusLookup = async (e) => {
@@ -87,199 +144,277 @@ export default function PublicBookingsPage() {
     finally { setSearchStatus(false); }
   };
 
+  const isPaid = (ev) => !ev.is_free && ev.price > 0;
+
   return (
-    <div className="min-h-screen bg-background">
-      <header className="bg-card border-b border-border px-4 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-8 w-auto object-contain" />
-          <Link to="/login"><Button variant="outline" size="sm">Staff Login</Button></Link>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900">
+      {/* Header */}
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-8 w-auto" />
+          <div className="flex items-center gap-3">
+            {/* Country selector */}
+            <Select value={countryFilter} onValueChange={setCountryFilter}>
+              <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="country-selector">
+                <div className="flex items-center gap-1.5"><Globe size={12} /><SelectValue /></div>
+              </SelectTrigger>
+              <SelectContent>
+                {COUNTRIES.map(c => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Link to="/portal"><Button size="sm" variant="outline" className="gap-1.5 text-xs h-8" data-testid="portal-login-btn"><ExternalLink size={12} /> My Portal</Button></Link>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-        <div className="text-center">
-          <h2 className="text-3xl font-heading font-semibold mb-2">Book Events &amp; Spaces</h2>
-          <p className="text-muted-foreground">Register for public events, reserve a venue, or check booking status.</p>
+      {/* Hero with 58:12 info */}
+      <section className="bg-[#1a1a2e] text-white py-12 px-4">
+        <div className="max-w-4xl mx-auto text-center">
+          <h1 className="text-3xl sm:text-4xl font-bold font-heading mb-3">Bringing Hope & Healing to the Most Vulnerable</h1>
+          <p className="text-slate-300 text-sm sm:text-base max-w-2xl mx-auto mb-4">58:12 Global is a Christ-centered nonprofit that exists to bring hope and healing. We serve in the USA (Ohio), Uganda, Kenya, Thailand, and Haiti.</p>
+          <p className="text-slate-400 text-xs italic">"Your people will rebuild the ancient ruins and will raise up the age-old foundations; you will be called Repairer of Broken Walls, Restorer of Streets with Dwellings." — Isaiah 58:12</p>
+        </div>
+      </section>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+        {/* Search bar */}
+        <div className="flex flex-col sm:flex-row gap-3 items-center">
+          <div className="relative flex-1 max-w-lg">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-9" placeholder="Search events..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} data-testid="event-search" />
+          </div>
+          <p className="text-sm text-muted-foreground">{filteredEvents.length} events found</p>
         </div>
 
         <Tabs defaultValue="events" className="space-y-6">
           <TabsList className="grid w-full max-w-lg mx-auto grid-cols-3">
             <TabsTrigger value="events" className="gap-2"><Ticket size={15} />Events</TabsTrigger>
             <TabsTrigger value="venues" className="gap-2"><Building size={15} />Book Space</TabsTrigger>
-            <TabsTrigger value="status" className="gap-2"><Search size={15} />Status Lookup</TabsTrigger>
+            <TabsTrigger value="status" className="gap-2"><Search size={15} />My Bookings</TabsTrigger>
           </TabsList>
 
+          {/* EVENTS TAB - organized by type in columns */}
           <TabsContent value="events">
             {loading ? (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {[1,2,3].map(i => <div key={i} className="h-64 bg-card border border-border rounded-xl animate-pulse" />)}
-              </div>
-            ) : events.length === 0 ? (
-              <p className="text-center py-12 text-muted-foreground">No public events available</p>
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">{[1,2,3].map(i => <div key={i} className="h-48 bg-card border rounded-xl animate-pulse" />)}</div>
+            ) : Object.keys(eventsByType).length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">No events available for this location</p>
             ) : (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {events.map(event => (
-                  <Card key={event.id} className="shadow-soft hover:shadow-soft-lg transition-shadow rounded-xl">
-                    <CardContent className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <Badge variant="outline" className="capitalize">{event.type}</Badge>
-                        {event.is_free
-                          ? <Badge className="bg-green-600 text-white border-0">Free</Badge>
-                          : <Badge className="bg-amber-600 text-white border-0">UGX {event.price?.toLocaleString()}</Badge>
-                        }
-                      </div>
-                      <h3 className="font-semibold text-lg mb-3">{event.title}</h3>
-                      <div className="space-y-2 text-sm text-muted-foreground mb-4">
-                        <div className="flex items-center gap-2"><Calendar size={14} /><span>{formatDate(event.date)}</span></div>
-                        <div className="flex items-center gap-2"><Clock size={14} /><span>{event.time}</span></div>
-                        <div className="flex items-center gap-2"><Users size={14} /><span>{event.capacity - (event.registered || 0)} spots left</span></div>
-                      </div>
-                      <Button className="w-full" onClick={() => setSelectedEvent(event)} disabled={event.capacity - (event.registered || 0) <= 0}>
-                        {event.capacity - (event.registered || 0) <= 0 ? 'Fully Booked' : event.is_free ? 'Get Free Tickets' : 'Register Now'}
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="venues">
-            {loading ? (
-              <div className="grid md:grid-cols-2 gap-6">
-                {[1,2].map(i => <div key={i} className="h-48 bg-card border border-border rounded-xl animate-pulse" />)}
-              </div>
-            ) : (
-              <div className="grid md:grid-cols-2 gap-6">
-                {venues.map(venue => (
-                  <Card key={venue.id} className="shadow-soft rounded-xl">
-                    <CardContent className="p-6">
-                      <div className="flex items-start justify-between mb-3">
-                        <h3 className="font-semibold text-lg">{venue.name}</h3>
-                        <Badge variant={venue.available ? 'outline' : 'secondary'} className={venue.available ? 'border-green-500 text-green-600' : ''}>
-                          {venue.available ? 'Available' : 'Unavailable'}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground mb-3">{venue.description}</p>
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
-                        <span className="flex items-center gap-1"><Users size={13} />{venue.capacity} capacity</span>
-                        <span className="capitalize">{venue.type}</span>
-                      </div>
-                      <p className="text-sm font-medium mb-4">
-                        {venue.hourly_rate ? `UGX ${venue.hourly_rate?.toLocaleString()} / hr` : 'Free use'}
-                      </p>
-                      <Button className="w-full" disabled={!venue.available} onClick={() => setSelectedVenue(venue)}>
-                        {venue.available ? 'Request Booking' : 'Currently Unavailable'}
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="status">
-            <div className="max-w-lg mx-auto">
-              <Card className="shadow-soft rounded-xl">
-                <CardContent className="p-6 space-y-4">
-                  <div>
-                    <h3 className="font-semibold text-lg mb-1">Check Booking Status</h3>
-                    <p className="text-sm text-muted-foreground">Enter your booking ID, email, or phone number</p>
-                  </div>
-                  <form onSubmit={handleStatusLookup} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>Booking ID</Label>
-                      <Input placeholder="book_xxxxxxxxxxxx" value={statusQuery.booking_id} onChange={e => setStatusQuery({...statusQuery, booking_id: e.target.value})} />
+              <div className="space-y-8">
+                {Object.entries(eventsByType).map(([type, typeEvents]) => (
+                  <div key={type}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className={`w-3 h-3 rounded-full ${typeColors[type] || 'bg-slate-400'}`} />
+                      <h3 className="text-base font-semibold capitalize">{typeLabels[type] || type}</h3>
+                      <Badge variant="outline" className="text-[10px]">{typeEvents.length}</Badge>
                     </div>
-                    <div className="text-center text-xs text-muted-foreground">— or —</div>
-                    <div className="space-y-2">
-                      <Label>Email (optional)</Label>
-                      <Input type="email" placeholder="your@email.com" value={statusQuery.email} onChange={e => setStatusQuery({...statusQuery, email: e.target.value})} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Phone (optional)</Label>
-                      <Input placeholder="+256 700 000000" value={statusQuery.phone} onChange={e => setStatusQuery({...statusQuery, phone: e.target.value})} />
-                    </div>
-                    <Button type="submit" className="w-full gap-2" disabled={searchStatus}>
-                      <Search size={15} />{searchStatus ? 'Looking up...' : 'Check Booking Status'}
-                    </Button>
-                  </form>
-
-                  {statusResults !== null && (
-                    <div className="mt-4 space-y-3">
-                      {statusResults.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-4">No bookings found</p>
-                      ) : (
-                        <>
-                          <p className="text-sm font-medium">Found {statusResults.length} booking(s):</p>
-                          {statusResults.map(b => (
-                            <div key={b.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-secondary/30">
-                              <div>
-                                <p className="text-sm font-medium">{b.id}</p>
-                                <p className="text-xs text-muted-foreground">{b.name} · {b.email}</p>
-                              </div>
-                              <Badge className={`border-0 text-white text-xs ${b.status === 'confirmed' ? 'bg-green-600' : 'bg-amber-600'}`}>
-                                {b.status}
-                              </Badge>
+                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {typeEvents.map(event => (
+                        <Card key={event.id} className="rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => setSelectedEvent(event)} data-testid={`event-card-${event.id}`}>
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between mb-2">
+                              <h4 className="font-semibold text-sm line-clamp-2">{event.title}</h4>
+                              {isPaid(event) ? <Badge className="bg-amber-100 text-amber-800 text-[10px] shrink-0">{event.price?.toLocaleString()} {event.currency || 'UGX'}</Badge> : <Badge variant="outline" className="text-[10px] text-green-600 shrink-0">Free</Badge>}
                             </div>
-                          ))}
-                        </>
-                      )}
+                            <div className="space-y-1 text-xs text-muted-foreground">
+                              <p className="flex items-center gap-1.5"><Calendar size={11} />{formatDate(event.date)}</p>
+                              {event.time && <p className="flex items-center gap-1.5"><Clock size={11} />{event.time}{event.end_time ? ` - ${event.end_time}` : ''}</p>}
+                              {event.location && <p className="flex items-center gap-1.5"><MapPin size={11} />{event.location}</p>}
+                            </div>
+                            <div className="flex items-center justify-between mt-3">
+                              <span className="text-xs text-muted-foreground">{event.registered || 0}/{event.capacity} registered</span>
+                              <Button size="sm" className="h-7 text-xs">Register</Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+                  </div>
+                ))}
+                {filteredEvents.length > 12 && !showMore && (
+                  <div className="text-center"><Button variant="outline" onClick={() => setShowMore(true)}>View More Events</Button></div>
+                )}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* VENUES TAB */}
+          <TabsContent value="venues">
+            {loading ? <div className="h-48 bg-card border rounded-xl animate-pulse" /> : venues.length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">No bookable spaces available</p>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {venues.map(venue => (
+                  <Card key={venue.id} className="rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => setSelectedVenue(venue)}>
+                    <CardContent className="p-4">
+                      <h4 className="font-semibold text-sm mb-1">{venue.name}</h4>
+                      <p className="text-xs text-muted-foreground mb-2">{venue.description}</p>
+                      <div className="flex gap-2 text-xs">
+                        <Badge variant="outline"><Users size={10} className="mr-1" />{venue.capacity}</Badge>
+                        {venue.hourly_rate && <Badge variant="outline">{venue.hourly_rate?.toLocaleString()}/hr</Badge>}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* STATUS TAB */}
+          <TabsContent value="status">
+            <Card className="max-w-md mx-auto rounded-xl">
+              <CardContent className="p-6">
+                <h3 className="font-semibold mb-4">Check Booking Status</h3>
+                <form onSubmit={handleStatusLookup} className="space-y-3">
+                  <div className="space-y-1.5"><Label className="text-xs">Booking ID</Label><Input placeholder="book_..." value={statusQuery.booking_id} onChange={e => setStatusQuery({...statusQuery, booking_id: e.target.value})} /></div>
+                  <p className="text-xs text-muted-foreground text-center">- or -</p>
+                  <div className="space-y-1.5"><Label className="text-xs">Email</Label><Input type="email" value={statusQuery.email} onChange={e => setStatusQuery({...statusQuery, email: e.target.value})} /></div>
+                  <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={statusQuery.phone} onChange={e => setStatusQuery({...statusQuery, phone: e.target.value})} /></div>
+                  <Button type="submit" className="w-full" disabled={searchStatus}>{searchStatus ? 'Searching...' : 'Look Up'}</Button>
+                </form>
+                {statusResults && (
+                  <div className="mt-4 space-y-2">
+                    {statusResults.length === 0 ? <p className="text-sm text-muted-foreground">No bookings found</p> :
+                      statusResults.map(b => (
+                        <div key={b.id} className="p-3 rounded-lg border text-sm">
+                          <p className="font-medium">{b.event_title || b.type || 'Booking'}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant={b.status === 'confirmed' ? 'default' : 'secondary'} className="text-xs">{b.status}</Badge>
+                            {b.payment_status && <Badge variant={b.payment_status === 'paid' ? 'default' : 'destructive'} className="text-xs">{b.payment_status}</Badge>}
+                            {b.ticket_ids && <span className="text-xs text-muted-foreground">{b.ticket_ids.join(', ')}</span>}
+                          </div>
+                        </div>
+                      ))
+                    }
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </main>
 
-      {/* Event Registration Dialog */}
-      <Dialog open={!!selectedEvent} onOpenChange={() => setSelectedEvent(null)}>
-        <DialogContent className="max-w-md">
+      {/* Event Registration Dialog with Payment */}
+      <Dialog open={!!selectedEvent} onOpenChange={(open) => !open && setSelectedEvent(null)}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Register for {selectedEvent?.title}</DialogTitle>
-            <DialogDescription>{selectedEvent && formatDate(selectedEvent.date)} at {selectedEvent?.time}</DialogDescription>
+            <DialogTitle>{selectedEvent?.title}</DialogTitle>
+            <DialogDescription>{formatDate(selectedEvent?.date || '')} {selectedEvent?.time ? `at ${selectedEvent.time}` : ''}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleRegister} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Full Name *</Label><Input placeholder="Your full name" value={regData.name} onChange={e => setRegData({...regData, name: e.target.value})} required /></div>
-            <div className="space-y-2"><Label>Email *</Label><Input type="email" placeholder="your@email.com" value={regData.email} onChange={e => setRegData({...regData, email: e.target.value})} required /></div>
-            <div className="space-y-2"><Label>Phone</Label><Input placeholder="+256 700 000000" value={regData.phone} onChange={e => setRegData({...regData, phone: e.target.value})} /></div>
-            <div className="space-y-2">
-              <Label>Number of Tickets</Label>
-              <Input type="number" min={1} max={10} value={regData.num_tickets} onChange={e => setRegData({...regData, num_tickets: parseInt(e.target.value)})} />
-            </div>
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? 'Submitting...' : selectedEvent?.is_free ? 'Confirm Registration' : 'Register Now'}
-            </Button>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Space Booking Dialog */}
-      <Dialog open={!!selectedVenue} onOpenChange={() => setSelectedVenue(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Book {selectedVenue?.name}</DialogTitle>
-            <DialogDescription>Capacity: {selectedVenue?.capacity} · {selectedVenue?.hourly_rate ? `UGX ${selectedVenue?.hourly_rate?.toLocaleString()}/hr` : 'Free'}</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSpaceBooking} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Full Name *</Label><Input placeholder="Your full name" value={spaceData.name} onChange={e => setSpaceData({...spaceData, name: e.target.value})} required /></div>
-            <div className="space-y-2"><Label>Email *</Label><Input type="email" value={spaceData.email} onChange={e => setSpaceData({...spaceData, email: e.target.value})} required /></div>
-            <div className="space-y-2"><Label>Phone</Label><Input value={spaceData.phone} onChange={e => setSpaceData({...spaceData, phone: e.target.value})} /></div>
-            <div className="space-y-2"><Label>Booking Date *</Label><Input type="date" value={spaceData.booking_date} onChange={e => setSpaceData({...spaceData, booking_date: e.target.value})} required /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Start Time</Label><Input type="time" value={spaceData.start_time} onChange={e => setSpaceData({...spaceData, start_time: e.target.value})} /></div>
-              <div className="space-y-2"><Label>End Time</Label><Input type="time" value={spaceData.end_time} onChange={e => setSpaceData({...spaceData, end_time: e.target.value})} /></div>
+              <div className="col-span-2 space-y-1.5"><Label className="text-xs">Full Name *</Label><Input value={regData.name} onChange={e => setRegData({...regData, name: e.target.value})} required data-testid="reg-name" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Email *</Label><Input type="email" value={regData.email} onChange={e => setRegData({...regData, email: e.target.value})} required /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={regData.phone} onChange={e => setRegData({...regData, phone: e.target.value})} /></div>
             </div>
-            <div className="space-y-2"><Label>Purpose</Label><Input placeholder="Event, meeting, class..." value={spaceData.purpose} onChange={e => setSpaceData({...spaceData, purpose: e.target.value})} /></div>
-            <Button type="submit" className="w-full" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit Booking Request'}</Button>
+            <div className="space-y-1.5"><Label className="text-xs">Number of Tickets</Label><Input type="number" min={1} max={10} value={regData.num_tickets} onChange={e => setRegData({...regData, num_tickets: parseInt(e.target.value) || 1})} /></div>
+
+            {/* Payment section for paid events */}
+            {selectedEvent && isPaid(selectedEvent) && (
+              <div className="space-y-3 p-3 bg-amber-50 dark:bg-amber-950 rounded-lg border border-amber-200 dark:border-amber-800">
+                <p className="text-sm font-medium">Payment: {(selectedEvent.price * (regData.num_tickets || 1)).toLocaleString()} {selectedEvent.currency || 'UGX'}</p>
+                <div className="space-y-1.5"><Label className="text-xs">Payment Method</Label>
+                  <Select value={regData.payment_method} onValueChange={v => setRegData({...regData, payment_method: v})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PAYMENT_METHODS.map(pm => {
+                        const daysUntil = getDaysUntil(selectedEvent.date);
+                        if (pm.id === 'cash' && daysUntil <= 3) return null;
+                        return <SelectItem key={pm.id} value={pm.id}>{pm.label}</SelectItem>;
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {regData.payment_method === 'cash' && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    {getDaysUntil(selectedEvent.date) <= 7 ? 'Cash payment must be received within 2 days.' : 'Cash payment must be received within 7 days of booking.'}
+                  </p>
+                )}
+                {regData.payment_method === 'venmo' && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    {getDaysUntil(selectedEvent.date) <= 7 ? 'Venmo payment must be sent within 2 days.' : 'Venmo payment must be sent within 7 days of booking.'}
+                  </p>
+                )}
+                <label className="flex items-start gap-2 cursor-pointer text-xs">
+                  <input type="checkbox" className="mt-0.5 accent-primary" checked={regData.agreed_to_terms} onChange={e => setRegData({...regData, agreed_to_terms: e.target.checked})} />
+                  <span>I agree to complete payment by the deadline. I understand unpaid bookings will be automatically cancelled.</span>
+                </label>
+              </div>
+            )}
+            <Button type="submit" className="w-full" disabled={submitting}>{submitting ? 'Registering...' : selectedEvent?.is_free ? 'Register (Free)' : `Pay & Register`}</Button>
           </form>
         </DialogContent>
       </Dialog>
 
-      <footer className="text-center py-6 text-sm text-muted-foreground border-t border-border mt-8">
-        58:12 Global • Uganda CRM System
+      {/* Venue Booking Dialog */}
+      <Dialog open={!!selectedVenue} onOpenChange={(open) => !open && setSelectedVenue(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Book: {selectedVenue?.name}</DialogTitle><DialogDescription>Capacity: {selectedVenue?.capacity} {selectedVenue?.hourly_rate ? `| Rate: ${selectedVenue.hourly_rate}/hr` : ''}</DialogDescription></DialogHeader>
+          <form onSubmit={handleSpaceBooking} className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1.5"><Label className="text-xs">Name *</Label><Input value={spaceData.name} onChange={e => setSpaceData({...spaceData, name: e.target.value})} required /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Email *</Label><Input type="email" value={spaceData.email} onChange={e => setSpaceData({...spaceData, email: e.target.value})} required /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={spaceData.phone} onChange={e => setSpaceData({...spaceData, phone: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Date *</Label><Input type="date" value={spaceData.booking_date} onChange={e => setSpaceData({...spaceData, booking_date: e.target.value})} required /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Start *</Label><Input type="time" value={spaceData.start_time} onChange={e => setSpaceData({...spaceData, start_time: e.target.value})} required /></div>
+              <div className="space-y-1.5"><Label className="text-xs">End *</Label><Input type="time" value={spaceData.end_time} onChange={e => setSpaceData({...spaceData, end_time: e.target.value})} required /></div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Purpose</Label><Input value={spaceData.purpose} onChange={e => setSpaceData({...spaceData, purpose: e.target.value})} /></div>
+            <Button type="submit" className="w-full" disabled={submitting}>{submitting ? 'Submitting...' : 'Request Booking'}</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Policies Dialog */}
+      <Dialog open={showPolicies} onOpenChange={setShowPolicies}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>58:12 Global Policies</DialogTitle></DialogHeader>
+          {policies ? (
+            <div className="space-y-6 mt-2">
+              {Object.values(policies).map((p, i) => (
+                <div key={i} className="space-y-1.5">
+                  <h3 className="font-semibold text-sm flex items-center gap-2"><Shield size={14} className="text-primary" />{p.title}</h3>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{p.content}</p>
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-sm text-muted-foreground py-4">Loading policies...</p>}
+        </DialogContent>
+      </Dialog>
+
+      {/* Footer */}
+      <footer className="bg-[#1a1a2e] text-slate-400 py-8 px-4 mt-12">
+        <div className="max-w-7xl mx-auto">
+          <div className="grid md:grid-cols-3 gap-6 mb-6">
+            <div>
+              <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-6 brightness-0 invert mb-3" />
+              <p className="text-xs">Bringing hope and healing to the most vulnerable in our world.</p>
+              <p className="text-xs mt-2">Office: 330-521-1948</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-300 uppercase mb-2">Where We Serve</p>
+              <p className="text-xs">Holmes County (Ohio) | Thailand | Haiti | Kenya | Uganda</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-300 uppercase mb-2">Links</p>
+              <div className="space-y-1">
+                <a href="https://5812-global.org" target="_blank" rel="noopener noreferrer" className="text-xs hover:text-white flex items-center gap-1"><ExternalLink size={10} /> 5812-Global.org</a>
+                <button onClick={() => setShowPolicies(true)} className="text-xs hover:text-white flex items-center gap-1"><Lock size={10} /> Privacy Policy & Terms</button>
+                <Link to="/login" className="text-xs hover:text-white flex items-center gap-1"><Shield size={10} /> Staff Login</Link>
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-slate-700 pt-4 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px]">&copy; {new Date().getFullYear()} 58:12 Global. All rights reserved.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowPolicies(true)} className="text-[10px] hover:text-white">Privacy Policy</button>
+              <button onClick={() => setShowPolicies(true)} className="text-[10px] hover:text-white">Terms of Service</button>
+              <button onClick={() => setShowPolicies(true)} className="text-[10px] hover:text-white">Refund Policy</button>
+            </div>
+          </div>
+        </div>
       </footer>
     </div>
   );

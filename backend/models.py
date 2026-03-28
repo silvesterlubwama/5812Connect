@@ -239,6 +239,8 @@ class PublicBookingCreate(BaseModel):
     phone: Optional[str] = None
     event_id: str
     num_tickets: int = 1
+    payment_method: Optional[str] = None  # cash, mobile_money_mtn, mobile_money_airtel, venmo, card
+    agreed_to_terms: bool = False
 
 class SpaceBookingCreate(BaseModel):
     name: str

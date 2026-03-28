@@ -476,17 +476,21 @@ async def delete_venue(venue_id: str, current_user: dict = Depends(get_current_u
 # ========== PUBLIC ENDPOINTS ==========
 
 @router.get("/public/events")
-async def public_events():
-    events = await db.events.find(
-        {"is_public": True, "status": "upcoming"},
-        {"_id": 0}
-    ).sort("date", 1).to_list(50)
+async def public_events(country: Optional[str] = None):
+    query = {"is_public": True, "status": "upcoming"}
+    if country:
+        query["$or"] = [{"country": country}, {"country": {"$exists": False}}, {"country": ""}]
+    # Only show events up to 1 year ahead
+    from datetime import timedelta
+    max_date = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%d")
+    query["date"] = {"$lte": max_date}
+    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(100)
     return events
 
 
 @router.get("/public/venues")
 async def public_venues():
-    venues = await db.venues.find({"available": True}, {"_id": 0}).to_list(50)
+    venues = await db.venues.find({"available": True, "is_bookable": {"$ne": False}}, {"_id": 0}).to_list(50)
     return venues
 
 
@@ -497,13 +501,39 @@ async def public_book_event(data: PublicBookingCreate):
         raise HTTPException(status_code=404, detail="Event not found")
     if event.get("registered", 0) >= event.get("capacity", 0):
         raise HTTPException(status_code=400, detail="Event is fully booked")
+    is_free = event.get("is_free", True)
+    price = event.get("price", 0)
+    payment_method = data.payment_method if hasattr(data, 'payment_method') else None
+    # Payment rules for paid events
+    if not is_free and price > 0:
+        method = payment_method or "card"
+        event_date = event.get("date", "")
+        days_until = 999
+        if event_date:
+            try:
+                from datetime import date as dt_date
+                ed = dt_date.fromisoformat(event_date)
+                days_until = (ed - dt_date.today()).days
+            except: pass
+        if method == "cash":
+            if days_until <= 3:
+                raise HTTPException(status_code=400, detail="Cash payments not accepted within 3 days of event. Please use card or mobile money.")
+            payment_deadline = 2 if days_until <= 7 else 7
+        else:
+            payment_deadline = None
+    else:
+        payment_deadline = None
     booking_id = f"book_{str(uuid.uuid4())[:12]}"
     booking = {
         "id": booking_id, **data.model_dump(),
         "event_title": event.get("title", ""),
-        "is_free": event.get("is_free", True),
-        "price": event.get("price", 0),
-        "status": "confirmed" if event.get("is_free", True) else "pending_payment",
+        "is_free": is_free,
+        "price": price,
+        "total": price * (data.num_tickets or 1) if not is_free else 0,
+        "payment_method": payment_method,
+        "payment_status": "paid" if is_free else "pending",
+        "payment_deadline_days": payment_deadline,
+        "status": "confirmed" if is_free else "pending_payment",
         "ticket_ids": [f"TKT-{str(uuid.uuid4())[:4].upper()}" for _ in range(data.num_tickets)],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -543,6 +573,63 @@ async def check_booking_status(booking_id: Optional[str] = None, email: Optional
     bookings = await db.public_bookings.find(query, {"_id": 0}).to_list(20)
     return bookings
 
+
+@router.put("/public/bookings/{booking_id}/mark-paid")
+async def mark_booking_paid(booking_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Mark a booking/ticket as paid. Staff+ only. Requires transaction reference."""
+    booking = await db.public_bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    await db.public_bookings.update_one({"id": booking_id}, {"$set": {
+        "payment_status": "paid", "status": "confirmed",
+        "paid_at": datetime.now(timezone.utc).isoformat(),
+        "paid_by": current_user["id"],
+        "transaction_ref": data.get("transaction_ref", ""),
+        "payment_notes": data.get("notes", ""),
+    }})
+    return {"message": "Booking marked as paid"}
+
+
+@router.get("/public/bookings/pending-payments")
+async def list_pending_payments(current_user: dict = Depends(require_staff)):
+    """List bookings with pending payments."""
+    bookings = await db.public_bookings.find(
+        {"payment_status": "pending"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    return bookings
+
+
+# ========== POLICIES ==========
+
+@router.get("/public/policies")
+async def get_policies():
+    """Return unified organizational policies."""
+    return {
+        "privacy_policy": {
+            "title": "Privacy Policy",
+            "content": "58:12 Global (\"we\", \"us\") is committed to protecting your personal data. We collect and process personal information in accordance with the EU General Data Protection Regulation (GDPR), the US Privacy Act, Uganda's Data Protection and Privacy Act 2019, Kenya's Data Protection Act 2019, Thailand's Personal Data Protection Act (PDPA), Haiti's applicable privacy provisions, and Mexico's Federal Law on Protection of Personal Data (LFPDPPP). We collect only data necessary for event registration, volunteer management, and ministry operations. You have the right to access, correct, delete, and port your data. Contact privacy@5812global.org for requests.",
+        },
+        "terms_of_service": {
+            "title": "Terms of Service",
+            "content": "By using 58:12 Connect services, you agree to these terms. 58:12 Global is a Christ-centered nonprofit organization bringing hope and healing to the most vulnerable. Our services include event management, volunteer coordination, and community programs across the USA, Uganda, Kenya, Thailand, Haiti, and Mexico. Users must be at least 13 years old. Parents/guardians must consent for minors. We reserve the right to modify services and these terms with notice.",
+        },
+        "refund_policy": {
+            "title": "Refund & Cancellation Policy",
+            "content": "Free events: No payment required, cancellations accepted anytime. Paid events: Full refund if cancelled 7+ days before event. 50% refund if cancelled 3-7 days before. No refund within 3 days of event. Cash payments must be received within the agreed deadline or booking is automatically cancelled. Mobile money and card payments are processed immediately.",
+        },
+        "employee_onboarding": {
+            "title": "Employee & Volunteer Onboarding Policy",
+            "content": "All new staff and volunteers undergo a background check process compliant with US, EU, and local laws. New accounts start as Members and require admin approval before system access is granted. Volunteers must complete orientation training. Staff must sign confidentiality agreements, undergo safeguarding training, and comply with our Code of Conduct. All personnel working with children must pass enhanced background checks per local jurisdiction requirements.",
+        },
+        "data_retention": {
+            "title": "Data Retention Policy",
+            "content": "Personal data is retained for the duration of your relationship with 58:12 Global plus 3 years for legal compliance. Financial records are retained for 7 years per US IRS requirements. Check-in data is retained for 2 years. You may request data deletion at any time, subject to legal retention requirements. Anonymization is available as an alternative to deletion.",
+        },
+        "cookie_policy": {
+            "title": "Cookie & Tracking Policy",
+            "content": "We use essential cookies for authentication and session management. We use location data only with your consent to show relevant local events. You may disable cookies in your browser settings. We do not sell personal data to third parties.",
+        },
+    }
 
 
 # ========== CALENDAR IMPORT/EXPORT ==========

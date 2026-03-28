@@ -26,8 +26,8 @@ export default function PortalLayout() {
       {/* Sidebar */}
       <aside className="w-56 shrink-0 border-r border-border bg-card hidden md:flex flex-col">
         <div className="px-4 py-5 border-b border-border">
-          <h1 className="text-base font-bold font-heading tracking-tight">58:12 Connect Portal</h1>
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">{user?.name}</p>
+          <h1 className="text-base font-bold font-heading tracking-tight">58:12 Connect</h1>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">User Portal - {user?.name}</p>
         </div>
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
           {NAV.map(n => (

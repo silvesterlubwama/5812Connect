@@ -83,7 +83,7 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
         events = await db.events.find(eq, {"_id": 0}).to_list(5000)
         data["events"] = events; data["events_count"] = len(events)
     if rtype in ("attendance", "custom"):
-        checkins = await db.check_ins.find({}, {"_id": 0}).to_list(5000)
+        checkins = await db.checkins.find({**campus}, {"_id": 0}).to_list(5000)
         data["checkins"] = checkins; data["checkins_count"] = len(checkins)
     now = datetime.now(timezone.utc).isoformat()
     await db.reports.update_one({"id": report_id}, {"$set": {"data_snapshot": data, "last_generated": now}})
