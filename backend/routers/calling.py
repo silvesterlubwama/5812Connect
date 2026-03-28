@@ -40,6 +40,9 @@ class PbxConfigCreate(BaseModel):
     port: int = 5060
     username: Optional[str] = None
     password: Optional[str] = None
+    sip_username: Optional[str] = None
+    sip_password: Optional[str] = None
+    sip_domain: Optional[str] = None
     api_key: Optional[str] = None
     api_url: Optional[str] = None
     websocket_url: Optional[str] = None

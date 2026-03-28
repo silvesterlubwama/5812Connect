@@ -123,7 +123,7 @@ function AppRoutes() {
         <Route path="gdpr" element={<GdprSettingsPage />} />
         {/* Calling Feature Routes */}
         <Route path="call-history" element={<CallHistoryPage />} />
-        <Route path="extensions" element={<ExtensionsPage />} />
+        <Route path="extensions" element={<PbxSettingsPage />} />
         <Route path="pbx-settings" element={<PbxSettingsPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
