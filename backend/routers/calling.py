@@ -202,9 +202,24 @@ async def get_user_extension(user_id: str, db=Depends(get_db)):
 
 @router.get("/pbx-configs")
 async def list_pbx_configs(db=Depends(get_db)):
-    """List all PBX configurations"""
+    """List all PBX configurations (passwords excluded)"""
     configs = await db.pbx_configs.find({}, {"_id": 0, "password": 0, "api_key": 0, "sip_password": 0}).to_list(50)
     return configs
+
+
+@router.get("/pbx-configs/sip-credentials")
+async def get_sip_credentials(db=Depends(get_db)):
+    """Get SIP credentials for the default active PBX (for SIP.js registration).
+    Returns sip_username, sip_password, sip_domain, websocket_url, host."""
+    config = await db.pbx_configs.find_one(
+        {"is_default": True, "is_active": True},
+        {"_id": 0, "sip_username": 1, "sip_password": 1, "sip_domain": 1,
+         "websocket_url": 1, "host": 1, "port": 1, "provider": 1,
+         "stun_servers": 1, "turn_servers": 1}
+    )
+    if not config:
+        return {"registered": False, "error": "No default active PBX"}
+    return config
 
 @router.post("/pbx-configs")
 async def create_pbx_config(data: PbxConfigCreate, db=Depends(get_db)):
@@ -229,8 +244,13 @@ async def create_pbx_config(data: PbxConfigCreate, db=Depends(get_db)):
 @router.put("/pbx-configs/{config_id}")
 async def update_pbx_config(config_id: str, data: dict, db=Depends(get_db)):
     """Update PBX configuration"""
-    # Remove sensitive read from response
     update_data = {k: v for k, v in data.items() if v is not None}
+    # Don't overwrite passwords with empty strings
+    if not update_data.get("password"): update_data.pop("password", None)
+    if not update_data.get("sip_password"): update_data.pop("sip_password", None)
+    if not update_data.get("api_key"): update_data.pop("api_key", None)
+    update_data.pop("_id", None)
+    update_data.pop("id", None)
     update_data["updated_at"] = datetime.now(timezone.utc)
     
     if update_data.get("is_default"):

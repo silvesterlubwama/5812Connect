@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { callingApi, adminApi } from '../services/api';
+import { useCall } from '../context/CallContext';
 import { toast } from 'sonner';
 
 const PBX_PROVIDERS = [
@@ -117,14 +118,42 @@ export default function PbxSettingsPage() {
 
   const usersWithoutExt = users.filter(u => !extensions.some(e => e.user_id === u.id));
 
+  let sipStatus = { registered: false, error: null };
+  try { const c = useCall(); sipStatus = { registered: c.sipRegistered, error: c.sipError }; } catch {}
+
   if (loading) return <div className="p-6"><div className="h-64 animate-pulse bg-muted rounded-xl" /></div>;
 
   return (
     <div className="p-6 space-y-6" data-testid="pbx-settings-page">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading">PBX & Extensions</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Manage phone system, extensions, queues, and call routing</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold font-heading">PBX & Extensions</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Manage phone system, extensions, queues, and call routing</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {sipStatus.registered ? (
+            <Badge className="gap-1.5 bg-green-100 text-green-700" data-testid="sip-status-badge"><CheckCircle size={12} /> SIP Registered</Badge>
+          ) : sipStatus.error ? (
+            <Badge variant="destructive" className="gap-1.5 text-xs" data-testid="sip-status-badge" title={sipStatus.error}><XCircle size={12} /> SIP Error</Badge>
+          ) : configs.length > 0 ? (
+            <Badge variant="outline" className="gap-1.5 text-xs" data-testid="sip-status-badge"><Wifi size={12} /> Connecting...</Badge>
+          ) : null}
+        </div>
       </div>
+
+      {/* SIP Error Details */}
+      {sipStatus.error && (
+        <Card className="rounded-xl border-red-200 bg-red-50 dark:bg-red-950/20">
+          <CardContent className="p-3 flex items-start gap-3">
+            <XCircle size={16} className="text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-red-800 dark:text-red-400">SIP Registration Failed</p>
+              <p className="text-xs text-red-600 dark:text-red-500 mt-0.5">{sipStatus.error}</p>
+              <p className="text-xs text-muted-foreground mt-1">Check: WebSocket URL is reachable (wss://), SIP credentials are correct, and PBX has WebSocket/WebRTC support enabled.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="extensions" className="space-y-4">
         <TabsList className="grid grid-cols-5 w-full max-w-2xl">
@@ -174,7 +203,7 @@ export default function PbxSettingsPage() {
               <CardContent className="p-4 flex items-center gap-4">
                 <Server size={20} className="text-primary shrink-0" />
                 <div className="flex-1">
-                  <p className="font-medium text-sm">{c.name} <Badge variant="outline" className="text-[10px] ml-1">{c.provider}</Badge></p>
+                  <div className="font-medium text-sm flex items-center gap-1">{c.name} <Badge variant="outline" className="text-[10px]">{c.provider}</Badge></div>
                   <p className="text-xs text-muted-foreground">{c.host}:{c.port} {c.sip_domain ? `| SIP: ${c.sip_domain}` : ''}</p>
                 </div>
                 <div className="flex gap-1.5">
@@ -308,7 +337,11 @@ export default function PbxSettingsPage() {
               <div className="space-y-1.5"><Label className="text-xs">Admin Password</Label><Input type="password" value={pbxForm.password} onChange={e => setPbxForm({...pbxForm, password: e.target.value})} /></div>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">API URL</Label><Input value={pbxForm.api_url} onChange={e => setPbxForm({...pbxForm, api_url: e.target.value})} placeholder="https://pbx.company.com/api" /></div>
-            <div className="space-y-1.5"><Label className="text-xs">WebSocket URL (for WebRTC)</Label><Input value={pbxForm.websocket_url} onChange={e => setPbxForm({...pbxForm, websocket_url: e.target.value})} placeholder="wss://pbx.company.com:8089/ws" /></div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-primary">WebSocket URL (REQUIRED for browser calling)</Label>
+              <Input value={pbxForm.websocket_url} onChange={e => setPbxForm({...pbxForm, websocket_url: e.target.value})} placeholder="wss://pbx.company.com:8089/ws" data-testid="pbx-ws-url" />
+              <p className="text-[10px] text-muted-foreground">SIP.js connects via WebSocket. Common ports: 8089 (FreePBX), 7443 (3CX), 443. Ask your PBX provider for the WSS URL. If empty, will auto-try wss://host:8089/ws</p>
+            </div>
             {pbxForm.provider === '3cx' && <div className="space-y-1.5"><Label className="text-xs">API Key</Label><Input type="password" value={pbxForm.api_key} onChange={e => setPbxForm({...pbxForm, api_key: e.target.value})} /></div>}
             <div className="space-y-1.5"><Label className="text-xs">STUN Servers (one per line)</Label><Textarea rows={2} value={pbxForm.stun_servers} onChange={e => setPbxForm({...pbxForm, stun_servers: e.target.value})} /></div>
             <div className="flex items-center justify-between p-2 border rounded-lg"><Label className="text-xs">Active</Label><Switch checked={pbxForm.is_active} onCheckedChange={v => setPbxForm({...pbxForm, is_active: v})} /></div>

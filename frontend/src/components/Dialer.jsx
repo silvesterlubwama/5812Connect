@@ -8,7 +8,7 @@ import { useCall } from '../context/CallContext';
 import { Badge } from './ui/badge';
 
 export default function Dialer({ open, onClose }) {
-  const { initiateCall, callableContacts, myExtension, sipRegistered } = useCall();
+  const { initiateCall, callableContacts, myExtension, sipRegistered, sipError } = useCall();
   const [dialNumber, setDialNumber] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [calling, setCalling] = useState(false);
@@ -79,7 +79,13 @@ export default function Dialer({ open, onClose }) {
           <DialogTitle className="flex items-center gap-2">
             <Phone size={18} /> Make a Call
             <div className="ml-auto flex items-center gap-2">
-              {sipRegistered && <Badge className="text-[10px] bg-green-100 text-green-700 gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> SIP</Badge>}
+              {sipRegistered ? (
+                <Badge className="text-[10px] bg-green-100 text-green-700 gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> SIP</Badge>
+              ) : sipError ? (
+                <Badge className="text-[10px] bg-red-100 text-red-600 gap-1" title={sipError}><span className="w-1.5 h-1.5 rounded-full bg-red-500" /> SIP Err</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px] gap-1"><span className="w-1.5 h-1.5 rounded-full bg-slate-400" /> WebRTC</Badge>
+              )}
               {myExtension && <Badge variant="outline" className="text-xs">Ext: {myExtension.extension}</Badge>}
             </div>
           </DialogTitle>

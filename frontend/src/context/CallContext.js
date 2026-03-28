@@ -41,6 +41,7 @@ export const CallProvider = ({ children }) => {
   const [callableContacts, setCallableContacts] = useState([]);
   const [sipRegistered, setSipRegistered] = useState(false);
   const [sipConfig, setSipConfig] = useState(null);
+  const [sipError, setSipError] = useState(null);
   const remoteAudioRef = useRef(null);
 
   // Create hidden audio element for SIP remote stream
@@ -73,11 +74,11 @@ export const CallProvider = ({ children }) => {
         }
       }).catch(() => {});
 
-      // Auto-register with default PBX if available
-      callingApi.listPbxConfigs().then(res => {
-        const defaultPbx = (res.data || []).find(c => c.is_default && c.is_active && c.websocket_url);
-        if (defaultPbx) {
-          setSipConfig(defaultPbx);
+      // Auto-register with default PBX if available (get credentials with sip_password)
+      callingApi.getSipCredentials().then(res => {
+        const creds = res.data;
+        if (creds && creds.sip_username && !creds.error) {
+          setSipConfig(creds);
         }
       }).catch(() => {});
     }
@@ -85,7 +86,7 @@ export const CallProvider = ({ children }) => {
 
   // SIP registration when config is available
   useEffect(() => {
-    if (!sipConfig || !sipConfig.websocket_url || !sipConfig.sip_username || !remoteAudioRef.current) return;
+    if (!sipConfig || !sipConfig.sip_username || !remoteAudioRef.current) return;
     const ext = myExtension;
     const config = {
       ...sipConfig,
@@ -93,9 +94,9 @@ export const CallProvider = ({ children }) => {
       display_name: user?.name || ext?.display_name,
     };
 
-    sipService.onRegistered = () => { setSipRegistered(true); toast.success('SIP registered'); };
+    sipService.onRegistered = () => { setSipRegistered(true); setSipError(null); toast.success('SIP registered'); };
     sipService.onUnregistered = () => { setSipRegistered(false); };
-    sipService.onError = (msg) => { toast.error(`SIP: ${msg}`); setSipRegistered(false); };
+    sipService.onError = (msg) => { setSipError(msg); setSipRegistered(false); };
     sipService.onIncomingCall = (data) => {
       setIncomingCall({ ...data, call_type: 'sip', caller_name: data.from });
       setCallStatus('ringing');
@@ -105,6 +106,7 @@ export const CallProvider = ({ children }) => {
 
     sipService.register(config, remoteAudioRef.current).catch(err => {
       console.warn('[SIP] Auto-register failed:', err.message);
+      setSipError(err.message);
     });
 
     return () => { sipService.unregister(); };
@@ -587,6 +589,7 @@ export const CallProvider = ({ children }) => {
       callableContacts,
       localStream: localStreamRef.current,
       sipRegistered,
+      sipError,
       
       // Actions
       initiateCall,

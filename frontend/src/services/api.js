@@ -601,6 +601,7 @@ export const callingApi = {
   
   // PBX Configuration
   listPbxConfigs: () => api.get('/calling/pbx-configs'),
+  getSipCredentials: () => api.get('/calling/pbx-configs/sip-credentials'),
   createPbxConfig: (data) => api.post('/calling/pbx-configs', data),
   updatePbxConfig: (id, data) => api.put(`/calling/pbx-configs/${id}`, data),
   deletePbxConfig: (id) => api.delete(`/calling/pbx-configs/${id}`),
