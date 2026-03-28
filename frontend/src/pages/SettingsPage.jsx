@@ -32,7 +32,7 @@ export default function SettingsPage() {
   const [loadingVenues, setLoadingVenues] = useState(true);
   const [showAddVenue, setShowAddVenue] = useState(false);
   const [editingVenue, setEditingVenue] = useState(null);
-  const [newVenue, setNewVenue] = useState({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true });
+  const [newVenue, setNewVenue] = useState({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true, is_offsite: false, is_bookable: true, country: '', address: '' });
   const [passwords, setPasswords] = useState({ current: '', new_: '', confirm: '' });
   const [savingPass, setSavingPass] = useState(false);
   const [appSettings, setAppSettings] = useState({ registration_open: true, default_role: 'member', maintenance_mode: false });

@@ -25,6 +25,17 @@ export default function PublicBookingsPage() {
   const [statusResults, setStatusResults] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [searchStatus, setSearchStatus] = useState(false);
+  const [countryFilter, setCountryFilter] = useState('');
+
+  useEffect(() => {
+    // Auto-detect country by timezone
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      if (tz.includes('America')) setCountryFilter('USA');
+      else if (tz.includes('Africa/Kampala') || tz.includes('Africa/Nairobi')) setCountryFilter('Uganda');
+      else if (tz.includes('Africa')) setCountryFilter('Africa');
+    } catch {}
+  }, []);
 
   useEffect(() => {
     Promise.all([publicApi.events(), publicApi.venues()])

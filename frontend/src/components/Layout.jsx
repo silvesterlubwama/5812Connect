@@ -40,6 +40,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { to: '/portal', icon: CircleUser, label: 'My Portal' },
+      { to: '/gdpr', icon: Lock, label: 'My Privacy', roles: [...STAFF_PLUS, 'Volunteer', 'Member', 'Parent'] },
     ]
   },
   {
@@ -154,7 +155,7 @@ export default function Layout() {
 
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
-  const isGlobalAdmin = ED_PLUS.includes(user?.role);
+  const isGlobalAdmin = ED_PLUS.includes(user?.role) || user?.role === 'Adviser';
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { addListener } = useWebSocket();

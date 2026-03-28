@@ -688,3 +688,125 @@ async def get_ice_servers(db=Depends(get_db)):
         servers.extend(turn_servers)
     
     return {"ice_servers": servers}
+
+
+# ============== AUTO-ATTENDANT ==============
+
+@router.get("/auto-attendant")
+async def get_auto_attendant(db=Depends(get_db)):
+    """Get auto-attendant configuration"""
+    doc = await db.auto_attendant.find_one({"_key": "main"}, {"_id": 0})
+    return doc or {
+        "_key": "main", "enabled": False, "greeting": "Welcome to 58:12 Global. Press 1 for reception, 2 for directory.",
+        "menu_options": [
+            {"key": "1", "action": "transfer", "target": "reception", "label": "Reception"},
+            {"key": "2", "action": "directory", "target": "directory", "label": "Staff Directory"},
+            {"key": "0", "action": "operator", "target": "operator", "label": "Operator"},
+        ],
+        "business_hours": {"start": "08:00", "end": "17:00", "timezone": "Africa/Kampala"},
+        "after_hours_greeting": "Our office is currently closed. Please leave a message.",
+        "after_hours_action": "voicemail",
+    }
+
+@router.put("/auto-attendant")
+async def update_auto_attendant(data: dict, db=Depends(get_db)):
+    """Update auto-attendant configuration (admin only)"""
+    data.pop("_id", None)
+    data["_key"] = "main"
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.auto_attendant.update_one({"_key": "main"}, {"$set": data}, upsert=True)
+    data.pop("_id", None)
+    return data
+
+# ============== CALL QUEUES ==============
+
+@router.get("/queues")
+async def list_call_queues(db=Depends(get_db)):
+    """List call queues"""
+    return await db.call_queues.find({}, {"_id": 0}).sort("name", 1).to_list(50)
+
+@router.post("/queues")
+async def create_call_queue(data: dict, db=Depends(get_db)):
+    """Create a call queue"""
+    doc = {
+        "id": f"queue_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "strategy": data.get("strategy", "ring_all"),  # ring_all, round_robin, least_recent, random
+        "timeout": data.get("timeout", 30),
+        "max_wait": data.get("max_wait", 300),
+        "members": data.get("members", []),  # list of extension numbers
+        "music_on_hold": data.get("music_on_hold", "default"),
+        "announce_position": data.get("announce_position", True),
+        "wrap_up_time": data.get("wrap_up_time", 10),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.call_queues.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@router.put("/queues/{queue_id}")
+async def update_call_queue(queue_id: str, data: dict, db=Depends(get_db)):
+    data.pop("_id", None)
+    data.pop("id", None)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.call_queues.update_one({"id": queue_id}, {"$set": data})
+    return await db.call_queues.find_one({"id": queue_id}, {"_id": 0})
+
+@router.delete("/queues/{queue_id}")
+async def delete_call_queue(queue_id: str, db=Depends(get_db)):
+    await db.call_queues.delete_one({"id": queue_id})
+    return {"message": "Queue deleted"}
+
+# ============== CALL FORWARDING RULES ==============
+
+@router.get("/forwarding/{user_id}")
+async def get_forwarding_rules(user_id: str, db=Depends(get_db)):
+    """Get call forwarding rules for a user"""
+    doc = await db.call_forwarding.find_one({"user_id": user_id}, {"_id": 0})
+    return doc or {
+        "user_id": user_id,
+        "enabled": False,
+        "forward_always": None,
+        "forward_busy": None,
+        "forward_no_answer": None,
+        "forward_no_answer_timeout": 20,
+        "forward_offline": None,
+    }
+
+@router.put("/forwarding/{user_id}")
+async def update_forwarding_rules(user_id: str, data: dict, db=Depends(get_db)):
+    """Update call forwarding rules"""
+    data["user_id"] = user_id
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    data.pop("_id", None)
+    await db.call_forwarding.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
+    data.pop("_id", None)
+    return data
+
+# ============== OUTGOING CALL RULES ==============
+
+@router.get("/outgoing-rules")
+async def list_outgoing_rules(db=Depends(get_db)):
+    """List outgoing call rules"""
+    return await db.outgoing_rules.find({}, {"_id": 0}).sort("priority", 1).to_list(50)
+
+@router.post("/outgoing-rules")
+async def create_outgoing_rule(data: dict, db=Depends(get_db)):
+    doc = {
+        "id": f"rule_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "pattern": data.get("pattern", ""),  # regex pattern for number matching
+        "action": data.get("action", "allow"),  # allow, block, prefix
+        "prefix": data.get("prefix", ""),
+        "priority": data.get("priority", 10),
+        "enabled": data.get("enabled", True),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.outgoing_rules.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@router.delete("/outgoing-rules/{rule_id}")
+async def delete_outgoing_rule(rule_id: str, db=Depends(get_db)):
+    await db.outgoing_rules.delete_one({"id": rule_id})
+    return {"message": "Rule deleted"}

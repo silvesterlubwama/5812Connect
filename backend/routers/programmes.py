@@ -134,11 +134,21 @@ async def update_outreach_program(prog_id: str, data: dict, current_user: dict =
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.outreach_programs.update_one({"id": prog_id}, {"$set": update})
-    return await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
+    prog = await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
+    # Auto-regenerate events if recurrence changed
+    if prog and prog.get("is_recurring") and any(k in data for k in ("recurrence_pattern", "recurrence_day", "recurrence_time", "start_date")):
+        try:
+            await db.events.delete_many({"outreach_program_id": prog_id, "is_auto_generated": True})
+            await _auto_generate_outreach_events(prog, current_user["id"], months_ahead=3)
+        except Exception as e:
+            logger.warning(f"Auto-regenerate outreach events failed: {e}")
+    return prog
 
 
 @router.delete("/outreach/programs/{prog_id}")
 async def delete_outreach_program(prog_id: str, current_user: dict = Depends(get_current_user)):
+    # Auto-delete associated events
+    await db.events.delete_many({"outreach_program_id": prog_id, "is_auto_generated": True})
     await db.outreach_programs.delete_one({"id": prog_id})
     return {"message": "Deleted"}
 

@@ -284,10 +284,11 @@ async def people_stats(current_user: dict = Depends(get_current_user)):
 
 @api_router.put("/user/active-campus")
 async def set_active_campus(data: dict, current_user: dict = Depends(get_current_user)):
-    """Set active campus for data filtering. Admins/EDs only."""
-    if not is_system_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only system admins can switch campuses")
-    campus_id = data.get("campus_id")  # None = show all
+    """Set active campus for data filtering. Admins/EDs/Advisers."""
+    from deps import has_campus_switcher
+    if not has_campus_switcher(current_user):
+        raise HTTPException(status_code=403, detail="Insufficient permissions for campus switching")
+    campus_id = data.get("campus_id")
     await db.users.update_one({"id": current_user["id"]}, {"$set": {"active_campus_id": campus_id}})
     return {"active_campus_id": campus_id}
 

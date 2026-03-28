@@ -174,7 +174,12 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
                   return depts.length > 0 ? (<Select value={editForm.department || ''} onValueChange={v => setEditForm({...editForm, department: v})}><SelectTrigger><SelectValue placeholder="Select dept" /></SelectTrigger><SelectContent>{depts.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}<SelectItem value="_other">Other...</SelectItem></SelectContent></Select>) : (<Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} placeholder="Department" />);
                 })()}
               </div>
-              <div className="space-y-2"><Label>PIN Code</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
+              <div className="space-y-2"><Label>PIN Code (also voicemail PIN)</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
+            </div>
+            {/* Extension (admin-only) */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2"><Label>Extension (admin assigns)</Label><Input maxLength={6} placeholder="3-6 digit ext" value={editForm.extension || ''} onChange={e => setEditForm({...editForm, extension: e.target.value})} data-testid="edit-extension" /></div>
+              <div className="space-y-2"><Label>Call Forward To</Label><Input placeholder="Phone number" value={editForm.forward_to || ''} onChange={e => setEditForm({...editForm, forward_to: e.target.value})} /></div>
             </div>
             <div className="space-y-2">
               <Label>Title <span className="text-xs text-muted-foreground">(auto-suggested, editable)</span></Label>

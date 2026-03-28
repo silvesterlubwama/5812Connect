@@ -87,6 +87,9 @@ ROLE_LEVELS = {
 # Roles that bypass campus isolation (see everything)
 SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director"}
 
+# Roles that get the campus switcher (global visibility + location switching)
+CAMPUS_SWITCHER_ROLES = {"admin", "system_admin", "executive director", "adviser"}
+
 def get_role_level(role: str) -> int:
     return ROLE_LEVELS.get(role, 0)
 
@@ -97,19 +100,27 @@ def is_system_admin(user: dict) -> bool:
     return (user.get("role") or "").lower() in SYSTEM_ADMIN_ROLES
 
 
+def has_campus_switcher(user: dict) -> bool:
+    """Returns True if user gets the campus location switcher (Admins, EDs, Advisers)."""
+    return (user.get("role") or "").lower() in CAMPUS_SWITCHER_ROLES
+
+
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
-    System admins get an empty dict (no restriction) unless they have active_campus_id set.
+    System admins/EDs get an empty dict (no restriction) unless they have active_campus_id set.
+    Advisers with campus switcher also check active_campus_id.
     Supports multi-location users via location_ids array.
     Automatically includes sub-locations of any campus the user has access to."""
-    if is_system_admin(user):
-        # If admin has selected a specific campus via switcher, scope to that
+    # Global admins or Advisers with switcher can override
+    if is_system_admin(user) or has_campus_switcher(user):
         active = user.get("active_campus_id")
         if active:
             sub_locs = await db.locations.find({"parent_id": active}, {"_id": 0, "id": 1}).to_list(200)
             all_locs = [active] + [s["id"] for s in sub_locs]
             return {field: {"$in": all_locs}} if len(all_locs) > 1 else {field: active}
-        return {}
+        if is_system_admin(user):
+            return {}
+        # Adviser without active campus: fall through to normal location_ids filtering
     locs = list(user.get("location_ids") or [])
     loc = user.get("location_id")
     if loc and loc not in locs:

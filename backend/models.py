@@ -215,6 +215,10 @@ class VenueCreate(BaseModel):
     hourly_rate: Optional[float] = None
     available: bool = True
     location_id: Optional[str] = None
+    is_offsite: bool = False
+    is_bookable: bool = True
+    country: Optional[str] = None
+    address: Optional[str] = None
 
 class VenueUpdate(BaseModel):
     name: Optional[str] = None
@@ -224,6 +228,10 @@ class VenueUpdate(BaseModel):
     hourly_rate: Optional[float] = None
     available: Optional[bool] = None
     location_id: Optional[str] = None
+    is_offsite: Optional[bool] = None
+    is_bookable: Optional[bool] = None
+    country: Optional[str] = None
+    address: Optional[str] = None
 
 class PublicBookingCreate(BaseModel):
     name: str

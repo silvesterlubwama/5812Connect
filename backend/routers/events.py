@@ -263,6 +263,42 @@ async def checkout_person(checkin_id: str, current_user: dict = Depends(require_
     return {"message": "Checked out successfully"}
 
 
+@router.post("/checkins/qr-scan")
+async def qr_code_checkin(data: dict, current_user: dict = Depends(get_current_user)):
+    """Check in by scanning a member's QR code (containing member ID or national ID)."""
+    qr_data = (data.get("qr_data") or "").strip()
+    event_id = data.get("event_id", "")
+    event_name = data.get("event_name", "")
+    if not qr_data:
+        raise HTTPException(status_code=400, detail="QR data required")
+    # Try to find member by ID, national_id, or email
+    member = await db.members.find_one(
+        {"$or": [{"id": qr_data}, {"national_id": qr_data}, {"email": qr_data}, {"pin": qr_data}]},
+        {"_id": 0}
+    )
+    if not member:
+        # Try users table
+        user = await db.users.find_one(
+            {"$or": [{"id": qr_data}, {"national_id": qr_data}, {"email": qr_data}]},
+            {"_id": 0, "password_hash": 0}
+        )
+        if user:
+            member = {"id": user["id"], "name": user.get("name", ""), "role": user.get("role", "member")}
+    if not member:
+        raise HTTPException(status_code=404, detail="No member found for this QR code")
+    # Create check-in
+    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    checkin = {
+        "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
+        "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
+        "method": "qr", "check_in_time": datetime.now(timezone.utc).isoformat(),
+        "checked_in_by": current_user["id"],
+    }
+    await db.checkins.insert_one(checkin)
+    checkin.pop("_id", None)
+    return {"message": "Checked in via QR", "member": member, "checkin": checkin}
+
+
 @router.post("/checkins/parent-lookup")
 async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_current_user)):
     """Look up children by parent phone, ID, email, or QR code and optionally check them in.

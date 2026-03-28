@@ -84,6 +84,7 @@ export const checkinsApi = {
   pinCheckin: (data) => api.post('/checkins/pin', data),
   checkout: (id) => api.post(`/checkins/${id}/checkout`),
   parentLookup: (data) => api.post('/checkins/parent-lookup', data),
+  qrScan: (data) => api.post('/checkins/qr-scan', data),
 };
 
 // ---- VENUES ----
@@ -641,6 +642,21 @@ export const callingApi = {
   
   // ICE Servers
   getIceServers: () => api.get('/calling/ice-servers'),
+  // Auto-Attendant
+  getAutoAttendant: () => api.get('/calling/auto-attendant'),
+  updateAutoAttendant: (data) => api.put('/calling/auto-attendant', data),
+  // Call Queues
+  listQueues: () => api.get('/calling/queues'),
+  createQueue: (data) => api.post('/calling/queues', data),
+  updateQueue: (id, data) => api.put(`/calling/queues/${id}`, data),
+  deleteQueue: (id) => api.delete(`/calling/queues/${id}`),
+  // Call Forwarding
+  getForwarding: (userId) => api.get(`/calling/forwarding/${userId}`),
+  updateForwarding: (userId, data) => api.put(`/calling/forwarding/${userId}`, data),
+  // Outgoing Rules
+  listOutgoingRules: () => api.get('/calling/outgoing-rules'),
+  createOutgoingRule: (data) => api.post('/calling/outgoing-rules', data),
+  deleteOutgoingRule: (id) => api.delete(`/calling/outgoing-rules/${id}`),
 };
 
 // ---- PRESENCE ----
