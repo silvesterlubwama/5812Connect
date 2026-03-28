@@ -162,6 +162,7 @@ export default function AdminPage() {
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, ...res.data } : u));
       toast.success('Profile updated');
       setShowEdit(false);
+      fetchUsers();
     } catch (err) { toast.error(err.response?.data?.detail || 'Update failed'); }
     finally { setSaving(false); }
   };

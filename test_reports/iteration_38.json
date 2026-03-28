@@ -1,0 +1,69 @@
+{
+  "summary": "Iteration 38 - Three Bug Fixes Verified: (1) Staff edit changes now persist - fetchUsers() called after save, (2) Organization settings now save via PUT /api/global-settings and load from GET /api/global-settings on mount, (3) Venue form has Bookable/Offsite toggles and Address field, venue cards show Offsite and Not Bookable badges",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_38.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (all API endpoints working)",
+    "frontend": "100% (all bug fixes verified)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created TEST_VENUE_ITERATION38 with is_offsite=true, is_bookable=false, address='123 Test Street, Kampala' (cleaned up after test)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 38 verified three bug fixes: (1) AdminPage.jsx line 165 calls fetchUsers() after saveEdit - user list refreshes immediately after edit. (2) SettingsPage.jsx handleSaveOrg calls api.put('/global-settings') and useEffect loads from api.get('/global-settings'). (3) Venue form has is_bookable toggle (data-testid='venue-bookable-toggle'), is_offsite toggle (data-testid='venue-offsite-toggle'), and address field. Venue cards display Offsite (amber badge) and Not Bookable (gray badge) badges.",
+  "features_tested": {
+    "staff_edit_persistence": {
+      "status": "PASSED",
+      "details": "Edited TEST_New Member to TEST_ITER38_EDITED_USER, saved, verified name appeared in list immediately. Toast showed 'Profile updated'. fetchUsers() is called after save."
+    },
+    "organization_settings_save": {
+      "status": "PASSED",
+      "details": "Changed org name to TEST_ORG_ITERATION38_UPDATED, clicked Save Changes, verified via GET /api/global-settings that change persisted. Toast showed 'Organization settings saved!'"
+    },
+    "organization_settings_load": {
+      "status": "PASSED",
+      "details": "Settings page loads org info from GET /api/global-settings on mount. Verified org name field populated with API data."
+    },
+    "venue_bookable_toggle": {
+      "status": "PASSED",
+      "details": "Add Venue form has Bookable toggle with data-testid='venue-bookable-toggle'. Default is ON, can toggle OFF."
+    },
+    "venue_offsite_toggle": {
+      "status": "PASSED",
+      "details": "Add Venue form has Offsite toggle with data-testid='venue-offsite-toggle'. Default is OFF, can toggle ON."
+    },
+    "venue_address_field": {
+      "status": "PASSED",
+      "details": "Add Venue form has Address field with placeholder 'Street address' and label 'Address (for offsite venues)'."
+    },
+    "venue_list_badges": {
+      "status": "PASSED",
+      "details": "Venue cards show 'Offsite' badge (amber/orange) and 'Not Bookable' badge (gray) for venues with is_offsite=true and is_bookable=false. Address also displayed on card."
+    }
+  },
+  "api_tests": {
+    "GET /api/global-settings": "PASSED - Returns org settings including org_name, contact_email, contact_phone, contact_address, timezone, currency",
+    "PUT /api/global-settings": "PASSED - Saves org settings and persists to database",
+    "POST /api/venues": "PASSED - Accepts is_bookable, is_offsite, address fields",
+    "GET /api/venues": "PASSED - Returns venues with is_bookable, is_offsite, address fields"
+  },
+  "ui_tests_summary": {
+    "settings_organization_tab": "PASSED - Loads org settings from API, Save Changes button calls PUT /api/global-settings",
+    "settings_venues_tab": "PASSED - Shows venue cards with Offsite and Not Bookable badges",
+    "add_venue_dialog": "PASSED - Has Bookable toggle, Offsite toggle, and Address field",
+    "admin_staff_edit": "PASSED - Edit dialog saves changes, list refreshes immediately after save"
+  }
+}

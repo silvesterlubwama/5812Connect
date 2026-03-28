@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { venuesApi, authApi, appSettingsApi, pushApi, webAuthnApi } from '../services/api';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import TwoFactorSetup from '../components/TwoFactorSetup';
@@ -178,6 +179,18 @@ export default function SettingsPage() {
       .then(res => setVenues(res.data))
       .catch(() => {})
       .finally(() => setLoadingVenues(false));
+    // Load global settings for org info
+    api.get('/global-settings').then(res => {
+      const d = res.data;
+      setOrgSettings({
+        orgName: d.org_name || d.app_name || '58:12 Global',
+        orgEmail: d.contact_email || '',
+        orgPhone: d.contact_phone || '',
+        orgAddress: d.contact_address || '',
+        timezone: d.timezone || 'Africa/Kampala',
+        currency: d.currency || 'UGX',
+      });
+    }).catch(() => {});
     if (isAdmin) {
       appSettingsApi.get().then(r => setAppSettings(prev => ({ ...prev, ...r.data }))).catch(() => {});
     }
@@ -192,9 +205,20 @@ export default function SettingsPage() {
     finally { setSavingAdmin(false); }
   };
 
-  const handleSaveOrg = (e) => {
+  const handleSaveOrg = async (e) => {
     e.preventDefault();
-    toast.success('Organization settings saved!');
+    try {
+      await api.put('/global-settings', {
+        org_name: orgSettings.orgName,
+        app_name: '58:12 Connect',
+        contact_email: orgSettings.orgEmail,
+        contact_phone: orgSettings.orgPhone,
+        contact_address: orgSettings.orgAddress,
+        timezone: orgSettings.timezone,
+        currency: orgSettings.currency,
+      });
+      toast.success('Organization settings saved!');
+    } catch { toast.error('Failed to save organization settings'); }
   };
 
   const handleAddVenue = async (e) => {
@@ -342,8 +366,13 @@ export default function SettingsPage() {
                           {venue.available ? 'Available' : 'Booked'}
                         </Badge>
                       </div>
-                      {venue.description && <p className="text-xs text-muted-foreground mb-3">{venue.description}</p>}
-                      <p className="text-xs font-medium mb-3">{venue.hourly_rate ? `UGX ${venue.hourly_rate?.toLocaleString()}/hr` : 'Free use'}</p>
+                      {venue.description && <p className="text-xs text-muted-foreground mb-2">{venue.description}</p>}
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        <span className="text-xs font-medium">{venue.hourly_rate ? `UGX ${venue.hourly_rate?.toLocaleString()}/hr` : 'Free use'}</span>
+                        {venue.is_offsite && <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-600">Offsite</Badge>}
+                        {venue.is_bookable === false && <Badge variant="secondary" className="text-[10px]">Not Bookable</Badge>}
+                        {venue.address && <span className="text-[10px] text-muted-foreground">{venue.address}</span>}
+                      </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" className="flex-1" onClick={() => toggleVenueAvailability(venue)}>
                           {venue.available ? 'Mark Booked' : 'Mark Available'}
@@ -381,7 +410,18 @@ export default function SettingsPage() {
                   <div className="space-y-2"><Label>Capacity</Label><Input type="number" min={1} value={newVenue.capacity} onChange={e => setNewVenue({...newVenue, capacity: e.target.value})} /></div>
                 </div>
                 <div className="space-y-2"><Label>Description</Label><Input placeholder="Brief description" value={newVenue.description} onChange={e => setNewVenue({...newVenue, description: e.target.value})} /></div>
+                <div className="space-y-2"><Label>Address (for offsite venues)</Label><Input placeholder="Street address" value={newVenue.address || ''} onChange={e => setNewVenue({...newVenue, address: e.target.value})} /></div>
                 <div className="space-y-2"><Label>Hourly Rate (UGX, leave blank if free)</Label><Input type="number" placeholder="20000" value={newVenue.hourly_rate} onChange={e => setNewVenue({...newVenue, hourly_rate: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+                    <div><Label className="text-sm">Bookable</Label><p className="text-[10px] text-muted-foreground">Available for reservations</p></div>
+                    <Switch checked={newVenue.is_bookable !== false} onCheckedChange={v => setNewVenue({...newVenue, is_bookable: v})} data-testid="venue-bookable-toggle" />
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+                    <div><Label className="text-sm">Offsite</Label><p className="text-[10px] text-muted-foreground">Not on organization premises</p></div>
+                    <Switch checked={newVenue.is_offsite || false} onCheckedChange={v => setNewVenue({...newVenue, is_offsite: v})} data-testid="venue-offsite-toggle" />
+                  </div>
+                </div>
                 <div className="flex gap-3 pt-2">
                   <Button type="button" variant="outline" className="flex-1" onClick={() => setShowAddVenue(false)}>Cancel</Button>
                   <Button type="submit" className="flex-1">Add Venue</Button>
