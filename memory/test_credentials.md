@@ -23,3 +23,13 @@
 - Extension 2450 assigned to admin user
 - Dialer accessible via green phone icon in header
 - Extensions must be assigned before users appear in dialer contacts
+
+## SIP/PBX Configuration
+- **Provider**: RingTele / SkySwitch
+- **SIP Username**: 5812Global
+- **SIP Password**: 10FpSH6s7GA3
+- **SIP Domain**: 5812Global.23317.service
+- **Host**: 23317.hpbx.outboundproxy.com
+- **WebSocket URL**: wss://ws.connectuc.io:443 (primary)
+- **STUN**: 18.206.78.162:443, 34.197.68.234:443
+- **TURN**: 18.206.78.162:443, 34.197.68.234:443 (same credentials as SIP)
