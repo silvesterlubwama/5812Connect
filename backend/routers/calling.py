@@ -203,7 +203,7 @@ async def get_user_extension(user_id: str, db=Depends(get_db)):
 @router.get("/pbx-configs")
 async def list_pbx_configs(db=Depends(get_db)):
     """List all PBX configurations"""
-    configs = await db.pbx_configs.find({}, {"_id": 0, "password": 0, "api_key": 0}).to_list(50)
+    configs = await db.pbx_configs.find({}, {"_id": 0, "password": 0, "api_key": 0, "sip_password": 0}).to_list(50)
     return configs
 
 @router.post("/pbx-configs")
@@ -222,6 +222,7 @@ async def create_pbx_config(data: PbxConfigCreate, db=Depends(get_db)):
     # Don't return sensitive fields
     config_doc.pop("password", None)
     config_doc.pop("api_key", None)
+    config_doc.pop("sip_password", None)
     config_doc.pop("_id", None)
     return config_doc
 
