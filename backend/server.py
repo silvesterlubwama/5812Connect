@@ -491,7 +491,7 @@ async def google_auth(data: dict):
     else:
         if google_user.get("picture"):
             await db.users.update_one({"email": email}, {"$set": {"avatar": google_user["picture"]}})
-    token = create_token({"sub": user["id"], "email": email, "role": user.get("role", "Member")})
+    token = create_token(user["id"])
     return {"token": token, "user": {k: v for k, v in user.items() if k != "password_hash"}}
 
 
