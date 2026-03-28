@@ -8,7 +8,7 @@ import { useCall } from '../context/CallContext';
 import { Badge } from './ui/badge';
 
 export default function Dialer({ open, onClose }) {
-  const { initiateCall, callableContacts, myExtension } = useCall();
+  const { initiateCall, callableContacts, myExtension, sipRegistered } = useCall();
   const [dialNumber, setDialNumber] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [calling, setCalling] = useState(false);
@@ -78,11 +78,10 @@ export default function Dialer({ open, onClose }) {
         <DialogHeader className="p-4 pb-0">
           <DialogTitle className="flex items-center gap-2">
             <Phone size={18} /> Make a Call
-            {myExtension && (
-              <Badge variant="outline" className="ml-auto text-xs">
-                My Ext: {myExtension.extension}
-              </Badge>
-            )}
+            <div className="ml-auto flex items-center gap-2">
+              {sipRegistered && <Badge className="text-[10px] bg-green-100 text-green-700 gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> SIP</Badge>}
+              {myExtension && <Badge variant="outline" className="text-xs">Ext: {myExtension.extension}</Badge>}
+            </div>
           </DialogTitle>
         </DialogHeader>
 

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { useAuth } from './AuthContext';
 import { useWebSocket } from './WebSocketContext';
 import { callingApi } from '../services/api';
+import sipService from '../services/sipService';
 import { toast } from 'sonner';
 
 const CallContext = createContext(null);
@@ -38,25 +39,76 @@ export const CallProvider = ({ children }) => {
   // Extension info
   const [myExtension, setMyExtension] = useState(null);
   const [callableContacts, setCallableContacts] = useState([]);
-  
+  const [sipRegistered, setSipRegistered] = useState(false);
+  const [sipConfig, setSipConfig] = useState(null);
+  const remoteAudioRef = useRef(null);
+
+  // Create hidden audio element for SIP remote stream
+  useEffect(() => {
+    if (!remoteAudioRef.current) {
+      const el = document.createElement('audio');
+      el.autoplay = true;
+      el.id = 'sip-remote-audio';
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      remoteAudioRef.current = el;
+    }
+    return () => { if (remoteAudioRef.current) { remoteAudioRef.current.remove(); remoteAudioRef.current = null; } };
+  }, []);
+
   // Load user's extension and contacts
   useEffect(() => {
     if (user?.id) {
       callingApi.getUserExtension(user.id).then(res => {
         setMyExtension(res.data);
       }).catch(() => {});
-      
+
       callingApi.getCallableContacts(user.id).then(res => {
         setCallableContacts(res.data || []);
       }).catch(() => {});
-      
+
       callingApi.getIceServers().then(res => {
         if (res.data?.ice_servers) {
           iceServersRef.current = res.data.ice_servers;
         }
       }).catch(() => {});
+
+      // Auto-register with default PBX if available
+      callingApi.listPbxConfigs().then(res => {
+        const defaultPbx = (res.data || []).find(c => c.is_default && c.is_active && c.websocket_url);
+        if (defaultPbx) {
+          setSipConfig(defaultPbx);
+        }
+      }).catch(() => {});
     }
   }, [user?.id]);
+
+  // SIP registration when config is available
+  useEffect(() => {
+    if (!sipConfig || !sipConfig.websocket_url || !sipConfig.sip_username || !remoteAudioRef.current) return;
+    const ext = myExtension;
+    const config = {
+      ...sipConfig,
+      sip_username: sipConfig.sip_username || ext?.extension,
+      display_name: user?.name || ext?.display_name,
+    };
+
+    sipService.onRegistered = () => { setSipRegistered(true); toast.success('SIP registered'); };
+    sipService.onUnregistered = () => { setSipRegistered(false); };
+    sipService.onError = (msg) => { toast.error(`SIP: ${msg}`); setSipRegistered(false); };
+    sipService.onIncomingCall = (data) => {
+      setIncomingCall({ ...data, call_type: 'sip', caller_name: data.from });
+      setCallStatus('ringing');
+    };
+    sipService.onCallAnswered = () => { setCallStatus('connected'); startDurationTimer(); };
+    sipService.onCallHangup = () => { setActiveCall(null); setCallStatus('idle'); setCallDuration(0); clearInterval(durationIntervalRef.current); };
+
+    sipService.register(config, remoteAudioRef.current).catch(err => {
+      console.warn('[SIP] Auto-register failed:', err.message);
+    });
+
+    return () => { sipService.unregister(); };
+  }, [sipConfig, myExtension, user?.name]);
   
   // Handle incoming WebSocket messages for calls
   useEffect(() => {
@@ -137,57 +189,47 @@ export const CallProvider = ({ children }) => {
     }
   }, []);
   
-  // Initiate a call
+  // Initiate a call - uses SIP if registered, otherwise WebRTC
   const initiateCall = useCallback(async (targetUserId, callType = 'audio') => {
-    if (!user?.id) {
-      toast.error('Not connected');
-      return;
-    }
-    
-    try {
-      // Get media
-      const stream = await getUserMedia(callType === 'video');
-      
-      // Create call via API
-      const res = await callingApi.initiateCall({
-        to_user_id: targetUserId,
-        call_type: callType,
-        use_pbx: false
-      }, user.id);
-      
-      const { call_id, ice_servers, call } = res.data;
-      
-      if (ice_servers) {
-        iceServersRef.current = ice_servers;
+    if (!user?.id) { toast.error('Not connected'); return; }
+
+    // Find target extension
+    const targetContact = callableContacts.find(c => c.user_id === targetUserId);
+    const targetExt = targetContact?.extension;
+
+    // Use SIP if registered and target has extension
+    if (sipRegistered && targetExt) {
+      try {
+        await sipService.call(targetExt);
+        setActiveCall({ call_type: 'sip', target_user_id: targetUserId, target_extension: targetExt, target_name: targetContact?.name });
+        setCallStatus('ringing');
+        toast.info(`Calling ${targetContact?.name || targetExt} via SIP...`);
+        return 'sip_call';
+      } catch (err) {
+        toast.error(`SIP call failed: ${err.message}. Falling back to WebRTC.`);
       }
-      
+    }
+
+    // WebRTC fallback
+    try {
+      const stream = await getUserMedia(callType === 'video');
+      const res = await callingApi.initiateCall({ to_user_id: targetUserId, call_type: callType, use_pbx: false }, user.id);
+      const { call_id, ice_servers, call } = res.data;
+      if (ice_servers) iceServersRef.current = ice_servers;
       setActiveCall({ ...call, call_id });
       setCallStatus('ringing');
       setParticipants([user.id, targetUserId]);
-      
-      // Create peer connection and offer
       const pc = createPeerConnection(targetUserId);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      
-      // Send offer via WebSocket
-      send({
-        type: 'call_offer',
-        call_id,
-        target_user_id: targetUserId,
-        sdp: offer,
-        call_type: callType,
-        caller_name: user.name,
-        caller_extension: myExtension?.extension
-      });
-      
+      send({ type: 'call_offer', call_id, target_user_id: targetUserId, sdp: offer, call_type: callType, caller_name: user.name, caller_extension: myExtension?.extension });
       return call_id;
     } catch (err) {
-      console.error('Failed to initiate call:', err);
+      console.error('Call failed:', err);
       endCall();
       throw err;
     }
-  }, [user, createPeerConnection, getUserMedia, send, myExtension]);
+  }, [user, sipRegistered, callableContacts, createPeerConnection, getUserMedia, send, myExtension]);
   
   // Handle incoming call
   const handleIncomingCall = useCallback((data) => {
@@ -215,53 +257,35 @@ export const CallProvider = ({ children }) => {
   // Answer incoming call
   const answerCall = useCallback(async (withVideo = false) => {
     if (!incomingCall) return;
-    
+
     try {
-      // Stop ringtone
-      if (incomingCall.ringtone) {
-        incomingCall.ringtone.pause();
-        incomingCall.ringtone.currentTime = 0;
+      if (incomingCall.ringtone) { incomingCall.ringtone.pause(); incomingCall.ringtone.currentTime = 0; }
+
+      // SIP incoming call
+      if (incomingCall.type === 'sip_incoming' || incomingCall.call_type === 'sip') {
+        await sipService.answer();
+        setActiveCall({ call_type: 'sip', caller_name: incomingCall.caller_name || incomingCall.from });
+        setCallStatus('connected');
+        setIncomingCall(null);
+        startDurationTimer();
+        return;
       }
-      
-      // Get media
+
+      // WebRTC answer
       const stream = await getUserMedia(withVideo);
-      
-      // Create peer connection
       const pc = createPeerConnection(incomingCall.caller_id);
-      
-      // Set remote description (offer)
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.sdp));
-      
-      // Create answer
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      
-      // Send answer
-      send({
-        type: 'call_answer',
-        call_id: incomingCall.call_id,
-        caller_id: incomingCall.caller_id,
-        sdp: answer
-      });
-      
-      setActiveCall({
-        call_id: incomingCall.call_id,
-        caller_id: incomingCall.caller_id,
-        caller_name: incomingCall.caller_name,
-        call_type: incomingCall.call_type
-      });
+      send({ type: 'call_answer', call_id: incomingCall.call_id, caller_id: incomingCall.caller_id, sdp: answer });
+      setActiveCall({ call_id: incomingCall.call_id, caller_id: incomingCall.caller_id, caller_name: incomingCall.caller_name, call_type: incomingCall.call_type });
       setCallStatus('connected');
       setParticipants([user.id, incomingCall.caller_id]);
       setIncomingCall(null);
-      
-      // Start duration timer
       startDurationTimer();
-      
-      // Update status in API
       callingApi.callAction(incomingCall.call_id, { action: 'answer' }, user.id).catch(() => {});
-      
     } catch (err) {
-      console.error('Failed to answer call:', err);
+      console.error('Failed to answer:', err);
       rejectCall();
     }
   }, [incomingCall, user, createPeerConnection, getUserMedia, send]);
@@ -341,64 +365,46 @@ export const CallProvider = ({ children }) => {
   
   // End call
   const endCall = useCallback(() => {
+    // SIP hangup
+    if (activeCall?.call_type === 'sip') {
+      sipService.hangup().catch(() => {});
+    }
+
     // Stop all streams
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach(track => track.stop());
-      screenStreamRef.current = null;
-    }
-    
-    // Close all peer connections
+    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(track => track.stop()); localStreamRef.current = null; }
+    if (screenStreamRef.current) { screenStreamRef.current.getTracks().forEach(track => track.stop()); screenStreamRef.current = null; }
     Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
     peerConnectionsRef.current = {};
-    
-    // Stop duration timer
-    if (durationIntervalRef.current) {
-      clearInterval(durationIntervalRef.current);
-      durationIntervalRef.current = null;
-    }
-    
-    // Send hangup message
-    if (activeCall?.call_id) {
-      send({
-        type: 'call_hangup',
-        call_id: activeCall.call_id
-      });
+    if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
+
+    if (activeCall?.call_id && activeCall?.call_type !== 'sip') {
+      send({ type: 'call_hangup', call_id: activeCall.call_id });
       callingApi.callAction(activeCall.call_id, { action: 'hangup' }, user?.id).catch(() => {});
     }
-    
-    // Reset state
-    setActiveCall(null);
-    setCallStatus('idle');
-    setIsMuted(false);
-    setIsVideoEnabled(false);
-    setIsScreenSharing(false);
-    setIsRecording(false);
-    setCallDuration(0);
-    setRemoteStreams({});
-    setParticipants([]);
+
+    setActiveCall(null); setCallStatus('idle'); setIsMuted(false); setIsVideoEnabled(false);
+    setIsScreenSharing(false); setIsRecording(false); setCallDuration(0);
+    setRemoteStreams({}); setParticipants([]);
   }, [activeCall, send, user]);
   
   // Toggle mute
   const toggleMute = useCallback(() => {
+    // SIP mute
+    if (activeCall?.call_type === 'sip') {
+      if (isMuted) { sipService.unmute(); setIsMuted(false); }
+      else { sipService.mute(); setIsMuted(true); }
+      return;
+    }
+    // WebRTC mute
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!audioTrack.enabled);
-        
-        send({
-          type: 'call_mute',
-          call_id: activeCall?.call_id,
-          is_muted: !audioTrack.enabled,
-          media_type: 'audio'
-        });
+        send({ type: 'call_mute', call_id: activeCall?.call_id, is_muted: !audioTrack.enabled, media_type: 'audio' });
       }
     }
-  }, [activeCall, send]);
+  }, [activeCall, isMuted, send]);
   
   // Toggle video
   const toggleVideo = useCallback(async () => {
@@ -492,17 +498,28 @@ export const CallProvider = ({ children }) => {
   // Toggle hold
   const toggleHold = useCallback(() => {
     const isOnHold = callStatus === 'on_hold';
+    if (activeCall?.call_type === 'sip') {
+      if (isOnHold) sipService.unhold(); else sipService.hold();
+    }
     setCallStatus(isOnHold ? 'connected' : 'on_hold');
-    
-    send({
-      type: 'call_hold',
-      call_id: activeCall?.call_id,
-      is_held: !isOnHold
-    });
-    
-    callingApi.callAction(activeCall?.call_id, { action: isOnHold ? 'unhold' : 'hold' }, user?.id).catch(() => {});
+    if (activeCall?.call_type !== 'sip') {
+      send({ type: 'call_hold', call_id: activeCall?.call_id, is_held: !isOnHold });
+      callingApi.callAction(activeCall?.call_id, { action: isOnHold ? 'unhold' : 'hold' }, user?.id).catch(() => {});
+    }
   }, [callStatus, activeCall, send, user]);
-  
+
+  // Transfer call (SIP + WebRTC)
+  const transferCall = useCallback((targetUserId) => {
+    const target = callableContacts.find(c => c.user_id === targetUserId);
+    if (activeCall?.call_type === 'sip' && target?.extension) {
+      sipService.transfer(target.extension).then(() => toast.success('Call transferred')).catch(e => toast.error(`Transfer failed: ${e.message}`));
+    } else {
+      send({ type: 'call_transfer', call_id: activeCall?.call_id, transfer_to_user_id: targetUserId });
+      callingApi.callAction(activeCall?.call_id, { action: 'transfer', target_user_id: targetUserId }, user?.id).catch(() => {});
+    }
+    toast.info('Transferring...');
+  }, [activeCall, callableContacts, send, user]);
+
   // Toggle recording
   const toggleRecording = useCallback(async () => {
     if (isRecording) {
@@ -515,23 +532,7 @@ export const CallProvider = ({ children }) => {
       toast.success('Recording started');
     }
   }, [isRecording, activeCall]);
-  
-  // Transfer call
-  const transferCall = useCallback((targetUserId) => {
-    send({
-      type: 'call_transfer',
-      call_id: activeCall?.call_id,
-      transfer_to_user_id: targetUserId
-    });
-    
-    callingApi.callAction(activeCall?.call_id, { 
-      action: 'transfer', 
-      target_user_id: targetUserId 
-    }, user?.id).catch(() => {});
-    
-    toast.info('Transferring call...');
-  }, [activeCall, send, user]);
-  
+
   // Add participant to conference
   const addParticipant = useCallback((targetUserId) => {
     send({
@@ -585,6 +586,7 @@ export const CallProvider = ({ children }) => {
       myExtension,
       callableContacts,
       localStream: localStreamRef.current,
+      sipRegistered,
       
       // Actions
       initiateCall,
@@ -598,6 +600,7 @@ export const CallProvider = ({ children }) => {
       toggleRecording,
       transferCall,
       addParticipant,
+      sendDtmf: (tone) => sipService.sendDtmf(tone),
       
       // Helpers
       isInCall: !!activeCall,
