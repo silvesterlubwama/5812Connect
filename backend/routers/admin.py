@@ -49,7 +49,7 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)):
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    password = data.get("password") or secrets.token_urlsafe(10)
+    password = data.get("password") or "User@58:12"
     user_id = str(uuid.uuid4())
     user = {
         "id": user_id,

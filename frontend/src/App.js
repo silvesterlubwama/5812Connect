@@ -94,6 +94,7 @@ function AppRoutes() {
         <Route path="members" element={<UnifiedPeoplePage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="tasks" element={<TasksPage />} />
+        <Route path="boards" element={<TasksPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="check-ins" element={<CheckInsPage />} />
         <Route path="settings" element={<SettingsPage />} />

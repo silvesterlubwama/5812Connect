@@ -30,7 +30,7 @@ async def get_currencies():
 @router.get("/global-settings")
 async def get_global_settings(current_user: dict = Depends(get_current_user)):
     doc = await db.global_settings.find_one({"_key": "global"}, {"_id": 0})
-    return doc or {"_key": "global", "app_name": "58:12 Global Connect", "currency": "UGX", "main_currency": "USD", "footer_text": "58:12 Global Connect", "contact_email": "", "contact_phone": "", "contact_address": "", "logo_url": ""}
+    return doc or {"_key": "global", "app_name": "58:12 Connect", "org_name": "58:12 Global", "currency": "UGX", "main_currency": "USD", "footer_text": "58:12 Global", "contact_email": "", "contact_phone": "", "contact_address": "", "logo_url": ""}
 
 @router.put("/global-settings")
 async def update_global_settings(settings: dict, current_user: dict = Depends(require_admin)):

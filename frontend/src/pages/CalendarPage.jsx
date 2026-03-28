@@ -205,9 +205,14 @@ export default function CalendarPage() {
             <Upload size={13} /> Import iCal
           </Button>
           <Button variant="outline" size="icon" onClick={prev}><ChevronLeft size={16} /></Button>
-          <span className="text-sm font-semibold min-w-[150px] text-center">{MONTHS[current.month]} {current.year}</span>
+          <span className="text-sm font-semibold min-w-[150px] text-center cursor-pointer" onClick={() => setCurrent(c => ({ ...c, year: c.year - 1 }))} title="Click for previous year">{MONTHS[current.month]} {current.year}</span>
           <Button variant="outline" size="icon" onClick={next}><ChevronRight size={16} /></Button>
           <Button variant="outline" size="sm" onClick={() => setCurrent({ month: today.getMonth(), year: today.getFullYear() })}>Today</Button>
+          <div className="hidden sm:flex items-center gap-1 border rounded-lg px-1">
+            <Button variant="ghost" size="sm" className="h-7 text-xs px-1.5" onClick={() => setCurrent(c => ({ ...c, year: c.year - 1 }))} data-testid="prev-year-btn">{current.year - 1}</Button>
+            <span className="text-xs font-bold text-primary">{current.year}</span>
+            <Button variant="ghost" size="sm" className="h-7 text-xs px-1.5" onClick={() => setCurrent(c => ({ ...c, year: c.year + 1 }))} data-testid="next-year-btn">{current.year + 1}</Button>
+          </div>
           <Button size="sm" className="gap-1.5" asChild><Link to="/events"><Plus size={14} />New Event</Link></Button>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRecurring(true)} data-testid="recurring-events-btn"><Repeat size={14} />Recurring</Button>
         </div>

@@ -81,7 +81,7 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
         query["is_public"] = is_public
     if visibility and visibility != "all":
         query["visibility"] = visibility
-    events = await db.events.find(query, {"_id": 0}).sort("date", -1).to_list(200)
+    events = await db.events.find(query, {"_id": 0}).sort([("status", 1), ("date", 1)]).to_list(200)
     # Filter imported events: only show to importer or invited users
     uid = current_user["id"]
     filtered = []
