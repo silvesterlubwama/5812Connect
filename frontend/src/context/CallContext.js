@@ -273,8 +273,9 @@ export const CallProvider = ({ children }) => {
         return;
       }
 
-      // WebRTC answer
-      const stream = await getUserMedia(withVideo);
+      // WebRTC answer — match incoming call type (video if caller sent video)
+      const isVideoCall = withVideo || incomingCall.call_type === 'video';
+      const stream = await getUserMedia(isVideoCall);
       const pc = createPeerConnection(incomingCall.caller_id);
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.sdp));
       const answer = await pc.createAnswer();

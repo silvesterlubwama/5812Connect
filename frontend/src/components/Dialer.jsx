@@ -60,7 +60,8 @@ export default function Dialer({ open, onClose }) {
     return (
       (c.name || '').toLowerCase().includes(term) ||
       (c.display_name || '').toLowerCase().includes(term) ||
-      c.extension.includes(term)
+      (c.extension || '').includes(term) ||
+      (c.email || '').toLowerCase().includes(term)
     );
   });
 
@@ -70,6 +71,7 @@ export default function Dialer({ open, onClose }) {
     dnd: 'bg-red-500',
     offline: 'bg-slate-400',
     on_call: 'bg-blue-500',
+    sip: 'bg-blue-500', // Blue dot for SIP-registered users
   };
 
   return (
@@ -126,11 +128,18 @@ export default function Dialer({ open, onClose }) {
                       <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium">
                         {(contact.name || contact.display_name || '?').charAt(0).toUpperCase()}
                       </div>
-                      <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${statusColors[contact.status] || statusColors.offline}`} />
+                      {contact.extension ? (
+                        <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${sipRegistered ? 'bg-blue-500' : statusColors[contact.status] || statusColors.offline}`} title={sipRegistered && contact.extension ? 'SIP Available' : contact.status || 'offline'} />
+                      ) : (
+                        <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background bg-slate-400`} title="WebRTC only" />
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{contact.name || contact.display_name}</p>
-                      <p className="text-xs text-muted-foreground">Ext. {contact.extension}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {contact.extension ? `Ext. ${contact.extension}` : 'WebRTC'} 
+                        {sipRegistered && contact.extension && <span className="text-blue-500 ml-1">SIP</span>}
+                      </p>
                     </div>
                     <div className="flex gap-1">
                       <Button

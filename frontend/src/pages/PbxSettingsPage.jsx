@@ -41,7 +41,7 @@ export default function PbxSettingsPage() {
   const [showRuleForm, setShowRuleForm] = useState(false);
   const [testing, setTesting] = useState(null);
 
-  const [pbxForm, setPbxForm] = useState({ name: '', provider: 'freepbx', host: '', port: 5060, username: '', password: '', sip_username: '', sip_password: '', sip_domain: '', api_key: '', api_url: '', websocket_url: '', stun_servers: 'stun:stun.l.google.com:19302', turn_servers: [], is_active: true, is_default: false });
+  const [pbxForm, setPbxForm] = useState({ name: '', provider: 'freepbx', host: '', port: 5060, username: '', password: '', sip_username: '', sip_password: '', sip_domain: '', api_key: '', api_url: '', websocket_url: '', stun_servers: 'stun:stun.l.google.com:19302', turn_servers: [], is_active: true, is_default: false, sip_only: false });
   const [extForm, setExtForm] = useState({ user_id: '', extension: '', display_name: '', voicemail_enabled: true, voicemail_pin: '', dnd_enabled: false, forward_to: '' });
   const [queueForm, setQueueForm] = useState({ name: '', strategy: 'ring_all', timeout: 30, max_wait: 300, members: '', announce_position: true });
   const [ruleForm, setRuleForm] = useState({ name: '', pattern: '', action: 'allow', prefix: '', priority: 10, enabled: true });
@@ -346,6 +346,8 @@ export default function PbxSettingsPage() {
             <div className="space-y-1.5"><Label className="text-xs">STUN Servers (one per line)</Label><Textarea rows={2} value={pbxForm.stun_servers} onChange={e => setPbxForm({...pbxForm, stun_servers: e.target.value})} /></div>
             <div className="flex items-center justify-between p-2 border rounded-lg"><Label className="text-xs">Active</Label><Switch checked={pbxForm.is_active} onCheckedChange={v => setPbxForm({...pbxForm, is_active: v})} /></div>
             <div className="flex items-center justify-between p-2 border rounded-lg"><Label className="text-xs">Default PBX</Label><Switch checked={pbxForm.is_default} onCheckedChange={v => setPbxForm({...pbxForm, is_default: v})} /></div>
+            <div className="flex items-center justify-between p-2 border rounded-lg"><Label className="text-xs">SIP Only (no ICE/STUN)</Label><Switch checked={pbxForm.sip_only || false} onCheckedChange={v => setPbxForm({...pbxForm, sip_only: v})} /></div>
+            <p className="text-[10px] text-muted-foreground">Enable "SIP Only" when your PBX handles media routing directly without WebRTC ICE negotiation.</p>
             <div className="flex gap-3"><Button variant="outline" className="flex-1" onClick={() => { setShowPbxForm(false); setEditPbx(null); }}>Cancel</Button><Button className="flex-1" onClick={savePbx} data-testid="save-pbx-btn"><Save size={14} className="mr-1" /> {editPbx ? 'Update' : 'Add'}</Button></div>
           </div>
         </DialogContent>

@@ -52,12 +52,13 @@ export default function CallInterface() {
     }
   }, [localStream, isVideoEnabled]);
   
-  // Attach remote stream to video element
+  // Attach remote stream to video/audio element
   useEffect(() => {
     if (remoteVideoRef.current) {
       const streams = Object.values(remoteStreams);
       if (streams.length > 0) {
         remoteVideoRef.current.srcObject = streams[0];
+        remoteVideoRef.current.play().catch(() => {});
       }
     }
   }, [remoteStreams]);
@@ -122,15 +123,15 @@ export default function CallInterface() {
       
       {/* Video Area */}
       <div className="flex-1 relative bg-slate-800 flex items-center justify-center overflow-hidden">
-        {/* Remote Video (Main) */}
-        {Object.keys(remoteStreams).length > 0 ? (
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className="w-full h-full object-cover"
-          />
-        ) : (
+        {/* Remote Video/Audio - always mounted for audio playback */}
+        <video
+          ref={remoteVideoRef}
+          autoPlay
+          playsInline
+          className={`w-full h-full object-cover ${Object.keys(remoteStreams).length === 0 ? 'hidden' : ''}`}
+        />
+        {/* Avatar placeholder when no video */}
+        {Object.keys(remoteStreams).length === 0 && (
           <div className="flex flex-col items-center justify-center">
             <div className="h-32 w-32 rounded-full bg-slate-700 flex items-center justify-center mb-4">
               <span className="text-5xl text-white font-bold">

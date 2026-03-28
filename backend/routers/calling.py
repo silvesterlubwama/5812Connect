@@ -50,6 +50,7 @@ class PbxConfigCreate(BaseModel):
     turn_servers: List[Dict] = []
     is_active: bool = True
     is_default: bool = False
+    sip_only: bool = False  # When True, disables ICE/STUN for direct PBX media routing
 
 class CallInitiate(BaseModel):
     to_user_id: Optional[str] = None
@@ -210,12 +211,12 @@ async def list_pbx_configs(db=Depends(get_db)):
 @router.get("/pbx-configs/sip-credentials")
 async def get_sip_credentials(db=Depends(get_db)):
     """Get SIP credentials for the default active PBX (for SIP.js registration).
-    Returns sip_username, sip_password, sip_domain, websocket_url, host."""
+    Returns sip_username, sip_password, sip_domain, websocket_url, host, sip_only."""
     config = await db.pbx_configs.find_one(
         {"is_default": True, "is_active": True},
         {"_id": 0, "sip_username": 1, "sip_password": 1, "sip_domain": 1,
          "websocket_url": 1, "host": 1, "port": 1, "provider": 1,
-         "stun_servers": 1, "turn_servers": 1}
+         "stun_servers": 1, "turn_servers": 1, "sip_only": 1}
     )
     if not config:
         return {"registered": False, "error": "No default active PBX"}

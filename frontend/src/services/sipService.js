@@ -92,16 +92,20 @@ class SipService {
         logLevel: 'warn',
         transportOptions: {
           server: wsUrl,
-          connectionTimeout: 10,
+          connectionTimeout: 15,
           keepAliveInterval: 30,
         },
         sessionDescriptionHandlerFactoryOptions: {
           peerConnectionConfiguration: {
-            iceServers: [
+            // When sipOnly mode (no ICE needed), use empty iceServers
+            // PBX handles media routing directly
+            iceServers: config.sip_only ? [] : [
               { urls: 'stun:stun.l.google.com:19302' },
-              ...(config.stun_servers || []).map(s => ({ urls: s })),
+              ...(config.stun_servers || []).map(s => typeof s === 'string' ? { urls: s } : s),
             ],
           },
+          // Allow audio codecs that PBX supports (PCMU, PCMA for traditional, Opus for WebRTC)
+          constraints: { audio: true, video: false },
         },
       },
     };
