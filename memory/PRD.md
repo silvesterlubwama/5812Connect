@@ -1,69 +1,57 @@
-# 58:12 Connect (58:12 Global) - Product Requirements
+# 58:12 Connect - Product Requirements
 
 ## Overview
-Multi-tenant CRM for 58:12 Global: campuses, members, events, check-ins, finances, sales, outreach, resources with deep RBAC, full-featured calling, unified communications with threading and conferencing.
+Multi-tenant CRM for 58:12 Global: campuses, members, events, check-ins, finances, sales, outreach, resources with deep RBAC, full PBX-capable calling, unified communications with threading/conferencing, and self-service portal.
 
 ## Architecture
 - **Frontend**: React + Tailwind CSS + Shadcn/UI
 - **Backend**: FastAPI + Motor (Async MongoDB)
-- **Auth**: JWT RBAC - Admin/System Admin > Executive Director > Adviser > Director > Manager > Coordinator > Staff > Volunteer > Member > Parent
-- **Global Access**: Only Admin + System Admin + Executive Director have cross-campus visibility
-- **Integrations**: Resend (email), Gemini AI (Emergent LLM Key), Google OAuth (Emergent-managed)
-- **Calling**: WebRTC + WebSocket + optional PBX
-- **Presence**: In-memory with WebSocket broadcasts (Green/Yellow/Blue/Red)
+- **Auth**: JWT RBAC with phone/email login
+- **Global Access**: Admin + System Admin + Executive Director
+- **Campus Switcher**: Admin + ED + Adviser
+- **Calling**: WebRTC + WebSocket + PBX (auto-attendant, call queues, forwarding)
+- **Presence**: In-memory with WebSocket broadcasts
 
-## Completed Features (All Phases)
+## All Completed Features
 
-### Core (Phase 1-6)
-- [x] Auth, Dashboard, People, Events, Calendar, Boards (Kanban), Check-ins
-- [x] Outreach, Communications, Resources, Access Control, Financial, Sales
-- [x] 14 Major Enhancements, Calling System, Portal
+### Core (Phase 1-7)
+- [x] Auth, Dashboard, People, Events, Calendar, Boards, Check-ins, Outreach, Comms, Resources, Access Control, Financial, Sales, Attendance, 14 Major Enhancements, Full Calling System, Portal
 
-### Phase 8 - Bug Fixes & Unified Comms
-- [x] Location filtering (async get_campus_filter with sub-location expansion)
-- [x] Data isolation, Calendar editing, Staff task creation, Presence, Reactions
+### Phase 8-9 - Bug Fixes, Unified Comms, Refactoring
+- [x] Location filtering, Data isolation, Calendar editing, Staff tasks, Presence, Reactions, Threading, Conferencing, AdminPage split (319 lines), server.py modularization (879 lines)
 
-### Phase 9 - Refactoring & Advanced Comms
-- [x] AdminPage split (1037->319 lines), server.py modularized (1100->879 lines)
-- [x] Group conferencing, Thread support, Conference scheduling/email invites
+### Phase 10 - Application Overhaul
+- [x] Data isolation overhaul (Admin+ED global only), Collapsible nav, Campus switcher, Role-based visibility, Renamed app/location, Admin-only API/PBX, Default password, Events ordering, Year navigation
 
-### Phase 10 - Application Overhaul (2026-03-27)
-- [x] **Data Isolation Overhaul**: Only Admin + ED have global access. Directors/Advisers now campus-scoped
-- [x] **Campus Switcher**: Persistent dropdown for Admin/ED users, stored on user record, filters ALL data via get_campus_filter
-- [x] **Navigation Overhaul**: Collapsible sections with auto-expand. New structure: Ministry (Outreach, Events, Check-ins), Operations (Boards, Resources, Calendar, People, Scheduling, Access), Comms (Chat, History), Finance, Analytics, Admin
-- [x] **Role-Based Nav Visibility**: Users only see sections/pages they can access
-- [x] **Renamed**: Tasks -> Boards, Main location -> "58:12 Global (Central)", App name -> "58:12 Connect"
-- [x] **Admin-Only Lock**: Financial APIs + PBX Settings restricted to admin role
-- [x] **Default Password**: New users get "User@58:12"
-- [x] **Events Ordering**: Upcoming first, then by date
-- [x] **Calendar Year Navigation**: Prev/next year buttons
-- [x] **Close Dialog on Save**: Admin edit dialog auto-closes on successful save
+### Phase 11 - Phase D+E Features (2026-03-27)
+- [x] **Adviser Campus Switcher**: Advisers get location switcher via `has_campus_switcher` and `CAMPUS_SWITCHER_ROLES`
+- [x] **Chat Auto-Detect Type**: New conversation defaults to direct (1 user), auto-switches to group when 2+ participants, auto-names direct messages
+- [x] **GDPR Accessible to All**: 'My Privacy' nav link visible to all roles, not just admins
+- [x] **Venue Offsite + Non-Bookable**: `is_offsite`, `is_bookable`, `country`, `address` fields on venue model
+- [x] **Extension in Staff Profile**: Extension and call forward fields in UserEditDialog Account tab
+- [x] **QR Code Check-In**: `POST /api/checkins/qr-scan` looks up members by ID, national_id, email, or PIN
+- [x] **Public Calendar by Country**: Auto-detects user country from timezone for location-relevant events
+- [x] **Outreach Auto-Events**: Creating/updating recurring programmes auto-generates calendar events. Deleting programme auto-deletes associated events
+- [x] **Auto-Attendant**: `GET/PUT /api/calling/auto-attendant` with greeting, menu options, business hours, after-hours config
+- [x] **Call Queues**: CRUD `/api/calling/queues` with ring_all, round_robin, least_recent, random strategies
+- [x] **Call Forwarding**: `GET/PUT /api/calling/forwarding/{user_id}` with always/busy/no-answer/offline rules
+- [x] **Outgoing Call Rules**: CRUD `/api/calling/outgoing-rules` with pattern matching, allow/block/prefix actions
+- [x] **Portal Enhancement**: Unified portal with "Events & RSVP", renamed to "58:12 Connect Portal"
 
 ## Navigation Structure
-- **Dashboard** + My Portal
-- **Ministry**: Outreach, Events, Check-ins
-- **Operations**: Boards, Resources, Calendar, People, Scheduling, Access Control
-- **Comms**: Chat, History
-- **Finance**: Financial, Sales & Products (Manager+)
-- **Analytics**: Attendance, Sales, Location, Advanced, Reports, Report Builder (Manager+)
-- **Admin**: Staff Management, Campuses, Financial APIs, PBX & Extensions, Email Templates, Settings, Audit, GDPR (Admin only)
+- Dashboard + My Portal + My Privacy
+- Ministry: Outreach, Events, Check-ins
+- Operations: Boards, Resources, Calendar, People, Scheduling, Access Control
+- Comms: Chat, History
+- Finance: Financial, Sales & Products
+- Analytics: Attendance, Sales, Location, Advanced, Reports, Report Builder
+- Admin: Staff Management, Campuses, Financial APIs, PBX & Extensions, Email Templates, Settings, Audit, GDPR
 
 ## Test Reports
-- Iterations 1-32: All passed
-- Iteration 33: 100% (15/15 - Phase 10 overhaul)
+- Iterations 1-33: All passed
+- Iteration 34: 100% (26/26 - Phase D+E features)
 
-## Upcoming / Backlog (Phase D-E from user request)
-- [ ] Chat defaults to 1 user, group only if 2+ selected
-- [ ] Merge board calendar with main calendar
-- [ ] Public calendar by country on bookings page
-- [ ] Outreach auto-creates/deletes events with enhanced recurrence
-- [ ] Unified parent + member portal (phone login, profile edit, staff chat, RSVP, volunteer, docs)
-- [ ] GDPR settings accessible to all users
-- [ ] Boards assigned to campus/sub-location
-- [ ] Venue setup moved to Campus page with offsite/non-bookable options
-- [ ] Auto-attendants, call queues, call forwarding (advanced PBX)
-- [ ] WebRTC calling fixes
-- [ ] QR code scanning for faster check-in
-- [ ] Extension management in staff profile (admin-only)
-- [ ] Multi-role/multi-location user switching
-- [ ] Redis-backed presence for production scaling
+## Remaining Backlog
+- [ ] Full WebRTC audio/video calling end-to-end testing and fixes
+- [ ] Redis-backed presence for production horizontal scaling
+- [ ] Further server.py extraction (remaining seed, notifications, OAuth sections)
