@@ -52,7 +52,7 @@ export const WebSocketProvider = ({ children }) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
     const host = backendUrl.replace(/^https?:\/\//, '');
-    const wsUrl = `${protocol}//${host}/ws/${user.id}`;
+    const wsUrl = `${protocol}//${host}/api/ws/${user.id}`;
 
     try {
       const ws = new WebSocket(wsUrl);

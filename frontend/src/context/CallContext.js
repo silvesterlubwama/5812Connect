@@ -14,7 +14,7 @@ export const useCall = () => {
 
 export const CallProvider = ({ children }) => {
   const { user } = useAuth();
-  const { sendMessage, lastMessage, isConnected } = useWebSocket();
+  const { send, addListener } = useWebSocket();
   
   // Call state
   const [activeCall, setActiveCall] = useState(null);
@@ -60,55 +60,25 @@ export const CallProvider = ({ children }) => {
   
   // Handle incoming WebSocket messages for calls
   useEffect(() => {
-    if (!lastMessage) return;
-    
-    const { type, ...data } = lastMessage;
-    
-    switch (type) {
-      case 'incoming_call':
-        handleIncomingCall(data);
-        break;
-      case 'call_answered':
-        handleCallAnswered(data);
-        break;
-      case 'ice_candidate':
-        handleIceCandidate(data);
-        break;
-      case 'call_rejected':
-        handleCallRejected(data);
-        break;
-      case 'call_ended':
-        handleCallEnded(data);
-        break;
-      case 'call_hold_changed':
-        if (data.is_held) {
-          setCallStatus('on_hold');
-        } else {
-          setCallStatus('connected');
-        }
-        break;
-      case 'call_mute_changed':
-        // Update remote participant mute state
-        break;
-      case 'conference_invite':
-        handleConferenceInvite(data);
-        break;
-      case 'conference_participant_added':
-        setParticipants(prev => [...prev, data.new_participant_id]);
-        break;
-      case 'incoming_transfer':
-        handleIncomingTransfer(data);
-        break;
-      case 'screen_share_started':
-        toast.info('Remote user started screen sharing');
-        break;
-      case 'screen_share_stopped':
-        toast.info('Remote user stopped screen sharing');
-        break;
-      default:
-        break;
-    }
-  }, [lastMessage]);
+    const callTypes = ['incoming_call', 'call_answered', 'ice_candidate', 'call_rejected', 'call_ended', 'call_hold_changed', 'call_mute_changed', 'conference_invite', 'conference_participant_added', 'incoming_transfer', 'screen_share_started', 'screen_share_stopped'];
+    const unsubs = callTypes.map(type => addListener(type, (data) => {
+      switch (type) {
+        case 'incoming_call': handleIncomingCall(data); break;
+        case 'call_answered': handleCallAnswered(data); break;
+        case 'ice_candidate': handleIceCandidate(data); break;
+        case 'call_rejected': handleCallRejected(data); break;
+        case 'call_ended': handleCallEnded(data); break;
+        case 'call_hold_changed': setCallStatus(data.is_held ? 'on_hold' : 'connected'); break;
+        case 'conference_invite': handleConferenceInvite(data); break;
+        case 'conference_participant_added': setParticipants(prev => [...prev, data.new_participant_id]); break;
+        case 'incoming_transfer': handleIncomingTransfer(data); break;
+        case 'screen_share_started': toast.info('Remote user started screen sharing'); break;
+        case 'screen_share_stopped': toast.info('Remote user stopped screen sharing'); break;
+        default: break;
+      }
+    }));
+    return () => unsubs.forEach(u => u());
+  }, [addListener]);
   
   // Create peer connection
   const createPeerConnection = useCallback((targetUserId) => {
@@ -118,7 +88,7 @@ export const CallProvider = ({ children }) => {
     
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendMessage({
+        send({
           type: 'ice_candidate',
           call_id: activeCall?.call_id,
           candidate: event.candidate,
@@ -149,7 +119,7 @@ export const CallProvider = ({ children }) => {
     
     peerConnectionsRef.current[targetUserId] = pc;
     return pc;
-  }, [activeCall, sendMessage]);
+  }, [activeCall, send]);
   
   // Get user media
   const getUserMedia = useCallback(async (video = false) => {
@@ -169,7 +139,7 @@ export const CallProvider = ({ children }) => {
   
   // Initiate a call
   const initiateCall = useCallback(async (targetUserId, callType = 'audio') => {
-    if (!user?.id || !isConnected) {
+    if (!user?.id) {
       toast.error('Not connected');
       return;
     }
@@ -201,7 +171,7 @@ export const CallProvider = ({ children }) => {
       await pc.setLocalDescription(offer);
       
       // Send offer via WebSocket
-      sendMessage({
+      send({
         type: 'call_offer',
         call_id,
         target_user_id: targetUserId,
@@ -217,13 +187,13 @@ export const CallProvider = ({ children }) => {
       endCall();
       throw err;
     }
-  }, [user, isConnected, createPeerConnection, getUserMedia, sendMessage, myExtension]);
+  }, [user, createPeerConnection, getUserMedia, send, myExtension]);
   
   // Handle incoming call
   const handleIncomingCall = useCallback((data) => {
     if (activeCall) {
       // Already in a call, reject
-      sendMessage({
+      send({
         type: 'call_reject',
         call_id: data.call_id,
         caller_id: data.caller_id,
@@ -240,7 +210,7 @@ export const CallProvider = ({ children }) => {
     
     // Store ringtone ref to stop it later
     setIncomingCall(prev => ({ ...data, ringtone }));
-  }, [activeCall, sendMessage]);
+  }, [activeCall, send]);
   
   // Answer incoming call
   const answerCall = useCallback(async (withVideo = false) => {
@@ -267,7 +237,7 @@ export const CallProvider = ({ children }) => {
       await pc.setLocalDescription(answer);
       
       // Send answer
-      sendMessage({
+      send({
         type: 'call_answer',
         call_id: incomingCall.call_id,
         caller_id: incomingCall.caller_id,
@@ -294,7 +264,7 @@ export const CallProvider = ({ children }) => {
       console.error('Failed to answer call:', err);
       rejectCall();
     }
-  }, [incomingCall, user, createPeerConnection, getUserMedia, sendMessage]);
+  }, [incomingCall, user, createPeerConnection, getUserMedia, send]);
   
   // Reject incoming call
   const rejectCall = useCallback((reason = 'rejected') => {
@@ -306,7 +276,7 @@ export const CallProvider = ({ children }) => {
       incomingCall.ringtone.currentTime = 0;
     }
     
-    sendMessage({
+    send({
       type: 'call_reject',
       call_id: incomingCall.call_id,
       caller_id: incomingCall.caller_id,
@@ -316,7 +286,7 @@ export const CallProvider = ({ children }) => {
     callingApi.callAction(incomingCall.call_id, { action: 'reject' }, user?.id).catch(() => {});
     
     setIncomingCall(null);
-  }, [incomingCall, sendMessage, user]);
+  }, [incomingCall, send, user]);
   
   // Handle call answered (we initiated the call)
   const handleCallAnswered = useCallback(async (data) => {
@@ -393,7 +363,7 @@ export const CallProvider = ({ children }) => {
     
     // Send hangup message
     if (activeCall?.call_id) {
-      sendMessage({
+      send({
         type: 'call_hangup',
         call_id: activeCall.call_id
       });
@@ -410,7 +380,7 @@ export const CallProvider = ({ children }) => {
     setCallDuration(0);
     setRemoteStreams({});
     setParticipants([]);
-  }, [activeCall, sendMessage, user]);
+  }, [activeCall, send, user]);
   
   // Toggle mute
   const toggleMute = useCallback(() => {
@@ -420,7 +390,7 @@ export const CallProvider = ({ children }) => {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!audioTrack.enabled);
         
-        sendMessage({
+        send({
           type: 'call_mute',
           call_id: activeCall?.call_id,
           is_muted: !audioTrack.enabled,
@@ -428,7 +398,7 @@ export const CallProvider = ({ children }) => {
         });
       }
     }
-  }, [activeCall, sendMessage]);
+  }, [activeCall, send]);
   
   // Toggle video
   const toggleVideo = useCallback(async () => {
@@ -442,7 +412,7 @@ export const CallProvider = ({ children }) => {
       localStreamRef.current.removeTrack(videoTrack);
       setIsVideoEnabled(false);
       
-      sendMessage({
+      send({
         type: 'call_mute',
         call_id: activeCall?.call_id,
         is_muted: true,
@@ -462,7 +432,7 @@ export const CallProvider = ({ children }) => {
         
         setIsVideoEnabled(true);
         
-        sendMessage({
+        send({
           type: 'call_mute',
           call_id: activeCall?.call_id,
           is_muted: false,
@@ -472,7 +442,7 @@ export const CallProvider = ({ children }) => {
         toast.error('Could not enable camera');
       }
     }
-  }, [activeCall, sendMessage]);
+  }, [activeCall, send]);
   
   // Toggle screen share
   const toggleScreenShare = useCallback(async () => {
@@ -484,7 +454,7 @@ export const CallProvider = ({ children }) => {
       }
       setIsScreenSharing(false);
       
-      sendMessage({
+      send({
         type: 'screen_share_stop',
         call_id: activeCall?.call_id
       });
@@ -509,7 +479,7 @@ export const CallProvider = ({ children }) => {
         
         setIsScreenSharing(true);
         
-        sendMessage({
+        send({
           type: 'screen_share_start',
           call_id: activeCall?.call_id
         });
@@ -517,21 +487,21 @@ export const CallProvider = ({ children }) => {
         toast.error('Could not share screen');
       }
     }
-  }, [isScreenSharing, activeCall, sendMessage]);
+  }, [isScreenSharing, activeCall, send]);
   
   // Toggle hold
   const toggleHold = useCallback(() => {
     const isOnHold = callStatus === 'on_hold';
     setCallStatus(isOnHold ? 'connected' : 'on_hold');
     
-    sendMessage({
+    send({
       type: 'call_hold',
       call_id: activeCall?.call_id,
       is_held: !isOnHold
     });
     
     callingApi.callAction(activeCall?.call_id, { action: isOnHold ? 'unhold' : 'hold' }, user?.id).catch(() => {});
-  }, [callStatus, activeCall, sendMessage, user]);
+  }, [callStatus, activeCall, send, user]);
   
   // Toggle recording
   const toggleRecording = useCallback(async () => {
@@ -548,7 +518,7 @@ export const CallProvider = ({ children }) => {
   
   // Transfer call
   const transferCall = useCallback((targetUserId) => {
-    sendMessage({
+    send({
       type: 'call_transfer',
       call_id: activeCall?.call_id,
       transfer_to_user_id: targetUserId
@@ -560,11 +530,11 @@ export const CallProvider = ({ children }) => {
     }, user?.id).catch(() => {});
     
     toast.info('Transferring call...');
-  }, [activeCall, sendMessage, user]);
+  }, [activeCall, send, user]);
   
   // Add participant to conference
   const addParticipant = useCallback((targetUserId) => {
-    sendMessage({
+    send({
       type: 'conference_add',
       call_id: activeCall?.call_id,
       participant_id: targetUserId
@@ -574,7 +544,7 @@ export const CallProvider = ({ children }) => {
       action: 'add_participant', 
       target_user_id: targetUserId 
     }, user?.id).catch(() => {});
-  }, [activeCall, sendMessage, user]);
+  }, [activeCall, send, user]);
   
   // Start duration timer
   const startDurationTimer = useCallback(() => {

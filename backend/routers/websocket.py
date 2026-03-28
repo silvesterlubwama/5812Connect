@@ -134,7 +134,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@router.websocket("/ws/{user_id}")
+@router.websocket("/api/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     await manager.connect(websocket, user_id)
     try:

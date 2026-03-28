@@ -648,7 +648,8 @@ async def mark_missed_calls_seen(user_id: str = Query(...), db=Depends(get_db)):
 
 @router.get("/contacts")
 async def get_callable_contacts(user_id: str = Query(...), db=Depends(get_db)):
-    """Get list of contacts that can be called (users with extensions)"""
+    """Get list of contacts that can be called (users with extensions + all staff)"""
+    # Users with extensions
     pipeline = [
         {"$lookup": {
             "from": "users",
@@ -669,9 +670,19 @@ async def get_callable_contacts(user_id: str = Query(...), db=Depends(get_db)):
             "role": "$user.role"
         }}
     ]
+    ext_contacts = await db.extensions.aggregate(pipeline).to_list(200)
+    ext_user_ids = {c["user_id"] for c in ext_contacts}
     
-    contacts = await db.extensions.aggregate(pipeline).to_list(200)
-    return contacts
+    # Also include staff users without extensions
+    staff_roles = ["admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager", "Coordinator", "Staff", "HR"]
+    staff_users = await db.users.find(
+        {"id": {"$ne": user_id, "$nin": list(ext_user_ids)}, "role": {"$in": staff_roles}, "status": "active"},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1}
+    ).to_list(200)
+    for u in staff_users:
+        ext_contacts.append({"user_id": u["id"], "extension": None, "display_name": u.get("name"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role")})
+    
+    return ext_contacts
 
 # ============== ICE SERVERS ==============
 
