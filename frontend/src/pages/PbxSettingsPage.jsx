@@ -127,30 +127,29 @@ export default function PbxSettingsPage() {
     <div className="p-6 space-y-6" data-testid="pbx-settings-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold font-heading">PBX & Extensions</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Manage phone system, extensions, queues, and call routing</p>
+          <h1 className="text-2xl font-semibold font-heading">PBX Integration</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Connect a local PBX (FreePBX/Asterisk/FreeSWITCH) for external calling, extensions, queues & routing</p>
         </div>
         <div className="flex items-center gap-2">
           {sipStatus.registered ? (
             <Badge className="gap-1.5 bg-green-100 text-green-700" data-testid="sip-status-badge"><CheckCircle size={12} /> SIP Registered</Badge>
           ) : sipStatus.error ? (
-            <Badge variant="destructive" className="gap-1.5 text-xs" data-testid="sip-status-badge" title={sipStatus.error}><XCircle size={12} /> SIP Error</Badge>
+            <Badge variant="destructive" className="gap-1.5 text-xs" data-testid="sip-status-badge" title={sipStatus.error}><XCircle size={12} /> Not Connected</Badge>
           ) : configs.length > 0 ? (
-            <Badge variant="outline" className="gap-1.5 text-xs" data-testid="sip-status-badge"><Wifi size={12} /> Connecting...</Badge>
-          ) : null}
+            <Badge variant="outline" className="gap-1.5 text-xs" data-testid="sip-status-badge"><Wifi size={12} /> Checking...</Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1.5 text-xs"><Server size={12} /> No PBX</Badge>
+          )}
         </div>
       </div>
 
-      {/* SIP Error Details */}
-      {sipStatus.error && (
-        <Card className="rounded-xl border-red-200 bg-red-50 dark:bg-red-950/20">
-          <CardContent className="p-3 flex items-start gap-3">
-            <XCircle size={16} className="text-red-500 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-red-800 dark:text-red-400">SIP Registration Failed</p>
-              <p className="text-xs text-red-600 dark:text-red-500 mt-0.5">{sipStatus.error}</p>
-              <p className="text-xs text-muted-foreground mt-1">Check: WebSocket URL is reachable (wss://), SIP credentials are correct, and PBX has WebSocket/WebRTC support enabled.</p>
-            </div>
+      {/* Info banner when no PBX */}
+      {configs.length === 0 && (
+        <Card className="rounded-xl border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="p-4">
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">Internal calling works without a PBX</p>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">Audio calls, video calls, screen sharing, and group calls are available now via WebRTC. Connect a PBX only if you need external phone numbers, SIP trunking, or traditional telephony features.</p>
+            <p className="text-xs text-muted-foreground mt-2">Supported: FreePBX/Asterisk, FreeSWITCH/FusionPBX, 3CX, or any SIP server with WebSocket support.</p>
           </CardContent>
         </Card>
       )}

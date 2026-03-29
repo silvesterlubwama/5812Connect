@@ -14,6 +14,7 @@ import { chatApi, membersApi, presenceApi, reactionsApi, conferencesApi } from '
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
+import { useCall } from '../context/CallContext';
 import { toast } from 'sonner';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
@@ -34,6 +35,7 @@ const PRESENCE_LABELS = {
 export default function CommsPage() {
   const { user } = useAuth();
   const { onlineUsers, typingUsers, sendTyping, sendChatMessage, sendReadReceipt, addListener } = useWebSocket();
+  const { initiateCall, isInCall } = useCall();
   const [conversations, setConversations] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -595,11 +597,19 @@ export default function CommsPage() {
               {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && (
                 <div className="flex items-center gap-1">
                   <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-green-600" data-testid="voice-call-btn"
-                    onClick={() => toast.info('Voice calling via the Dialer (green phone icon in header)')}>
+                    onClick={() => {
+                      const otherUser = selectedRoom.participants?.find(p => p !== user?.id);
+                      if (otherUser) { initiateCall(otherUser, 'audio'); }
+                      else { toast.error('No user to call'); }
+                    }}>
                     <Phone size={15} />
                   </Button>
                   <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-blue-600" data-testid="video-call-btn"
-                    onClick={() => toast.info('Video conferencing: use the dialer or conference scheduler')}>
+                    onClick={() => {
+                      const otherUser = selectedRoom.participants?.find(p => p !== user?.id);
+                      if (otherUser) { initiateCall(otherUser, 'video'); }
+                      else { toast.error('No user to call'); }
+                    }}>
                     <Video size={15} />
                   </Button>
                 </div>
