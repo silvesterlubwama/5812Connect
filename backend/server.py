@@ -1,3 +1,10 @@
+# Fix bcrypt 4.x + passlib 1.7.4 compatibility
+import bcrypt
+if not hasattr(bcrypt, '__about__'):
+    class _About:
+        __version__ = getattr(bcrypt, '__version__', '4.0.0')
+    bcrypt.__about__ = _About()
+
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
