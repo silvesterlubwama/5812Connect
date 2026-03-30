@@ -700,6 +700,7 @@ try:
     from routers.reactions import router as reactions_router
     from routers.locations import router as locations_router
     from routers.settings import router as settings_router
+    from routers.wave import router as wave_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -729,6 +730,7 @@ try:
     app.include_router(reactions_router)
     app.include_router(locations_router)
     app.include_router(settings_router)
+    app.include_router(wave_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

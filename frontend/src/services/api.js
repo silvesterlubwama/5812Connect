@@ -695,3 +695,14 @@ export const reactionsApi = {
   getMessageReactions: (messageId) => api.get(`/reactions/message/${messageId}`),
   getRecentReactions: (conversationId, limit = 10) => api.get(`/reactions/conversation/${conversationId}/recent?limit=${limit}`),
 };
+
+// ---- WAVE (Grandstream CloudUCM) ----
+export const waveApi = {
+  listServers: () => api.get('/wave/servers'),
+  addServer: (data) => api.post('/wave/servers', data),
+  updateServer: (id, data) => api.put(`/wave/servers/${id}`, data),
+  deleteServer: (id) => api.delete(`/wave/servers/${id}`),
+  getMyConfig: () => api.get('/wave/my-config'),
+  saveMyCredentials: (data) => api.put('/wave/my-credentials', data),
+};
+

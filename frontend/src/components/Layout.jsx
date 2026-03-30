@@ -69,6 +69,7 @@ const NAV_SECTIONS = [
     collapsible: true,
     items: [
       { to: '/comms', icon: MessageSquare, label: 'Chat' },
+      { to: '/wave', icon: Phone, label: 'Wave', roles: STAFF_PLUS },
       { to: '/call-history', icon: PhoneCall, label: 'History', roles: STAFF_PLUS },
     ]
   },
