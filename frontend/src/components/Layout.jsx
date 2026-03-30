@@ -68,9 +68,9 @@ const NAV_SECTIONS = [
     label: 'Comms',
     collapsible: true,
     items: [
-      { to: '/comms', icon: MessageSquare, label: 'Chat' },
-      { to: '/wave', icon: Phone, label: 'Wave', roles: STAFF_PLUS },
-      { to: '/call-history', icon: PhoneCall, label: 'History', roles: STAFF_PLUS },
+      { to: '/wave', icon: Phone, label: 'Wave' },
+      { to: '/comms', icon: MessageSquare, label: 'Internal Chat' },
+      { to: '/call-history', icon: PhoneCall, label: 'Call History', roles: STAFF_PLUS },
     ]
   },
   {
@@ -103,7 +103,6 @@ const NAV_SECTIONS = [
       { to: '/admin', icon: Shield, label: 'Staff Management' },
       { to: '/locations', icon: MapPin, label: 'Campuses' },
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
-      { to: '/pbx-settings', icon: Server, label: 'PBX & Extensions', roles: ADMIN_ROLES },
       { to: '/email-templates', icon: Mail, label: 'Email Templates' },
       { to: '/settings', icon: Settings, label: 'Settings' },
       { to: '/audit', icon: Shield, label: 'Audit Trail' },
