@@ -1,6 +1,9 @@
 """
-Wave API Tests - Iteration 44
-Tests for Grandstream Wave (CloudUCM) server configuration and user config endpoints
+Wave API Tests - Iteration 45
+Tests for Grandstream Wave H5 Embedded SDK integration:
+- Server CRUD endpoints
+- User config with extension and wave_password for auto-login
+- postMessage integration (mocked - depends on Wave accepting message format)
 """
 import pytest
 import requests
@@ -140,21 +143,42 @@ class TestWaveAPI:
     # ========== Wave User Config Tests ==========
     
     def test_get_my_wave_config(self):
-        """GET /api/wave/my-config - Get user's Wave config based on campus"""
+        """GET /api/wave/my-config - Get user's Wave config with extension and wave_password for H5 auto-login"""
         res = self.session.get(f"{BASE_URL}/api/wave/my-config")
         assert res.status_code == 200, f"Failed to get config: {res.text}"
         data = res.json()
         
-        # Verify response structure
+        # Verify response structure for H5 embedded SDK
         assert "server" in data, "Response should have server field"
-        assert "credentials" in data, "Response should have credentials field"
+        assert "extension" in data, "Response should have extension field for auto-login"
+        assert "wave_password" in data, "Response should have wave_password field for auto-login"
+        assert "auto_login" in data, "Response should have auto_login flag"
+        assert "display_name" in data, "Response should have display_name"
         
         if data["server"]:
             print(f"User's Wave server: {data['server'].get('name')} - {data['server'].get('url')}")
         else:
             print("No Wave server configured for user")
         
+        print(f"Extension: {data.get('extension')}, Auto-login: {data.get('auto_login')}")
+        
         return data
+    
+    def test_my_config_auto_login_flag(self):
+        """Test auto_login flag is True only when extension, wave_password, and server are all set"""
+        res = self.session.get(f"{BASE_URL}/api/wave/my-config")
+        assert res.status_code == 200
+        data = res.json()
+        
+        has_extension = bool(data.get("extension"))
+        has_password = bool(data.get("wave_password"))
+        has_server = bool(data.get("server"))
+        
+        expected_auto_login = has_extension and has_password and has_server
+        assert data.get("auto_login") == expected_auto_login, \
+            f"auto_login should be {expected_auto_login} (ext={has_extension}, pwd={has_password}, server={has_server})"
+        
+        print(f"Auto-login flag correctly set to {data.get('auto_login')}")
     
     def test_save_my_wave_credentials(self):
         """PUT /api/wave/my-credentials - Save user's Wave credentials"""

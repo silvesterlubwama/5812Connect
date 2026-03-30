@@ -55,7 +55,7 @@ async def delete_wave_server(server_id: str, current_user: dict = Depends(requir
 
 @router.get("/my-config")
 async def get_my_wave_config(current_user: dict = Depends(get_current_user)):
-    """Get the Wave server URL for the current user based on their campus"""
+    """Get the Wave server URL and auto-login credentials for the current user"""
     user_loc = current_user.get("location_id", "")
     user_locs = current_user.get("location_ids", [])
     # Try to find a server matching user's campus
@@ -63,16 +63,25 @@ async def get_my_wave_config(current_user: dict = Depends(get_current_user)):
     if user_loc or user_locs:
         all_locs = list(set([user_loc] + user_locs)) if user_loc else user_locs
         server = await db.wave_servers.find_one({"campus_id": {"$in": all_locs}}, {"_id": 0})
-    # Fallback to default
     if not server:
         server = await db.wave_servers.find_one({"is_default": True}, {"_id": 0})
     if not server:
         server = await db.wave_servers.find_one({}, {"_id": 0})
-    # Get user's Wave credentials
-    wave_creds = await db.wave_user_creds.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    # Get user's Wave extension and password from their profile
+    user_full = await db.users.find_one({"id": current_user["id"]}, {"_id": 0, "extension": 1, "wave_password": 1, "wave_server_id": 1, "name": 1})
+    extension = user_full.get("extension") if user_full else None
+    wave_password = user_full.get("wave_password") if user_full else None
+    # Check for specific server override
+    if user_full and user_full.get("wave_server_id"):
+        override = await db.wave_servers.find_one({"id": user_full["wave_server_id"]}, {"_id": 0})
+        if override:
+            server = override
     return {
         "server": server,
-        "credentials": wave_creds,
+        "extension": extension,
+        "wave_password": wave_password,
+        "display_name": current_user.get("name", ""),
+        "auto_login": bool(extension and wave_password and server),
     }
 
 

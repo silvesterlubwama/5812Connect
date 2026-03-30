@@ -177,9 +177,19 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <div className="space-y-2"><Label>PIN Code (also voicemail PIN)</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
             </div>
             {/* Extension (admin-only) */}
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">Wave / PBX</p>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Extension (admin assigns)</Label><Input maxLength={6} placeholder="3-6 digit ext" value={editForm.extension || ''} onChange={e => setEditForm({...editForm, extension: e.target.value})} data-testid="edit-extension" /></div>
+              <div className="space-y-2"><Label>Extension</Label><Input maxLength={6} placeholder="e.g. 1001" value={editForm.extension || ''} onChange={e => setEditForm({...editForm, extension: e.target.value})} data-testid="edit-extension" /></div>
+              <div className="space-y-2"><Label>Wave Password</Label><Input type="password" placeholder="Wave login password" value={editForm.wave_password || ''} onChange={e => setEditForm({...editForm, wave_password: e.target.value})} data-testid="edit-wave-password" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Call Forward To</Label><Input placeholder="Phone number" value={editForm.forward_to || ''} onChange={e => setEditForm({...editForm, forward_to: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Wave Server</Label>
+                <Select value={editForm.wave_server_id || '_auto'} onValueChange={v => setEditForm({...editForm, wave_server_id: v === '_auto' ? '' : v})}>
+                  <SelectTrigger><SelectValue placeholder="Auto (campus)" /></SelectTrigger>
+                  <SelectContent><SelectItem value="_auto">Auto (based on campus)</SelectItem></SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Title <span className="text-xs text-muted-foreground">(auto-suggested, editable)</span></Label>
