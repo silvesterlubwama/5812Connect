@@ -26,10 +26,6 @@
 
 ## SIP/PBX Configuration
 - **Provider**: RingTele / SkySwitch
-- **SIP Username**: 5812Global
-- **SIP Password**: 10FpSH6s7GA3
-- **SIP Domain**: 5812Global.23317.service
-- **Host**: 23317.hpbx.outboundproxy.com
-- **WebSocket URL**: wss://ws.connectuc.io:443 (primary)
-- **STUN**: 18.206.78.162:443, 34.197.68.234:443
-- **TURN**: 18.206.78.162:443, 34.197.68.234:443 (same credentials as SIP)
+- **Wave Server**: https://5812Uganda.a.gdms.cloud
+- **Wave Extension**: 4001
+- **Wave Password**: Ucm63042024!
