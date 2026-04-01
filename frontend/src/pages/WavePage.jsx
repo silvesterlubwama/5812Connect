@@ -204,7 +204,35 @@ export default function WavePage() {
         </div>
       )}
 
-      {/* Admin Server Management */}
+      {/* Wave Add-in Integration */}
+      <Card className="rounded-xl border-blue-200 dark:border-blue-800">
+        <CardContent className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shrink-0">
+              <Monitor size={22} className="text-white" />
+            </div>
+            <div className="flex-1">
+              <h3 className="font-semibold mb-1">Wave Desktop Add-in</h3>
+              <p className="text-sm text-muted-foreground mb-3">Install the 58:12 Connect add-in in your Wave Desktop app for click-to-dial, meetings, contacts, and CRM access directly from Wave.</p>
+              <div className="flex flex-wrap gap-2">
+                <a href="/wave-addin/index.html" target="_blank" rel="noopener noreferrer">
+                  <Button size="sm" variant="outline" className="gap-1.5 text-xs"><ExternalLink size={12} /> Preview Add-in</Button>
+                </a>
+              </div>
+              {isAdmin && (
+                <div className="mt-3 p-3 rounded-lg bg-secondary/50 text-xs space-y-1">
+                  <p className="font-medium">Installation Steps:</p>
+                  <p>1. Download Wave Desktop from <a href="https://www.grandstream.com/products/ucm6300-ecosystem/product/wave" target="_blank" className="text-primary underline">grandstream.com</a></p>
+                  <p>2. Copy the <code className="bg-muted px-1 rounded">wave-addin</code> folder to:</p>
+                  <p className="pl-3">Mac: <code className="bg-muted px-1 rounded text-[10px]">~/Library/Application Support/Wave/extensions/5812connect/</code></p>
+                  <p className="pl-3">Win: <code className="bg-muted px-1 rounded text-[10px]">C:\Users\YOU\AppData\Roaming\Wave\extensions\5812connect\</code></p>
+                  <p>3. Restart Wave — the add-in appears in the app module</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
       <Dialog open={showAdmin} onOpenChange={setShowAdmin}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Wave Servers</DialogTitle><DialogDescription>Grandstream CloudUCM servers. URL: https://yourserver.a.gdms.cloud</DialogDescription></DialogHeader>

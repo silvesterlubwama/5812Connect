@@ -1,0 +1,23 @@
+{
+  "name": "58:12 Connect",
+  "version": "1.0.0.1",
+  "description": "58:12 Global Connect CRM - Access your CRM, trigger calls, create meetings, and manage contacts directly from Wave.",
+  "icon": "/logo.png",
+  "extend_icon": "/logo-mono.png",
+  "permissions": [
+    "call.listen",
+    "call.dial",
+    "chat.send",
+    "chat.attach",
+    "meeting.manage",
+    "contact.manage"
+  ],
+  "plugin_show_in_wave": [
+    {
+      "scopes": ["file"],
+      "context": "chat"
+    }
+  ],
+  "plugin_type": "background",
+  "minimum_SDK_version": "1.0.4"
+}

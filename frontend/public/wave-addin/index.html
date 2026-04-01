@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>58:12 Connect - Wave Add-in</title>
+    <script src="wave-add-in-kit.js" type="text/javascript"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a2e; }
+        .header { background: #1a1a2e; color: white; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+        .header img { height: 24px; filter: brightness(0) invert(1); }
+        .header h1 { font-size: 14px; font-weight: 600; }
+        .status { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: rgba(255,255,255,0.2); }
+        .status.connected { background: #22c55e; color: white; }
+        .container { padding: 16px; }
+        .card { background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .card h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1a1a2e; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.15s; }
+        .btn-primary { background: #1a1a2e; color: white; }
+        .btn-primary:hover { background: #2d2d4e; }
+        .btn-green { background: #22c55e; color: white; }
+        .btn-green:hover { background: #16a34a; }
+        .btn-blue { background: #3b82f6; color: white; }
+        .btn-blue:hover { background: #2563eb; }
+        .btn-outline { background: transparent; border: 1px solid #e2e8f0; color: #1a1a2e; }
+        .btn-outline:hover { background: #f1f5f9; }
+        .input { width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; outline: none; }
+        .input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .dial-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+        .dial-key { padding: 12px; text-align: center; font-size: 18px; font-weight: 600; background: #f8f9fa; border: 1px solid #e2e8f0; border-radius: 10px; cursor: pointer; }
+        .dial-key:hover { background: #e2e8f0; }
+        .contacts-list { max-height: 300px; overflow-y: auto; }
+        .contact-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer; }
+        .contact-item:hover { background: #f1f5f9; }
+        .contact-avatar { width: 32px; height: 32px; border-radius: 50%; background: #e8e8f0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #1a1a2e; }
+        .contact-name { font-size: 12px; font-weight: 500; }
+        .contact-ext { font-size: 10px; color: #94a3b8; }
+        .log { font-size: 10px; color: #64748b; padding: 4px 0; border-bottom: 1px solid #f1f5f9; }
+        .tabs { display: flex; gap: 2px; background: #f1f5f9; border-radius: 8px; padding: 2px; margin-bottom: 12px; }
+        .tab { flex: 1; padding: 8px; text-align: center; font-size: 11px; font-weight: 500; border-radius: 6px; cursor: pointer; color: #64748b; }
+        .tab.active { background: white; color: #1a1a2e; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .hidden { display: none !important; }
+        .call-active { background: #22c55e; color: white; padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12" />
+        <h1>58:12 Connect</h1>
+        <div style="flex:1"></div>
+        <span id="status" class="status">Initializing...</span>
+    </div>
+
+    <div class="container">
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('dialer')">Dialer</div>
+            <div class="tab" onclick="switchTab('contacts')">Contacts</div>
+            <div class="tab" onclick="switchTab('meetings')">Meetings</div>
+            <div class="tab" onclick="switchTab('crm')">CRM</div>
+        </div>
+
+        <!-- Active Call Banner -->
+        <div id="active-call" class="call-active hidden">
+            <div style="flex:1">
+                <div style="font-size:12px;font-weight:600">On Call: <span id="call-number"></span></div>
+                <div style="font-size:10px;opacity:0.8" id="call-duration">00:00</div>
+            </div>
+            <button class="btn" style="background:rgba(255,255,255,0.2);color:white" onclick="hangup()">End</button>
+        </div>
+
+        <!-- Dialer Tab -->
+        <div id="tab-dialer">
+            <div class="card">
+                <input id="dial-input" class="input" type="tel" placeholder="Enter number or extension..." oninput="updateDialInput()" />
+                <div class="dial-pad">
+                    <div class="dial-key" onclick="dialKey('1')">1</div>
+                    <div class="dial-key" onclick="dialKey('2')">2</div>
+                    <div class="dial-key" onclick="dialKey('3')">3</div>
+                    <div class="dial-key" onclick="dialKey('4')">4</div>
+                    <div class="dial-key" onclick="dialKey('5')">5</div>
+                    <div class="dial-key" onclick="dialKey('6')">6</div>
+                    <div class="dial-key" onclick="dialKey('7')">7</div>
+                    <div class="dial-key" onclick="dialKey('8')">8</div>
+                    <div class="dial-key" onclick="dialKey('9')">9</div>
+                    <div class="dial-key" onclick="dialKey('*')">*</div>
+                    <div class="dial-key" onclick="dialKey('0')">0</div>
+                    <div class="dial-key" onclick="dialKey('#')">#</div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                    <button class="btn btn-green" style="flex:1" onclick="makeAudioCall()">Audio Call</button>
+                    <button class="btn btn-blue" style="flex:1" onclick="makeVideoCall()">Video Call</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contacts Tab -->
+        <div id="tab-contacts" class="hidden">
+            <div class="card">
+                <input id="contact-search" class="input" placeholder="Search contacts..." oninput="filterContacts()" />
+                <div id="contacts-list" class="contacts-list" style="margin-top:10px">
+                    <div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px">Loading contacts...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Meetings Tab -->
+        <div id="tab-meetings" class="hidden">
+            <div class="card">
+                <h3>Quick Meeting</h3>
+                <button class="btn btn-blue" style="width:100%" onclick="startInstantMeeting()">Start Instant Meeting</button>
+            </div>
+            <div class="card">
+                <h3>Join Meeting</h3>
+                <input id="meeting-num" class="input" placeholder="Meeting number" style="margin-bottom:8px" />
+                <input id="meeting-pwd" class="input" placeholder="Password (optional)" style="margin-bottom:8px" />
+                <button class="btn btn-primary" style="width:100%" onclick="joinMeeting()">Join</button>
+            </div>
+            <div class="card">
+                <h3>Schedule Meeting</h3>
+                <input id="meeting-subject" class="input" placeholder="Subject" style="margin-bottom:8px" />
+                <input id="meeting-start" class="input" type="datetime-local" style="margin-bottom:8px" />
+                <input id="meeting-end" class="input" type="datetime-local" style="margin-bottom:8px" />
+                <button class="btn btn-primary" style="width:100%" onclick="scheduleMeeting()">Schedule</button>
+            </div>
+        </div>
+
+        <!-- CRM Tab -->
+        <div id="tab-crm" class="hidden">
+            <div class="card">
+                <h3>Open 58:12 Connect CRM</h3>
+                <p style="font-size:11px;color:#64748b;margin-bottom:12px">Access the full CRM in your browser for members, events, finances, and more.</p>
+                <button class="btn btn-primary" style="width:100%" onclick="openCRM()">Open CRM</button>
+            </div>
+            <div class="card">
+                <h3>Recent Call Log</h3>
+                <div id="call-log" style="font-size:11px;color:#64748b">No recent calls</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== STATE =====
+        var contacts = [];
+        var callLog = [];
+        var currentCall = null;
+        var callTimer = null;
+        var callSeconds = 0;
+        var CRM_URL = ''; // Will be set from userConfig
+
+        // ===== WAVE SDK INITIALIZATION =====
+        if (typeof pluginSDK !== 'undefined') {
+            pluginSDK.eventEmitter.on('onInitPluginWindowOk', function(data) {
+                var userConfig = data.userConfig;
+                console.log('Wave Add-in initialized', userConfig);
+                document.getElementById('status').textContent = 'Connected';
+                document.getElementById('status').className = 'status connected';
+
+                // Load saved CRM URL
+                pluginSDK.userConfig.getUserConfig(function(result) {
+                    if (result.errorCode === pluginSDK.ErrorCode.SUCCESS && result.data) {
+                        try {
+                            var config = JSON.parse(result.data);
+                            CRM_URL = config.crmUrl || '';
+                        } catch(e) {}
+                    }
+                    if (!CRM_URL) {
+                        CRM_URL = window.location.origin.replace(/:\d+$/, '');
+                    }
+                });
+
+                // Set window size
+                pluginSDK.setDefaultWindow({
+                    width: 380,
+                    height: 640,
+                    center: true,
+                    show: true,
+                });
+
+                // Load contacts
+                loadContacts();
+            });
+
+            // Call events
+            pluginSDK.eventEmitter.on('onRecvP2PIncomingCall', function(data) {
+                console.log('Incoming call:', data.callNum, data.callType);
+                showCallActive(data.callNum);
+                addCallLog('Incoming', data.callNum, data.callType);
+            });
+
+            pluginSDK.eventEmitter.on('onInitP2PCall', function(data) {
+                console.log('Outgoing call:', data.callNum, data.callType);
+                showCallActive(data.callNum);
+            });
+
+            pluginSDK.eventEmitter.on('onAnswerP2PCall', function(data) {
+                console.log('Call answered:', data.callNum);
+                startCallTimer();
+            });
+
+            pluginSDK.eventEmitter.on('onHangupP2PCall', function(data) {
+                console.log('Call ended:', data);
+                hideCallActive();
+                addCallLog(data.callDirection || 'Ended', data.callNum, data.callType);
+            });
+
+            pluginSDK.eventEmitter.on('onRejectP2PCall', function(data) {
+                console.log('Call rejected:', data.callNum);
+                hideCallActive();
+            });
+
+            pluginSDK.eventEmitter.on('onP2PCallCanceled', function(data) {
+                console.log('Call canceled:', data.callNum);
+                hideCallActive();
+            });
+        } else {
+            // Running outside Wave (browser preview)
+            document.getElementById('status').textContent = 'Preview Mode';
+            document.getElementById('status').style.background = '#f59e0b';
+        }
+
+        // ===== FUNCTIONS =====
+        function switchTab(tab) {
+            document.querySelectorAll('[id^="tab-"]').forEach(function(el) { el.classList.add('hidden'); });
+            document.getElementById('tab-' + tab).classList.remove('hidden');
+            document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('active'); });
+            event.target.classList.add('active');
+        }
+
+        function dialKey(key) {
+            var input = document.getElementById('dial-input');
+            input.value += key;
+            // If on active call, send DTMF
+            if (currentCall && typeof pluginSDK !== 'undefined') {
+                pluginSDK.call.sendDTMF({ digits: key }, function(result) {
+                    console.log('DTMF sent:', key, result.errorCode);
+                });
+            }
+        }
+
+        function makeAudioCall() {
+            var num = document.getElementById('dial-input').value.trim();
+            if (!num) return;
+            if (typeof pluginSDK !== 'undefined') {
+                pluginSDK.call.makeP2PAudioCall({ callNumber: num }, function(result) {
+                    if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                        console.log('Audio call initiated');
+                        showCallActive(num);
+                        addCallLog('Outbound', num, 'audio');
+                    } else {
+                        alert('Call failed: ' + (result.errorMsg || 'Unknown error'));
+                    }
+                });
+            } else {
+                alert('Wave SDK not available (preview mode)');
+            }
+        }
+
+        function makeVideoCall() {
+            var num = document.getElementById('dial-input').value.trim();
+            if (!num) return;
+            if (typeof pluginSDK !== 'undefined') {
+                pluginSDK.call.makeP2PVideoCall({ callNumber: num }, function(result) {
+                    if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                        console.log('Video call initiated');
+                        showCallActive(num);
+                        addCallLog('Outbound', num, 'video');
+                    } else {
+                        alert('Video call failed: ' + (result.errorMsg || 'Unknown error'));
+                    }
+                });
+            } else {
+                alert('Wave SDK not available (preview mode)');
+            }
+        }
+
+        function callContact(ext, type) {
+            document.getElementById('dial-input').value = ext;
+            if (type === 'video') makeVideoCall();
+            else makeAudioCall();
+        }
+
+        function loadContacts() {
+            if (typeof pluginSDK === 'undefined') return;
+            pluginSDK.contact.getContactList(function(result) {
+                if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                    contacts = result.data || [];
+                    renderContacts(contacts);
+                }
+            });
+        }
+
+        function renderContacts(list) {
+            var html = '';
+            if (!list || list.length === 0) {
+                html = '<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px">No contacts found</div>';
+            } else {
+                list.forEach(function(c) {
+                    var name = c.name || c.firstName || c.extension || '?';
+                    var initials = name.charAt(0).toUpperCase();
+                    html += '<div class="contact-item" onclick="callContact(\'' + (c.extension || '') + '\',\'audio\')">' +
+                        '<div class="contact-avatar">' + initials + '</div>' +
+                        '<div style="flex:1"><div class="contact-name">' + name + '</div>' +
+                        '<div class="contact-ext">Ext ' + (c.extension || '-') + '</div></div>' +
+                        '<button class="btn btn-green" style="padding:4px 8px;font-size:10px" onclick="event.stopPropagation();callContact(\'' + (c.extension || '') + '\',\'audio\')">Call</button>' +
+                        '<button class="btn btn-blue" style="padding:4px 8px;font-size:10px" onclick="event.stopPropagation();callContact(\'' + (c.extension || '') + '\',\'video\')">Video</button>' +
+                        '</div>';
+                });
+            }
+            document.getElementById('contacts-list').innerHTML = html;
+        }
+
+        function filterContacts() {
+            var q = document.getElementById('contact-search').value.toLowerCase();
+            var filtered = contacts.filter(function(c) {
+                return (c.name || '').toLowerCase().includes(q) || (c.extension || '').includes(q);
+            });
+            renderContacts(filtered);
+        }
+
+        function startInstantMeeting() {
+            if (typeof pluginSDK === 'undefined') { alert('Wave SDK not available'); return; }
+            pluginSDK.meeting.quickStart(function(result) {
+                if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                    alert('Meeting started! Number: ' + result.meetingNum);
+                } else {
+                    alert('Failed to start meeting');
+                }
+            });
+        }
+
+        function joinMeeting() {
+            var num = document.getElementById('meeting-num').value.trim();
+            if (!num) { alert('Enter meeting number'); return; }
+            var pwd = document.getElementById('meeting-pwd').value.trim();
+            if (typeof pluginSDK === 'undefined') { alert('Wave SDK not available'); return; }
+            var data = { meetingNum: num };
+            if (pwd) data.password = parseInt(pwd);
+            pluginSDK.meeting.join(data, function(result) {
+                if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                    console.log('Joined meeting');
+                } else {
+                    alert('Failed to join: ' + (result.errorMsg || 'Unknown'));
+                }
+            });
+        }
+
+        function scheduleMeeting() {
+            var subject = document.getElementById('meeting-subject').value.trim();
+            var start = document.getElementById('meeting-start').value;
+            var end = document.getElementById('meeting-end').value;
+            if (!subject || !start || !end) { alert('Fill in all fields'); return; }
+            if (typeof pluginSDK === 'undefined') { alert('Wave SDK not available'); return; }
+            pluginSDK.meeting.schedule({
+                subject: subject,
+                meetingType: 0,
+                startTime: new Date(start).getTime(),
+                endTime: new Date(end).getTime(),
+                invitees: []
+            }, function(result) {
+                if (result.errorCode === pluginSDK.ErrorCode.SUCCESS) {
+                    alert('Meeting scheduled! Number: ' + result.meetingNum);
+                } else {
+                    alert('Failed to schedule: ' + (result.errorMsg || 'Unknown'));
+                }
+            });
+        }
+
+        function openCRM() {
+            var url = CRM_URL || window.location.origin;
+            window.open(url, '_blank');
+        }
+
+        // Call UI helpers
+        function showCallActive(num) {
+            currentCall = num;
+            document.getElementById('call-number').textContent = num;
+            document.getElementById('active-call').classList.remove('hidden');
+        }
+
+        function hideCallActive() {
+            currentCall = null;
+            callSeconds = 0;
+            if (callTimer) clearInterval(callTimer);
+            document.getElementById('active-call').classList.add('hidden');
+        }
+
+        function startCallTimer() {
+            callSeconds = 0;
+            callTimer = setInterval(function() {
+                callSeconds++;
+                var m = Math.floor(callSeconds / 60).toString().padStart(2, '0');
+                var s = (callSeconds % 60).toString().padStart(2, '0');
+                document.getElementById('call-duration').textContent = m + ':' + s;
+            }, 1000);
+        }
+
+        function addCallLog(direction, num, type) {
+            callLog.unshift({ direction: direction, number: num, type: type, time: new Date().toLocaleTimeString() });
+            if (callLog.length > 20) callLog.pop();
+            var html = '';
+            callLog.forEach(function(l) {
+                html += '<div class="log">' + l.time + ' - ' + l.direction + ' ' + l.type + ' ' + l.number + '</div>';
+            });
+            document.getElementById('call-log').innerHTML = html || 'No recent calls';
+        }
+    </script>
+</body>
+</html>
