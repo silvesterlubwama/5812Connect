@@ -10,7 +10,7 @@ import io
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 ADMIN_EMAIL = "admin@5812global.org"
-ADMIN_PASSWORD = "Admin@1234"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
 
 
 # ============ FIXTURES ============

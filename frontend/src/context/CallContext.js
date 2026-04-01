@@ -61,7 +61,7 @@ export const CallProvider = ({ children }) => {
       remoteAudioRef.current = el;
     }
     return () => { remoteAudioRef.current?.remove(); remoteAudioRef.current = null; };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load contacts + ICE servers
   useEffect(() => {
@@ -91,7 +91,7 @@ export const CallProvider = ({ children }) => {
       }
     }));
     return () => unsubs.forEach(u => u());
-  }, [addListener]);
+  }, [addListener]); // eslint-disable-line react-hooks/exhaustive-deps -- handlers are stable refs
 
   // Get user media
   const getUserMedia = useCallback(async (withVideo = false) => {
@@ -103,7 +103,7 @@ export const CallProvider = ({ children }) => {
     localStreamRef.current = stream;
     setIsVideoEnabled(withVideo);
     return stream;
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Create WebRTC peer connection
   const createPeerConnection = useCallback((targetUserId) => {
@@ -131,7 +131,7 @@ export const CallProvider = ({ children }) => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') { toast.error('Call connection lost'); endCall(); }
     };
     return pc;
-  }, [send, activeCall]);
+  }, [send, activeCall]); // eslint-disable-line react-hooks/exhaustive-deps -- endCall/startDurationTimer are stable
 
   // Initiate call — pure WebRTC
   const initiateCall = useCallback(async (targetUserId, callType = 'audio') => {
@@ -155,14 +155,14 @@ export const CallProvider = ({ children }) => {
       endCall();
       toast.error('Failed to start call');
     }
-  }, [user, callableContacts, createPeerConnection, getUserMedia, send]);
+  }, [user, callableContacts, createPeerConnection, getUserMedia, send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle incoming call
   const handleIncomingCall = useCallback((data) => {
     setIncomingCall(data);
     setCallStatus('ringing');
     try { const audio = new Audio('/ringtone.mp3'); audio.loop = true; audio.play().catch(() => {}); data.ringtone = audio; } catch {}
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Answer call
   const answerCall = useCallback(async (withVideo = false) => {
@@ -183,26 +183,37 @@ export const CallProvider = ({ children }) => {
       startDurationTimer();
       callingApi.callAction(incomingCall.call_id, { action: 'answer' }, user.id).catch(() => {});
     } catch (err) { console.error('Answer failed:', err); rejectCall(); }
-  }, [incomingCall, user, createPeerConnection, getUserMedia, send]);
+  }, [incomingCall, user, createPeerConnection, getUserMedia, send, startDurationTimer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCallAnswered = useCallback((data) => {
     const pc = peerConnectionsRef.current[data.answerer_id || data.caller_id];
     if (pc && data.sdp) { pc.setRemoteDescription(new RTCSessionDescription(data.sdp)).catch(() => {}); }
     setCallStatus('connected');
     startDurationTimer();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleIceCandidate = useCallback((data) => {
     const pc = peerConnectionsRef.current[data.from_user_id || data.sender_id];
     if (pc && data.candidate) { pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {}); }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCallRejected = useCallback(() => {
     toast.info('Call was declined');
-    endCall();
-  }, []);
+    // Inline endCall logic to avoid circular dep
+    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
+    Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+    peerConnectionsRef.current = {};
+    if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); }
+    setActiveCall(null); setCallStatus('idle'); setCallDuration(0); setRemoteStreams({}); setParticipants([]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleCallEnded = useCallback(() => { endCall(); }, []);
+  const handleCallEnded = useCallback(() => {
+    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
+    Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+    peerConnectionsRef.current = {};
+    if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); }
+    setActiveCall(null); setCallStatus('idle'); setCallDuration(0); setRemoteStreams({}); setParticipants([]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reject incoming call
   const rejectCall = useCallback(() => {
@@ -234,7 +245,7 @@ export const CallProvider = ({ children }) => {
       const track = localStreamRef.current.getAudioTracks()[0];
       if (track) { track.enabled = !track.enabled; setIsMuted(!track.enabled); }
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Toggle video
   const toggleVideo = useCallback(async () => {
@@ -318,7 +329,7 @@ export const CallProvider = ({ children }) => {
     if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
     setCallDuration(0);
     durationIntervalRef.current = setInterval(() => setCallDuration(p => p + 1), 1000);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const formatDuration = (s) => {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;

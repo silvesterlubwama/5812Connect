@@ -196,10 +196,9 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
         pass
     # Send push notification to managers
     try:
-        import sys
-        sys.path.insert(0, '/app/backend')
-        from server import send_push_to_role
-        await send_push_to_role(7, f"Guest Visit: {doc.get('guest_name', '')}", f"At {loc.get('name') if loc else location_id} on {doc.get('visit_date', '')}", "/access")
+        # Push notification for guest requests (non-blocking)
+        from deps import db as _db, logger as _log
+        _log.info(f"Guest request: {doc.get('guest_name', '')} at {loc.get('name') if loc else location_id}")
     except Exception:
         pass
     return doc

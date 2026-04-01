@@ -23,7 +23,7 @@ class TestAuth:
         """Get admin auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -44,7 +44,7 @@ class TestDocumentUploadWithUserId:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json().get("token")
     
@@ -157,7 +157,7 @@ class TestCalendarFeatures:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json().get("token")
     
@@ -242,7 +242,7 @@ class TestLocationsAndCampus:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json().get("token")
     
@@ -300,7 +300,7 @@ class TestAdminProfileLookup:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json().get("token")
     
@@ -333,7 +333,7 @@ class TestIDTypes:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json().get("token")
     

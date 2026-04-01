@@ -18,7 +18,7 @@ BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def admin_token():
-    r = requests.post(f"{BASE_URL}/api/auth/login", json={"identifier": "admin@5812uganda.org", "password": "Admin@5812"})
+    r = requests.post(f"{BASE_URL}/api/auth/login", json={"identifier": "admin@5812uganda.org", "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")})
     assert r.status_code == 200, f"Admin login failed: {r.text}"
     return r.json()["token"]
 

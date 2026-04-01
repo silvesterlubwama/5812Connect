@@ -24,7 +24,7 @@ class TestCallingEndpoints:
         # First login to get a user_id
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_response.status_code == 200, f"Login failed: {login_response.text}"
         user_data = login_response.json()
@@ -127,7 +127,7 @@ class TestCallInitiation:
         """Login and get user info"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         return response.json()
@@ -213,7 +213,7 @@ class TestCallActions:
         # Login
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         user_id = login_response.json().get("user", {}).get("id")
         
@@ -286,7 +286,7 @@ class TestCallHistory:
         # Login
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         user_id = login_response.json().get("user", {}).get("id")
         
@@ -301,7 +301,7 @@ class TestCallHistory:
         """Test getting missed calls"""
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         user_id = login_response.json().get("user", {}).get("id")
         
@@ -319,7 +319,7 @@ class TestVoicemail:
         """Test getting voicemails"""
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         user_id = login_response.json().get("user", {}).get("id")
         
@@ -333,7 +333,7 @@ class TestVoicemail:
         """Test getting unread voicemail count"""
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         user_id = login_response.json().get("user", {}).get("id")
         

@@ -16,7 +16,7 @@ class TestAuth:
         """Get authentication token for admin user"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -28,7 +28,7 @@ class TestAuth:
         """Test login with valid credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         assert response.status_code == 200
         data = response.json()
@@ -53,7 +53,7 @@ class TestAnalytics:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -91,7 +91,7 @@ class TestAnnouncements:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -125,7 +125,7 @@ class TestOutreach:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -160,7 +160,7 @@ class TestResources:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -194,7 +194,7 @@ class TestBadges:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -227,7 +227,7 @@ class TestFinancialCashflow:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -249,7 +249,7 @@ class TestMembersPending:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -272,7 +272,7 @@ class TestAppSettings:
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}

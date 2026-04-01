@@ -19,9 +19,9 @@ BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 # Test credentials
 ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
 ADMIN2_EMAIL = "admin@5812global.org"
-ADMIN2_PASSWORD = "Admin@1234"
+ADMIN2_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
 
 
 class TestCampusRBAC:

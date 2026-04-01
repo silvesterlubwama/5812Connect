@@ -17,7 +17,7 @@ def auth_token():
     """Get authentication token for admin user"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
         "identifier": "admin@5812uganda.org",
-        "password": "Admin@5812"
+        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
     })
     if response.status_code == 200:
         return response.json().get("token")

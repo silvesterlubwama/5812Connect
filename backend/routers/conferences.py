@@ -12,7 +12,7 @@ import secrets
 router = APIRouter(prefix="/api/conferences", tags=["conferences"])
 
 def get_db():
-    from server import db
+    from deps import db
     return db
 
 def serialize_doc(doc):

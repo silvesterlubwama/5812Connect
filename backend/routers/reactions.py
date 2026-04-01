@@ -9,7 +9,7 @@ from typing import List, Optional
 router = APIRouter(prefix="/api/reactions", tags=["reactions"])
 
 def get_db():
-    from server import db
+    from deps import db
     return db
 
 # Quick reaction emojis

@@ -23,7 +23,7 @@ class TestIteration41Features:
         # Login
         login_resp = self.session.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
         data = login_resp.json()

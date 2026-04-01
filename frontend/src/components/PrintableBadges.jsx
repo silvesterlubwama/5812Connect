@@ -10,12 +10,15 @@ function printElement(ref, title) {
   const html = ref.current?.innerHTML;
   if (!html) return;
   const win = window.open('', '_blank', 'width=500,height=400');
-  win.document.write(`<html><head><title>${title}</title><style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}
-    @media print{body{min-height:auto}}
-  </style></head><body>${html}</body></html>`);
-  win.document.close();
+  if (!win) return;
+  const doc = win.document;
+  doc.open();
+  doc.write('<!DOCTYPE html>');
+  doc.close();
+  doc.head.innerHTML = `<title>${encodeURIComponent(title)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}@media print{body{min-height:auto}}</style>`;
+  const container = doc.createElement('div');
+  container.innerHTML = html;
+  doc.body.appendChild(container);
   setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
 }
 

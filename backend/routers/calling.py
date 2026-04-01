@@ -71,7 +71,7 @@ class VoicemailGreeting(BaseModel):
 # ============== DATABASE HELPERS ==============
 
 def get_db():
-    from server import db
+    from deps import db
     return db
 
 def serialize_doc(doc):

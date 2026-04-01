@@ -15,7 +15,7 @@ user_presence: Dict[str, Dict] = {}  # user_id -> {status, last_activity, socket
 IDLE_TIMEOUT_SECONDS = 300  # 5 minutes
 
 def get_db():
-    from server import db
+    from deps import db
     return db
 
 def calculate_presence_status(user_data: Dict) -> str:

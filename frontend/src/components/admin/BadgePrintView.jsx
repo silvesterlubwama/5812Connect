@@ -15,21 +15,15 @@ export function BadgePrintView({ user, onClose }) {
   const printBadge = () => {
     const printContents = badgeRef.current?.innerHTML;
     const win = window.open('', '_blank', 'width=400,height=300');
-    win.document.write(`
-      <html>
-        <head>
-          <title>Badge - ${user.name}</title>
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; }
-            .badge { width: 3.375in; height: 2.125in; border: 2px solid #1a1a2e; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-            @media print { body { height: auto; } .badge { box-shadow: none; } }
-          </style>
-        </head>
-        <body>${printContents}</body>
-      </html>
-    `);
-    win.document.close();
+    if (!win) return;
+    const doc = win.document;
+    doc.open();
+    doc.write('<!DOCTYPE html>');
+    doc.close();
+    doc.head.innerHTML = `<title>Badge - ${encodeURIComponent(user.name)}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; } @media print { body { height: auto; } }</style>`;
+    const container = doc.createElement('div');
+    container.innerHTML = printContents;
+    doc.body.appendChild(container);
     setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
   };
 

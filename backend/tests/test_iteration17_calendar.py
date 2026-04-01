@@ -20,7 +20,7 @@ class TestAuth:
         """Test admin login with identifier field"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -37,7 +37,7 @@ class TestMembersEdit:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -132,7 +132,7 @@ class TestAdminUsers:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -215,7 +215,7 @@ class TestTasksCalendar:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -334,7 +334,7 @@ class TestBoardsKanban:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -357,7 +357,7 @@ class TestDashboard:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -382,7 +382,7 @@ class TestEvents:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     
@@ -405,7 +405,7 @@ class TestCleanup:
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return response.json()["token"]
     

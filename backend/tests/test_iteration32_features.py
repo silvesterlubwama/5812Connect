@@ -22,7 +22,7 @@ class TestAuth:
         """Test admin login with correct credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -41,7 +41,7 @@ class TestSettingsRouter:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -155,7 +155,7 @@ class TestChatThreadSupport:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -266,7 +266,7 @@ class TestConferenceScheduling:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -370,7 +370,7 @@ class TestPresenceAPI:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -419,7 +419,7 @@ class TestAdminUserManagement:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -530,7 +530,7 @@ class TestCleanup:
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         if response.status_code == 200:
             self.token = response.json()["token"]

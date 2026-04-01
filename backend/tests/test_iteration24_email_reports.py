@@ -22,7 +22,7 @@ class TestEmailIntegration:
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -134,7 +134,7 @@ class TestCampusReports:
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -236,7 +236,7 @@ class TestDashboardSwitcher:
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -324,7 +324,7 @@ class TestReportsPdfExport:
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")

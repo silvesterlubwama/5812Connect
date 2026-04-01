@@ -18,7 +18,7 @@ class TestAuth:
         """Login with admin@5812uganda.org / Admin@5812"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -30,7 +30,7 @@ class TestAuth:
         """Login with admin@5812global.org / Admin@1234"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812global.org",
-            "password": "Admin@1234"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         return response.json()["token"]
@@ -53,7 +53,7 @@ class TestEvents:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -109,7 +109,7 @@ class TestEventTypes:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -155,7 +155,7 @@ class TestTasks:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -193,7 +193,7 @@ class TestAdminUserManagement:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -241,7 +241,7 @@ class TestAdminUserManagement:
         
         response = requests.post(
             f"{BASE_URL}/api/admin/users/{target_user['id']}/reset-password",
-            json={"new_password": "Admin@1234"},  # Reset to original
+            json={"new_password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")},  # Reset to original
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -287,7 +287,7 @@ class TestFinancialExpenseApproval:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -354,7 +354,7 @@ class TestCheckIns:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -421,7 +421,7 @@ class TestProgrammes:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -509,7 +509,7 @@ class TestResourceTypes:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     
@@ -543,7 +543,7 @@ class TestLocationVenues:
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         return {"Authorization": f"Bearer {response.json()['token']}"}
     

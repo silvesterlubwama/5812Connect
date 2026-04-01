@@ -20,7 +20,7 @@ class TestSipCredentialsEndpoint:
         """Login and get auth token"""
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
         self.token = login_resp.json().get("token")
@@ -64,7 +64,7 @@ class TestPbxPasswordPreservation:
         """Login and get auth token"""
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_resp.status_code == 200
         self.token = login_resp.json().get("token")
@@ -149,7 +149,7 @@ class TestPbxConfigsEndpoints:
         """Login and get auth token"""
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert login_resp.status_code == 200
         self.token = login_resp.json().get("token")
@@ -248,7 +248,7 @@ class TestHealthAndAuth:
         """Admin login works"""
         resp = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert resp.status_code == 200
         data = resp.json()

@@ -22,7 +22,7 @@ def auth_token():
     """Get admin auth token"""
     resp = requests.post(f"{BASE_URL}/api/auth/login", json={
         "identifier": "admin@5812uganda.org",
-        "password": "Admin@5812"
+        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
     })
     if resp.status_code != 200:
         pytest.skip(f"Auth failed: {resp.status_code} - {resp.text[:200]}")
@@ -46,7 +46,7 @@ class TestAuth:
     def test_login_success(self):
         resp = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert resp.status_code == 200, f"Login failed: {resp.text[:300]}"
         data = resp.json()

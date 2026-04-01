@@ -16,7 +16,7 @@ class TestAuth:
         """Get authentication token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -32,7 +32,7 @@ class TestAuth:
         """Test admin login"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         data = response.json()
@@ -49,7 +49,7 @@ class TestPBXConfigs:
         """Get authentication headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -115,7 +115,7 @@ class TestExtensions:
         """Get authentication headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -180,7 +180,7 @@ class TestICEServers:
         """Get authentication headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -210,7 +210,7 @@ class TestCallingFeatures:
         """Get authentication headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
