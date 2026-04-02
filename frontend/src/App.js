@@ -56,9 +56,9 @@ import FinancialApisPage from './pages/FinancialApisPage';
 import GdprSettingsPage from './pages/GdprSettingsPage';
 // Calling Feature Pages
 import CallHistoryPage from './pages/CallHistoryPage';
-import ExtensionsPage from './pages/ExtensionsPage';
 import PbxSettingsPage from './pages/PbxSettingsPage';
 import WavePage from './pages/WavePage';
+// ExtensionsPage removed — PBX page handles extensions
 // Calling Components
 import { CallProvider } from './context/CallContext';
 import CallInterface from './components/CallInterface';

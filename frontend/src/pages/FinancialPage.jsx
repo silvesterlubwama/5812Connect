@@ -96,7 +96,6 @@ export default function FinancialPage() {
   };
 
   useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); }, []);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const fetchPending = async () => {

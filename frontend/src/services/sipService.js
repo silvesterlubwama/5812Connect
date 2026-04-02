@@ -1,18 +1,25 @@
 /**
- * SIP.js Integration Service
- * Handles SIP registration, outbound/inbound calls via PBX WebSocket
+ * SIP.js Integration Service (lazy-loaded, safe for production builds)
  */
-let SimpleUser;
-try {
-  const sipjs = require('sip.js/lib/platform/web');
-  SimpleUser = sipjs.SimpleUser;
-} catch (e) {
+let SimpleUser = null;
+
+// Safe dynamic import - won't crash if sip.js bundle structure differs
+function loadSipJs() {
+  if (SimpleUser) return true;
   try {
-    const sipjs = require('sip.js');
-    SimpleUser = sipjs.Web?.SimpleUser || sipjs.SimpleUser;
-  } catch (e2) {
-    console.warn('[SIP] sip.js not available:', e2.message);
+    // Try the standard import path
+    const mod = require('sip.js');
+    SimpleUser = mod?.Web?.SimpleUser || mod?.SimpleUser;
+    if (!SimpleUser) {
+      try {
+        const webMod = require('sip.js/lib/platform/web');
+        SimpleUser = webMod?.SimpleUser;
+      } catch (e2) { /* path doesn't exist in this build */ }
+    }
+  } catch (e) {
+    console.warn('[SIP] sip.js not available:', e.message);
   }
+  return !!SimpleUser;
 }
 
 class SipService {
@@ -76,8 +83,8 @@ class SipService {
    * Register with a SIP server — tries multiple WebSocket URLs
    */
   async register(config, remoteAudio) {
-    if (!SimpleUser) {
-      this.registrationError = 'SIP.js library not loaded';
+    if (!loadSipJs() || !SimpleUser) {
+      this.registrationError = 'SIP.js library not available';
       throw new Error(this.registrationError);
     }
     if (this.simpleUser) await this.unregister();

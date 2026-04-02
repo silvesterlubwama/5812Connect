@@ -41,7 +41,7 @@ export default function WavePage() {
       finally { setLoading(false); }
     };
     load();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- intentional mount-only fetch
+  }, []);
 
   // Check if Wave popup is still open
   useEffect(() => {
