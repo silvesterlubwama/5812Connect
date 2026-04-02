@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Video, Settings, ExternalLink, Plus, Trash2, Edit2, Save, Globe, RefreshCw, Users, PhoneCall, AlertCircle, X, Monitor, MessageSquare, Voicemail } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Phone, Video, Settings, ExternalLink, Plus, Trash2, Edit2, Save, Globe, RefreshCw, Users, PhoneCall, AlertCircle, X, Monitor, MessageSquare, Voicemail, Download } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -215,8 +215,26 @@ export default function WavePage() {
               <h3 className="font-semibold mb-1">Wave Desktop Add-in</h3>
               <p className="text-sm text-muted-foreground mb-3">Install the 58:12 Connect add-in in your Wave Desktop app for click-to-dial, meetings, contacts, and CRM access directly from Wave.</p>
               <div className="flex flex-wrap gap-2">
+                <Button size="sm" className="gap-1.5 text-xs" onClick={async () => {
+                  try {
+                    const JSZip = (await import('jszip')).default;
+                    const zip = new JSZip();
+                    const folder = zip.folder('5812connect');
+                    const files = ['index.html', 'plugin.json', 'wave-add-in-kit.js', 'logo.png'];
+                    for (const file of files) {
+                      const res = await fetch(`/wave-addin/${file}`);
+                      const blob = await res.blob();
+                      folder.file(file, blob);
+                    }
+                    const content = await zip.generateAsync({ type: 'blob' });
+                    const url = URL.createObjectURL(content);
+                    const a = document.createElement('a'); a.href = url; a.download = '5812connect-wave-addin.zip';
+                    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                    toast.success('Add-in downloaded! See installation steps below.');
+                  } catch (e) { toast.error('Download failed: ' + e.message); }
+                }} data-testid="download-addin-btn"><Download size={12} /> Download Add-in (.zip)</Button>
                 <a href="/wave-addin/index.html" target="_blank" rel="noopener noreferrer">
-                  <Button size="sm" variant="outline" className="gap-1.5 text-xs"><ExternalLink size={12} /> Preview Add-in</Button>
+                  <Button size="sm" variant="outline" className="gap-1.5 text-xs"><ExternalLink size={12} /> Preview</Button>
                 </a>
               </div>
               {isAdmin && (
