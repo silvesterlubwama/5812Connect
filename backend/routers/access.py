@@ -4,7 +4,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
 import logging
-from deps import db, get_current_user, _audit
+from deps import db, get_current_user, require_admin, require_staff, _audit
 
 router = APIRouter(prefix="/api", tags=["access"])
 logger = logging.getLogger(__name__)
@@ -495,3 +495,123 @@ async def list_eligible_residents(location_id: str, current_user: dict = Depends
     }, {"_id": 0, "id": 1, "name": 1}).to_list(200)
 
     return {"members": members, "children": children}
+
+
+# ========== ACCESS CONTROL API CONNECTIONS ==========
+
+@router.get("/access/api-connections")
+async def list_access_api_connections(current_user: dict = Depends(require_admin)):
+    """List configured access control system API connections"""
+    return await db.access_api_connections.find({}, {"_id": 0}).sort("name", 1).to_list(50)
+
+
+@router.post("/access/api-connections")
+async def create_access_api_connection(data: dict, current_user: dict = Depends(require_admin)):
+    """Add an access control API connection for a door/sublocation/venue"""
+    doc = {
+        "id": f"acc_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "type": data.get("type", "door"),  # door, gate, turnstile, barrier
+        "api_url": data.get("api_url", ""),
+        "api_key": data.get("api_key", ""),
+        "auth_type": data.get("auth_type", "api_key"),  # api_key, oauth, basic
+        "location_id": data.get("location_id"),
+        "sublocation_id": data.get("sublocation_id"),
+        "venue_id": data.get("venue_id"),
+        "door_name": data.get("door_name", ""),
+        "enabled": data.get("enabled", True),
+        "provider": data.get("provider", "generic"),  # generic, kisi, salto, brivo, openpath
+        "config": data.get("config", {}),
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.access_api_connections.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/access/api-connections/{conn_id}")
+async def update_access_api_connection(conn_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    data.pop("_id", None); data.pop("id", None)
+    if not data.get("api_key"): data.pop("api_key", None)  # Don't overwrite with blank
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.access_api_connections.update_one({"id": conn_id}, {"$set": data})
+    return await db.access_api_connections.find_one({"id": conn_id}, {"_id": 0, "api_key": 0})
+
+
+@router.delete("/access/api-connections/{conn_id}")
+async def delete_access_api_connection(conn_id: str, current_user: dict = Depends(require_admin)):
+    await db.access_api_connections.delete_one({"id": conn_id})
+    return {"message": "Connection removed"}
+
+
+# ========== SHAREABLE GUEST ACCESS LINKS ==========
+
+@router.post("/access/guest-links")
+async def create_guest_access_link(data: dict, current_user: dict = Depends(require_staff)):
+    """Create a shareable link for guests to request access to a restricted space"""
+    import secrets as sec
+    token = sec.token_urlsafe(24)
+    doc = {
+        "id": f"glink_{str(uuid.uuid4())[:8]}",
+        "token": token,
+        "location_id": data.get("location_id"),
+        "sublocation_id": data.get("sublocation_id"),
+        "venue_id": data.get("venue_id"),
+        "space_name": data.get("space_name", ""),
+        "max_uses": data.get("max_uses", 0),  # 0 = unlimited
+        "uses": 0,
+        "expires_at": data.get("expires_at"),  # ISO date string
+        "requires_approval": data.get("requires_approval", True),
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guest_access_links.insert_one(doc)
+    doc.pop("_id", None)
+    doc["link"] = f"/public-access/{token}"
+    return doc
+
+
+@router.get("/access/guest-links")
+async def list_guest_access_links(current_user: dict = Depends(require_staff)):
+    links = await db.guest_access_links.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    for l in links:
+        l["link"] = f"/public-access/{l['token']}"
+    return links
+
+
+@router.delete("/access/guest-links/{link_id}")
+async def delete_guest_access_link(link_id: str, current_user: dict = Depends(require_staff)):
+    await db.guest_access_links.delete_one({"id": link_id})
+    return {"message": "Link deleted"}
+
+
+@router.post("/public/access-request/{token}")
+async def submit_guest_access_request(token: str, data: dict):
+    """Public endpoint — guest submits access request via shared link"""
+    link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
+    if not link:
+        raise HTTPException(status_code=404, detail="Invalid or expired link")
+    if link.get("max_uses") and link["uses"] >= link["max_uses"]:
+        raise HTTPException(status_code=400, detail="This link has reached its maximum uses")
+    if link.get("expires_at"):
+        from datetime import datetime as dt
+        if dt.fromisoformat(link["expires_at"]) < dt.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="This link has expired")
+    request_doc = {
+        "id": f"areq_{str(uuid.uuid4())[:8]}",
+        "link_id": link["id"],
+        "guest_name": data.get("name", ""),
+        "guest_email": data.get("email", ""),
+        "guest_phone": data.get("phone", ""),
+        "purpose": data.get("purpose", ""),
+        "visit_date": data.get("visit_date", ""),
+        "location_id": link.get("location_id"),
+        "space_name": link.get("space_name"),
+        "status": "pending" if link.get("requires_approval") else "approved",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guest_access_requests.insert_one(request_doc)
+    request_doc.pop("_id", None)
+    await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
+    return request_doc

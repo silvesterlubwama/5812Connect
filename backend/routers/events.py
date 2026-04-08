@@ -732,7 +732,7 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
     Supports: daily, weekly, biweekly, monthly, yearly, nth_week, nth_month patterns."""
     import calendar as cal_module
 
-    pattern = data.get("pattern", "weekly")  # daily, weekly, biweekly, monthly, yearly, nth_week, nth_month
+    pattern = data.get("pattern", "weekly")  # daily, weekly, biweekly, monthly, bimonthly, quarterly, yearly, nth_week, nth_month, custom
     title = data.get("title", "Recurring Event")
     event_type = data.get("type", "service")
     location = data.get("location", "")
@@ -740,14 +740,16 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
     time_str = data.get("time", "09:00")
     end_time = data.get("end_time", "")
     start_date = data.get("start_date", datetime.now(timezone.utc).isoformat()[:10])
-    occurrences = min(int(data.get("occurrences", 12)), 52)
+    occurrences = min(int(data.get("occurrences", 12)), 104)
     interval = max(int(data.get("interval", 1)), 1)
     capacity = int(data.get("capacity", 100))
     is_public = data.get("is_public", True)
     day_of_week = int(data.get("day_of_week", 0))
     nth_week = int(data.get("nth_week", 1))
     day_of_month = int(data.get("day_of_month", 1))
-    end_date = data.get("end_date")  # optional hard stop date
+    end_date = data.get("end_date")
+    custom_dates = data.get("custom_dates", [])  # For custom pattern: list of date strings
+    days_of_week = data.get("days_of_week", [])  # For custom: multiple days per week
 
     from datetime import timedelta
     start = datetime.fromisoformat(start_date)
@@ -771,6 +773,35 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
             month = month % 12 + 1
             day = min(start.day, cal_module.monthrange(year, month)[1])
             event_date = start.replace(year=year, month=month, day=day)
+
+        elif pattern == "bimonthly":
+            month = start.month + i * 2 - 1
+            year = start.year + month // 12
+            month = month % 12 + 1
+            day = min(start.day, cal_module.monthrange(year, month)[1])
+            event_date = start.replace(year=year, month=month, day=day)
+
+        elif pattern == "quarterly":
+            month = start.month + i * 3 - 1
+            year = start.year + month // 12
+            month = month % 12 + 1
+            day = min(start.day, cal_module.monthrange(year, month)[1])
+            event_date = start.replace(year=year, month=month, day=day)
+
+        elif pattern == "custom" and custom_dates:
+            if i < len(custom_dates):
+                try: event_date = datetime.fromisoformat(custom_dates[i])
+                except: continue
+            else: break
+
+        elif pattern == "custom_weekly" and days_of_week:
+            # Multiple days per week (e.g., Mon+Wed+Fri)
+            week_num = i // len(days_of_week)
+            day_idx = i % len(days_of_week)
+            target_dow = days_of_week[day_idx]
+            base = start + timedelta(weeks=week_num * interval)
+            days_ahead = (target_dow - base.weekday()) % 7
+            event_date = base + timedelta(days=days_ahead)
 
         elif pattern == "yearly":
             try:

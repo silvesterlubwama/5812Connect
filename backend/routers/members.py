@@ -283,6 +283,17 @@ async def get_my_family(current_user: dict = Depends(get_current_user)):
         return {"family": None, "children": [], "parents": [], "message": "No family found. Contact admin to link your account."}
     children = await db.children.find({"family_id": family["id"]}, {"_id": 0}).to_list(50)
     parents = await db.guests.find({"family_id": family["id"], "is_parent": True}, {"_id": 0}).to_list(20)
+    # Also include staff users marked as parents linked to this family
+    staff_parents = await db.users.find(
+        {"is_parent": True, "$or": [
+            {"family_id": family["id"]},
+            {"email": {"$in": [p.get("email") for p in parents if p.get("email")]}},
+        ]},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "role": 1, "location_id": 1}
+    ).to_list(20)
+    for sp in staff_parents:
+        if not any(p.get("email") == sp.get("email") for p in parents):
+            parents.append({**sp, "is_parent": True, "is_staff": True})
     return {"family": family, "children": children, "parents": parents}
 
 
@@ -613,3 +624,133 @@ async def bulk_import_members(file: str = None, members_data: list = None, curre
             errors.append(f"Row {i+1}: {str(e)}")
     await _audit(current_user["id"], "create", "bulk_import", f"{imported}_members")
     return {"imported": imported, "errors": errors, "total": len(members_data)}
+
+
+# ========== CHILDREN IMPORT (with auto-parent/family creation) ==========
+
+@router.post("/children/bulk-import")
+async def bulk_import_children(request_data: dict, current_user: dict = Depends(get_current_user)):
+    """Import children with auto-creation of parents and families. 
+    Prevents duplicates; updates existing records with new info.
+    Body: {"children": [{name, age, gender, family_name, parent_name, parent_phone, parent_email, location_id}]}"""
+    data = request_data.get("children", request_data.get("data", []))
+    if not data:
+        return {"imported": 0, "updated": 0, "errors": ["No children data provided"], "total": 0}
+    imported = 0
+    updated = 0
+    errors = []
+    family_cache = {}
+
+    for i, row in enumerate(data):
+        try:
+            child_name = (row.get("name") or "").strip()
+            if not child_name:
+                errors.append(f"Row {i+1}: Name required"); continue
+            
+            family_name = (row.get("family_name") or "").strip()
+            parent_name = (row.get("parent_name") or "").strip()
+            parent_phone = (row.get("parent_phone") or "").strip()
+            parent_email = (row.get("parent_email") or "").strip().lower()
+            location_id = row.get("location_id", "")
+
+            # 1. Find or create family
+            family_id = None
+            if family_name:
+                if family_name in family_cache:
+                    family_id = family_cache[family_name]
+                else:
+                    existing_fam = await db.families.find_one({"family_name": {"$regex": f"^{family_name}$", "$options": "i"}})
+                    if existing_fam:
+                        family_id = existing_fam["id"]
+                        # Update location if provided
+                        if location_id and not existing_fam.get("location_id"):
+                            await db.families.update_one({"id": family_id}, {"$set": {"location_id": location_id}})
+                    else:
+                        family_id = f"fam_{str(uuid.uuid4())[:8]}"
+                        await db.families.insert_one({
+                            "id": family_id, "family_name": family_name,
+                            "primary_contact_name": parent_name, "primary_contact_phone": parent_phone,
+                            "primary_contact_email": parent_email, "location_id": location_id,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                    family_cache[family_name] = family_id
+
+            # 2. Find or create parent
+            if parent_name:
+                parent_q = {"name": {"$regex": f"^{parent_name}$", "$options": "i"}}
+                if parent_email: parent_q["email"] = parent_email
+                existing_parent = await db.guests.find_one({**parent_q, "is_parent": True})
+                if not existing_parent:
+                    # Check if parent is a staff member marked as parent
+                    staff_parent = await db.users.find_one({"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True})
+                    if not staff_parent:
+                        await db.guests.insert_one({
+                            "id": f"gst_{str(uuid.uuid4())[:8]}", "name": parent_name,
+                            "email": parent_email, "phone": parent_phone,
+                            "is_parent": True, "family_id": family_id, "location_id": location_id,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                elif family_id and not existing_parent.get("family_id"):
+                    await db.guests.update_one({"id": existing_parent["id"]}, {"$set": {"family_id": family_id}})
+
+            # 3. Find or create/update child
+            child_q = {"name": {"$regex": f"^{child_name}$", "$options": "i"}}
+            if family_id: child_q["family_id"] = family_id
+            existing_child = await db.children.find_one(child_q)
+            if existing_child:
+                # Update with new info (don't duplicate)
+                update_fields = {}
+                for k in ("age", "gender", "date_of_birth", "medical_info", "allergies", "grade"):
+                    if row.get(k) and row[k] != existing_child.get(k):
+                        update_fields[k] = row[k]
+                if location_id and location_id != existing_child.get("location_id"):
+                    update_fields["location_id"] = location_id
+                if update_fields:
+                    update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    await db.children.update_one({"id": existing_child["id"]}, {"$set": update_fields})
+                    updated += 1
+            else:
+                await db.children.insert_one({
+                    "id": f"chd_{str(uuid.uuid4())[:8]}", "name": child_name,
+                    "age": row.get("age"), "gender": row.get("gender", ""),
+                    "date_of_birth": row.get("date_of_birth", ""),
+                    "family_id": family_id, "location_id": location_id,
+                    "medical_info": row.get("medical_info", ""), "allergies": row.get("allergies", ""),
+                    "grade": row.get("grade", ""),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)}")
+
+    return {"imported": imported, "updated": updated, "errors": errors, "total": len(data)}
+
+
+# ========== FAMILY EDITING (children + parents) ==========
+
+@router.put("/families/{family_id}/members")
+async def update_family_members(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Update which children and parents/guardians belong to a family"""
+    child_ids = data.get("child_ids", [])
+    parent_ids = data.get("parent_ids", [])
+    guardian_ids = data.get("guardian_ids", [])
+
+    # Unlink old children from this family
+    await db.children.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
+    # Link specified children
+    if child_ids:
+        await db.children.update_many({"id": {"$in": child_ids}}, {"$set": {"family_id": family_id}})
+
+    # Unlink old parents
+    await db.guests.update_many({"family_id": family_id, "is_parent": True}, {"$unset": {"family_id": ""}})
+    # Link specified parents
+    if parent_ids:
+        await db.guests.update_many({"id": {"$in": parent_ids}}, {"$set": {"family_id": family_id, "is_parent": True}})
+
+    # Store guardian links
+    await db.families.update_one({"id": family_id}, {"$set": {
+        "guardian_ids": guardian_ids,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+
+    return {"message": "Family members updated", "children": len(child_ids), "parents": len(parent_ids), "guardians": len(guardian_ids)}
