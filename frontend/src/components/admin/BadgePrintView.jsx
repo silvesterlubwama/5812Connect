@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Printer, Bluetooth, Monitor } from 'lucide-react';
 import { Button } from '../ui/button';
 import { toast } from 'sonner';
+import DOMPurify from 'dompurify';
 
 export function BadgePrintView({ user, onClose }) {
   const badgeRef = useRef(null);
@@ -20,9 +21,9 @@ export function BadgePrintView({ user, onClose }) {
     doc.open();
     doc.write('<!DOCTYPE html>');
     doc.close();
-    doc.head.innerHTML = `<title>Badge - ${encodeURIComponent(user.name)}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; } @media print { body { height: auto; } }</style>`;
+    doc.head.innerHTML = DOMPurify.sanitize(`<title>Badge - ${user.name}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; } @media print { body { height: auto; } }</style>`, { FORCE_BODY: true });
     const container = doc.createElement('div');
-    container.innerHTML = printContents;
+    container.innerHTML = DOMPurify.sanitize(printContents);
     doc.body.appendChild(container);
     setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
   };

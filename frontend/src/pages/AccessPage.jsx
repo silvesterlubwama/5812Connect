@@ -76,7 +76,7 @@ export default function AccessPage() {
       ]);
       setApiConnections(connRes.data || []);
       setGuestLinks(linksRes.data || []);
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);

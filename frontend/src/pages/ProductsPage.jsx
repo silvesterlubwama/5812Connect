@@ -569,7 +569,7 @@ export default function ProductsPage() {
               <Label>API Integrations (JSON)</Label>
               <Textarea rows={3} placeholder='[{"name": "MoMo API", "url": "https://...", "key": "..."}]'
                 value={JSON.stringify(storeSettings.api_integrations || [], null, 2)}
-                onChange={e => { try { setStoreSettings({...storeSettings, api_integrations: JSON.parse(e.target.value)}); } catch {} }}
+                onChange={e => { try { setStoreSettings({...storeSettings, api_integrations: JSON.parse(e.target.value)}); } catch (e) { console.warn(e.message || e); } }}
               />
               <p className="text-xs text-muted-foreground">External payment API configurations for this location</p>
             </div>

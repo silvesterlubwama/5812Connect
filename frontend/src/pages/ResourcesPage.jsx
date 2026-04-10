@@ -69,7 +69,7 @@ export default function ResourcesPage() {
     try {
       const res = await bookingsApi.list({});
       setBookings(res.data || []);
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   };
 
   useEffect(() => { fetchBookings(); }, []);

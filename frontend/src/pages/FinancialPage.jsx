@@ -99,7 +99,7 @@ export default function FinancialPage() {
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const fetchPending = async () => {
-    try { const r = await financialApi.pendingExpenses(); setPendingExpenses(r.data); } catch {}
+    try { const r = await financialApi.pendingExpenses(); setPendingExpenses(r.data); } catch (e) { console.warn(e.message || e); }
   };
 
   const approveExpense = async (id) => {

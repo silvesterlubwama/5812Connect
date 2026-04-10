@@ -80,7 +80,7 @@ export const WebSocketProvider = ({ children }) => {
           }
           const handlers = listenersRef.current.get(data.type);
           if (handlers) handlers.forEach(cb => cb(data));
-        } catch {}
+        } catch (e) { console.warn(e.message || e); }
       };
 
       ws.onclose = () => {
@@ -155,7 +155,7 @@ export const WebSocketProvider = ({ children }) => {
           });
         }
       }
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   }, []);
 
   // Listen for background sync completion

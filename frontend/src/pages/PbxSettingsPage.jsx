@@ -119,7 +119,7 @@ export default function PbxSettingsPage() {
   const usersWithoutExt = users.filter(u => !extensions.some(e => e.user_id === u.id));
 
   let sipStatus = { registered: false, error: null };
-  try { const c = useCall(); sipStatus = { registered: c.sipRegistered, error: c.sipError }; } catch {}
+  try { const c = useCall(); sipStatus = { registered: c.sipRegistered, error: c.sipError }; } catch (e) { console.warn(e.message || e); }
 
   if (loading) return <div className="p-6"><div className="h-64 animate-pulse bg-muted rounded-xl" /></div>;
 

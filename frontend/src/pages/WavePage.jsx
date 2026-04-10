@@ -37,7 +37,7 @@ export default function WavePage() {
         setWaveConfig(configRes.data);
         setServers(serversRes.data || []);
         setLocations(locsRes.data || []);
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
       finally { setLoading(false); }
     };
     load();

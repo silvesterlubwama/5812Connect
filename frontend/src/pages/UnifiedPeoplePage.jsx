@@ -192,7 +192,7 @@ export default function UnifiedPeoplePage() {
       setFamilies(famRes.data || []);
       setChildren(chdRes.data || []);
       setGuests(gstRes.data || []);
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   }, []);
 
   useEffect(() => {
@@ -204,7 +204,7 @@ export default function UnifiedPeoplePage() {
         const pendData = pendRes.data;
         setPendingMembers(Array.isArray(pendData) ? pendData : pendData?.members || []);
         setBadges(badgeRes.data || []);
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
     };
     load();
   }, [fetchMembers, fetchPeople]);

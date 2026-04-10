@@ -211,7 +211,7 @@ export default function CheckInsPage() {
               finally { setLookingUp(false); }
               return;
             }
-          } catch {}
+          } catch (e) { console.warn(e.message || e); }
           requestAnimationFrame(scanLoop);
         };
         requestAnimationFrame(scanLoop);

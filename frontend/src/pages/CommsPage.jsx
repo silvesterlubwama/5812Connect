@@ -80,7 +80,7 @@ export default function CommsPage() {
     try {
       const res = await chatApi.conversations();
       setConversations(res.data || []);
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   }, []);
 
   useEffect(() => {
@@ -94,11 +94,11 @@ export default function CommsPage() {
         ]);
         setAnnouncements(annRes.data || []);
         setAllStaff(staffRes.data?.members || staffRes.data || []);
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
       try {
         const aiRes = await chatApi.messages(`ai_${user?.id}`, { limit: 50 });
         setAiMessages((aiRes.data || []).map(m => ({ role: m.type === 'ai' ? 'assistant' : 'user', text: m.text })));
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
       setLoading(false);
     };
     load();
@@ -114,7 +114,7 @@ export default function CommsPage() {
         const map = {};
         (res.data || []).forEach(u => { map[u.user_id] = u.status; });
         setPresenceMap(map);
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
     };
     fetchPresence();
     const interval = setInterval(fetchPresence, 30000);

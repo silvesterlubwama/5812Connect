@@ -58,7 +58,7 @@ export default function PublicBookingsPage() {
       else if (tz.includes('Nairobi')) setCountryFilter('KE');
       else if (tz.includes('Bangkok')) setCountryFilter('TH');
       else if (tz.includes('Port-au-Prince')) setCountryFilter('HT');
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
     // Ask for location permission
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(() => {}, () => {}, { timeout: 5000 });

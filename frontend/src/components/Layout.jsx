@@ -220,17 +220,17 @@ export default function Layout() {
   }, [addListener]);
 
   const fetchUnreadCount = useCallback(async () => {
-    try { const res = await notificationsApi.unreadCount(); setUnreadCount(res.data.count); } catch {}
+    try { const res = await notificationsApi.unreadCount(); setUnreadCount(res.data.count); } catch (e) { console.warn(e.message || e); }
   }, []);
 
   const fetchNotifs = async () => {
-    try { const res = await notificationsApi.list(); setNotifs(res.data); setUnreadCount(res.data.filter(n => !n.read).length); } catch {}
+    try { const res = await notificationsApi.list(); setNotifs(res.data); setUnreadCount(res.data.filter(n => !n.read).length); } catch (e) { console.warn(e.message || e); }
   };
 
   useEffect(() => { fetchUnreadCount(); const interval = setInterval(fetchUnreadCount, 30000); return () => clearInterval(interval); }, [fetchUnreadCount]);
   const handleNotifOpen = () => { setNotifOpen(true); fetchNotifs(); };
-  const markAllRead = async () => { try { await notificationsApi.markAllRead(); setNotifs(prev => prev.map(n => ({ ...n, read: true }))); setUnreadCount(0); } catch {} };
-  const markRead = async (id) => { try { await notificationsApi.markRead(id); setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch {} };
+  const markAllRead = async () => { try { await notificationsApi.markAllRead(); setNotifs(prev => prev.map(n => ({ ...n, read: true }))); setUnreadCount(0); } catch (e) { console.warn(e.message || e); } };
+  const markRead = async (id) => { try { await notificationsApi.markRead(id); setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { console.warn(e.message || e); } };
 
   useEffect(() => {
     const handler = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); } if (e.key === 'Escape') setSearchOpen(false); };
@@ -244,7 +244,7 @@ export default function Layout() {
     if (q.length < 2) { setSearchResults([]); return; }
     setSearching(true);
     searchTimeout.current = setTimeout(async () => {
-      try { const res = await searchApi.query(q); setSearchResults(res.data.results || []); } catch {}
+      try { const res = await searchApi.query(q); setSearchResults(res.data.results || []); } catch (e) { console.warn(e.message || e); }
       finally { setSearching(false); }
     }, 300);
   };

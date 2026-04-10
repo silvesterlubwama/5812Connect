@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    try { await authApi.logout(); } catch {}
+    try { await authApi.logout(); } catch (e) { console.warn(e.message || e); }
     localStorage.removeItem('5812_token');
     localStorage.removeItem('5812_auth_user');
     setUser(null);

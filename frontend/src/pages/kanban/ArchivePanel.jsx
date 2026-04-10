@@ -27,7 +27,7 @@ export function ArchivePanel({ open, onClose, boardId, onRestoreCard, onRestoreL
       const res = await tasksExtApi.restore(card.id);
       setArchivedCards(prev => prev.filter(c => c.id !== card.id));
       onRestoreCard?.(res.data);
-    } catch {}
+    } catch (e) { console.error("Archive error:", e.message); }
   };
 
   const handleRestoreList = async (list) => {
@@ -35,7 +35,7 @@ export function ArchivePanel({ open, onClose, boardId, onRestoreCard, onRestoreL
       const res = await boardsApi.restoreList(boardId, list.id);
       setArchivedLists(prev => prev.filter(l => l.id !== list.id));
       onRestoreList?.(res.data);
-    } catch {}
+    } catch (e) { console.error("Archive error:", e.message); }
   };
 
   return (

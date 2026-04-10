@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
+import DOMPurify from 'dompurify';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 const ORG = '58:12 Global Connect';
@@ -15,9 +16,9 @@ function printElement(ref, title) {
   doc.open();
   doc.write('<!DOCTYPE html>');
   doc.close();
-  doc.head.innerHTML = `<title>${encodeURIComponent(title)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}@media print{body{min-height:auto}}</style>`;
+  doc.head.innerHTML = DOMPurify.sanitize(`<title>${title}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}@media print{body{min-height:auto}}</style>`, { FORCE_BODY: true });
   const container = doc.createElement('div');
-  container.innerHTML = html;
+  container.innerHTML = DOMPurify.sanitize(html);
   doc.body.appendChild(container);
   setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
 }

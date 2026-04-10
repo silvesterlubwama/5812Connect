@@ -14,7 +14,7 @@ function loadSipJs() {
       try {
         const webMod = require('sip.js/lib/platform/web');
         SimpleUser = webMod?.SimpleUser;
-      } catch (e2) { /* path doesn't exist in this build */ }
+      } catch (e2) { console.debug('[SIP] Alternate import path unavailable:', e2.message); }
     }
   } catch (e) {
     console.warn('[SIP] sip.js not available:', e.message);
@@ -123,7 +123,7 @@ class SipService {
         console.warn(`[SIP] Failed on ${wsUrl}: ${err.message}`);
         // Clean up before trying next
         if (this.simpleUser) {
-          try { await this.simpleUser.disconnect(); } catch {}
+          try { await this.simpleUser.disconnect(); } catch (e) { console.warn("[SIP]", e.message); }
           this.simpleUser = null;
         }
       }

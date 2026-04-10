@@ -1,3 +1,4 @@
+import os
 """
 Iteration 47 - Testing new features:
 1. Event recurrence: bimonthly, quarterly, custom, custom_weekly patterns
@@ -17,7 +18,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 
 # Test credentials
 ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
 
 
 class TestAuth:

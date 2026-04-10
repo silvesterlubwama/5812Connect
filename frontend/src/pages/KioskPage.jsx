@@ -20,7 +20,7 @@ const saveRecentVisitor = (v) => {
     const existing = getRecentVisitors().filter(rv => rv.phone !== v.phone && rv.id !== v.id);
     const updated = [{ ...v, last_visit: new Date().toISOString() }, ...existing].slice(0, MAX_RECENT);
     localStorage.setItem(KIOSK_VISITORS_KEY, JSON.stringify(updated));
-  } catch {}
+  } catch (e) { console.warn(e.message || e); }
 };
 const getRecentVisitors = () => {
   try { return JSON.parse(localStorage.getItem(KIOSK_VISITORS_KEY) || '[]'); } catch { return []; }
@@ -29,7 +29,7 @@ const removeRecentVisitor = (id) => {
   try {
     const updated = getRecentVisitors().filter(v => v.id !== id);
     localStorage.setItem(KIOSK_VISITORS_KEY, JSON.stringify(updated));
-  } catch {}
+  } catch (e) { console.warn(e.message || e); }
 };
 
 export default function KioskPage() {
@@ -85,7 +85,7 @@ export default function KioskPage() {
         osc.frequency.value = 200; osc.type = 'square'; gain.gain.value = 0.3;
         osc.start(); setTimeout(() => { osc.stop(); ctx.close(); }, 400);
       }
-    } catch {}
+    } catch (e) { console.warn(e.message || e); }
   };
 
   // QR/ID scanning via device camera
@@ -147,7 +147,7 @@ export default function KioskPage() {
         const restricted = (locsRes.data || []).filter(l => l.is_restricted);
         setLocations(restricted);
         if (restricted.length > 0) setSelectedLocation(restricted[0].id);
-      } catch {}
+      } catch (e) { console.warn(e.message || e); }
     } catch (err) { toast.error(err.response?.data?.detail || 'Login failed'); }
     finally { setLoading(false); }
   };
