@@ -352,6 +352,15 @@ export const accessApi = {
   validateGuestPass: (passId) => api.get(`/access/guest-passes/${passId}/validate`),
   extendGuestPass: (passId, data) => api.put(`/access/guest-passes/${passId}/extend`, data),
   eligibleResidents: (locationId) => api.get(`/access/eligible-residents/${locationId}`),
+  // API connections for door/access control systems
+  listApiConnections: () => api.get('/access/api-connections'),
+  createApiConnection: (data) => api.post('/access/api-connections', data),
+  updateApiConnection: (id, data) => api.put(`/access/api-connections/${id}`, data),
+  deleteApiConnection: (id) => api.delete(`/access/api-connections/${id}`),
+  // Shareable guest access links
+  listGuestLinks: () => api.get('/access/guest-links'),
+  createGuestLink: (data) => api.post('/access/guest-links', data),
+  deleteGuestLink: (id) => api.delete(`/access/guest-links/${id}`),
 };
 
 // ---- REPORTS ----

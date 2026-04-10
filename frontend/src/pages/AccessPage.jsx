@@ -41,6 +41,16 @@ export default function AccessPage() {
   const [scanMode, setScanMode] = useState('member');
   const [saving, setSaving] = useState(false);
 
+  // Access Control API connections
+  const [apiConnections, setApiConnections] = useState([]);
+  const [showApiConnForm, setShowApiConnForm] = useState(false);
+  const [apiConnForm, setApiConnForm] = useState({ name: '', type: 'door', api_url: '', api_key: '', provider: 'generic', location_id: '', sublocation_id: '', door_name: '', enabled: true });
+  // Guest access links
+  const [guestLinks, setGuestLinks] = useState([]);
+  const [showGuestLinkForm, setShowGuestLinkForm] = useState(false);
+  const [guestLinkForm, setGuestLinkForm] = useState({ space_name: '', location_id: '', max_uses: 0, requires_approval: true, expires_at: '' });
+  const isAdmin = true; // This page is already admin-restricted
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -58,6 +68,15 @@ export default function AccessPage() {
       }
     } catch { toast.error('Failed to load data'); }
     finally { setLoading(false); }
+    // Load API connections and guest links
+    try {
+      const [connRes, linksRes] = await Promise.all([
+        accessApi.listApiConnections().catch(() => ({ data: [] })),
+        accessApi.listGuestLinks().catch(() => ({ data: [] })),
+      ]);
+      setApiConnections(connRes.data || []);
+      setGuestLinks(linksRes.data || []);
+    } catch {}
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -239,12 +258,14 @@ export default function AccessPage() {
           </div>
 
           <Tabs defaultValue="residents">
-            <TabsList>
+            <TabsList className="flex-wrap">
               <TabsTrigger value="residents" data-testid="tab-residents"><Users size={13} className="mr-1.5" /> Residents</TabsTrigger>
               <TabsTrigger value="staff" data-testid="tab-staff"><KeyRound size={13} className="mr-1.5" /> Staff Access</TabsTrigger>
               <TabsTrigger value="guests" data-testid="tab-guests"><UserPlus size={13} className="mr-1.5" /> Guest Requests</TabsTrigger>
               <TabsTrigger value="passes" data-testid="tab-passes"><QrCode size={13} className="mr-1.5" /> Guest Passes</TabsTrigger>
               <TabsTrigger value="log" data-testid="tab-scan-log"><Clock size={13} className="mr-1.5" /> Scan Log</TabsTrigger>
+              <TabsTrigger value="doors" data-testid="tab-doors"><Shield size={13} className="mr-1.5" /> Door APIs</TabsTrigger>
+              <TabsTrigger value="links" data-testid="tab-links"><KeyRound size={13} className="mr-1.5" /> Guest Links</TabsTrigger>
             </TabsList>
 
             <TabsContent value="residents" className="mt-4">
@@ -395,6 +416,63 @@ export default function AccessPage() {
                         </div>
                       </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Door/Access Control API Connections */}
+            <TabsContent value="doors" className="mt-4">
+              <div className="flex justify-between items-center mb-4">
+                <p className="text-sm text-muted-foreground">{apiConnections.length} connections configured</p>
+                <Button size="sm" className="gap-1.5" onClick={() => { setApiConnForm({ name: '', type: 'door', api_url: '', api_key: '', provider: 'generic', location_id: selectedLocation, sublocation_id: '', door_name: '', enabled: true }); setShowApiConnForm(true); }} data-testid="add-api-conn-btn"><UserPlus size={13} /> Add Connection</Button>
+              </div>
+              {apiConnections.length === 0 ? (
+                <p className="text-center py-8 text-muted-foreground text-sm">No access control APIs configured. Connect door systems (Kisi, Salto, Brivo, OpenPath) to manage physical access.</p>
+              ) : (
+                <div className="space-y-2">
+                  {apiConnections.map(conn => (
+                    <Card key={conn.id} className="rounded-xl">
+                      <CardContent className="p-4 flex items-center gap-4">
+                        <Shield size={18} className="text-primary shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm">{conn.name} <Badge variant="outline" className="text-[10px] ml-1">{conn.type}</Badge> <Badge variant="outline" className="text-[10px] ml-1">{conn.provider}</Badge></p>
+                          <p className="text-xs text-muted-foreground truncate">{conn.api_url} {conn.door_name ? `| ${conn.door_name}` : ''}</p>
+                        </div>
+                        <Badge className={`text-[10px] ${conn.enabled ? 'bg-green-100 text-green-700' : 'bg-slate-100'}`}>{conn.enabled ? 'Active' : 'Off'}</Badge>
+                        <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => { if (window.confirm('Remove?')) { await accessApi.deleteApiConnection(conn.id); setApiConnections(prev => prev.filter(c => c.id !== conn.id)); toast.success('Removed'); } }}><XCircle size={13} /></Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Shareable Guest Access Links */}
+            <TabsContent value="links" className="mt-4">
+              <div className="flex justify-between items-center mb-4">
+                <p className="text-sm text-muted-foreground">{guestLinks.length} active links</p>
+                <Button size="sm" className="gap-1.5" onClick={() => { setGuestLinkForm({ space_name: '', location_id: selectedLocation, max_uses: 0, requires_approval: true, expires_at: '' }); setShowGuestLinkForm(true); }} data-testid="create-guest-link-btn"><KeyRound size={13} /> Create Link</Button>
+              </div>
+              {guestLinks.length === 0 ? (
+                <p className="text-center py-8 text-muted-foreground text-sm">No guest access links. Create shareable links for guests to request access to restricted spaces.</p>
+              ) : (
+                <div className="space-y-2">
+                  {guestLinks.map(link => (
+                    <Card key={link.id} className="rounded-xl">
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-4">
+                          <KeyRound size={16} className="text-amber-500 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm">{link.space_name || 'Access Link'}</p>
+                            <p className="text-xs text-muted-foreground">Uses: {link.uses}/{link.max_uses || 'unlimited'} {link.expires_at ? `| Expires: ${link.expires_at.slice(0, 10)}` : ''}</p>
+                          </div>
+                          <Badge variant={link.requires_approval ? 'secondary' : 'default'} className="text-[10px]">{link.requires_approval ? 'Needs Approval' : 'Auto-Approve'}</Badge>
+                          <Button size="sm" variant="outline" className="text-xs" onClick={() => { const url = `${window.location.origin}/public-access/${link.token}`; navigator.clipboard.writeText(url); toast.success('Link copied!'); }} data-testid="copy-guest-link">Copy Link</Button>
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => { await accessApi.deleteGuestLink(link.id); setGuestLinks(prev => prev.filter(l => l.id !== link.id)); toast.success('Deleted'); }}><XCircle size={13} /></Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   ))}
                 </div>
               )}
@@ -616,6 +694,64 @@ export default function AccessPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* API Connection Form */}
+      <Dialog open={showApiConnForm} onOpenChange={setShowApiConnForm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Add Access Control API</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Name *</Label><Input value={apiConnForm.name} onChange={e => setApiConnForm({...apiConnForm, name: e.target.value})} placeholder="Front Door" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Type</Label>
+                <Select value={apiConnForm.type} onValueChange={v => setApiConnForm({...apiConnForm, type: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="door">Door</SelectItem><SelectItem value="gate">Gate</SelectItem><SelectItem value="turnstile">Turnstile</SelectItem><SelectItem value="barrier">Barrier</SelectItem></SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Provider</Label>
+              <Select value={apiConnForm.provider} onValueChange={v => setApiConnForm({...apiConnForm, provider: v})}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="generic">Generic</SelectItem><SelectItem value="kisi">Kisi</SelectItem><SelectItem value="salto">Salto</SelectItem><SelectItem value="brivo">Brivo</SelectItem><SelectItem value="openpath">OpenPath</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">API URL *</Label><Input value={apiConnForm.api_url} onChange={e => setApiConnForm({...apiConnForm, api_url: e.target.value})} placeholder="https://api.kisi.io/v1" /></div>
+            <div className="space-y-1.5"><Label className="text-xs">API Key</Label><Input type="password" value={apiConnForm.api_key} onChange={e => setApiConnForm({...apiConnForm, api_key: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Door/Device Name</Label><Input value={apiConnForm.door_name} onChange={e => setApiConnForm({...apiConnForm, door_name: e.target.value})} placeholder="Main Entrance" /></div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setShowApiConnForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                if (!apiConnForm.name || !apiConnForm.api_url) { toast.error('Name and API URL required'); return; }
+                try { const res = await accessApi.createApiConnection(apiConnForm); setApiConnections(prev => [...prev, res.data]); setShowApiConnForm(false); toast.success('Connection added'); }
+                catch { toast.error('Failed'); }
+              }} data-testid="save-api-conn">Add</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Guest Link Form */}
+      <Dialog open={showGuestLinkForm} onOpenChange={setShowGuestLinkForm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Create Guest Access Link</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label className="text-xs">Space / Room Name *</Label><Input value={guestLinkForm.space_name} onChange={e => setGuestLinkForm({...guestLinkForm, space_name: e.target.value})} placeholder="Conference Room A" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Max Uses (0=unlimited)</Label><Input type="number" min={0} value={guestLinkForm.max_uses} onChange={e => setGuestLinkForm({...guestLinkForm, max_uses: parseInt(e.target.value) || 0})} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Expires</Label><Input type="date" value={guestLinkForm.expires_at} onChange={e => setGuestLinkForm({...guestLinkForm, expires_at: e.target.value})} /></div>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={guestLinkForm.requires_approval} onChange={e => setGuestLinkForm({...guestLinkForm, requires_approval: e.target.checked})} /> Requires admin approval</label>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setShowGuestLinkForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                if (!guestLinkForm.space_name) { toast.error('Space name required'); return; }
+                try { const res = await accessApi.createGuestLink({...guestLinkForm, location_id: selectedLocation}); setGuestLinks(prev => [...prev, res.data]); setShowGuestLinkForm(false); toast.success('Link created! Click "Copy Link" to share.'); }
+                catch { toast.error('Failed'); }
+              }} data-testid="save-guest-link">Create Link</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
