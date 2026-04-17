@@ -916,9 +916,25 @@ export default function MembersPage() {
             <DialogDescription>Upload a CSV file or paste data with header: first_name, last_name, date_of_birth, grade, family_name, fathers_names, fathers_phone, mothers_names, mothers_phone, allergies, medical_notes, special_needs</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Upload CSV File</Label>
-              <Input type="file" accept=".csv" onChange={e => setChildCsvFile(e.target.files?.[0] || null)} data-testid="child-csv-file-input" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Upload CSV File</Label>
+                <Input type="file" accept=".csv" onChange={e => setChildCsvFile(e.target.files?.[0] || null)} data-testid="child-csv-file-input" />
+              </div>
+              <div className="space-y-2">
+                <Label>Country</Label>
+                <Select value={importCountry} onValueChange={setImportCountry}>
+                  <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="UG">Uganda</SelectItem>
+                    <SelectItem value="US">United States</SelectItem>
+                    <SelectItem value="KE">Kenya</SelectItem>
+                    <SelectItem value="TH">Thailand</SelectItem>
+                    <SelectItem value="HT">Haiti</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
             <Textarea rows={6} placeholder={`first_name,last_name,date_of_birth,grade,family_name,...\nJohn,Doe,2015-05-10,3,Doe Family,...`}
@@ -941,9 +957,25 @@ export default function MembersPage() {
             <DialogDescription>Upload a CSV file or paste data with header: name, email, phone, national_id, role, department</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Upload CSV File</Label>
-              <Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} data-testid="staff-csv-file-input" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Upload CSV File</Label>
+                <Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} data-testid="staff-csv-file-input" />
+              </div>
+              <div className="space-y-2">
+                <Label>Country</Label>
+                <Select value={importCountry} onValueChange={setImportCountry}>
+                  <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="UG">Uganda</SelectItem>
+                    <SelectItem value="US">United States</SelectItem>
+                    <SelectItem value="KE">Kenya</SelectItem>
+                    <SelectItem value="TH">Thailand</SelectItem>
+                    <SelectItem value="HT">Haiti</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
             <Textarea rows={6} placeholder={`name,email,phone,national_id,role,department\nJane Smith,jane@example.com,...`}
@@ -954,6 +986,83 @@ export default function MembersPage() {
             <Button className="flex-1" disabled={importLoading || (!staffCsvData.trim() && !staffCsvFile)} onClick={handleStaffImport} data-testid="import-staff-btn">
               {importLoading ? 'Importing...' : 'Import Staff'}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Edit Dialog */}
+      <Dialog open={showBulkEdit} onOpenChange={setShowBulkEdit}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bulk Edit {selectedIds.size} Members</DialogTitle>
+            <DialogDescription>Only fields you change will be updated. Leave blank to keep current values.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label className="text-xs">Status</Label>
+                <Select value={bulkEditForm.status} onValueChange={v => setBulkEditForm(prev => ({...prev, status: v}))}>
+                  <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No change</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Role</Label>
+                <Select value={bulkEditForm.role} onValueChange={v => setBulkEditForm(prev => ({...prev, role: v}))}>
+                  <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No change</SelectItem>
+                    {(MOCK_ROLES || ['Staff','Volunteer','Member','Parent','Customer','Guest']).map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label className="text-xs">Group</Label>
+                <Select value={bulkEditForm.group} onValueChange={v => setBulkEditForm(prev => ({...prev, group: v}))}>
+                  <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No change</SelectItem>
+                    {(MOCK_GROUPS || ['General','Youth','Women','Men','Children','Leadership']).map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Location</Label>
+                <Select value={bulkEditForm.location_id} onValueChange={v => setBulkEditForm(prev => ({...prev, location_id: v}))}>
+                  <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No change</SelectItem>
+                    {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBulkEdit(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="apply-bulk-edit" onClick={async () => {
+                const updates = {};
+                if (bulkEditForm.status) updates.status = bulkEditForm.status;
+                if (bulkEditForm.role) updates.role = bulkEditForm.role;
+                if (bulkEditForm.group) updates.group = bulkEditForm.group;
+                if (bulkEditForm.location_id) updates.location_id = bulkEditForm.location_id;
+                if (Object.keys(updates).length === 0) { toast.error('No changes selected'); return; }
+                try {
+                  const res = await adminApi.bulkUpdateMembers([...selectedIds], updates);
+                  toast.success(`Updated ${res.data.updated || selectedIds.size} members`);
+                  setShowBulkEdit(false);
+                  setSelectedIds(new Set());
+                  setBulkEditForm({ status: '', group: '', role: '', location_id: '' });
+                  fetchMembers();
+                } catch (e) { toast.error(e.response?.data?.detail || 'Bulk update failed'); }
+              }}>Apply to {selectedIds.size} Members</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
