@@ -110,6 +110,11 @@ async def create_event(data: EventCreate, current_user: dict = Depends(get_curre
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
+    # Auto-set country from location if not provided
+    if not event.get("country") and event.get("location_id"):
+        loc = await db.locations.find_one({"id": event["location_id"]}, {"_id": 0, "country": 1})
+        if loc and loc.get("country"):
+            event["country"] = loc["country"]
     await db.events.insert_one(event)
     event.pop("_id", None)
     try:

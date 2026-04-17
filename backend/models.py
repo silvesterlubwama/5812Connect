@@ -133,6 +133,7 @@ class EventCreate(BaseModel):
     recurrence_days_of_week: Optional[List[int]] = []  # 0=Mon..6=Sun
     recurrence_week_of_month: Optional[int] = None  # 1st, 2nd, 3rd, 4th, -1=last
     programme_id: Optional[str] = None
+    country: Optional[str] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -153,6 +154,7 @@ class EventUpdate(BaseModel):
     is_recurring: Optional[bool] = None
     recurrence_pattern: Optional[str] = None
     recurrence_day: Optional[int] = None
+    country: Optional[str] = None
 
 class TaskCreate(BaseModel):
     title: str

@@ -32,7 +32,7 @@ export default function EventsPage() {
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeColor, setNewTypeColor] = useState('#6366f1');
   const [editingEvent, setEditingEvent] = useState(null);
-  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: '', venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1 };
+  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: '', venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '' };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
 
@@ -53,11 +53,19 @@ export default function EventsPage() {
   }, []);
 
   const loadVenues = async (locId) => {
-    if (!locId) { setLocationVenues([]); return; }
+    if (!locId) { setLocationVenues([]); return []; }
     try {
       const r = await locationVenuesApi.get(locId);
-      setLocationVenues([...r.data.venues, ...r.data.sublocations.map(s => ({ id: s.id, name: s.name, type: 'sublocation' }))]);
-    } catch { setLocationVenues([]); }
+      const combined = [...(r.data.venues || []), ...(r.data.sublocations || []).map(s => ({ id: s.id, name: s.name, type: 'sublocation' }))];
+      setLocationVenues(combined);
+      return combined;
+    } catch (e) { console.warn(e.message || e); setLocationVenues([]); return []; }
+  };
+
+  // Get country from location
+  const getLocationCountry = (locId) => {
+    const loc = locations.find(l => l.id === locId);
+    return loc?.country || '';
   };
 
   const upcoming = events.filter(e => e.status === 'upcoming');
@@ -89,10 +97,10 @@ export default function EventsPage() {
     } catch { toast.error('Failed to duplicate'); }
   };
 
-  const editEvent = (event) => {
+  const editEvent = async (event) => {
     setEditingEvent(event);
-    setNewEvent({ title: event.title, type: event.type || 'service', date: event.date || '', time: event.time || '', end_time: event.end_time || '', location: event.location || '', location_id: event.location_id || '', venue_id: event.venue_id || '', capacity: event.capacity || 100, description: event.description || '', is_public: event.is_public ?? true, is_free: event.is_free ?? true, price: event.price || '', visibility: event.visibility || 'external', is_recurring: event.is_recurring ?? false, recurrence_pattern: event.recurrence_pattern || '', recurrence_day: event.recurrence_day || 1 });
-    if (event.location_id) loadVenues(event.location_id);
+    setNewEvent({ title: event.title, type: event.type || 'service', date: event.date || '', time: event.time || '', end_time: event.end_time || '', location: event.location || '', location_id: event.location_id || '', venue_id: event.venue_id || '', capacity: event.capacity || 100, description: event.description || '', is_public: event.is_public ?? true, is_free: event.is_free ?? true, price: event.price || '', visibility: event.visibility || 'external', is_recurring: event.is_recurring ?? false, recurrence_pattern: event.recurrence_pattern || '', recurrence_day: event.recurrence_day || 1, country: event.country || getLocationCountry(event.location_id) });
+    if (event.location_id) await loadVenues(event.location_id);
     setShowAdd(true);
   };
 
@@ -250,9 +258,9 @@ export default function EventsPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Location</Label>
-                <Select value={newEvent.location_id || '_none'} onValueChange={v => { const lid = v === '_none' ? '' : v; setNewEvent({...newEvent, location_id: lid, venue_id: ''}); loadVenues(lid); }}>
+                <Select value={newEvent.location_id || '_none'} onValueChange={v => { const lid = v === '_none' ? '' : v; const country = getLocationCountry(lid); setNewEvent({...newEvent, location_id: lid, venue_id: '', country}); loadVenues(lid); }}>
                   <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
-                  <SelectContent><SelectItem value="_none">-- Select --</SelectItem>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                  <SelectContent><SelectItem value="_none">-- Select --</SelectItem>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name} {l.country ? `(${l.country})` : ''}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-2"><Label>Venue / Sub-location</Label>
