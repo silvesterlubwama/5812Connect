@@ -11,7 +11,8 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi } from '../services/api';
+import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, adminApi } from '../services/api';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
 
@@ -42,12 +43,16 @@ export default function MembersPage() {
   const [childCsvData, setChildCsvData] = useState('');
   const [showStaffImport, setShowStaffImport] = useState(false);
   const [staffCsvData, setStaffCsvData] = useState('');
+  const [importCountry, setImportCountry] = useState('');
   const [allLocations, setAllLocations] = useState([]);
   const [memberDocuments, setMemberDocuments] = useState([]);
   const [docFile, setDocFile] = useState(null);
   const [docType, setDocType] = useState('id_scan');
   const [docLabel, setDocLabel] = useState('');
   const [docLoading, setDocLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditForm, setBulkEditForm] = useState({ status: '', group: '', role: '', location_id: '' });
   const [docUploading, setDocUploading] = useState(false);
   const [csvFile, setCsvFile] = useState(null);
   const [childCsvFile, setChildCsvFile] = useState(null);
@@ -407,6 +412,20 @@ export default function MembersPage() {
         </Select>
       </div>
 
+      {/* Bulk Action Bar */}
+      <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())}
+        onBulkEdit={() => setShowBulkEdit(true)}
+        onBulkDelete={async () => {
+          if (!window.confirm(`Delete ${selectedIds.size} members?`)) return;
+          try { await adminApi.bulkDeleteMembers([...selectedIds]); toast.success(`Deleted ${selectedIds.size} members`); setSelectedIds(new Set()); fetchMembers(); }
+          catch (e) { toast.error(e.message || 'Failed'); }
+        }}
+        onBulkExport={async () => {
+          try { const res = await membersApi.bulkExport([...selectedIds]); exportToCSV(res.data, 'members-export.csv'); toast.success('Exported!'); }
+          catch (e) { toast.error(e.message || 'Export failed'); }
+        }}
+      />
+
       {/* Members grid */}
       {loading ? (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -420,6 +439,7 @@ export default function MembersPage() {
             <Card key={member.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow" data-testid={`member-card-${member.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-start gap-3 mb-3">
+                  <SelectCheckbox id={member.id} checked={selectedIds.has(member.id)} onChange={() => setSelectedIds(prev => { const next = new Set(prev); next.has(member.id) ? next.delete(member.id) : next.add(member.id); return next; })} />
                   <Avatar className="h-10 w-10">
                     <AvatarFallback className={`text-sm font-semibold ${member.status === 'active' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
                       {initials(member.name)}
@@ -828,9 +848,25 @@ export default function MembersPage() {
             <DialogDescription>Upload a CSV file or paste data below (name, email, phone, group per line)</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Upload CSV File</Label>
-              <Input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} data-testid="bulk-csv-file-input" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Upload CSV File</Label>
+                <Input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} data-testid="bulk-csv-file-input" />
+              </div>
+              <div className="space-y-2">
+                <Label>Country</Label>
+                <Select value={importCountry} onValueChange={setImportCountry}>
+                  <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="UG">Uganda</SelectItem>
+                    <SelectItem value="US">United States</SelectItem>
+                    <SelectItem value="KE">Kenya</SelectItem>
+                    <SelectItem value="TH">Thailand</SelectItem>
+                    <SelectItem value="HT">Haiti</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="text-xs text-muted-foreground text-center">— or paste below —</div>
             <Textarea

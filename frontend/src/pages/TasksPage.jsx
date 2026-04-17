@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { boardsApi, tasksApi, locationsApi, adminApi } from '../services/api';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { toast } from 'sonner';
@@ -45,6 +46,7 @@ export default function TasksPage() {
   const trelloFileRef = useRef(null);
   const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'calendar'
   const [allTasks, setAllTasks] = useState([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState(new Set());
 
   const isAdmin = ['admin', 'system_admin', 'executive director', 'director'].includes((user?.role || '').toLowerCase());
   const canEdit = isAdmin || ['manager', 'coordinator', 'staff'].includes((user?.role || '').toLowerCase());
@@ -333,31 +335,34 @@ export default function TasksPage() {
   const bulkArchive = async () => {
     if (selectedCards.size === 0) return;
     try {
-      await Promise.all([...selectedCards].map(id => tasksApi.update(id, { is_archived: true })));
+      await tasksApi.bulkArchive([...selectedCards], true);
       toast.success(`${selectedCards.size} cards archived`);
-      setSelectedCards(new Set());
-      setBulkMode(false);
-      fetchBoards();
-    } catch { toast.error('Bulk archive failed'); }
+      setSelectedCards(new Set()); setBulkMode(false); fetchBoards();
+    } catch (e) { toast.error(e.message || 'Bulk archive failed'); }
   };
   const bulkMoveToList = async (targetListId, targetListName) => {
     if (selectedCards.size === 0) return;
     try {
-      await Promise.all([...selectedCards].map(id => tasksApi.update(id, { list_id: targetListId, list_name: targetListName })));
+      await tasksApi.bulkUpdate([...selectedCards], { list_id: targetListId });
       toast.success(`${selectedCards.size} cards moved`);
-      setSelectedCards(new Set());
-      fetchBoards();
-    } catch { toast.error('Bulk move failed'); }
+      setSelectedCards(new Set()); fetchBoards();
+    } catch (e) { toast.error(e.message || 'Bulk move failed'); }
   };
   const bulkDelete = async () => {
     if (selectedCards.size === 0 || !window.confirm(`Delete ${selectedCards.size} cards permanently?`)) return;
     try {
-      await Promise.all([...selectedCards].map(id => tasksApi.delete(id)));
+      await tasksApi.bulkDelete([...selectedCards]);
       toast.success(`${selectedCards.size} cards deleted`);
-      setSelectedCards(new Set());
-      setBulkMode(false);
-      fetchBoards();
-    } catch { toast.error('Bulk delete failed'); }
+      setSelectedCards(new Set()); setBulkMode(false); fetchBoards();
+    } catch (e) { toast.error(e.message || 'Bulk delete failed'); }
+  };
+  const bulkExportCSV = async () => {
+    try {
+      const allTasksList = Object.values(tasks).flat();
+      const selected = allTasksList.filter(t => selectedCards.has(t.id));
+      exportToCSV(selected.length > 0 ? selected : allTasksList, 'tasks-export.csv');
+      toast.success('Exported!');
+    } catch (e) { toast.error(e.message || 'Export failed'); }
   };
 
   if (loading) return (

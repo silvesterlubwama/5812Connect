@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Switch } from '../components/ui/switch';
 import { eventsApi, checkinsApi, locationsApi, venuesApi, locationVenuesApi } from '../services/api';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { toast } from 'sonner';
 
 const statusColors = { upcoming: 'bg-blue-100 text-blue-700 border-blue-200', completed: 'bg-green-100 text-green-700 border-green-200', cancelled: 'bg-red-100 text-red-700 border-red-200' };
@@ -33,6 +34,7 @@ export default function EventsPage() {
   const [editingEvent, setEditingEvent] = useState(null);
   const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: '', venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1 };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -121,12 +123,15 @@ export default function EventsPage() {
   const typeColorMap = Object.fromEntries(eventTypes.map(t => [t.name, t.color]));
 
   const EventCard = ({ event }) => (
-    <Card data-testid={`event-card-${event.id}`} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow">
+    <Card data-testid={`event-card-${event.id}`} className={`shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow ${selectedIds.has(event.id) ? 'ring-2 ring-primary/40' : ''}`}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex items-center gap-2">
+            <SelectCheckbox id={event.id} checked={selectedIds.has(event.id)} onChange={() => setSelectedIds(prev => { const next = new Set(prev); next.has(event.id) ? next.delete(event.id) : next.add(event.id); return next; })} />
+            <div className="flex flex-wrap gap-1.5">
             <span className="text-xs px-2 py-0.5 rounded-full font-medium capitalize" style={{ backgroundColor: (typeColorMap[event.type] || '#6366f1') + '22', color: typeColorMap[event.type] || '#6366f1' }}>{event.type}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium border capitalize ${statusColors[event.status] || ''}`}>{event.status}</span>
+            </div>
           </div>
           <div className="flex gap-1">
             {event.visibility === 'internal' ? <Lock size={13} className="text-amber-500" /> : <Globe size={13} className="text-green-500" />}
@@ -190,6 +195,19 @@ export default function EventsPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* Bulk Action Bar */}
+      <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())}
+        onBulkDelete={async () => {
+          if (!window.confirm(`Delete ${selectedIds.size} events?`)) return;
+          try { await eventsApi.bulkDelete([...selectedIds]); toast.success('Deleted'); setSelectedIds(new Set()); fetchEvents(); }
+          catch (e) { toast.error(e.message || 'Failed'); }
+        }}
+        onBulkExport={async () => {
+          try { const res = await eventsApi.bulkExport([...selectedIds]); exportToCSV(res.data, 'events-export.csv'); toast.success('Exported!'); }
+          catch (e) { toast.error(e.message || 'Failed'); }
+        }}
+      />
 
       {loading ? (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[...Array(6)].map((_, i) => <div key={i} className="h-56 bg-card border border-border rounded-xl animate-pulse" />)}</div>
