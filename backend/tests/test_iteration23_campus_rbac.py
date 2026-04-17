@@ -410,7 +410,7 @@ class TestCampusRBAC:
         loc_name = loc["name"]
         
         test_email = f"test_staff_{uuid.uuid4().hex[:8]}@test.com"
-        test_password = "TestPass123"
+        test_password = os.environ.get("TEST_STAFF_PASSWORD", "TestPass123")
         
         # Create staff user with location
         resp = self.session.post(f"{BASE_URL}/api/admin/users", json={
