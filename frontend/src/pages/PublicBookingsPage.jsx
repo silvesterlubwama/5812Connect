@@ -45,6 +45,9 @@ export default function PublicBookingsPage() {
   const [searchStatus, setSearchStatus] = useState(false);
   const [countryFilter, setCountryFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [showMore, setShowMore] = useState(false);
   const [showPolicies, setShowPolicies] = useState(false);
   const [policies, setPolicies] = useState(null);
@@ -81,12 +84,33 @@ export default function PublicBookingsPage() {
     }
   }, [showPolicies, policies]);
 
-  // Filter events by country and search
+  // Filter events by search, type, date range, country
   const filteredEvents = events.filter(ev => {
-    if (searchQuery && !ev.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    // Text search (name)
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchesName = ev.title?.toLowerCase().includes(q);
+      const matchesType = ev.type?.toLowerCase().includes(q);
+      const matchesLocation = ev.location?.toLowerCase().includes(q);
+      if (!matchesName && !matchesType && !matchesLocation) return false;
+    }
+    // Type filter
+    if (typeFilter !== 'all' && ev.type !== typeFilter) return false;
+    // Date range
+    if (dateFrom && ev.date < dateFrom) return false;
+    if (dateTo && ev.date > dateTo) return false;
+    // Country filter
+    if (countryFilter !== 'ALL') {
+      const evCountry = ev.country || ev.location_country || '';
+      // If event has no country, show it (global events)
+      if (evCountry && evCountry !== countryFilter) return false;
+    }
     return true;
   }).sort((a, b) => a.date?.localeCompare(b.date));
   const displayEvents = showMore ? filteredEvents : filteredEvents.slice(0, 12);
+
+  // Get unique event types for filter dropdown
+  const eventTypes = [...new Set(events.map(e => e.type).filter(Boolean))];
 
   // Group events by type
   const eventsByType = {};
@@ -177,13 +201,51 @@ export default function PublicBookingsPage() {
       </section>
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-6">
-        {/* Search bar */}
-        <div className="flex flex-col sm:flex-row gap-3 items-center">
-          <div className="relative flex-1 max-w-lg">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input className="pl-9" placeholder="Search events..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} data-testid="event-search" />
+        {/* Search & Filter Bar */}
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+            {/* Search input */}
+            <div className="relative flex-1">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-9 h-10" placeholder="Search by event name, type, or location..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} data-testid="event-search" />
+            </div>
+            {/* Type filter */}
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-full sm:w-[160px] h-10 text-xs" data-testid="type-filter">
+                <SelectValue placeholder="All Types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                {eventTypes.map(t => (
+                  <SelectItem key={t} value={t}>
+                    <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${typeColors[t] || 'bg-slate-400'}`} />{typeLabels[t] || t.charAt(0).toUpperCase() + t.slice(1)}</div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Country filter (duplicate in header for mobile) */}
+            <Select value={countryFilter} onValueChange={setCountryFilter}>
+              <SelectTrigger className="w-full sm:w-[170px] h-10 text-xs sm:hidden" data-testid="country-filter-mobile">
+                <div className="flex items-center gap-1.5"><Globe size={12} /><SelectValue /></div>
+              </SelectTrigger>
+              <SelectContent>
+                {COUNTRIES.map(c => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <p className="text-sm text-muted-foreground">{filteredEvents.length} events found</p>
+          {/* Date range row */}
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+            <div className="flex items-center gap-2 flex-1">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
+              <Input type="date" className="h-9 text-xs flex-1" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="date-from" />
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
+              <Input type="date" className="h-9 text-xs flex-1" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="date-to" />
+              {(dateFrom || dateTo || typeFilter !== 'all' || searchQuery) && (
+                <Button size="sm" variant="ghost" className="text-xs h-9 shrink-0" onClick={() => { setSearchQuery(''); setTypeFilter('all'); setDateFrom(''); setDateTo(''); }} data-testid="clear-filters">Clear</Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground shrink-0">{filteredEvents.length} event{filteredEvents.length !== 1 ? 's' : ''} found</p>
+          </div>
         </div>
 
         <Tabs defaultValue="events" className="space-y-6">
