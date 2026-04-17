@@ -70,11 +70,11 @@ export default function PublicBookingsPage() {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([publicApi.events(), publicApi.venues()])
+    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues()])
       .then(([evRes, venRes]) => { setEvents(evRes.data); setVenues(venRes.data); })
       .catch(() => toast.error('Failed to load data'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [countryFilter]);
 
   // Load policies
   useEffect(() => {
@@ -99,12 +99,7 @@ export default function PublicBookingsPage() {
     // Date range
     if (dateFrom && ev.date < dateFrom) return false;
     if (dateTo && ev.date > dateTo) return false;
-    // Country filter
-    if (countryFilter !== 'ALL') {
-      const evCountry = ev.country || ev.location_country || '';
-      // If event has no country, show it (global events)
-      if (evCountry && evCountry !== countryFilter) return false;
-    }
+    // Country filtering is done server-side via API param
     return true;
   }).sort((a, b) => a.date?.localeCompare(b.date));
   const displayEvents = showMore ? filteredEvents : filteredEvents.slice(0, 12);

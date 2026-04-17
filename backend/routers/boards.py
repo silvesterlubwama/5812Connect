@@ -22,12 +22,21 @@ async def _can_access_board(board: dict, user: dict) -> bool:
     user_loc = user.get("location_id")
     if user_loc and user_loc not in user_locs:
         user_locs = user_locs + [user_loc]
-    if board_loc and board_loc in user_locs:
-        return True
+    # Restricted boards in restricted sub-locations: only tagged members + admins
+    if board.get("is_restricted") or board.get("is_private"):
+        return user["id"] in (board.get("tagged_members") or []) or user["id"] == board.get("created_by")
+    # Check location match
+    if board_loc:
+        if board_loc in user_locs:
+            return True
+        # Check if board's location is a sub-location of user's campus
+        loc = await db.locations.find_one({"id": board_loc}, {"_id": 0, "parent_id": 1})
+        if loc and loc.get("parent_id") in user_locs:
+            return True
+        return False
+    # No location set = visible to all staff
     role = (user.get("role") or "").lower()
-    if role in {"manager", "coordinator", "staff", "hr"}:
-        return not board_loc or board_loc in user_locs
-    return False
+    return role in {"manager", "coordinator", "staff", "hr", "director", "adviser"}
 
 
 async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_user: str = None):
@@ -49,12 +58,11 @@ async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_us
 @router.get("/boards")
 async def list_boards(current_user: dict = Depends(get_current_user)):
     """Return all boards accessible to the current user.
-    Coordinators and below only see boards they are assigned to or in their campus."""
+    Restricted/private boards in restricted sub-locations: only tagged members.
+    Otherwise: boards in user's location(s)."""
     if _is_admin(current_user):
         boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     else:
-        # Use expanded campus filter (includes sub-locations)
-        campus = await get_campus_filter(current_user)
         user_locs_raw = current_user.get("location_ids") or []
         user_loc = current_user.get("location_id")
         if user_loc and user_loc not in user_locs_raw:
@@ -66,23 +74,29 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
         else:
             user_locs = user_locs_raw
         user_id = current_user["id"]
-        role = (current_user.get("role") or "").lower()
-        is_manager_plus = role in {"manager"}
 
-        if is_manager_plus:
-            # Managers see all boards in their campuses + global
-            query = {"$or": [{"is_global": True}]}
-            if user_locs:
-                query["$or"].append({"location_id": {"$in": user_locs}})
-        else:
-            # Coordinators and below: only assigned boards or their campus boards
-            query = {"$or": [
-                {"tagged_members": user_id},
-                {"created_by": user_id},
-            ]}
-            if user_locs:
-                query["$or"].append({"location_id": {"$in": user_locs}})
-        boards = await db.boards.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+        # All boards user can see: global + their location + assigned to them
+        or_clauses = [
+            {"is_global": True},
+            {"tagged_members": user_id},
+            {"created_by": user_id},
+        ]
+        if user_locs:
+            or_clauses.append({"location_id": {"$in": user_locs}})
+        # Also boards with no location (legacy/unassigned)
+        or_clauses.append({"location_id": {"$exists": False}})
+        or_clauses.append({"location_id": None})
+        or_clauses.append({"location_id": ""})
+
+        all_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        # Post-filter: remove restricted/private boards unless user is tagged
+        boards = []
+        for b in all_boards:
+            if b.get("is_restricted") or b.get("is_private"):
+                if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by") or _is_admin(current_user):
+                    boards.append(b)
+            else:
+                boards.append(b)
 
     for b in boards:
         b["list_count"] = await db.board_lists.count_documents({"board_id": b["id"]})
@@ -101,6 +115,8 @@ async def create_board(data: dict, current_user: dict = Depends(get_current_user
         "location_name": data.get("location_name", ""),
         "background": data.get("background", "#0052cc"),
         "is_global": not data.get("location_id"),
+        "is_restricted": data.get("is_restricted", False),
+        "is_private": data.get("is_private", False),
         "tagged_members": data.get("tagged_members", []),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],

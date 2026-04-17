@@ -478,13 +478,26 @@ async def delete_venue(venue_id: str, current_user: dict = Depends(get_current_u
 @router.get("/public/events")
 async def public_events(country: Optional[str] = None):
     query = {"is_public": True, "status": "upcoming"}
-    if country:
-        query["$or"] = [{"country": country}, {"country": {"$exists": False}}, {"country": ""}]
-    # Only show events up to 1 year ahead
     from datetime import timedelta
     max_date = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%d")
     query["date"] = {"$lte": max_date}
-    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(100)
+    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(200)
+
+    # Resolve country from location_id for events that don't have country set
+    if events:
+        loc_ids = list(set(e.get("location_id") for e in events if e.get("location_id") and not e.get("country")))
+        loc_map = {}
+        if loc_ids:
+            locs = await db.locations.find({"id": {"$in": loc_ids}}, {"_id": 0, "id": 1, "country": 1, "name": 1}).to_list(100)
+            loc_map = {l["id"]: l.get("country", "") for l in locs}
+        for ev in events:
+            if not ev.get("country") and ev.get("location_id"):
+                ev["country"] = loc_map.get(ev["location_id"], "")
+
+    # Filter by country if specified
+    if country and country != 'ALL':
+        events = [e for e in events if not e.get("country") or e["country"] == country]
+
     return events
 
 

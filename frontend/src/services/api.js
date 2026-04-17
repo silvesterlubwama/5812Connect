@@ -102,7 +102,7 @@ export const dashboardApi = {
 
 // ---- PUBLIC ----
 export const publicApi = {
-  events: () => api.get('/public/events'),
+  events: (params) => api.get('/public/events', { params }),
   venues: () => api.get('/public/venues'),
   bookEvent: (data) => api.post('/public/bookings/event', data),
   bookSpace: (data) => api.post('/public/bookings/space', data),
