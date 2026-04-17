@@ -128,6 +128,43 @@ async def create_event(data: EventCreate, current_user: dict = Depends(get_curre
     return event
 
 
+# ========== BULK EVENT OPERATIONS (must be before parameterized routes) ==========
+
+@router.put("/events/bulk-update")
+async def bulk_update_events(data: dict, current_user: dict = Depends(require_staff)):
+    """Bulk update events. Body: {ids: [], updates: {status, type, location_id, is_public, country}}"""
+    ids = data.get("ids", [])
+    updates = data.get("updates", {})
+    if not ids or not updates:
+        return {"updated": 0}
+    allowed = {"status", "type", "location_id", "is_public", "country", "visibility", "capacity"}
+    clean = {k: v for k, v in updates.items() if k in allowed}
+    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.events.update_many({"id": {"$in": ids}}, {"$set": clean})
+    return {"updated": result.modified_count}
+
+
+@router.post("/events/bulk-delete")
+async def bulk_delete_events(data: dict, current_user: dict = Depends(require_staff)):
+    """Bulk delete events. Body: {ids: []}"""
+    ids = data.get("ids", [])
+    if not ids:
+        return {"deleted": 0}
+    result = await db.events.delete_many({"id": {"$in": ids}})
+    return {"deleted": result.deleted_count}
+
+
+@router.post("/events/bulk-export")
+async def bulk_export_events(data: dict, current_user: dict = Depends(get_current_user)):
+    """Export selected events as JSON (for CSV conversion on frontend). Body: {ids: []} or empty for all."""
+    ids = data.get("ids")
+    query = {"id": {"$in": ids}} if ids else {}
+    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(500)
+    return events
+
+
+# ========== SINGLE EVENT OPERATIONS ==========
+
 @router.get("/events/{event_id}")
 async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
@@ -156,6 +193,8 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"message": "Event deleted"}
+
+
 
 
 @router.post("/events/{event_id}/duplicate")

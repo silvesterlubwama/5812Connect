@@ -48,6 +48,7 @@ export const membersApi = {
   uploadDocument: (id, formData) => api.post(`/members/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   downloadDocument: (docId) => api.get(`/documents/${docId}/download`, { responseType: 'blob' }),
   archiveDocument: (docId) => api.put(`/documents/${docId}/archive`),
+  bulkExport: (ids) => api.post('/members/bulk-export', { ids }),
 };
 
 // ---- EVENTS ----
@@ -65,6 +66,9 @@ export const eventsApi = {
   deleteType: (id) => api.delete(`/event-types/${id}`),
   exportIcal: () => api.get('/events/export/ical', { responseType: 'blob' }),
   importIcal: (data) => api.post('/events/import/ical', data),
+  bulkUpdate: (ids, updates) => api.put('/events/bulk-update', { ids, updates }),
+  bulkDelete: (ids) => api.post('/events/bulk-delete', { ids }),
+  bulkExport: (ids) => api.post('/events/bulk-export', { ids }),
 };
 
 // ---- TASKS ----
@@ -74,6 +78,9 @@ export const tasksApi = {
   update: (id, data) => api.put(`/tasks/${id}`, data),
   delete: (id) => api.delete(`/tasks/${id}`),
   importTrello: (data) => api.post('/tasks/import-trello', data),
+  bulkUpdate: (ids, updates) => api.put('/tasks/bulk-update', { ids, updates }),
+  bulkDelete: (ids) => api.post('/tasks/bulk-delete', { ids }),
+  bulkArchive: (ids, archive) => api.post('/tasks/bulk-archive', { ids, archive }),
 };
 
 // ---- CHECK-INS ----

@@ -82,6 +82,45 @@ async def create_task(data: TaskCreate, current_user: dict = Depends(get_current
     return task
 
 
+# =================== BULK TASK OPERATIONS (must be before parameterized routes) ===================
+
+@router.put("/tasks/bulk-update")
+async def bulk_update_tasks(data: dict, current_user: dict = Depends(get_current_user)):
+    """Bulk update tasks. Body: {ids: [], updates: {status, priority, list_id, board_id, assignees}}"""
+    ids = data.get("ids", [])
+    updates = data.get("updates", {})
+    if not ids or not updates:
+        return {"updated": 0}
+    allowed = {"status", "priority", "list_id", "board_id", "due_date", "is_archived"}
+    clean = {k: v for k, v in updates.items() if k in allowed}
+    if "assignees" in updates:
+        clean["assignees"] = updates["assignees"]
+    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.tasks.update_many({"id": {"$in": ids}}, {"$set": clean})
+    return {"updated": result.modified_count}
+
+
+@router.post("/tasks/bulk-delete")
+async def bulk_delete_tasks(data: dict, current_user: dict = Depends(get_current_user)):
+    """Bulk delete tasks. Body: {ids: []}"""
+    ids = data.get("ids", [])
+    if not ids:
+        return {"deleted": 0}
+    result = await db.tasks.delete_many({"id": {"$in": ids}})
+    return {"deleted": result.deleted_count}
+
+
+@router.post("/tasks/bulk-archive")
+async def bulk_archive_tasks(data: dict, current_user: dict = Depends(get_current_user)):
+    """Bulk archive/unarchive tasks. Body: {ids: [], archive: true/false}"""
+    ids = data.get("ids", [])
+    archive = data.get("archive", True)
+    result = await db.tasks.update_many({"id": {"$in": ids}}, {"$set": {"is_archived": archive, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"updated": result.modified_count}
+
+
+# =================== SINGLE TASK OPERATIONS ===================
+
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depends(get_current_user)):
     raw = data.model_dump()
@@ -184,6 +223,7 @@ async def delete_task(task_id: str, current_user: dict = Depends(get_current_use
         "list_id": task.get("list_id"),
     }, exclude_user=current_user["id"])
     return {"message": "Task deleted"}
+
 
 
 # =================== ATTACHMENTS ===================

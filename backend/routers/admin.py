@@ -327,6 +327,17 @@ async def bulk_delete_members(data: dict, current_user: dict = Depends(require_a
     return {"deleted": result.deleted_count}
 
 
+@router.post("/members/bulk-export")
+async def bulk_export_members(data: dict, current_user: dict = Depends(get_current_user)):
+    """Export selected members as JSON. Body: {ids: []} or empty for all."""
+    ids = data.get("ids") or data.get("member_ids")
+    query = {"id": {"$in": ids}} if ids else {}
+    members = await db.members.find(query, {"_id": 0}).sort("name", 1).to_list(1000)
+    return members
+
+
+
+
 # ========== AUDIT LOG ==========
 
 @router.get("/audit")
