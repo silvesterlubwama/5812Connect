@@ -14,11 +14,13 @@ import { callingApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useCall } from '../context/CallContext';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 export default function CallHistoryPage() {
   const { user } = useAuth();
   const { initiateCall } = useCall();
   const [calls, setCalls] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [voicemails, setVoicemails] = useState([]);
   const [recordings, setRecordings] = useState([]);
   const [loading, setLoading] = useState(true);

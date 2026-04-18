@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { productsApi, salesApi, locationsApi, storeSettingsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -33,6 +34,7 @@ const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category
 export default function ProductsPage() {
   const { user } = useAuth();
   const [products, setProducts] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [sales, setSales] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -266,9 +268,13 @@ export default function ProductsPage() {
                 {loading ? (
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">{[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
                 ) : (
+                  <div>
+                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} products?`)) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch {} } setSelectedIds(new Set()); fetchProducts(); toast.success('Deleted'); }} /></div>}
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     {filteredProducts.map(p => (
-                      <button key={p.id} data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={p.stock === 0}
+                      <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>
+                        <div className="absolute top-2 left-2 z-10"><input type="checkbox" className="accent-primary" checked={selectedIds.has(p.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} onClick={e => e.stopPropagation()} /></div>
+                      <button data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={p.stock === 0}
                         className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${p.stock === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
                         <div className="flex items-start justify-between mb-2">
                           <div className="p-2 rounded-lg bg-secondary"><Package size={16} className="text-muted-foreground" /></div>
@@ -281,8 +287,10 @@ export default function ProductsPage() {
                         </div>
                         <p className="text-primary font-bold mt-2 text-sm">{fmt(p.price, p.currency || activeCurrency)}</p>
                       </button>
+                      </div>
                     ))}
                     {filteredProducts.length === 0 && <div className="col-span-3 text-center py-12 text-sm text-muted-foreground">No products found.</div>}
+                  </div>
                   </div>
                 )}
               </div>

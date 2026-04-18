@@ -11,12 +11,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { volunteerApi, locationsApi, eventsApi, membersApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const ROLES = ['General', 'Greeter', 'Usher', 'Worship', 'Children Ministry', 'Media/Tech', 'Security', 'Hospitality', 'Parking'];
 
 export default function VolunteerSchedulingPage() {
   const { user } = useAuth();
   const [shifts, setShifts] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [myShifts, setMyShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);

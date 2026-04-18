@@ -13,6 +13,7 @@ import { Textarea } from '../components/ui/textarea';
 import api from '../services/api';
 import { locationsApi, bookingsApi, resourcesApi } from '../services/api';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const RESOURCE_TYPES = [
   { value: 'venue', label: 'Venue' },
@@ -30,6 +31,7 @@ const emptyForm = {
 
 export default function ResourcesPage() {
   const [resources, setResources] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -181,14 +183,19 @@ export default function ResourcesPage() {
           {search || typeFilter !== 'all' || locationFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
         </div>
       ) : (
+        <div>
+          {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(filtered.filter(r => selectedIds.has(r.id)), 'resources-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} resources?`)) return; for (const id of selectedIds) { try { await resourcesApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelectedIds(new Set()); fetchResources(); toast.success('Deleted'); }} /></div>}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(r => (
-            <Card key={r.id} className="shadow-soft rounded-xl hover:shadow-md transition-shadow" data-testid="resource-card">
+            <Card key={r.id} className={`shadow-soft rounded-xl hover:shadow-md transition-shadow ${selectedIds.has(r.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid="resource-card">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="font-semibold text-sm">{r.name}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{getLocationName(r.location_id)}</p>
+                  <div className="flex items-start gap-2">
+                    <input type="checkbox" className="accent-primary mt-1" checked={selectedIds.has(r.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(r.id) ? n.delete(r.id) : n.add(r.id); return n; })} />
+                    <div>
+                      <p className="font-semibold text-sm">{r.name}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{getLocationName(r.location_id)}</p>
+                    </div>
                   </div>
                   <div className="flex gap-1">
                     {r.is_bookable && (
@@ -214,6 +221,7 @@ export default function ResourcesPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
         </div>
       )}
 

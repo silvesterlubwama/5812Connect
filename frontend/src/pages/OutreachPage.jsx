@@ -12,11 +12,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { outreachApi } from '../services/api';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const statusColors = { active: 'border-green-500 text-green-600', completed: 'border-slate-400 text-slate-500', paused: 'border-amber-500 text-amber-600' };
 
 export default function OutreachPage() {
   const [programs, setPrograms] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [sessions, setSessions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -153,17 +155,22 @@ export default function OutreachPage() {
         <TabsContent value="programs" className="mt-4">
           <div className="flex justify-end mb-3"><Button size="sm" className="gap-2" onClick={() => { setEditingProg(null); setProgForm({...emptyProg}); setShowProgram(true); }}><Plus size={14} /> New Programme</Button></div>
           {loading ? <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{[1,2,3].map(i => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}</div> : programs.length > 0 ? (
+            <div>
+            {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(programs.filter(p => selectedIds.has(p.id)), 'outreach-programs-export.csv')} /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {programs.map(p => (
-                <Card key={p.id} className="shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow" data-testid="program-card">
+                <Card key={p.id} className={`shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid="program-card">
                   <CardContent className="p-5">
                     <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1"><p className="font-semibold text-sm">{p.name}</p>
+                      <div className="flex items-start gap-2">
+                        <input type="checkbox" className="accent-primary mt-1" checked={selectedIds.has(p.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} />
+                        <div className="flex-1"><p className="font-semibold text-sm">{p.name}</p>
                         <div className="flex gap-2 mt-1">
                           <span className="text-xs px-2 py-0.5 rounded-full capitalize" style={{ backgroundColor: (catColorMap[p.category] || '#6366f1') + '22', color: catColorMap[p.category] || '#6366f1' }}>{p.category}</span>
                           <Badge variant="outline" className={`text-xs capitalize ${statusColors[p.status] || ''}`}>{p.status}</Badge>
                           {p.is_recurring && <Badge variant="outline" className="text-xs border-purple-300 text-purple-600"><Repeat size={10} className="mr-1" />Recurring</Badge>}
                         </div>
+                      </div>
                       </div>
                     </div>
                     {p.description && <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{p.description}</p>}
@@ -181,6 +188,7 @@ export default function OutreachPage() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
             </div>
           ) : <p className="text-center text-sm text-muted-foreground py-12">No programmes yet.</p>}
         </TabsContent>

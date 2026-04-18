@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { financialApi, financialExtrasApi, exportApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 const SummaryCard = ({ title, value, sub, icon: Icon, color, loading }) => (
@@ -51,6 +52,7 @@ const expenseCategoryColors = {
 export default function FinancialPage() {
   const { user } = useAuth();
   const [summary, setSummary] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [donations, setDonations] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);

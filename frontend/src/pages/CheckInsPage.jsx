@@ -11,12 +11,14 @@ import { Checkbox } from '../components/ui/checkbox';
 import { ChildTag, ParentBadge } from '../components/PrintableBadges';
 import { checkinsApi, eventsApi, membersApi } from '../services/api';
 import { toast } from 'sonner';
+import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700', pin: 'bg-green-100 text-green-700', biometric: 'bg-indigo-100 text-indigo-700', nfc: 'bg-cyan-100 text-cyan-700', parent_id: 'bg-pink-100 text-pink-700' };
 const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600', child: 'border-emerald-500 text-emerald-600' };
 
 export default function CheckInsPage() {
   const [checkins, setCheckins] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [stats, setStats] = useState({ total: 0, today: 0, members: 0, visitors: 0, staff: 0 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -344,9 +346,11 @@ export default function CheckInsPage() {
       {/* Table */}
       <Card className="shadow-soft rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
+          {selectedIds.size > 0 && <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { const sel = checkins.filter(c => selectedIds.has(c.id)); exportToCSV(sel.length ? sel : checkins, 'checkins-export.csv'); }} onBulkDelete={() => { toast.info('Bulk delete not available for check-ins'); }} />}
           <table className="w-full text-sm">
             <thead className="bg-secondary/50 border-b border-border">
               <tr>
+                <th className="px-2 py-3 w-8"><input type="checkbox" className="accent-primary" checked={selectedIds.size > 0 && checkins.every(c => selectedIds.has(c.id))} onChange={() => { if (selectedIds.size === checkins.length) setSelectedIds(new Set()); else setSelectedIds(new Set(checkins.map(c => c.id))); }} /></th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Person</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Type</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Event</th>
@@ -361,7 +365,8 @@ export default function CheckInsPage() {
                   <tr key={i}><td colSpan={5} className="px-4 py-3"><div className="h-5 bg-muted animate-pulse rounded" /></td></tr>
                 ))
               ) : checkins.map(ci => (
-                <tr key={ci.id} className="hover:bg-accent/30 transition-colors">
+                <tr key={ci.id} className={`hover:bg-accent/30 transition-colors ${selectedIds.has(ci.id) ? 'bg-primary/5' : ''}`}>
+                  <td className="px-2 py-3"><input type="checkbox" className="accent-primary" checked={selectedIds.has(ci.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(ci.id) ? n.delete(ci.id) : n.add(ci.id); return n; })} /></td>
                   <td className="px-4 py-3 font-medium">{ci.member_name}</td>
                   <td className="px-4 py-3">
                     <Badge variant="outline" className={`text-xs capitalize ${typeStyle[ci.type] || ''}`}>{ci.type}</Badge>
