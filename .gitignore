@@ -98,8 +98,8 @@ frontend/node_modules/.cache/default-development/15.pack
 frontend/node_modules/.cache/default-development/16.pack
 frontend/node_modules/.cache/default-development/19.pack
 -e 
-# Environment files
-*.env
-*.env.*
+# Environment files - tracked intentionally for Emergent deployment
+# *.env
+# *.env.*
 frontend/node_modules/.cache/default-development/3.pack_
 frontend/node_modules/.cache/default-development/20.pack
