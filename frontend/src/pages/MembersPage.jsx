@@ -1,3 +1,4 @@
+import { secureStorage } from '../services/secureStorage';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, Plus, Filter, UserCheck, UserX, Mail, Phone, ChevronDown, Eye, Trash2, RefreshCw, Download, Upload, Award, Users, FileUp } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -154,7 +155,7 @@ export default function MembersPage() {
   };
 
   const downloadCSV = () => {
-    const token = localStorage.getItem('5812_token');
+    const token = secureStorage.getToken();
     const url = exportApi.members();
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.blob())

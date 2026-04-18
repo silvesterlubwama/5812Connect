@@ -65,7 +65,7 @@ export default function SharedBoardPage() {
                 <div key={task.id} className="rounded-lg p-3 bg-[#0f172a] border border-white/10">
                   {(task.labels || []).length > 0 && (
                     <div className="flex gap-1 mb-1.5 flex-wrap">
-                      {task.labels.map((l, i) => <span key={i} className="w-8 h-1.5 rounded-full" style={{ background: l.color }} />)}
+                      {task.labels.map((l, i) => <span key={l.color || i} className="w-8 h-1.5 rounded-full" style={{ background: l.color }} />)}
                     </div>
                   )}
                   <p className="text-xs font-medium text-white/90">{task.title}</p>

@@ -77,7 +77,7 @@ export default function LoginPage() {
       assertionJSON.expectedOrigin = window.location.origin;
       const verifyRes = await webAuthnApi.authenticateComplete(assertionJSON);
       const { token, user } = verifyRes.data;
-      localStorage.setItem('token', token);
+      secureStorage.setToken(token);
       setUser(user);
       toast.success(`Welcome back, ${user.name}!`);
       navigate('/dashboard');

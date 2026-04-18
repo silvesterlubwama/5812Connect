@@ -1,11 +1,11 @@
 import axios from 'axios';
+import { secureStorage } from './secureStorage';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const api = axios.create({ baseURL: `${BACKEND_URL}/api` });
 
-// Attach token to every request
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('5812_token');
+  const token = secureStorage.getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -15,8 +15,8 @@ api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('5812_token');
-      localStorage.removeItem('5812_auth_user');
+      secureStorage.removeToken();
+      secureStorage.removeUser();
       window.location.href = '/login';
     }
     return Promise.reject(err);

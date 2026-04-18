@@ -374,7 +374,7 @@ export default function ReportBuilderPage() {
                         </thead>
                         <tbody className="divide-y divide-border">
                           {showPreview.data[key].slice(0, 20).map((row, i) => (
-                            <tr key={i} className="hover:bg-muted/30">
+                            <tr key={row?.id || i} className="hover:bg-muted/30">
                               {Object.keys(row).slice(0, 8).map(col => (
                                 <td key={col} className="px-3 py-2 truncate max-w-[200px]">{String(row[col] ?? '')}</td>
                               ))}

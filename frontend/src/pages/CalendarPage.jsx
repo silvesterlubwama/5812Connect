@@ -1,3 +1,4 @@
+import { secureStorage } from '../services/secureStorage';
 import React, { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -100,7 +101,7 @@ export default function CalendarPage() {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
   const downloadIcal = () => {
-    const token = localStorage.getItem('5812_token');
+    const token = secureStorage.getToken();
     const url = exportApi.ical();
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.blob())

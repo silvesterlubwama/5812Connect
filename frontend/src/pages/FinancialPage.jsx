@@ -1,3 +1,4 @@
+import { secureStorage } from '../services/secureStorage';
 import React, { useState, useEffect } from 'react';
 import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, Upload, RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -141,7 +142,7 @@ export default function FinancialPage() {
   };
 
   const downloadCSV = () => {
-    const token = localStorage.getItem('5812_token');
+    const token = secureStorage.getToken();
     const url = exportApi.financial();
     const a = document.createElement('a');
     a.href = `${url}`;

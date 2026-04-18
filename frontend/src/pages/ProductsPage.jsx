@@ -436,7 +436,7 @@ export default function ProductsPage() {
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {customers.map((c, i) => (
-                        <tr key={i} className="hover:bg-accent/30 transition-colors" data-testid="customer-row">
+                        <tr key={c.email || c.name || i} className="hover:bg-accent/30 transition-colors" data-testid="customer-row">
                           <td className="py-3 font-medium">{c.name}</td>
                           <td className="py-3 text-primary font-semibold">{fmt(c.total_spent)}</td>
                           <td className="py-3 text-muted-foreground">{c.transactions}</td>
@@ -517,7 +517,7 @@ export default function ProductsPage() {
               </div>
               <div className="space-y-1.5">
                 {(lastReceipt.items || []).map((item, i) => (
-                  <div key={i} className="flex justify-between text-xs"><span>{item.name} x{item.qty}</span><span>{fmt(item.unit_price * item.qty)}</span></div>
+                  <div key={item.id || item.name || i} className="flex justify-between text-xs"><span>{item.name} x{item.qty}</span><span>{fmt(item.unit_price * item.qty)}</span></div>
                 ))}
               </div>
               <div className="border-t border-border pt-3 flex justify-between font-bold"><span>TOTAL</span><span className="text-primary">{fmt(lastReceipt.total)}</span></div>

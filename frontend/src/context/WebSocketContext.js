@@ -115,7 +115,7 @@ export const WebSocketProvider = ({ children }) => {
   // Queue message for offline sync via service worker
   const queueOfflineMessage = useCallback((payload) => {
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      const token = localStorage.getItem('token') || '';
+      const token = secureStorage.getToken() || '';
       navigator.serviceWorker.controller.postMessage({ type: 'queue-message', payload, token });
     }
   }, []);
@@ -146,7 +146,7 @@ export const WebSocketProvider = ({ children }) => {
         }).catch(() => null);
       }
       if (sub) {
-        const token = localStorage.getItem('token');
+        const token = secureStorage.getToken();
         if (token) {
           await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/push/subscribe`, {
             method: 'POST',

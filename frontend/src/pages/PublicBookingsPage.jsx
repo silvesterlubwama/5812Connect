@@ -431,7 +431,7 @@ export default function PublicBookingsPage() {
           {policies ? (
             <div className="space-y-6 mt-2">
               {Object.values(policies).map((p, i) => (
-                <div key={i} className="space-y-1.5">
+                <div key={p.title || i} className="space-y-1.5">
                   <h3 className="font-semibold text-sm flex items-center gap-2"><Shield size={14} className="text-primary" />{p.title}</h3>
                   <p className="text-xs text-muted-foreground leading-relaxed">{p.content}</p>
                 </div>

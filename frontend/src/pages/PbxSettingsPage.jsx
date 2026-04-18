@@ -267,7 +267,7 @@ export default function PbxSettingsPage() {
                 </div>
                 <div className="space-y-2"><Label>Menu Options</Label>
                   {(autoAttendant.menu_options || []).map((opt, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
+                    <div key={opt.key || i} className="flex items-center gap-2 text-sm">
                       <Input className="w-12 h-8 text-center text-xs" value={opt.key} onChange={e => { const mo = [...autoAttendant.menu_options]; mo[i] = {...mo[i], key: e.target.value}; setAutoAttendant({...autoAttendant, menu_options: mo}); }} />
                       <Input className="flex-1 h-8 text-xs" value={opt.label} onChange={e => { const mo = [...autoAttendant.menu_options]; mo[i] = {...mo[i], label: e.target.value}; setAutoAttendant({...autoAttendant, menu_options: mo}); }} />
                       <Select value={opt.action} onValueChange={v => { const mo = [...autoAttendant.menu_options]; mo[i] = {...mo[i], action: v}; setAutoAttendant({...autoAttendant, menu_options: mo}); }}>

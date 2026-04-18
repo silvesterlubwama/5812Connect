@@ -1,3 +1,4 @@
+import { secureStorage } from '../services/secureStorage';
 import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -25,7 +26,7 @@ export default function AuthCallback() {
       try {
         const res = await api.post('/auth/google-session', { session_id: sessionId });
         const { token, user } = res.data;
-        localStorage.setItem('5812_token', token);
+        secureStorage.setToken(token);
         if (setAuthUser) setAuthUser(user);
         // Clean the hash from URL and redirect to dashboard
         window.history.replaceState(null, '', window.location.pathname);

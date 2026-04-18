@@ -134,7 +134,7 @@ export default function PortalProfile() {
               {(member.badges || []).length > 0 && (
                 <div className="flex gap-1.5 mt-2">
                   {member.badges.map((b, i) => (
-                    <Badge key={i} style={{ backgroundColor: b.badge_color + '20', color: b.badge_color }} className="text-xs">{b.badge_name}</Badge>
+                    <Badge key={b.badge_name || b.id || i} style={{ backgroundColor: b.badge_color + '20', color: b.badge_color }} className="text-xs">{b.badge_name}</Badge>
                   ))}
                 </div>
               )}
@@ -155,7 +155,7 @@ export default function PortalProfile() {
           ) : (
             <div className="divide-y">
               {(checkins.checkins || []).slice(0, 10).map((c, i) => (
-                <div key={i} className="flex items-center justify-between py-2.5">
+                <div key={item?.label || i} className="flex items-center justify-between py-2.5">
                   <div>
                     <p className="text-sm">{c.event_name || c.type || 'Check-in'}</p>
                     <p className="text-xs text-muted-foreground">{c.method || 'manual'}</p>
