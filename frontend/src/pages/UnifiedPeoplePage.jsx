@@ -958,15 +958,15 @@ export default function UnifiedPeoplePage() {
           <DialogHeader><DialogTitle>Bulk Edit {selChildren.size} Children</DialogTitle><DialogDescription>Only changed fields will be updated</DialogDescription></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label className="text-xs">Family</Label>
-              <Select value={bulkChildForm.family_id} onValueChange={v => setBulkChildForm(prev => ({...prev, family_id: v}))}>
+              <Select value={bulkChildForm.family_id} onValueChange={v => setBulkChildForm(prev => ({...prev, family_id: v === "__none__" ? "" : v}))}>
                 <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
-                <SelectContent><SelectItem value="">No change</SelectItem>{families.map(f => <SelectItem key={f.id} value={f.id}>{f.family_name}</SelectItem>)}</SelectContent>
+                <SelectContent><SelectItem value="__none__">No change</SelectItem>{families.map(f => <SelectItem key={f.id} value={f.id}>{f.family_name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2"><Label className="text-xs">Campus / Location</Label>
-              <Select value={bulkChildForm.location_id} onValueChange={v => setBulkChildForm(prev => ({...prev, location_id: v}))}>
+              <Select value={bulkChildForm.location_id} onValueChange={v => setBulkChildForm(prev => ({...prev, location_id: v === "__none__" ? "" : v}))}>
                 <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
-                <SelectContent><SelectItem value="">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                <SelectContent><SelectItem value="__none__">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2"><Label className="text-xs">Class / Group</Label>
@@ -994,9 +994,9 @@ export default function UnifiedPeoplePage() {
           <DialogHeader><DialogTitle>Bulk Edit {selFamilies.size} Families</DialogTitle><DialogDescription>Only changed fields will be updated</DialogDescription></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label className="text-xs">Campus / Location</Label>
-              <Select value={bulkFamilyForm.location_id} onValueChange={v => setBulkFamilyForm(prev => ({...prev, location_id: v}))}>
+              <Select value={bulkFamilyForm.location_id} onValueChange={v => setBulkFamilyForm(prev => ({...prev, location_id: v === "__none__" ? "" : v}))}>
                 <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
-                <SelectContent><SelectItem value="">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                <SelectContent><SelectItem value="__none__">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="flex gap-3 pt-2">

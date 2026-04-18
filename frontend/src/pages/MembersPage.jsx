@@ -859,7 +859,7 @@ export default function MembersPage() {
                 <Select value={importCountry} onValueChange={setImportCountry}>
                   <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="__none__">Not specified</SelectItem>
                     <SelectItem value="UG">Uganda</SelectItem>
                     <SelectItem value="US">United States</SelectItem>
                     <SelectItem value="KE">Kenya</SelectItem>
@@ -927,7 +927,7 @@ export default function MembersPage() {
                 <Select value={importCountry} onValueChange={setImportCountry}>
                   <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="__none__">Not specified</SelectItem>
                     <SelectItem value="UG">Uganda</SelectItem>
                     <SelectItem value="US">United States</SelectItem>
                     <SelectItem value="KE">Kenya</SelectItem>
@@ -968,7 +968,7 @@ export default function MembersPage() {
                 <Select value={importCountry} onValueChange={setImportCountry}>
                   <SelectTrigger><SelectValue placeholder="Select country..." /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not specified</SelectItem>
+                    <SelectItem value="__none__">Not specified</SelectItem>
                     <SelectItem value="UG">Uganda</SelectItem>
                     <SelectItem value="US">United States</SelectItem>
                     <SelectItem value="KE">Kenya</SelectItem>
@@ -1002,10 +1002,10 @@ export default function MembersPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label className="text-xs">Status</Label>
-                <Select value={bulkEditForm.status} onValueChange={v => setBulkEditForm(prev => ({...prev, status: v}))}>
+                <Select value={bulkEditForm.status} onValueChange={v => setBulkEditForm(prev => ({...prev, status: v === "__none__" ? "" : v}))}>
                   <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No change</SelectItem>
+                    <SelectItem value="__none__">No change</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="inactive">Inactive</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
@@ -1014,10 +1014,10 @@ export default function MembersPage() {
               </div>
               <div className="space-y-2">
                 <Label className="text-xs">Role</Label>
-                <Select value={bulkEditForm.role} onValueChange={v => setBulkEditForm(prev => ({...prev, role: v}))}>
+                <Select value={bulkEditForm.role} onValueChange={v => setBulkEditForm(prev => ({...prev, role: v === "__none__" ? "" : v}))}>
                   <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No change</SelectItem>
+                    <SelectItem value="__none__">No change</SelectItem>
                     {(MOCK_ROLES || ['Staff','Volunteer','Member','Parent','Customer','Guest']).map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -1026,20 +1026,20 @@ export default function MembersPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label className="text-xs">Group</Label>
-                <Select value={bulkEditForm.group} onValueChange={v => setBulkEditForm(prev => ({...prev, group: v}))}>
+                <Select value={bulkEditForm.group} onValueChange={v => setBulkEditForm(prev => ({...prev, group: v === "__none__" ? "" : v}))}>
                   <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No change</SelectItem>
+                    <SelectItem value="__none__">No change</SelectItem>
                     {(MOCK_GROUPS || ['General','Youth','Women','Men','Children','Leadership']).map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label className="text-xs">Location</Label>
-                <Select value={bulkEditForm.location_id} onValueChange={v => setBulkEditForm(prev => ({...prev, location_id: v}))}>
+                <Select value={bulkEditForm.location_id} onValueChange={v => setBulkEditForm(prev => ({...prev, location_id: v === "__none__" ? "" : v}))}>
                   <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No change</SelectItem>
+                    <SelectItem value="__none__">No change</SelectItem>
                     {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
