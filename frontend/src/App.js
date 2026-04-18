@@ -88,6 +88,7 @@ function AppRoutes() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/kiosk" element={<KioskPage />} />
       <Route path="/public-bookings" element={<PublicBookingsPage />} />
+      <Route path="/marketplace" element={<PublicBookingsPage />} />
       <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />

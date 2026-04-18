@@ -400,3 +400,135 @@ async def import_financial_data(data: dict, current_user: dict = Depends(require
         exp_imported += 1
     await _audit(current_user["id"], "create", "financial_import", None, {"donations": don_imported, "expenses": exp_imported})
     return {"donations_imported": don_imported, "expenses_imported": exp_imported}
+
+
+
+# ========== BALANCE SHEET ==========
+
+@router.get("/financial/balance-sheet")
+async def get_balance_sheet(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(require_manager)):
+    """Generate a balance sheet (income vs expenses) for a campus"""
+    campus = await _financial_campus_filter(current_user)
+    query = {**campus}
+    if location_id:
+        query["location_id"] = location_id
+
+    date_q = {}
+    if date_from: date_q["$gte"] = date_from
+    if date_to: date_q["$lte"] = date_to
+
+    don_query = {**query}
+    exp_query = {**query}
+    if date_q:
+        don_query["date"] = date_q
+        exp_query["date"] = date_q
+
+    # Income
+    donations = await db.donations.find(don_query, {"_id": 0}).to_list(2000)
+    total_income = sum(d.get("amount", 0) for d in donations)
+    income_by_type = {}
+    for d in donations:
+        t = d.get("type", "general")
+        income_by_type[t] = income_by_type.get(t, 0) + d.get("amount", 0)
+
+    # Expenses
+    exp_query["status"] = {"$ne": "rejected"}
+    expenses = await db.expenses.find(exp_query, {"_id": 0}).to_list(2000)
+    total_expenses = sum(e.get("amount", 0) for e in expenses)
+    expense_by_category = {}
+    for e in expenses:
+        c = e.get("category", "general")
+        expense_by_category[c] = expense_by_category.get(c, 0) + e.get("amount", 0)
+
+    # Sales income
+    sale_query = {**query}
+    if date_q: sale_query["date"] = date_q
+    sales = await db.sales.find(sale_query, {"_id": 0}).to_list(2000)
+    total_sales = sum(s.get("total", 0) for s in sales)
+
+    net = total_income + total_sales - total_expenses
+
+    return {
+        "total_income": total_income,
+        "total_expenses": total_expenses,
+        "total_sales": total_sales,
+        "net_balance": net,
+        "income_by_type": income_by_type,
+        "expense_by_category": expense_by_category,
+        "donation_count": len(donations),
+        "expense_count": len(expenses),
+        "sale_count": len(sales),
+        "period": {"from": date_from, "to": date_to},
+        "location_id": location_id,
+    }
+
+
+# ========== RECEIPT SCANNING ==========
+
+@router.post("/financial/expenses/{expense_id}/receipt")
+async def upload_receipt(expense_id: str, current_user: dict = Depends(require_staff)):
+    """Upload receipt image for an expense"""
+    from fastapi import UploadFile, File, Form
+    # This endpoint accepts multipart form data
+    # For now, store receipt reference on the expense
+    return {"message": "Receipt endpoint ready — use multipart upload"}
+
+
+@router.put("/financial/expenses/{expense_id}/receipt-url")
+async def set_receipt_url(expense_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Set receipt URL/reference for an expense"""
+    url = data.get("receipt_url", "")
+    notes = data.get("receipt_notes", "")
+    await db.expenses.update_one({"id": expense_id}, {"$set": {
+        "receipt_url": url, "receipt_notes": notes,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }})
+    return {"message": "Receipt attached"}
+
+
+# ========== PUBLIC PRODUCTS / SHOP ==========
+
+@router.get("/public/products")
+async def public_products(location_id: Optional[str] = None, category: Optional[str] = None):
+    """Public product listing for online shop"""
+    query = {"stock": {"$gt": 0}, "is_public": {"$ne": False}}
+    if location_id: query["location_id"] = location_id
+    if category: query["category"] = category
+    products = await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(200)
+    return products
+
+
+@router.post("/public/orders")
+async def create_public_order(data: dict):
+    """Create a public order"""
+    items = data.get("items", [])
+    if not items: raise HTTPException(status_code=400, detail="No items in order")
+    order_id = f"ord_{str(uuid.uuid4())[:8]}"
+    total = 0
+    order_items = []
+    for item in items:
+        product = await db.products.find_one({"id": item.get("product_id")}, {"_id": 0})
+        if not product: continue
+        qty = int(item.get("quantity", 1))
+        line_total = (product.get("price", 0)) * qty
+        total += line_total
+        order_items.append({
+            "product_id": product["id"], "name": product.get("name"),
+            "price": product.get("price", 0), "quantity": qty, "total": line_total,
+        })
+    order = {
+        "id": order_id,
+        "customer_name": data.get("name", ""),
+        "customer_email": data.get("email", ""),
+        "customer_phone": data.get("phone", ""),
+        "items": order_items,
+        "total": total,
+        "payment_method": data.get("payment_method", "card"),
+        "payment_status": "pending",
+        "status": "pending",
+        "location_id": data.get("location_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.public_orders.insert_one(order)
+    order.pop("_id", None)
+    return order

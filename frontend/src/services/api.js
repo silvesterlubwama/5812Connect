@@ -111,6 +111,8 @@ export const dashboardApi = {
 export const publicApi = {
   events: (params) => api.get('/public/events', { params }),
   venues: () => api.get('/public/venues'),
+  products: (params) => api.get('/public/products', { params }),
+  createOrder: (data) => api.post('/public/orders', data),
   bookEvent: (data) => api.post('/public/bookings/event', data),
   bookSpace: (data) => api.post('/public/bookings/space', data),
   checkStatus: (params) => api.get('/public/bookings/status', { params }),
@@ -134,6 +136,9 @@ export const financialApi = {
   pendingExpenses: () => api.get('/financial/expenses/pending'),
   approveExpense: (id, comment) => api.put(`/financial/expenses/${id}/approve`, { comment }),
   rejectExpense: (id, comment) => api.put(`/financial/expenses/${id}/reject`, { comment }),
+  balanceSheet: (params) => api.get('/financial/balance-sheet', { params }),
+  setReceiptUrl: (expenseId, data) => api.put(`/financial/expenses/${expenseId}/receipt-url`, data),
+  importExport: (data) => api.post('/financial/import', data),
 };
 
 // ---- PRODUCTS & SALES ----

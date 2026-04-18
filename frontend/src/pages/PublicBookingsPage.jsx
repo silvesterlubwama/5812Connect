@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Ticket, Building, Search, Calendar, Clock, Users, MapPin, CreditCard, ChevronDown, ExternalLink, Globe, Shield, Lock, ChevronRight } from 'lucide-react';
+import { Ticket, Building, Search, Calendar, Clock, Users, MapPin, CreditCard, ChevronDown, ExternalLink, Globe, Shield, Lock, ChevronRight, ShoppingCart } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -51,6 +51,9 @@ export default function PublicBookingsPage() {
   const [showMore, setShowMore] = useState(false);
   const [showPolicies, setShowPolicies] = useState(false);
   const [policies, setPolicies] = useState(null);
+  const [shopProducts, setShopProducts] = useState([]);
+  const [shopCart, setShopCart] = useState([]);
+  const [shopOrder, setShopOrder] = useState({ name: '', email: '', phone: '', payment_method: 'card' });
 
   // Auto-detect country
   useEffect(() => {
@@ -70,8 +73,8 @@ export default function PublicBookingsPage() {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues()])
-      .then(([evRes, venRes]) => { setEvents(evRes.data); setVenues(venRes.data); })
+    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues(), publicApi.products()])
+      .then(([evRes, venRes, prodRes]) => { setEvents(evRes.data); setVenues(venRes.data); setShopProducts(prodRes.data || []); })
       .catch(() => toast.error('Failed to load data'))
       .finally(() => setLoading(false));
   }, [countryFilter]);
@@ -244,10 +247,11 @@ export default function PublicBookingsPage() {
         </div>
 
         <Tabs defaultValue="events" className="space-y-6">
-          <TabsList className="grid w-full max-w-lg mx-auto grid-cols-3">
+          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4">
             <TabsTrigger value="events" className="gap-2"><Ticket size={15} />Events</TabsTrigger>
+            <TabsTrigger value="shop" className="gap-2"><ShoppingCart size={15} />Shop</TabsTrigger>
             <TabsTrigger value="venues" className="gap-2"><Building size={15} />Book Space</TabsTrigger>
-            <TabsTrigger value="status" className="gap-2"><Search size={15} />My Bookings</TabsTrigger>
+            <TabsTrigger value="status" className="gap-2"><Search size={15} />My Orders</TabsTrigger>
           </TabsList>
 
           {/* EVENTS TAB - organized by type in columns */}
@@ -292,6 +296,60 @@ export default function PublicBookingsPage() {
                   <div className="text-center"><Button variant="outline" onClick={() => setShowMore(true)}>View More Events</Button></div>
                 )}
               </div>
+            )}
+          </TabsContent>
+
+          {/* SHOP TAB */}
+          <TabsContent value="shop">
+            {loading ? (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">{[1,2,3].map(i => <div key={i} className="h-48 bg-card border rounded-xl animate-pulse" />)}</div>
+            ) : shopProducts.length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">No products available</p>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {shopProducts.map(p => (
+                  <Card key={p.id} className="rounded-xl hover:shadow-md transition-shadow">
+                    <CardContent className="p-4">
+                      <h4 className="font-semibold text-sm mb-1">{p.name}</h4>
+                      {p.description && <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{p.description}</p>}
+                      <div className="flex items-center justify-between mt-2">
+                        <span className="font-bold text-primary">{p.currency || 'UGX'} {(p.price || 0).toLocaleString()}</span>
+                        <Badge variant={p.stock > 5 ? 'outline' : 'destructive'} className="text-[10px]">{p.stock > 0 ? `${p.stock} left` : 'Sold out'}</Badge>
+                      </div>
+                      <Button size="sm" className="w-full mt-3 text-xs" disabled={p.stock <= 0}
+                        onClick={() => { const existing = shopCart.find(c => c.product_id === p.id); if (existing) setShopCart(prev => prev.map(c => c.product_id === p.id ? {...c, quantity: c.quantity + 1} : c)); else setShopCart(prev => [...prev, { product_id: p.id, name: p.name, price: p.price, quantity: 1 }]); toast.success(`${p.name} added to cart`); }}>
+                        Add to Cart
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            {shopCart.length > 0 && (
+              <Card className="rounded-xl mt-6 max-w-md mx-auto">
+                <CardContent className="p-4">
+                  <h3 className="font-semibold mb-3">Cart ({shopCart.reduce((s, c) => s + c.quantity, 0)} items)</h3>
+                  {shopCart.map(c => (
+                    <div key={c.product_id} className="flex justify-between text-sm py-1.5 border-b last:border-0">
+                      <span>{c.name} x{c.quantity}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{(c.price * c.quantity).toLocaleString()}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive" onClick={() => setShopCart(prev => prev.filter(x => x.product_id !== c.product_id))}>x</Button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-bold mt-2 pt-2 border-t"><span>Total</span><span>{shopCart.reduce((s, c) => s + c.price * c.quantity, 0).toLocaleString()}</span></div>
+                  <div className="space-y-2 mt-3">
+                    <Input placeholder="Your name" value={shopOrder.name} onChange={e => setShopOrder({...shopOrder, name: e.target.value})} />
+                    <Input placeholder="Email" value={shopOrder.email} onChange={e => setShopOrder({...shopOrder, email: e.target.value})} />
+                    <Button className="w-full" onClick={async () => {
+                      if (!shopOrder.name || !shopOrder.email) { toast.error('Name and email required'); return; }
+                      try { const r = await publicApi.createOrder({ ...shopOrder, items: shopCart }); toast.success(`Order placed! ID: ${r.data.id}`); setShopCart([]); }
+                      catch { toast.error('Order failed'); }
+                    }}>Place Order</Button>
+                  </div>
+                </CardContent>
+              </Card>
             )}
           </TabsContent>
 

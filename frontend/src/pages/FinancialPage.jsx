@@ -69,6 +69,8 @@ export default function FinancialPage() {
   const [showDistribute, setShowDistribute] = useState(false);
   const [distForm, setDistForm] = useState({ from_location_id: '', to_location_id: '', amount: '', currency: 'UGX', notes: '' });
   const [pendingExpenses, setPendingExpenses] = useState([]);
+  const [balanceSheet, setBalanceSheet] = useState(null);
+  const [bsLoading, setBsLoading] = useState(false);
   const [showApprovalComment, setShowApprovalComment] = useState(null);
   const [approvalComment, setApprovalComment] = useState('');
   const [showImportExport, setShowImportExport] = useState(false);
@@ -103,6 +105,27 @@ export default function FinancialPage() {
 
   const fetchPending = async () => {
     try { const r = await financialApi.pendingExpenses(); setPendingExpenses(r.data); } catch (e) { console.warn(e.message || e); }
+  };
+
+  const fetchBalanceSheet = async () => {
+    setBsLoading(true);
+    try {
+      const params = {};
+      if (locationFilter) params.location_id = locationFilter;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const r = await financialApi.balanceSheet(params);
+      setBalanceSheet(r.data);
+    } catch (e) { console.warn(e.message || e); }
+    finally { setBsLoading(false); }
+  };
+
+  const attachReceipt = async (expenseId, url) => {
+    try {
+      await financialApi.setReceiptUrl(expenseId, { receipt_url: url });
+      setExpenses(prev => prev.map(e => e.id === expenseId ? { ...e, receipt_url: url } : e));
+      toast.success('Receipt attached');
+    } catch { toast.error('Failed'); }
   };
 
   const approveExpense = async (id) => {
@@ -276,6 +299,7 @@ export default function FinancialPage() {
         <TabsList>
           <TabsTrigger value="donations" data-testid="tab-donations">Donations</TabsTrigger>
           <TabsTrigger value="expenses" data-testid="tab-expenses">Expenses</TabsTrigger>
+          <TabsTrigger value="balance" data-testid="tab-balance" onClick={fetchBalanceSheet}>Balance Sheet</TabsTrigger>
           <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
         </TabsList>
 
@@ -340,6 +364,7 @@ export default function FinancialPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Amount</th>
                       <th className="pb-2 font-medium text-muted-foreground">Category</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Receipt</th>
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {expenses.map(e => (
@@ -348,6 +373,16 @@ export default function FinancialPage() {
                           <td className="py-3 text-red-600 font-semibold">{e.currency} {(e.amount||0).toLocaleString()}</td>
                           <td className="py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${expenseCategoryColors[e.category] || 'bg-slate-100 text-slate-700'}`}>{e.category}</span></td>
                           <td className="py-3 text-muted-foreground">{e.date}</td>
+                          <td className="py-3">
+                            {e.receipt_url ? (
+                              <a href={e.receipt_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">View</a>
+                            ) : (
+                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
+                                const url = prompt('Paste receipt URL or image link:');
+                                if (url) attachReceipt(e.id, url);
+                              }}>Attach</Button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -358,6 +393,38 @@ export default function FinancialPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* BALANCE SHEET TAB */}
+        <TabsContent value="balance" className="mt-4">
+          {bsLoading ? (
+            <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}</div>
+          ) : balanceSheet ? (
+            <div className="space-y-4">
+              <div className="grid sm:grid-cols-4 gap-4">
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-green-600">{fmt(balanceSheet.total_income)}</p><p className="text-xs text-muted-foreground mt-1">Total Income ({balanceSheet.donation_count} donations)</p></CardContent></Card>
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-blue-600">{fmt(balanceSheet.total_sales)}</p><p className="text-xs text-muted-foreground mt-1">Sales Revenue ({balanceSheet.sale_count} sales)</p></CardContent></Card>
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-red-600">{fmt(balanceSheet.total_expenses)}</p><p className="text-xs text-muted-foreground mt-1">Total Expenses ({balanceSheet.expense_count})</p></CardContent></Card>
+                <Card className="rounded-xl border-2 border-primary/20"><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${balanceSheet.net_balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(balanceSheet.net_balance)}</p><p className="text-xs text-muted-foreground mt-1">Net Balance</p></CardContent></Card>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <Card className="rounded-xl"><CardContent className="p-4"><h3 className="font-semibold text-sm mb-3">Income Breakdown</h3>
+                  {Object.entries(balanceSheet.income_by_type || {}).map(([type, amount]) => (
+                    <div key={type} className="flex justify-between py-1.5 text-sm border-b border-border last:border-0"><span className="capitalize text-muted-foreground">{type}</span><span className="font-medium text-green-600">{fmt(amount)}</span></div>
+                  ))}
+                  {Object.keys(balanceSheet.income_by_type || {}).length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No income data</p>}
+                </CardContent></Card>
+                <Card className="rounded-xl"><CardContent className="p-4"><h3 className="font-semibold text-sm mb-3">Expense Breakdown</h3>
+                  {Object.entries(balanceSheet.expense_by_category || {}).map(([cat, amount]) => (
+                    <div key={cat} className="flex justify-between py-1.5 text-sm border-b border-border last:border-0"><span className="capitalize text-muted-foreground">{cat}</span><span className="font-medium text-red-600">{fmt(amount)}</span></div>
+                  ))}
+                  {Object.keys(balanceSheet.expense_by_category || {}).length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expense data</p>}
+                </CardContent></Card>
+              </div>
+            </div>
+          ) : (
+            <Card className="rounded-xl"><CardContent className="py-12 text-center"><p className="text-muted-foreground">Click the Balance Sheet tab to generate the report for the selected campus and date range.</p></CardContent></Card>
+          )}
         </TabsContent>
 
         <TabsContent value="approvals" className="mt-4">

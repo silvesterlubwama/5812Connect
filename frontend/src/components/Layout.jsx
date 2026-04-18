@@ -79,7 +79,7 @@ const NAV_SECTIONS = [
     roles: MANAGER_PLUS,
     items: [
       { to: '/financial', icon: DollarSign, label: 'Financial' },
-      { to: '/sales', icon: ShoppingCart, label: 'Sales & Products' },
+      { to: '/sales', icon: ShoppingCart, label: 'Marketplace' },
     ]
   },
   {
