@@ -179,6 +179,48 @@ async def create_family(data: FamilyCreate, current_user: dict = Depends(get_cur
     return doc
 
 
+@router.put("/families/bulk-update")
+async def bulk_update_families(data: dict, current_user: dict = Depends(get_current_user)):
+    """Bulk update families. Body: {ids: [], updates: {location_id, primary_contact_name, primary_contact_phone}}"""
+    ids = data.get("ids", [])
+    updates = data.get("updates", {})
+    if not ids or not updates: return {"updated": 0}
+    allowed = {"location_id", "primary_contact_name", "primary_contact_phone", "primary_contact_email", "address"}
+    clean = {k: v for k, v in updates.items() if k in allowed and v}
+    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.families.update_many({"id": {"$in": ids}}, {"$set": clean})
+    return {"updated": result.modified_count}
+
+
+@router.post("/families/bulk-delete")
+async def bulk_delete_families(data: dict, current_user: dict = Depends(get_current_user)):
+    ids = data.get("ids", [])
+    if not ids: return {"deleted": 0}
+    result = await db.families.delete_many({"id": {"$in": ids}})
+    return {"deleted": result.deleted_count}
+
+
+@router.put("/guests/bulk-update")
+async def bulk_update_guests(data: dict, current_user: dict = Depends(get_current_user)):
+    ids = data.get("ids", [])
+    updates = data.get("updates", {})
+    if not ids or not updates: return {"updated": 0}
+    allowed = {"location_id", "is_parent", "family_id", "status"}
+    clean = {k: v for k, v in updates.items() if k in allowed}
+    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.guests.update_many({"id": {"$in": ids}}, {"$set": clean})
+    return {"updated": result.modified_count}
+
+
+@router.post("/guests/bulk-delete")
+async def bulk_delete_guests(data: dict, current_user: dict = Depends(get_current_user)):
+    ids = data.get("ids", [])
+    if not ids: return {"deleted": 0}
+    result = await db.guests.delete_many({"id": {"$in": ids}})
+    return {"deleted": result.deleted_count}
+
+
+
 @router.put("/families/{family_id}")
 async def update_family(family_id: str, data: FamilyCreate, current_user: dict = Depends(get_current_user)):
     update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -437,6 +479,30 @@ async def create_child(data: ChildCreate, current_user: dict = Depends(get_curre
     await db.children.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+# ========== BULK OPERATIONS FOR CHILDREN, FAMILIES, GUESTS ==========
+
+@router.put("/children/bulk-update")
+async def bulk_update_children(data: dict, current_user: dict = Depends(get_current_user)):
+    """Bulk update children. Body: {ids: [], updates: {family_id, location_id, class_group, gender}}"""
+    ids = data.get("ids", [])
+    updates = data.get("updates", {})
+    if not ids or not updates: return {"updated": 0}
+    allowed = {"family_id", "location_id", "class_group", "gender", "grade", "medical_info", "allergies"}
+    clean = {k: v for k, v in updates.items() if k in allowed and v}
+    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.children.update_many({"id": {"$in": ids}}, {"$set": clean})
+    return {"updated": result.modified_count}
+
+
+@router.post("/children/bulk-delete")
+async def bulk_delete_children(data: dict, current_user: dict = Depends(get_current_user)):
+    ids = data.get("ids", [])
+    if not ids: return {"deleted": 0}
+    result = await db.children.delete_many({"id": {"$in": ids}})
+    return {"deleted": result.deleted_count}
+
 
 
 @router.put("/children/{child_id}")
@@ -754,3 +820,6 @@ async def update_family_members(family_id: str, data: dict, current_user: dict =
     }})
 
     return {"message": "Family members updated", "children": len(child_ids), "parents": len(parent_ids), "guardians": len(guardian_ids)}
+
+
+

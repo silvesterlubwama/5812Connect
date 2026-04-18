@@ -164,6 +164,10 @@ export default function UnifiedPeoplePage() {
   const [selChildren, setSelChildren] = useState(new Set());
   const [selFamilies, setSelFamilies] = useState(new Set());
   const [selGuests, setSelGuests] = useState(new Set());
+  const [showBulkChildEdit, setShowBulkChildEdit] = useState(false);
+  const [showBulkFamilyEdit, setShowBulkFamilyEdit] = useState(false);
+  const [bulkChildForm, setBulkChildForm] = useState({ family_id: '', location_id: '', class_group: '' });
+  const [bulkFamilyForm, setBulkFamilyForm] = useState({ location_id: '' });
   const [showFamily, setShowFamily] = useState(false);
   const [showChild, setShowChild] = useState(false);
   const [showGuest, setShowGuest] = useState(false);
@@ -530,7 +534,15 @@ export default function UnifiedPeoplePage() {
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Heart size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No families yet</p></CardContent></Card>
           ) : (
             <div>
-            {selFamilies.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selFamilies} onClear={() => setSelFamilies(new Set())} onBulkExport={() => exportToCSV(families.filter(f => selFamilies.has(f.id)), 'families-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selFamilies.size} families?`)) return; for (const id of selFamilies) { try { await familiesApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelFamilies(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
+            {/* Select All + Bulk Actions for Families */}
+            <div className="flex items-center gap-2 mb-2">
+              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={selFamilies.size > 0 && selFamilies.size === families.length} onChange={() => selFamilies.size === families.length ? setSelFamilies(new Set()) : setSelFamilies(new Set(families.map(f => f.id)))} /> Select All ({families.length})</label>
+            </div>
+            {selFamilies.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selFamilies} onClear={() => setSelFamilies(new Set())}
+              onBulkEdit={() => setShowBulkFamilyEdit(true)}
+              onBulkExport={() => exportToCSV(families.filter(f => selFamilies.has(f.id)), 'families-export.csv')}
+              onBulkDelete={async () => { if (!window.confirm(`Delete ${selFamilies.size} families?`)) return; try { await familiesApi.bulkDelete([...selFamilies]); setSelFamilies(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+            /></div>}
             <div className="space-y-3">
               {families.map(f => (
                 <Card key={f.id} className={`shadow-soft rounded-xl ${selFamilies.has(f.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`family-card-${f.id}`}>
@@ -573,7 +585,15 @@ export default function UnifiedPeoplePage() {
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Baby size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No children registered</p></CardContent></Card>
           ) : (
             <div>
-            {selChildren.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selChildren} onClear={() => setSelChildren(new Set())} onBulkExport={() => exportToCSV(children.filter(c => selChildren.has(c.id)), 'children-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selChildren.size} children?`)) return; for (const id of selChildren) { try { await childrenApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelChildren(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
+            {/* Select All + Bulk Actions for Children */}
+            <div className="flex items-center gap-2 mb-3">
+              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={selChildren.size > 0 && selChildren.size === children.length} onChange={() => selChildren.size === children.length ? setSelChildren(new Set()) : setSelChildren(new Set(children.map(c => c.id)))} /> Select All ({children.length})</label>
+            </div>
+            {selChildren.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selChildren} onClear={() => setSelChildren(new Set())}
+              onBulkEdit={() => setShowBulkChildEdit(true)}
+              onBulkExport={() => exportToCSV(children.filter(c => selChildren.has(c.id)), 'children-export.csv')}
+              onBulkDelete={async () => { if (!window.confirm(`Delete ${selChildren.size} children?`)) return; try { await childrenApi.bulkDelete([...selChildren]); setSelChildren(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+            /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {children.map(c => (
                 <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
@@ -611,7 +631,14 @@ export default function UnifiedPeoplePage() {
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><UserPlus size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No guest visits recorded</p></CardContent></Card>
           ) : (
             <div>
-            {selGuests.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selGuests} onClear={() => setSelGuests(new Set())} onBulkExport={() => exportToCSV(guests.filter(g => selGuests.has(g.id)), 'guests-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selGuests.size} guests?`)) return; for (const id of selGuests) { try { await guestsApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelGuests(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
+            {/* Select All + Bulk Actions for Guests */}
+            <div className="flex items-center gap-2 mb-2">
+              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={selGuests.size > 0 && selGuests.size === guests.length} onChange={() => selGuests.size === guests.length ? setSelGuests(new Set()) : setSelGuests(new Set(guests.map(g => g.id)))} /> Select All ({guests.length})</label>
+            </div>
+            {selGuests.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selGuests} onClear={() => setSelGuests(new Set())}
+              onBulkExport={() => exportToCSV(guests.filter(g => selGuests.has(g.id)), 'guests-export.csv')}
+              onBulkDelete={async () => { if (!window.confirm(`Delete ${selGuests.size} guests?`)) return; try { await guestsApi.bulkDelete([...selGuests]); setSelGuests(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+            /></div>}
             <div className="space-y-2">
               {guests.map(g => (
                 <Card key={g.id} className={`shadow-soft rounded-xl ${selGuests.has(g.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`guest-card-${g.id}`}>
@@ -922,6 +949,67 @@ export default function UnifiedPeoplePage() {
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Import Staff</DialogTitle></DialogHeader>
           <div className="space-y-4"><div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="name,email,phone,..." value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} /></div>
           <div className="flex gap-3 pt-2"><Button variant="outline" className="flex-1" onClick={() => setShowStaffImport(false)}>Cancel</Button><Button className="flex-1" disabled={importLoading || (!staffCsvData.trim() && !staffCsvFile)} onClick={handleStaffImport}>{importLoading ? 'Importing...' : 'Import'}</Button></div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Edit Children Dialog */}
+      <Dialog open={showBulkChildEdit} onOpenChange={setShowBulkChildEdit}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Bulk Edit {selChildren.size} Children</DialogTitle><DialogDescription>Only changed fields will be updated</DialogDescription></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label className="text-xs">Family</Label>
+              <Select value={bulkChildForm.family_id} onValueChange={v => setBulkChildForm(prev => ({...prev, family_id: v}))}>
+                <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                <SelectContent><SelectItem value="">No change</SelectItem>{families.map(f => <SelectItem key={f.id} value={f.id}>{f.family_name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label className="text-xs">Campus / Location</Label>
+              <Select value={bulkChildForm.location_id} onValueChange={v => setBulkChildForm(prev => ({...prev, location_id: v}))}>
+                <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                <SelectContent><SelectItem value="">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label className="text-xs">Class / Group</Label>
+              <Input placeholder="No change" value={bulkChildForm.class_group} onChange={e => setBulkChildForm(prev => ({...prev, class_group: e.target.value}))} />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBulkChildEdit(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                const updates = {};
+                if (bulkChildForm.family_id) updates.family_id = bulkChildForm.family_id;
+                if (bulkChildForm.location_id) updates.location_id = bulkChildForm.location_id;
+                if (bulkChildForm.class_group) updates.class_group = bulkChildForm.class_group;
+                if (!Object.keys(updates).length) { toast.error('No changes selected'); return; }
+                try { await childrenApi.bulkUpdate([...selChildren], updates); toast.success(`Updated ${selChildren.size} children`); setShowBulkChildEdit(false); setSelChildren(new Set()); setBulkChildForm({ family_id: '', location_id: '', class_group: '' }); fetchPeople(); }
+                catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Apply to {selChildren.size} Children</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Edit Families Dialog */}
+      <Dialog open={showBulkFamilyEdit} onOpenChange={setShowBulkFamilyEdit}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Bulk Edit {selFamilies.size} Families</DialogTitle><DialogDescription>Only changed fields will be updated</DialogDescription></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label className="text-xs">Campus / Location</Label>
+              <Select value={bulkFamilyForm.location_id} onValueChange={v => setBulkFamilyForm(prev => ({...prev, location_id: v}))}>
+                <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                <SelectContent><SelectItem value="">No change</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBulkFamilyEdit(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                const updates = {};
+                if (bulkFamilyForm.location_id) updates.location_id = bulkFamilyForm.location_id;
+                if (!Object.keys(updates).length) { toast.error('No changes selected'); return; }
+                try { await familiesApi.bulkUpdate([...selFamilies], updates); toast.success(`Updated ${selFamilies.size} families`); setShowBulkFamilyEdit(false); setSelFamilies(new Set()); setBulkFamilyForm({ location_id: '' }); fetchPeople(); }
+                catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Apply to {selFamilies.size} Families</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

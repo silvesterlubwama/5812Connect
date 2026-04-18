@@ -165,17 +165,23 @@ export const familiesApi = {
   addGuardian: (familyId, data) => api.post(`/families/${familyId}/guardians`, data),
   updateGuardian: (familyId, guardianId, data) => api.put(`/families/${familyId}/guardians/${guardianId}`, data),
   removeGuardian: (familyId, guardianId) => api.delete(`/families/${familyId}/guardians/${guardianId}`),
+  bulkUpdate: (ids, updates) => api.put('/families/bulk-update', { ids, updates }),
+  bulkDelete: (ids) => api.post('/families/bulk-delete', { ids }),
 };
 export const childrenApi = {
   list: (params) => api.get('/children', { params }),
   create: (data) => api.post('/children', data),
   update: (id, data) => api.put(`/children/${id}`, data),
   delete: (id) => api.delete(`/children/${id}`),
+  bulkUpdate: (ids, updates) => api.put('/children/bulk-update', { ids, updates }),
+  bulkDelete: (ids) => api.post('/children/bulk-delete', { ids }),
 };
 export const guestsApi = {
   list: (params) => api.get('/guests', { params }),
   create: (data) => api.post('/guests', data),
   delete: (id) => api.delete(`/guests/${id}`),
+  bulkUpdate: (ids, updates) => api.put('/guests/bulk-update', { ids, updates }),
+  bulkDelete: (ids) => api.post('/guests/bulk-delete', { ids }),
 };
 
 // ---- LOCATIONS ----
