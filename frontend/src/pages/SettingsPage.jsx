@@ -51,8 +51,7 @@ export default function SettingsPage() {
     try {
       const res = await webAuthnApi.listCredentials();
       setPasskeys(res.data || []);
-    } catch (e) { console.debug('Settings load:', e.message || e); }
-    finally { setPasskeysLoading(false); }
+    } catch (e) { /* passkeys not critical */ } finally { setPasskeysLoading(false); }
   }, []);
 
   useEffect(() => { fetchPasskeys(); }, [fetchPasskeys]);
@@ -177,9 +176,8 @@ export default function SettingsPage() {
   useEffect(() => {
     venuesApi.list()
       .then(res => setVenues(res.data))
-      .catch(e => console.debug(e.message || e))
+      .catch(() => {})
       .finally(() => setLoadingVenues(false));
-    // Load global settings for org info
     api.get('/global-settings').then(res => {
       const d = res.data;
       setOrgSettings({
@@ -190,9 +188,9 @@ export default function SettingsPage() {
         timezone: d.timezone || 'Africa/Kampala',
         currency: d.currency || 'UGX',
       });
-    }).catch(e => console.debug(e.message || e));
+    }).catch(() => {});
     if (isAdmin) {
-      appSettingsApi.get().then(r => setAppSettings(prev => ({ ...prev, ...r.data }))).catch(e => console.debug(e.message || e));
+      appSettingsApi.get().then(r => setAppSettings(prev => ({ ...prev, ...r.data }))).catch(() => {});
     }
   }, [isAdmin]);
 

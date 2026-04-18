@@ -14,7 +14,6 @@ function loadSipJs() {
       try {
         const webMod = require('sip.js/lib/platform/web');
         SimpleUser = webMod?.SimpleUser;
-      } catch (e2) { console.debug('[SIP] Alternate import path unavailable:', e2.message); }
     }
   } catch (e) {
     console.warn('[SIP] sip.js not available:', e.message);
@@ -112,11 +111,9 @@ class SipService {
 
     // Try each WebSocket URL
     for (const wsUrl of wsUrls) {
-      console.log(`[SIP] Trying ${aor} via ${wsUrl}`);
       try {
         await this._attemptRegister(wsUrl, aor, sipUser, sipPass, iceServers, remoteAudio, config);
         this.activeWsUrl = wsUrl;
-        console.log(`[SIP] Registered successfully via ${wsUrl}`);
         return true;
       } catch (err) {
         lastError = err;
@@ -166,19 +163,14 @@ class SipService {
         this.simpleUser = new SimpleUser(wsUrl, options);
 
         this.simpleUser.delegate = {
-          onCallCreated: () => console.log('[SIP] Call created'),
           onCallReceived: () => {
-            console.log('[SIP] Incoming call');
             if (this.onIncomingCall) {
               const from = this.simpleUser.session?.remoteIdentity?.uri?.toString() || 'Unknown';
               this.onIncomingCall({ type: 'sip_incoming', from, caller_name: from });
             }
           },
-          onCallAnswered: () => { console.log('[SIP] Answered'); if (this.onCallAnswered) this.onCallAnswered(); },
-          onCallHangup: () => { console.log('[SIP] Hangup'); if (this.onCallHangup) this.onCallHangup(); },
           onRegistered: () => {
             clearTimeout(timeout);
-            console.log('[SIP] Registered');
             this.registered = true;
             this.registrationError = null;
             if (this.onRegistered) this.onRegistered();
@@ -188,7 +180,6 @@ class SipService {
             this.registered = false;
             if (this.onUnregistered) this.onUnregistered();
           },
-          onServerConnect: () => console.log('[SIP] Transport connected'),
           onServerDisconnect: (error) => {
             clearTimeout(timeout);
             this.registered = false;
@@ -227,7 +218,6 @@ class SipService {
     if (!this.simpleUser || !this.registered) throw new Error('Not registered');
     const domain = this.config.sip_domain || (this.config.host || '').replace(/:\d+$/, '');
     const uri = target.includes('@') ? `sip:${target}` : `sip:${target}@${domain}`;
-    console.log(`[SIP] Calling ${uri}`);
     await this.simpleUser.call(uri);
   }
 
