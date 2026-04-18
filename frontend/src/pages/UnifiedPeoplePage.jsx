@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '../components/ui/dropdown-menu';
 import { Checkbox } from '../components/ui/checkbox';
 import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, familiesApi, childrenApi, guestsApi, adminApi } from '../services/api';
+import { BulkActionBar, exportToCSV } from '../components/BulkActions';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
@@ -159,6 +160,10 @@ export default function UnifiedPeoplePage() {
   const [families, setFamilies] = useState([]);
   const [children, setChildren] = useState([]);
   const [guests, setGuests] = useState([]);
+  const [selMembers, setSelMembers] = useState(new Set());
+  const [selChildren, setSelChildren] = useState(new Set());
+  const [selFamilies, setSelFamilies] = useState(new Set());
+  const [selGuests, setSelGuests] = useState(new Set());
   const [showFamily, setShowFamily] = useState(false);
   const [showChild, setShowChild] = useState(false);
   const [showGuest, setShowGuest] = useState(false);
@@ -524,12 +529,17 @@ export default function UnifiedPeoplePage() {
           {families.length === 0 ? (
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Heart size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No families yet</p></CardContent></Card>
           ) : (
+            <div>
+            {selFamilies.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selFamilies} onClear={() => setSelFamilies(new Set())} onBulkExport={() => exportToCSV(families.filter(f => selFamilies.has(f.id)), 'families-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selFamilies.size} families?`)) return; for (const id of selFamilies) { try { await familiesApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelFamilies(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
             <div className="space-y-3">
               {families.map(f => (
-                <Card key={f.id} className="shadow-soft rounded-xl" data-testid={`family-card-${f.id}`}>
+                <Card key={f.id} className={`shadow-soft rounded-xl ${selFamilies.has(f.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`family-card-${f.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <div><p className="font-medium">{f.family_name}</p><p className="text-xs text-muted-foreground">{f.primary_contact_name} &middot; {f.primary_contact_phone}</p></div>
+                      <div className="flex items-center gap-2">
+                        <input type="checkbox" className="accent-primary" checked={selFamilies.has(f.id)} onChange={() => setSelFamilies(prev => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n; })} />
+                        <div><p className="font-medium">{f.family_name}</p><p className="text-xs text-muted-foreground">{f.primary_contact_name} &middot; {f.primary_contact_phone}</p></div>
+                      </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="secondary" className="text-xs">{childrenForFamily(f.id).length} children</Badge>
                         {isCoordinator && (
@@ -550,6 +560,7 @@ export default function UnifiedPeoplePage() {
                 </Card>
               ))}
             </div>
+            </div>
           )}
         </TabsContent>
 
@@ -561,15 +572,20 @@ export default function UnifiedPeoplePage() {
           {children.length === 0 ? (
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Baby size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No children registered</p></CardContent></Card>
           ) : (
+            <div>
+            {selChildren.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selChildren} onClear={() => setSelChildren(new Set())} onBulkExport={() => exportToCSV(children.filter(c => selChildren.has(c.id)), 'children-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selChildren.size} children?`)) return; for (const id of selChildren) { try { await childrenApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelChildren(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {children.map(c => (
-                <Card key={c.id} className="shadow-soft rounded-xl" data-testid={`child-card-${c.id}`}>
+                <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <p className="font-medium text-sm">{c.name}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{c.class_group} &middot; DOB: {c.date_of_birth || 'N/A'}</p>
-                        {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1.5">{c.allergies}</Badge>}
+                      <div className="flex items-start gap-2 flex-1">
+                        <input type="checkbox" className="accent-primary mt-1" checked={selChildren.has(c.id)} onChange={() => setSelChildren(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} />
+                        <div className="flex-1">
+                          <p className="font-medium text-sm">{c.name}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{c.class_group} &middot; DOB: {c.date_of_birth || 'N/A'}</p>
+                          {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1.5">{c.allergies}</Badge>}
+                        </div>
                       </div>
                       {isCoordinator && (
                         <div className="flex gap-1">
@@ -582,6 +598,7 @@ export default function UnifiedPeoplePage() {
                 </Card>
               ))}
             </div>
+            </div>
           )}
         </TabsContent>
 
@@ -593,15 +610,21 @@ export default function UnifiedPeoplePage() {
           {guests.length === 0 ? (
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><UserPlus size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No guest visits recorded</p></CardContent></Card>
           ) : (
+            <div>
+            {selGuests.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selGuests} onClear={() => setSelGuests(new Set())} onBulkExport={() => exportToCSV(guests.filter(g => selGuests.has(g.id)), 'guests-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selGuests.size} guests?`)) return; for (const id of selGuests) { try { await guestsApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelGuests(new Set()); fetchPeople(); toast.success('Deleted'); }} /></div>}
             <div className="space-y-2">
               {guests.map(g => (
-                <Card key={g.id} className="shadow-soft rounded-xl" data-testid={`guest-card-${g.id}`}>
+                <Card key={g.id} className={`shadow-soft rounded-xl ${selGuests.has(g.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`guest-card-${g.id}`}>
                   <CardContent className="p-3 flex items-center justify-between">
-                    <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-muted-foreground">{g.visit_date} &middot; {g.phone || g.email || ''}</p></div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" className="accent-primary" checked={selGuests.has(g.id)} onChange={() => setSelGuests(prev => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })} />
+                      <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-muted-foreground">{g.visit_date} &middot; {g.phone || g.email || ''}</p></div>
+                    </div>
                     {g.referred_by && <Badge variant="secondary" className="text-[10px]">Ref: {g.referred_by}</Badge>}
                   </CardContent>
                 </Card>
               ))}
+            </div>
             </div>
           )}
         </TabsContent>

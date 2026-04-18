@@ -292,7 +292,9 @@ export default function FinancialPage() {
               ) : donations.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
+                    {selectedIds.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(donations.filter(d => selectedIds.has(d.id)), 'donations-export.csv')} /></div>}
                     <thead><tr className="text-left border-b border-border">
+                      <th className="pb-2 w-8"><input type="checkbox" className="accent-primary" checked={selectedIds.size > 0 && donations.every(d => selectedIds.has(d.id))} onChange={() => { if (selectedIds.size === donations.length) setSelectedIds(new Set()); else setSelectedIds(new Set(donations.map(d => d.id))); }} /></th>
                       <th className="pb-2 font-medium text-muted-foreground">Donor</th>
                       <th className="pb-2 font-medium text-muted-foreground">Amount</th>
                       <th className="pb-2 font-medium text-muted-foreground">Type</th>
@@ -300,7 +302,8 @@ export default function FinancialPage() {
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {donations.map(d => (
-                        <tr key={d.id} className="hover:bg-accent/30 transition-colors">
+                        <tr key={d.id} className={`hover:bg-accent/30 transition-colors ${selectedIds.has(d.id) ? 'bg-primary/5' : ''}`}>
+                          <td className="py-3 w-8"><input type="checkbox" className="accent-primary" checked={selectedIds.has(d.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} /></td>
                           <td className="py-3 font-medium">{d.donor_name}</td>
                           <td className="py-3 text-green-600 font-semibold">{d.currency} {(d.amount||0).toLocaleString()}</td>
                           <td className="py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${typeColors[d.type] || 'bg-slate-100 text-slate-700'}`}>{d.type}</span></td>
