@@ -168,14 +168,16 @@ export default function Layout() {
     }
   }, [isGlobalAdmin]);
 
-  // Auto-expand the section containing the active route
+  // Auto-expand ONLY the section containing the active route, collapse all others
   useEffect(() => {
     const path = location.pathname;
+    const newExpanded = {};
     NAV_SECTIONS.forEach((section, idx) => {
       if (section.items.some(item => path.startsWith(item.to))) {
-        setExpandedSections(prev => ({ ...prev, [idx]: true }));
+        newExpanded[idx] = true;
       }
     });
+    setExpandedSections(newExpanded);
   }, [location.pathname]);
 
   const toggleSection = (idx) => {

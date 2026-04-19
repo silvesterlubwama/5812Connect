@@ -82,6 +82,12 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
     if visibility and visibility != "all":
         query["visibility"] = visibility
     events = await db.events.find(query, {"_id": 0}).sort([("date", 1)]).to_list(200)
+    # Auto-update status for past events still marked as upcoming
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for ev in events:
+        if ev.get("status") == "upcoming" and ev.get("date") and ev["date"] < today:
+            ev["status"] = "completed"
+            await db.events.update_one({"id": ev["id"]}, {"$set": {"status": "completed"}})
     # Sort: upcoming first, then by date
     status_order = {"upcoming": 0, "ongoing": 1, "completed": 2, "cancelled": 3}
     events.sort(key=lambda e: (status_order.get(e.get("status", ""), 9), e.get("date", "")))
@@ -305,6 +311,133 @@ async def checkout_person(checkin_id: str, current_user: dict = Depends(require_
         {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat(), "checked_out_by": current_user["id"]}}
     )
     return {"message": "Checked out successfully"}
+
+
+@router.post("/checkins/visitor")
+async def visitor_checkin(data: dict, current_user: dict = Depends(get_current_user)):
+    """Full visitor check-in flow: lookup/create guest, check blocked status, issue badge, tag under-18 guests"""
+    phone = (data.get("phone") or "").strip()
+    name = (data.get("name") or "").strip()
+    event_id = data.get("event_id", "")
+    event_name = data.get("event_name", "")
+    location_id = data.get("location_id", "")
+    additional_guests = data.get("additional_guests", [])  # [{name, age}] for under-18s
+    id_data = data.get("id_data")  # Extracted ID info: {first_name, last_name, dob, id_number, id_type, photo_url}
+
+    if not phone and not name:
+        raise HTTPException(status_code=400, detail="Phone number or name required")
+
+    # 1. Look up existing guest profile
+    guest = None
+    if phone:
+        guest = await db.guests.find_one({"phone": phone}, {"_id": 0})
+    if not guest and name:
+        guest = await db.guests.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}}, {"_id": 0})
+
+    needs_profile = not guest
+
+    # 2. Check if guest is blocked
+    if guest and guest.get("is_blocked"):
+        return {"status": "blocked", "message": f"This guest has been blocked from checking in. Reason: {guest.get('block_reason', 'Contact administration')}",
+                "guest": {"name": guest.get("name"), "id": guest.get("id")}}
+
+    # 3. Create new guest profile if needed
+    if needs_profile:
+        if not name:
+            return {"status": "needs_info", "message": "Guest not found. Please provide full name, date of birth, and ID."}
+        guest_id = f"gst_{str(uuid.uuid4())[:8]}"
+        guest = {
+            "id": guest_id, "name": name, "phone": phone,
+            "email": data.get("email", ""), "date_of_birth": data.get("date_of_birth", ""),
+            "location_id": location_id, "is_parent": False,
+            "id_type": id_data.get("id_type", "") if id_data else "",
+            "id_number": id_data.get("id_number", "") if id_data else "",
+            "photo_url": id_data.get("photo_url", "") if id_data else "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if id_data:
+            if id_data.get("first_name"): guest["name"] = f"{id_data['first_name']} {id_data.get('last_name', '')}".strip()
+            if id_data.get("dob"): guest["date_of_birth"] = id_data["dob"]
+        await db.guests.insert_one(guest)
+        guest.pop("_id", None)
+
+    # 4. Create check-in record
+    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    checkin = {
+        "id": ci_id, "member_id": guest["id"], "member_name": guest.get("name", name),
+        "type": "visitor", "event_id": event_id, "event_name": event_name,
+        "method": "visitor_kiosk", "location_id": location_id,
+        "check_in_time": datetime.now(timezone.utc).isoformat(),
+        "checked_in_by": current_user["id"],
+    }
+    await db.checkins.insert_one(checkin); checkin.pop("_id", None)
+
+    # 5. Handle additional under-18 guests (up to 3)
+    additional_badges = []
+    for i, ag in enumerate(additional_guests[:3]):
+        ag_name = (ag.get("name") or "").strip()
+        if not ag_name: continue
+        ag_ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+        ag_checkin = {
+            "id": ag_ci_id, "member_id": guest["id"], "member_name": ag_name,
+            "type": "minor_guest", "event_id": event_id, "event_name": event_name,
+            "method": "tagged_guest", "location_id": location_id,
+            "tagged_to": guest["id"], "tagged_to_name": guest.get("name", ""),
+            "age": ag.get("age"), "check_in_time": datetime.now(timezone.utc).isoformat(),
+            "checked_in_by": current_user["id"],
+        }
+        await db.checkins.insert_one(ag_checkin); ag_checkin.pop("_id", None)
+        additional_badges.append({"name": ag_name, "checkin_id": ag_ci_id, "tagged_to": guest.get("name", "")})
+
+    # 6. Generate badge data
+    badge = {
+        "guest_id": guest["id"], "name": guest.get("name", name),
+        "first_name": guest.get("name", "").split(" ")[0] if guest.get("name") else name.split(" ")[0],
+        "last_name": " ".join(guest.get("name", "").split(" ")[1:]) if guest.get("name") else "",
+        "qr_data": guest["id"], "checkin_id": ci_id,
+        "is_new_profile": needs_profile,
+    }
+
+    return {
+        "status": "success", "message": f"{'New profile created. ' if needs_profile else ''}Checked in!",
+        "guest": guest, "checkin": checkin, "badge": badge,
+        "additional_guests": additional_badges, "is_new_profile": needs_profile,
+    }
+
+
+@router.put("/guests/{guest_id}/block")
+async def block_guest(guest_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Block/unblock a guest from checking in"""
+    await db.guests.update_one({"id": guest_id}, {"$set": {
+        "is_blocked": data.get("blocked", True),
+        "block_reason": data.get("reason", ""),
+        "blocked_by": current_user["id"],
+        "blocked_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"message": "Guest blocked" if data.get("blocked", True) else "Guest unblocked"}
+
+
+@router.post("/checkins/restricted-alert")
+async def restricted_area_alert(data: dict, current_user: dict = Depends(get_current_user)):
+    """Send alert for unauthorized check-in at restricted location"""
+    location_id = data.get("location_id", "")
+    person_name = data.get("person_name", "Unknown")
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
+    campus_id = loc.get("parent_id") or location_id if loc else location_id
+    # Find director and security staff
+    director = await db.users.find_one({"location_id": campus_id, "role": {"$in": ["Director", "Executive Director"]}}, {"_id": 0, "id": 1, "name": 1})
+    loc_manager = await db.users.find_one({"location_id": location_id, "role": {"$in": ["Manager", "Coordinator"]}}, {"_id": 0, "id": 1, "name": 1})
+    # Create notification
+    notif = {
+        "id": f"notif_{str(uuid.uuid4())[:8]}", "type": "warning",
+        "title": f"UNAUTHORIZED ACCESS: {person_name}",
+        "message": f"Unauthorized check-in attempt at {loc.get('name', location_id) if loc else location_id}",
+        "link": "/access", "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    targets = [t["id"] for t in [director, loc_manager] if t]
+    for uid in targets:
+        await db.notifications.insert_one({**notif, "id": f"notif_{str(uuid.uuid4())[:8]}", "user_id": uid, "read": False})
+    return {"alerted": len(targets), "targets": targets}
 
 
 @router.post("/checkins/qr-scan")

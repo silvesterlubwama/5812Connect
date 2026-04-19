@@ -66,6 +66,10 @@ export default function KioskPage() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [scanType, setScanType] = useState('manual'); // manual, nfc, biometric
   const [lockMode, setLockMode] = useState(false);
+  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [lockToScan, setLockToScan] = useState(false); // Lock to scan-only mode
+  const [lockLocationId, setLockLocationId] = useState(''); // Lock to specific restricted location
   const [showSignup, setShowSignup] = useState(false);
   const [signupForm, setSignupForm] = useState({ name: '', phone: '', email: '', role: 'Member' });
 
@@ -272,7 +276,10 @@ export default function KioskPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant={lockMode ? 'default' : 'outline'} size="sm" className="text-xs h-8" onClick={() => setLockMode(!lockMode)} data-testid="kiosk-lock-btn">{lockMode ? 'Unlock' : 'Lock'}</Button>
+              <Button variant={lockMode ? 'default' : 'outline'} size="sm" className="text-xs h-8" onClick={() => {
+                if (lockMode) { setShowUnlockDialog(true); }
+                else { setLockMode(true); setLockToScan(true); toast.success('Kiosk locked to scan mode. Admin password required to unlock.'); }
+              }} data-testid="kiosk-lock-btn">{lockMode ? 'Unlock' : 'Lock'}</Button>
               <Badge variant={isOnline ? 'outline' : 'destructive'} className={`text-[10px] gap-1 ${isOnline ? 'border-green-300 text-green-600' : ''}`}>
                 {isOnline ? <Wifi size={10} /> : <WifiOff size={10} />} {isOnline ? 'Online' : 'Offline'}
               </Badge>
@@ -330,6 +337,30 @@ export default function KioskPage() {
               </div>
             </DialogContent>
           </Dialog>
+
+          {/* Admin Unlock Dialog */}
+          <Dialog open={showUnlockDialog} onOpenChange={setShowUnlockDialog}>
+            <DialogContent className="max-w-xs">
+              <DialogHeader><DialogTitle>Admin Unlock</DialogTitle></DialogHeader>
+              <div className="space-y-3 mt-2">
+                <p className="text-xs text-muted-foreground">Enter admin password to unlock kiosk</p>
+                <Input type="password" placeholder="Admin password" value={unlockPassword} onChange={e => setUnlockPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') {
+                  api.post('/auth/login', { identifier: staffUser?.email, password: unlockPassword }).then(() => {
+                    setLockMode(false); setLockToScan(false); setShowUnlockDialog(false); setUnlockPassword(''); toast.success('Kiosk unlocked');
+                  }).catch(() => toast.error('Wrong password'));
+                }}} data-testid="unlock-password" />
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => { setShowUnlockDialog(false); setUnlockPassword(''); }}>Cancel</Button>
+                  <Button className="flex-1" onClick={() => {
+                    api.post('/auth/login', { identifier: staffUser?.email, password: unlockPassword }).then(() => {
+                      setLockMode(false); setLockToScan(false); setShowUnlockDialog(false); setUnlockPassword(''); toast.success('Kiosk unlocked');
+                    }).catch(() => toast.error('Wrong password'));
+                  }}>Unlock</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
 
           {/* Recent Visitors Quick Check-In */}
           {recentVisitors.length > 0 && (

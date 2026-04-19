@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
 import { ChildTag, ParentBadge } from '../components/PrintableBadges';
-import { checkinsApi, eventsApi, membersApi } from '../services/api';
+import { checkinsApi, eventsApi, membersApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
@@ -23,6 +23,8 @@ export default function CheckInsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [allLocations, setAllLocations] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [events, setEvents] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -238,12 +240,14 @@ export default function CheckInsPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [ciRes, statsRes] = await Promise.all([
-        checkinsApi.list({ search: search || undefined, type: typeFilter !== 'all' ? typeFilter : undefined }),
+      const [ciRes, statsRes, locsRes] = await Promise.all([
+        checkinsApi.list({ search: search || undefined, type: typeFilter !== 'all' ? typeFilter : undefined, location_id: locationFilter || undefined }),
         checkinsApi.stats(),
+        locationsApi.list().catch(() => ({ data: [] })),
       ]);
       setCheckins(ciRes.data);
       setStats(statsRes.data);
+      setAllLocations(locsRes.data || []);
     } catch { toast.error('Failed to load check-ins'); }
     finally { setLoading(false); }
   };

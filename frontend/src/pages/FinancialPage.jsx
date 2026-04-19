@@ -78,10 +78,19 @@ export default function FinancialPage() {
   const [importingData, setImportingData] = useState(false);
   const today = new Date().toISOString().split('T')[0];
 
+  const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
+
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '' }));
   const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '' }));
+
+  // Default non-admin users to their campus
+  useEffect(() => {
+    if (!isFinanceAdmin && user?.location_id && !locationFilter) {
+      setLocationFilter(user.location_id);
+    }
+  }, [user, isFinanceAdmin, locationFilter]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -216,13 +225,17 @@ export default function FinancialPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Track donations, expenses, and cashflow</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)}>
-            <SelectTrigger className="w-44 h-8 text-xs" data-testid="financial-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="_all">All Locations</SelectItem>
-              {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          {isFinanceAdmin ? (
+            <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)}>
+              <SelectTrigger className="w-44 h-8 text-xs" data-testid="financial-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">All Locations</SelectItem>
+                {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Badge variant="outline" className="text-xs">{allLocations.find(l => l.id === locationFilter)?.name || 'My Campus'}</Badge>
+          )}
           <Button variant="outline" size="sm" onClick={() => setShowDistribute(true)} className="gap-1.5" data-testid="distribute-funds-btn"><DollarSign size={14} /> Transfer</Button>
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="financial-refresh"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-2" data-testid="financial-export">
