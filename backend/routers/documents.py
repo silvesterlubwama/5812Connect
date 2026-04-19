@@ -55,6 +55,20 @@ async def list_id_types(current_user: dict = Depends(get_current_user)):
     return ID_TYPES
 
 
+@router.get("/documents/available-types/{member_id}")
+async def available_doc_types(member_id: str, current_user: dict = Depends(get_current_user)):
+    """Return document types that haven't been uploaded yet or are expired"""
+    existing = await db.member_documents.find({"member_id": member_id}, {"_id": 0, "doc_type": 1, "expires_at": 1}).to_list(50)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    uploaded_valid = set()
+    for doc in existing:
+        exp = doc.get("expires_at", "")
+        if not exp or exp > today:
+            uploaded_valid.add(doc.get("doc_type"))
+    available = [t for t in ID_TYPES if t["value"] not in uploaded_valid]
+    return {"available": available, "uploaded_valid": list(uploaded_valid)}
+
+
 @router.post("/members/{member_id}/documents")
 async def upload_member_document(
     member_id: str,

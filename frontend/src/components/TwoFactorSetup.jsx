@@ -152,7 +152,14 @@ export default function TwoFactorSetup() {
                 <p className="text-sm text-muted-foreground mb-4">
                   Scan this QR code with your authenticator app
                 </p>
-                {setupData.qr_code_base64 ? (
+                {setupData.qr_code ? (
+                  <img 
+                    src={setupData.qr_code}
+                    alt="2FA QR Code" 
+                    className="mx-auto w-48 h-48 rounded-lg border border-border"
+                    data-testid="2fa-qr-code"
+                  />
+                ) : setupData.qr_code_base64 ? (
                   <img 
                     src={`data:image/png;base64,${setupData.qr_code_base64}`} 
                     alt="2FA QR Code" 

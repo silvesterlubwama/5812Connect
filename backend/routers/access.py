@@ -520,7 +520,7 @@ async def create_access_api_connection(data: dict, current_user: dict = Depends(
         "venue_id": data.get("venue_id"),
         "door_name": data.get("door_name", ""),
         "enabled": data.get("enabled", True),
-        "provider": data.get("provider", "generic"),  # generic, kisi, salto, brivo, openpath
+        "provider": data.get("provider", "generic"),  # generic, kisi, salto, brivo, openpath, unifi
         "config": data.get("config", {}),
         "created_by": current_user["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X } from 'lucide-react';
+import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -167,19 +167,39 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 </Button>
                 <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
               </div>
-              {attachments.map((att, i) => (
-                <div key={att.id || i} className="flex items-center gap-2 p-2 rounded-lg bg-[#0f172a] border border-white/10 group">
-                  <Paperclip size={12} className="text-slate-400 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-slate-200 truncate">{att.name}</p>
-                    {att.source === 'trello' && <p className="text-[10px] text-slate-500">From Trello</p>}
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                    {att.url && <a href={att.url} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-400 p-1"><Eye size={11} /></a>}
-                    <button onClick={() => removeAttachment(att.id)} className="text-slate-400 hover:text-red-400 p-1"><X size={11} /></button>
+              {attachments.map((att, i) => {
+                const isImage = att.name?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+                const isPdf = att.name?.match(/\.pdf$/i);
+                const isPreviewable = isImage || isPdf;
+                return (
+                <div key={att.id || att.name || i} className="rounded-lg bg-[#0f172a] border border-white/10 group overflow-hidden">
+                  {/* Inline preview for images */}
+                  {isImage && att.url && (
+                    <a href={att.url} target="_blank" rel="noopener noreferrer">
+                      <img src={att.url} alt={att.name} className="w-full h-32 object-cover rounded-t-lg hover:opacity-80 transition-opacity" />
+                    </a>
+                  )}
+                  {/* PDF preview */}
+                  {isPdf && att.url && (
+                    <div className="w-full h-32 bg-slate-800 flex items-center justify-center rounded-t-lg cursor-pointer hover:bg-slate-700" onClick={() => window.open(att.url, '_blank')}>
+                      <div className="text-center"><Paperclip size={24} className="text-red-400 mx-auto mb-1" /><p className="text-[10px] text-slate-400">PDF — Click to view</p></div>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 p-2">
+                    <Paperclip size={12} className="text-slate-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-200 truncate">{att.name}</p>
+                      {att.source === 'trello' && <p className="text-[10px] text-slate-500">From Trello</p>}
+                    </div>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {att.url && <a href={att.url} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-400 p-1" title="View"><Eye size={11} /></a>}
+                      {att.url && <a href={att.url} download className="text-slate-400 hover:text-green-400 p-1" title="Download"><Download size={11} /></a>}
+                      <button onClick={() => removeAttachment(att.id)} className="text-slate-400 hover:text-red-400 p-1" title="Delete"><X size={11} /></button>
+                    </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

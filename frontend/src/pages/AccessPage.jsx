@@ -714,7 +714,7 @@ export default function AccessPage() {
             <div className="space-y-1.5"><Label className="text-xs">Provider</Label>
               <Select value={apiConnForm.provider} onValueChange={v => setApiConnForm({...apiConnForm, provider: v})}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="generic">Generic</SelectItem><SelectItem value="kisi">Kisi</SelectItem><SelectItem value="salto">Salto</SelectItem><SelectItem value="brivo">Brivo</SelectItem><SelectItem value="openpath">OpenPath</SelectItem></SelectContent>
+                <SelectContent><SelectItem value="generic">Generic</SelectItem><SelectItem value="kisi">Kisi</SelectItem><SelectItem value="salto">Salto</SelectItem><SelectItem value="brivo">Brivo</SelectItem><SelectItem value="openpath">OpenPath</SelectItem><SelectItem value="unifi">Unifi Access</SelectItem></SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">API URL *</Label><Input value={apiConnForm.api_url} onChange={e => setApiConnForm({...apiConnForm, api_url: e.target.value})} placeholder="https://api.kisi.io/v1" /></div>

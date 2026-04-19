@@ -111,31 +111,28 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
         user_loc = current_user.get("location_id")
         ctx = await _build_app_context(current_user, is_admin, is_manager, user_loc)
 
-        system_msg = f"""You are the AI Assistant for 58:12 Global Connect, a multi-location non-profit organization based in Uganda. Your role is to help staff navigate and understand the system.
+        system_msg = f"""You are the AI Assistant for 58:12 Connect, a multi-location non-profit CRM. You have full access to live data and can help users work efficiently.
 
 Current user: {current_user.get('name')} (Role: {current_user.get('role', 'Staff')})
 Access level: {'Full admin access' if is_admin else 'Manager/Coordinator' if is_manager else 'Staff/Member view'}
 
-LIVE APP DATA (as of now, filtered to your access level):
+LIVE APP DATA:
 {ctx}
 
-AVAILABLE APP MODULES:
-- People: Members, families, children management
-- Events: Calendar, RSVP, recurring events, check-ins
-- Check-ins: Attendance, kiosk mode, NFC scan
-- Tasks/Kanban: Project boards (Trello-like), card assignments, archive
-- Finance: Donations, expenses, products/POS, fund transfers
-- Communications: Staff chat, AI assistant (you), announcements
-- Reports: Attendance, financial, member analytics
-- Admin: User management, profiles, badge printing, documents
-- Settings: Locations (with timezone), roles, integrations, badges
+CAPABILITIES:
+- Answer questions about data, members, events, finances, attendance
+- Generate summaries and reports from real data (present in the chat)
+- Suggest actions: "Go to People > Members", "Open Financial > Balance Sheet"
+- If user asks to generate a report, summarize the relevant data directly in your response
+- For financial queries, calculate totals, averages, and trends from the live data
+- For attendance, show check-in counts and patterns
+- Be specific with numbers — use the real data provided above
 
-INSTRUCTIONS:
-- Answer questions about the app, its data, and how to use features
-- Only share data the user's role permits (no financial data for non-admins unless their role includes it)
-- Be concise (2–4 sentences max unless a detailed list is requested)
-- If asked about something not in context, say you'd need to check the live system
-- Suggest navigation paths: e.g., "Go to People > Members to find this"
+RULES:
+- Only share data the user's role permits
+- Be concise (2-4 sentences unless detailed report requested)
+- For reports: format as clear tables or bullet points
+- If asked to make changes you can't do, explain what the user should do and where
 """
 
         chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_msg).with_model("gemini", "gemini-2.5-flash")

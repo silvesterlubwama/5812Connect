@@ -74,12 +74,16 @@ async def financial_summary(location_id: Optional[str] = None, current_user: dic
 async def distribute_funds(data: dict, current_user: dict = Depends(require_director)):
     from_location_id = data.get("from_location_id"); to_location_id = data.get("to_location_id")
     amount = float(data.get("amount", 0)); currency = data.get("currency", "UGX"); notes = data.get("notes", "")
+    exchange_rate = float(data.get("exchange_rate", 1.0))
+    receiving_currency = data.get("receiving_currency", currency)
     if amount <= 0: raise HTTPException(status_code=400, detail="Amount must be > 0")
+    receiving_amount = round(amount * exchange_rate, 2) if exchange_rate != 1.0 else amount
     transfer_id = f"tfr_{str(uuid.uuid4())[:8]}"; now = datetime.now(timezone.utc).isoformat()
-    await db.expenses.insert_one({"id": f"exp_{str(uuid.uuid4())[:8]}", "title": f"Fund transfer to {to_location_id}", "amount": amount, "currency": currency, "category": "transfer", "date": now[:10], "notes": f"Transfer {transfer_id}: {notes}", "location_id": from_location_id, "transfer_id": transfer_id, "created_at": now, "created_by": current_user["id"]})
-    await db.donations.insert_one({"id": f"don_{str(uuid.uuid4())[:8]}", "donor_name": "Internal Transfer", "amount": amount, "currency": currency, "type": "transfer", "date": now[:10], "notes": f"Transfer {transfer_id} from {from_location_id}: {notes}", "location_id": to_location_id, "transfer_id": transfer_id, "created_at": now, "created_by": current_user["id"]})
+    rate_note = f" (Rate: {exchange_rate} {currency}→{receiving_currency})" if exchange_rate != 1.0 else ""
+    await db.expenses.insert_one({"id": f"exp_{str(uuid.uuid4())[:8]}", "title": f"Fund transfer to {to_location_id}", "amount": amount, "currency": currency, "category": "transfer", "date": now[:10], "notes": f"Transfer {transfer_id}: {notes}{rate_note}", "location_id": from_location_id, "transfer_id": transfer_id, "exchange_rate": exchange_rate, "created_at": now, "created_by": current_user["id"]})
+    await db.donations.insert_one({"id": f"don_{str(uuid.uuid4())[:8]}", "donor_name": "Internal Transfer", "amount": receiving_amount, "currency": receiving_currency, "type": "transfer", "date": now[:10], "notes": f"Transfer {transfer_id} from {from_location_id}: {notes}{rate_note}", "location_id": to_location_id, "transfer_id": transfer_id, "exchange_rate": exchange_rate, "original_amount": amount, "original_currency": currency, "created_at": now, "created_by": current_user["id"]})
     await _audit(current_user["id"], "create", "fund_transfer", transfer_id)
-    return {"transfer_id": transfer_id, "amount": amount, "from": from_location_id, "to": to_location_id}
+    return {"transfer_id": transfer_id, "amount": amount, "receiving_amount": receiving_amount, "exchange_rate": exchange_rate, "from": from_location_id, "to": to_location_id}
 
 
 # ========== DONATIONS ==========
