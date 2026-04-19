@@ -730,7 +730,7 @@ export default function MembersPage() {
                       { label: 'Address', value: memberDetail.address, full: true },
                       { label: 'Notes', value: memberDetail.notes, full: true },
                     ].filter(f => f.value).map((field, i) => (
-                      <div key={i} className={field.full ? 'col-span-2' : ''}>
+                      <div key={field.label || field.key || i} className={field.full ? 'col-span-2' : ''}>
                         <p className="text-xs text-muted-foreground mb-0.5">{field.label}</p>
                         <p className="font-medium">{field.value}</p>
                       </div>

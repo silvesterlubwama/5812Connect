@@ -112,7 +112,7 @@ export default function ReportsPage() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {statCards.map((card, i) => (
-              <Card key={i} className="shadow-soft rounded-xl" data-testid={`report-stat-${i}`}>
+              <Card key={s?.label || i} className="shadow-soft rounded-xl" data-testid={`report-stat-${i}`}>
                 <CardContent className="p-4 flex items-start gap-3">
                   <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${card.color}`}>
                     <card.icon size={20} />

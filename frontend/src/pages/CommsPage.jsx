@@ -353,7 +353,7 @@ export default function CommsPage() {
             </div>
           )}
           {aiMessages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={`ai-${i}-${msg.role}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
                 {msg.role === 'assistant' && <p className="text-[10px] font-semibold opacity-60 mb-0.5">AI Assistant</p>}
                 <p className="text-sm whitespace-pre-wrap">{msg.text}</p>

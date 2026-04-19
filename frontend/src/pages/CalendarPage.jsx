@@ -240,7 +240,7 @@ export default function CalendarPage() {
           {cells.map((day, i) => {
             const dayEvents = day ? getEventsForDay(day) : [];
             return (
-              <div key={i} className={`min-h-[90px] p-1.5 border-b border-r border-border last:border-r-0 ${!day ? 'bg-muted/20' : 'hover:bg-accent/30 transition-colors'}`}>
+              <div key={day ? `day-${day}` : `empty-${i}`} className={`min-h-[90px] p-1.5 border-b border-r border-border last:border-r-0 ${!day ? 'bg-muted/20' : 'hover:bg-accent/30 transition-colors'}`}>
                 {day && (
                   <>
                     <span className={`text-sm font-medium inline-flex items-center justify-center w-7 h-7 rounded-full mb-1 ${isToday(day) ? 'bg-primary text-primary-foreground' : ''}`}>

@@ -146,7 +146,7 @@ export default function OutreachPage() {
 
       <div className="grid grid-cols-3 gap-4">
         {[{ label: 'Active', value: programs.filter(p => p.status === 'active').length, color: 'text-green-600' }, { label: 'Sessions', value: sessions.length, color: 'text-blue-600' }, { label: 'Reached', value: totalReached.toLocaleString(), color: 'text-primary' }].map((s, i) => (
-          <Card key={i} className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${s.color}`}>{s.value}</p><p className="text-xs text-muted-foreground mt-1">{s.label}</p></CardContent></Card>
+          <Card key={s.label || i} className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${s.color}`}>{s.value}</p><p className="text-xs text-muted-foreground mt-1">{s.label}</p></CardContent></Card>
         ))}
       </div>
 

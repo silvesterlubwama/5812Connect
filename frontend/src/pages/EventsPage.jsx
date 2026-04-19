@@ -357,7 +357,7 @@ export default function EventsPage() {
                 <TabsContent value="checkins" className="mt-3">
                   {(eventDetail.checkins ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No check-ins</p> : (
                     <div className="space-y-2">{eventDetail.checkins.map((ci, i) => (
-                      <div key={i} className="flex items-center justify-between p-2 rounded border border-border text-sm">
+                      <div key={item?.id || item?.day || i} className="flex items-center justify-between p-2 rounded border border-border text-sm">
                         <div><p className="font-medium">{ci.member_name}</p><p className="text-xs text-muted-foreground">{new Date(ci.check_in_time).toLocaleString()}</p></div>
                         <div className="flex gap-2">
                           <Badge variant="outline" className="text-xs capitalize">{ci.type}</Badge>
@@ -372,7 +372,7 @@ export default function EventsPage() {
                 <TabsContent value="attendees" className="mt-3">
                   {(eventDetail.attendees ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No registrations</p> : (
                     <div className="space-y-2">{eventDetail.attendees.map((a, i) => (
-                      <div key={i} className="flex items-center justify-between p-2 rounded border border-border text-sm">
+                      <div key={item?.id || item?.day || i} className="flex items-center justify-between p-2 rounded border border-border text-sm">
                         <div><p className="font-medium">{a.name}</p><p className="text-xs text-muted-foreground">{a.email}</p></div>
                         <Badge className="bg-green-600 text-white border-0 text-xs">{a.status}</Badge>
                       </div>

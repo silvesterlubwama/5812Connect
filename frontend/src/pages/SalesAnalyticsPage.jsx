@@ -83,7 +83,7 @@ export default function SalesAnalyticsPage() {
                   </ResponsiveContainer>
                   <div className="space-y-2 mt-2">
                     {data.payment_breakdown.map((item, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs">
+                      <div key={item?.name || item?.label || i} className="flex items-center gap-2 text-xs">
                         <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
                         <span className="text-muted-foreground">{item.name}</span>
                         <span className="ml-auto font-semibold">{fmt(item.value)}</span>

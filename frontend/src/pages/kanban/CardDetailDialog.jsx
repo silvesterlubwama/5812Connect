@@ -116,7 +116,7 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
           <div className="col-span-2 space-y-5">
             {labels.length > 0 && (
               <div className="flex flex-wrap gap-1">
-                {labels.map((lbl, i) => <span key={i} className="px-2.5 py-0.5 rounded text-xs font-medium text-white" style={{ background: lbl.color || '#3b82f6' }}>{lbl.name || lbl}</span>)}
+                {labels.map((lbl, i) => <span key={lbl.name || lbl.color || i} className="px-2.5 py-0.5 rounded text-xs font-medium text-white" style={{ background: lbl.color || '#3b82f6' }}>{lbl.name || lbl}</span>)}
               </div>
             )}
 
@@ -137,7 +137,7 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 </div>
                 <div className="space-y-1.5">
                   {checklist.map((item, i) => (
-                    <div key={i} className="flex items-center gap-2 group">
+                    <div key={item?.text || item?.label || i} className="flex items-center gap-2 group">
                       <input type="checkbox" checked={item.completed} className="h-4 w-4 rounded accent-emerald-500" onChange={() => toggleCheck(i)} />
                       <span className={`text-sm flex-1 ${item.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>{item.text}</span>
                       <button className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400"

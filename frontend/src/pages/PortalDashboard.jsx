@@ -71,7 +71,7 @@ export default function PortalDashboard() {
           ) : (
             <div className="space-y-2">
               {(d.recent_checkins || []).map((c, i) => (
-                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div key={t.id || t.title || i} className="flex items-center justify-between py-2 border-b last:border-0">
                   <div className="flex items-center gap-2">
                     <Clock size={14} className="text-muted-foreground" />
                     <span className="text-sm">{c.event_name || c.type || 'Check-in'}</span>
@@ -96,7 +96,7 @@ export default function PortalDashboard() {
           ) : (
             <div className="space-y-2">
               {(d.upcoming_events || []).map((e, i) => (
-                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div key={ev.id || ev.title || i} className="flex items-center justify-between py-2 border-b last:border-0">
                   <div>
                     <p className="text-sm font-medium">{e.title}</p>
                     <p className="text-xs text-muted-foreground">{e.date} {e.time && `at ${e.time}`} {e.location && `— ${e.location}`}</p>

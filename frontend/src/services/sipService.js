@@ -7,13 +7,13 @@ let SimpleUser = null;
 function loadSipJs() {
   if (SimpleUser) return true;
   try {
-    // Try the standard import path
     const mod = require('sip.js');
     SimpleUser = mod?.Web?.SimpleUser || mod?.SimpleUser;
     if (!SimpleUser) {
       try {
         const webMod = require('sip.js/lib/platform/web');
         SimpleUser = webMod?.SimpleUser;
+      } catch (e2) { console.warn('[SIP] Alternate path:', e2.message); }
     }
   } catch (e) {
     console.warn('[SIP] sip.js not available:', e.message);
