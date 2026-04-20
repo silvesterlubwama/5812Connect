@@ -928,31 +928,331 @@ async def list_pending_payments(current_user: dict = Depends(require_staff)):
 
 @router.get("/public/policies")
 async def get_policies():
-    """Return unified organizational policies."""
+    """Return organizational policies. Admin-editable via PUT, falls back to defaults."""
+    stored = await db.legal_policies.find_one({"_key": "policies"}, {"_id": 0})
+    if stored and stored.get("policies"):
+        return stored["policies"]
+    return _default_policies()
+
+
+@router.put("/policies")
+async def update_policies(data: dict, current_user: dict = Depends(require_admin)):
+    """Admin edits policies. Body: {policies: {privacy_policy: {title, content}, ...}}"""
+    policies = data.get("policies", data)
+    policies_clean = {}
+    for key, val in policies.items():
+        if isinstance(val, dict) and "title" in val and "content" in val:
+            policies_clean[key] = {"title": val["title"], "content": val["content"], "last_updated": datetime.now(timezone.utc).isoformat()}
+    await db.legal_policies.update_one({"_key": "policies"}, {"$set": {"_key": "policies", "policies": policies_clean, "updated_by": current_user["id"], "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return policies_clean
+
+
+@router.get("/policies")
+async def get_policies_admin(current_user: dict = Depends(get_current_user)):
+    """Get policies for admin editing"""
+    stored = await db.legal_policies.find_one({"_key": "policies"}, {"_id": 0})
+    if stored and stored.get("policies"):
+        return stored["policies"]
+    return _default_policies()
+
+
+def _default_policies():
     return {
         "privacy_policy": {
             "title": "Privacy Policy",
-            "content": "58:12 Global (\"we\", \"us\") is committed to protecting your personal data. We collect and process personal information in accordance with the EU General Data Protection Regulation (GDPR), the US Privacy Act, Uganda's Data Protection and Privacy Act 2019, Kenya's Data Protection Act 2019, Thailand's Personal Data Protection Act (PDPA), Haiti's applicable privacy provisions, and Mexico's Federal Law on Protection of Personal Data (LFPDPPP). We collect only data necessary for event registration, volunteer management, and ministry operations. You have the right to access, correct, delete, and port your data. Contact privacy@5812global.org for requests.",
+            "content": """58:12 Global, Inc. ("we," "us," "our") is a Christ-centered nonprofit organization (EIN pending) headquartered in Holmes County, Ohio, USA, with operations in Uganda, Kenya, Thailand, and Haiti. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use 58:12 Connect ("the Platform") and our services.
+
+INFORMATION WE COLLECT
+Personal Information: Name, email address, phone number, date of birth, gender, mailing address, national identification documents (ID number, passport), photographs, and emergency contact details.
+Children's Information: Name, date of birth, grade/class, medical information, allergies, guardian/parent associations. We comply with COPPA (Children's Online Privacy Protection Act) for users under 13 in the United States.
+Financial Information: Donation records, payment method details (processed through third-party payment processors — we do not store full credit card numbers), expense receipts, and transaction history.
+Check-in Data: Attendance records, timestamps, location data, device identifiers, and biometric scan data (fingerprint, facial recognition) where enabled with explicit consent.
+Technical Data: IP address, browser type, device information, cookies, and usage analytics.
+Communication Data: Chat messages, announcements, AI assistant interactions, and call metadata.
+
+LEGAL BASIS FOR PROCESSING
+We process personal data under the following legal bases, as applicable across our jurisdictions:
+- Consent (GDPR Art. 6(1)(a), PDPA Section 19, Uganda DPA Section 7)
+- Performance of a contract or service
+- Legitimate interests of the organization (ministry operations, safeguarding)
+- Legal obligations (financial record keeping, child protection reporting)
+
+YOUR RIGHTS
+Under applicable data protection laws (EU GDPR, Uganda Data Protection Act 2019, Kenya Data Protection Act 2019, Thailand PDPA, US state privacy laws), you have the right to:
+- Access your personal data
+- Correct inaccurate data
+- Request deletion ("right to be forgotten")
+- Data portability (receive your data in machine-readable format)
+- Object to processing
+- Withdraw consent at any time
+- Lodge a complaint with a supervisory authority
+
+To exercise these rights, use the "My Privacy" section in the Platform or contact us at privacy@5812global.org.
+
+DATA RETENTION
+- Active member data: Duration of relationship plus 3 years
+- Financial records: 7 years (US IRS requirements, applicable tax laws)
+- Check-in/attendance data: 2 years
+- Children's data: Until child reaches 18 or relationship ends, whichever is later
+- Communication data: 1 year for chat messages, 90 days for AI interactions
+
+DATA TRANSFERS
+As an international organization, we transfer data between our locations in the USA, Uganda, Kenya, Thailand, and Haiti. Transfers are protected through:
+- Standard Contractual Clauses (EU GDPR Chapter V)
+- Organizational security policies and encryption
+- Access controls limiting data to authorized personnel in each jurisdiction
+
+SECURITY MEASURES
+We implement industry-standard security measures including encryption in transit (TLS/SSL), role-based access control (RBAC), session management with secure storage, two-factor authentication (2FA), and regular access audits.
+
+COOKIES AND TRACKING
+We use essential cookies for authentication and session management. Location data is used only with consent to display relevant local events. We do not sell personal data to third parties. We do not use third-party advertising trackers.
+
+CHILDREN'S PRIVACY
+We take children's privacy seriously. Children's data is collected only with parental/guardian consent and is used solely for ministry program management, attendance tracking, and safeguarding purposes. Parents may review, modify, or request deletion of their children's data at any time.
+
+CONTACT
+58:12 Global, Inc.
+Holmes County, Ohio, USA
+Phone: 330-521-1948
+Email: privacy@5812global.org
+Website: www.5812-global.org
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
         "terms_of_service": {
             "title": "Terms of Service",
-            "content": "By using 58:12 Connect services, you agree to these terms. 58:12 Global is a Christ-centered nonprofit organization bringing hope and healing to the most vulnerable. Our services include event management, volunteer coordination, and community programs across the USA, Uganda, Kenya, Thailand, Haiti, and Mexico. Users must be at least 13 years old. Parents/guardians must consent for minors. We reserve the right to modify services and these terms with notice.",
+            "content": """These Terms of Service ("Terms") govern your use of 58:12 Connect ("the Platform"), operated by 58:12 Global, Inc. ("we," "us," "our"), a Christ-centered nonprofit organization.
+
+ACCEPTANCE OF TERMS
+By accessing or using the Platform, you agree to be bound by these Terms. If you do not agree, do not use the Platform. If you are using the Platform on behalf of an organization, you represent that you have authority to bind that organization.
+
+ELIGIBILITY
+You must be at least 13 years old to create an account. Users under 18 require parental or guardian consent. Parents/guardians are responsible for their children's use of the Platform.
+
+ACCOUNT REGISTRATION
+- New accounts start as "Member" status and require administrator approval before full access is granted
+- You are responsible for maintaining the confidentiality of your login credentials
+- Default passwords must be changed upon first login
+- You must provide accurate and complete information
+- You must notify us immediately of any unauthorized use of your account
+
+ACCEPTABLE USE
+You agree NOT to:
+- Use the Platform for any unlawful purpose
+- Attempt to gain unauthorized access to restricted areas or other users' accounts
+- Upload malicious software, viruses, or harmful content
+- Harass, threaten, or discriminate against any person
+- Share login credentials with unauthorized persons
+- Use the Platform to collect personal information about others without their consent
+- Circumvent access controls or security measures
+
+OUR SERVICES
+58:12 Connect provides tools for nonprofit ministry management including:
+- Member and family management
+- Event planning and registration
+- Check-in and attendance tracking
+- Financial tracking (donations, expenses)
+- Internal communications and calling
+- Volunteer coordination
+- Resource management
+- Access control for physical locations
+
+SERVICE AVAILABILITY
+We strive for continuous availability but do not guarantee uninterrupted service. We may perform maintenance, updates, or modifications at any time. We are not liable for any service interruptions.
+
+INTELLECTUAL PROPERTY
+The Platform, its design, features, and content are owned by 58:12 Global, Inc. User-generated content (messages, uploads, etc.) remains the property of the user, but you grant us a license to store, display, and process it as necessary to provide the service.
+
+PAYMENTS AND REFUNDS
+- Free events require no payment
+- Paid events: Full refund if cancelled 7+ days before event; 50% refund if cancelled 3-7 days before; no refund within 3 days
+- Cash bookings must be fulfilled within the agreed deadline or are automatically cancelled
+- All payment processing is handled by third-party providers; we do not store full payment card details
+
+LIMITATION OF LIABILITY
+To the maximum extent permitted by law, 58:12 Global shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Platform. Our total liability shall not exceed the amount you paid us in the 12 months preceding the claim.
+
+TERMINATION
+We may suspend or terminate your account at any time for violation of these Terms or for any other reason at our discretion. Upon termination, your right to use the Platform ceases immediately. You may request export of your data before termination.
+
+GOVERNING LAW
+These Terms are governed by the laws of the State of Ohio, United States, without regard to conflict of law principles. For users in other jurisdictions, applicable local consumer protection laws may also apply.
+
+CHANGES TO TERMS
+We reserve the right to modify these Terms at any time. Changes will be posted on the Platform with the updated date. Continued use after changes constitutes acceptance.
+
+CONTACT
+58:12 Global, Inc.
+Holmes County, Ohio, USA
+Phone: 330-521-1948
+Email: legal@5812global.org
+Website: www.5812-global.org
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
         "refund_policy": {
             "title": "Refund & Cancellation Policy",
-            "content": "Free events: No payment required, cancellations accepted anytime. Paid events: Full refund if cancelled 7+ days before event. 50% refund if cancelled 3-7 days before. No refund within 3 days of event. Cash payments must be received within the agreed deadline or booking is automatically cancelled. Mobile money and card payments are processed immediately.",
+            "content": """This policy applies to all bookings, event registrations, and purchases made through 58:12 Connect.
+
+EVENT REGISTRATIONS
+- Free events: No payment required. Cancellations accepted at any time
+- Paid events: Full refund if cancelled 7 or more days before the event date. 50% refund if cancelled 3-7 days before the event. No refund for cancellations within 3 days of the event
+- Event cancellation by organizer: Full refund will be issued regardless of timing
+
+PAYMENT METHODS AND DEADLINES
+- Credit/Debit Card: Payment processed immediately at time of booking
+- MTN Mobile Money: Payment processed immediately
+- Airtel Money: Payment processed immediately
+- Venmo: Payment must be sent within 7 days of booking (2 days if event is within 7 days)
+- Cash: Payment must be received in person within 7 days of booking (2 days if event is within 7 days). Cash bookings are not accepted within 3 days of the event
+
+UNPAID BOOKINGS
+Bookings with pending payment status will be automatically cancelled if payment is not received by the deadline. A notification will be sent before cancellation.
+
+SPACE/VENUE BOOKINGS
+Venue booking cancellations follow the same refund schedule as events. Damage deposits (if applicable) are returned within 14 days after the event, subject to inspection.
+
+PRODUCT PURCHASES
+- Physical goods: Returns accepted within 30 days of purchase in original condition. Buyer pays return shipping
+- Digital goods: No refunds after delivery
+
+DISPUTE RESOLUTION
+For refund disputes, contact us at finance@5812global.org. We aim to resolve all disputes within 14 business days.
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
         "employee_onboarding": {
             "title": "Employee & Volunteer Onboarding Policy",
-            "content": "All new staff and volunteers undergo a background check process compliant with US, EU, and local laws. New accounts start as Members and require admin approval before system access is granted. Volunteers must complete orientation training. Staff must sign confidentiality agreements, undergo safeguarding training, and comply with our Code of Conduct. All personnel working with children must pass enhanced background checks per local jurisdiction requirements.",
+            "content": """This policy applies to all staff, volunteers, interns, and contractors of 58:12 Global across all locations.
+
+ACCOUNT CREATION AND APPROVAL
+- All new accounts start as "Member" status with pending approval
+- Administrative approval is required before system access is granted
+- New staff accounts are assigned a default password which must be changed at first login
+- Two-factor authentication (2FA) is recommended for all staff accounts
+
+BACKGROUND CHECKS
+All personnel undergo background checks compliant with applicable laws:
+- USA: FBI fingerprint check, state criminal history, sex offender registry
+- Uganda: Police clearance certificate, reference checks per Employment Act 2006
+- Kenya: Certificate of Good Conduct per Kenya Police Service, DCI clearance
+- Thailand: Criminal record check per local law enforcement
+- Haiti: Background verification through local authorities
+
+CHILD SAFEGUARDING
+All personnel working directly with children or vulnerable persons must:
+- Complete safeguarding training within 30 days of onboarding
+- Pass enhanced background checks (above standard requirements)
+- Sign the 58:12 Global Child Protection Policy acknowledgment
+- Report any safeguarding concerns immediately to designated safeguarding officers
+- Comply with mandatory reporting laws in their jurisdiction
+
+CONFIDENTIALITY
+All staff and volunteers must sign a confidentiality agreement covering:
+- Member and beneficiary personal information
+- Financial data and donation records
+- Internal communications
+- Medical and sensitive personal data
+- Organizational strategic information
+
+CODE OF CONDUCT
+Personnel must comply with the 58:12 Global Code of Conduct which includes:
+- Professional behavior in all interactions
+- Respect for cultural diversity across all locations
+- Zero tolerance for abuse, harassment, or discrimination
+- Responsible use of organizational resources and technology
+- Compliance with local laws in all jurisdictions of operation
+
+TRAINING REQUIREMENTS
+- Safeguarding training (mandatory, within 30 days)
+- Data protection and privacy (within 60 days)
+- Platform usage training (within 14 days)
+- Location-specific orientation
+- Annual refresher training
+
+TERMINATION OF ACCESS
+Upon departure, all system access is immediately revoked. Former personnel may request export of their personal data within 30 days of departure.
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
         "data_retention": {
             "title": "Data Retention Policy",
-            "content": "Personal data is retained for the duration of your relationship with 58:12 Global plus 3 years for legal compliance. Financial records are retained for 7 years per US IRS requirements. Check-in data is retained for 2 years. You may request data deletion at any time, subject to legal retention requirements. Anonymization is available as an alternative to deletion.",
+            "content": """This policy defines how long 58:12 Global retains different categories of data across all jurisdictions.
+
+RETENTION SCHEDULES
+- Active member/user profiles: Duration of relationship plus 3 years
+- Inactive member profiles: 3 years after last activity, then anonymized
+- Financial records (donations, expenses, transfers): 7 years (US IRS, Uganda URA, Kenya KRA requirements)
+- Check-in/attendance data: 2 years
+- Chat messages and communications: 1 year
+- AI assistant interaction logs: 90 days
+- Call recordings and metadata: 6 months
+- Event registrations and bookings: 3 years
+- Children's records: Until child reaches 18 or relationship ends, plus 3 years
+- Access control logs (restricted areas): 1 year
+- Audit trail/activity logs: 5 years
+- Documents and ID scans: Duration of relationship plus 1 year, or until document expiry
+
+DELETION AND ANONYMIZATION
+- Users may request data deletion at any time via the "My Privacy" section
+- Deletion requests are processed within 30 days
+- Some data may be retained for legal compliance despite deletion request (financial records, safeguarding records)
+- Anonymization is available as an alternative to deletion — personal identifiers are replaced with anonymous values while aggregate data is preserved
+
+AUTOMATED RETENTION
+The system automatically:
+- Archives inactive accounts after 2 years of inactivity
+- Flags expired documents for renewal
+- Removes temporary guest check-in data after the retention period
+- Purges AI interaction logs after 90 days
+
+CROSS-BORDER CONSIDERATIONS
+Data retention may be extended where required by local law (e.g., Uganda's mandatory data retention requirements, Kenya's financial record keeping requirements). The longest applicable retention period across jurisdictions applies.
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
         "cookie_policy": {
             "title": "Cookie & Tracking Policy",
-            "content": "We use essential cookies for authentication and session management. We use location data only with your consent to show relevant local events. You may disable cookies in your browser settings. We do not sell personal data to third parties.",
+            "content": """This policy explains how 58:12 Connect uses cookies and similar technologies.
+
+ESSENTIAL COOKIES
+We use strictly necessary cookies for:
+- User authentication and session management (session token)
+- Security (CSRF protection)
+- User preference storage (dark mode, language, campus selection)
+These cookies cannot be disabled as they are required for the Platform to function.
+
+FUNCTIONAL COOKIES
+With your consent, we use:
+- Location detection (to show relevant local events)
+- Calendar preferences
+- Kiosk mode settings
+These can be managed in your browser settings.
+
+WE DO NOT USE
+- Third-party advertising cookies
+- Social media tracking pixels
+- Cross-site tracking technologies
+- We do not sell, share, or monetize any user data
+
+LOCATION DATA
+We may request access to your device location solely to:
+- Auto-detect your country for event filtering on the public marketplace
+- Determine the nearest campus for check-in
+Location data is processed locally and not stored on our servers unless you explicitly check in.
+
+MANAGING COOKIES
+You can control cookies through your browser settings. Blocking essential cookies may prevent the Platform from functioning correctly.
+
+COMPLIANCE
+This cookie policy complies with:
+- EU ePrivacy Directive (Cookie Law)
+- GDPR cookie consent requirements
+- Thailand PDPA cookie provisions
+- California Consumer Privacy Act (CCPA) disclosure requirements
+
+Last Updated: {date}""".replace("{date}", datetime.now(timezone.utc).strftime("%B %d, %Y")),
         },
     }
 
