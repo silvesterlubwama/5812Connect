@@ -135,6 +135,15 @@ async def update_outreach_program(prog_id: str, data: dict, current_user: dict =
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.outreach_programs.update_one({"id": prog_id}, {"$set": update})
     prog = await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
+    # Sync event changes when outreach name/location/time changes
+    event_update = {}
+    if "name" in data: event_update["title"] = data["name"]
+    if "location" in data: event_update["location"] = data["location"]
+    if "location_id" in data: event_update["location_id"] = data["location_id"]
+    if "recurrence_time" in data: event_update["time"] = data["recurrence_time"]
+    if event_update:
+        event_update["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await db.events.update_many({"outreach_program_id": prog_id}, {"$set": event_update})
     # Auto-regenerate events if recurrence changed
     if prog and prog.get("is_recurring") and any(k in data for k in ("recurrence_pattern", "recurrence_day", "recurrence_time", "start_date")):
         try:

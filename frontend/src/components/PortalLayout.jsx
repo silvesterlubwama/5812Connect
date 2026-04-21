@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart } from 'lucide-react';
+import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 
@@ -52,6 +52,11 @@ export default function PortalLayout() {
             <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs" onClick={() => navigate('/dashboard')}>
               <ArrowLeft size={14} /> Admin Panel
             </Button>
+          )}
+          {['admin','system_admin','Executive Director','Adviser','Director','Manager','Coordinator','Staff','HR','Volunteer'].includes(user?.role) && (
+            <NavLink to="/dashboard" className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-primary hover:bg-primary/10 transition-colors w-full">
+              <ExternalLink size={14} /> Staff Portal
+            </NavLink>
           )}
           <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs text-destructive" onClick={() => { logout(); navigate('/login'); }}>
             <LogOut size={14} /> Sign Out

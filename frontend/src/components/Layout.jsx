@@ -155,18 +155,20 @@ export default function Layout() {
 
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
-  const isGlobalAdmin = ED_PLUS.includes(user?.role) || user?.role === 'Adviser';
+  const isGlobalAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
+  // Non-admin users cannot switch campuses
+  const canSwitchCampus = isGlobalAdmin;
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { addListener } = useWebSocket();
   const { t, lang, changeLang, languages } = useI18n();
 
-  // Fetch campuses for switcher
+  // Fetch campuses for switcher (only for those who can switch)
   useEffect(() => {
-    if (isGlobalAdmin) {
+    if (canSwitchCampus) {
       locationsApi.list().then(res => setCampuses(res.data || [])).catch(() => {});
     }
-  }, [isGlobalAdmin]);
+  }, [canSwitchCampus]);
 
   // Auto-expand ONLY the section containing the active route, collapse all others
   useEffect(() => {
@@ -279,8 +281,8 @@ export default function Layout() {
           <button className="lg:hidden ml-auto text-muted-foreground" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
 
-        {/* Campus Switcher for Admins/EDs */}
-        {isGlobalAdmin && campuses.length > 0 && (
+        {/* Campus Switcher for Admin/ED/Adviser */}
+        {canSwitchCampus && campuses.length > 0 && (
           <div className="px-3 py-2 border-b border-border">
             <Select value={activeCampus || '__all__'} onValueChange={handleCampusChange}>
               <SelectTrigger className="h-8 text-xs" data-testid="campus-switcher">
@@ -302,8 +304,9 @@ export default function Layout() {
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
           {NAV_SECTIONS.map((section, si) => {
             if (!canSeeSection(section)) return null;
-            const isExpanded = expandedSections[si] !== false;
+            const isExpanded = expandedSections[si] === true;
             const hasActiveChild = section.items.some(item => location.pathname.startsWith(item.to));
+            const shouldShow = isExpanded || hasActiveChild;
             const visibleItems = section.items.filter(canAccess);
 
             if (!section.label) {
@@ -326,12 +329,12 @@ export default function Layout() {
                     className={`flex items-center justify-between w-full text-xs font-semibold uppercase tracking-wider px-3 py-1.5 rounded-md transition-colors ${hasActiveChild ? 'text-primary' : 'text-muted-foreground/60 hover:text-muted-foreground'}`}
                     data-testid={`nav-section-${section.label.toLowerCase().replace(/\s/g, '-')}`}>
                     <span>{section.label}</span>
-                    <ChevronRight size={12} className={`transition-transform duration-200 ${isExpanded || hasActiveChild ? 'rotate-90' : ''}`} />
+                    <ChevronRight size={12} className={`transition-transform duration-200 ${shouldShow ? 'rotate-90' : ''}`} />
                   </button>
                 ) : (
                   <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{section.label}</p>
                 )}
-                {(isExpanded || hasActiveChild || !section.collapsible) && (
+                {(shouldShow || !section.collapsible) && (
                   <div className="space-y-0.5 mt-0.5">
                     {visibleItems.map(({ to, icon: Icon, label }) => (
                       <NavLink key={to} to={to} onClick={() => setSidebarOpen(false)} data-testid={`nav-${to.replace('/', '')}`}

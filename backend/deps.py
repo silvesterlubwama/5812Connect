@@ -107,35 +107,29 @@ def has_campus_switcher(user: dict) -> bool:
 
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
-    System admins/EDs get an empty dict (no restriction) unless they have active_campus_id set.
-    Advisers with campus switcher also check active_campus_id.
-    Supports multi-location users via location_ids array.
-    Automatically includes sub-locations of any campus the user has access to."""
-    # Global admins or Advisers with switcher can override
+    Also matches documents where location_ids array overlaps with user's locations.
+    System admins/EDs get an empty dict unless they have active_campus_id set."""
     if is_system_admin(user) or has_campus_switcher(user):
         active = user.get("active_campus_id")
         if active:
             sub_locs = await db.locations.find({"parent_id": active}, {"_id": 0, "id": 1}).to_list(200)
             all_locs = [active] + [s["id"] for s in sub_locs]
-            return {field: {"$in": all_locs}} if len(all_locs) > 1 else {field: active}
+            if len(all_locs) == 1:
+                return {"$or": [{field: active}, {"location_ids": active}]}
+            return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
         if is_system_admin(user):
             return {}
-        # Adviser without active campus: fall through to normal location_ids filtering
     locs = list(user.get("location_ids") or [])
     loc = user.get("location_id")
     if loc and loc not in locs:
         locs.append(loc)
     if not locs:
         return {}
-    # Expand: include child sub-locations of any campus the user is assigned to
-    sub_locs = await db.locations.find(
-        {"parent_id": {"$in": locs}},
-        {"_id": 0, "id": 1}
-    ).to_list(200)
+    sub_locs = await db.locations.find({"parent_id": {"$in": locs}}, {"_id": 0, "id": 1}).to_list(200)
     all_locs = list(set(locs + [s["id"] for s in sub_locs]))
     if len(all_locs) == 1:
-        return {field: all_locs[0]}
-    return {field: {"$in": all_locs}}
+        return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
+    return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
 
 
 async def generate_title(role: str, location_ids: list, department: str = None) -> str:

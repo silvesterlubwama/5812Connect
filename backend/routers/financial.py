@@ -1,7 +1,7 @@
 """Financial routes: donations, expenses, products, sales, cashflow, balance, approval workflow"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, require_manager, require_director, _audit, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -127,6 +127,36 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
     await db.expenses.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "expense", doc["id"])
     return doc
+
+
+@router.delete("/financial/donations/{donation_id}")
+async def delete_donation(donation_id: str, current_user: dict = Depends(require_admin)):
+    """Admin delete a donation entry"""
+    await db.donations.delete_one({"id": donation_id})
+    await _audit(current_user["id"], "delete", "donation", donation_id)
+    return {"message": "Donation deleted"}
+
+
+@router.delete("/financial/expenses/{expense_id}")
+async def delete_expense(expense_id: str, current_user: dict = Depends(require_admin)):
+    """Admin delete an expense entry"""
+    await db.expenses.delete_one({"id": expense_id})
+    await _audit(current_user["id"], "delete", "expense", expense_id)
+    return {"message": "Expense deleted"}
+
+
+@router.put("/financial/donations/{donation_id}")
+async def update_donation(donation_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Admin edit a donation entry"""
+    allowed = {"donor_name", "amount", "currency", "type", "date", "notes", "location_id"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    update["updated_by"] = current_user["id"]
+    await db.donations.update_one({"id": donation_id}, {"$set": update})
+    await _audit(current_user["id"], "update", "donation", donation_id)
+    return await db.donations.find_one({"id": donation_id}, {"_id": 0})
+
+
 
 
 # ========== EXPENSE APPROVAL WORKFLOW ==========
