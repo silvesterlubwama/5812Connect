@@ -91,12 +91,16 @@ class ChildCreate(BaseModel):
     gender: Optional[str] = None
     family_id: Optional[str] = None
     class_group: Optional[str] = None
+    grade: Optional[str] = None
+    school: Optional[str] = None
     medical_notes: Optional[str] = None
     allergies: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
     parent_ids: Optional[List[str]] = []
     location_id: Optional[str] = None
+    is_resident: Optional[bool] = False
+    resident_location_id: Optional[str] = None
 
 class GuestCreate(BaseModel):
     name: str

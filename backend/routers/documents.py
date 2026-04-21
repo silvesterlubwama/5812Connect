@@ -78,10 +78,15 @@ async def upload_member_document(
     request_id: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Upload a document for a member or user. Accepts both member_id and user_id.
-    Staff/admin can upload for any member. Members can only upload their own documents."""
+    """Upload a document for a member, user, or child. Accepts member_id, user_id, or child_id.
+    Staff/admin can upload for any member/child. Members can only upload their own documents."""
     # Try members collection first
     member = await db.members.find_one({"id": member_id}, {"_id": 0, "role": 1, "group": 1, "name": 1, "email": 1})
+    if not member:
+        # Check children collection
+        child = await db.children.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1})
+        if child:
+            member = child
     if not member:
         # Fallback: check if this is a user_id and find their linked member record
         user = await db.users.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "email": 1})

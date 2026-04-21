@@ -566,3 +566,117 @@ async def create_public_order(data: dict):
     await db.public_orders.insert_one(order)
     order.pop("_id", None)
     return order
+
+
+
+# ========== CHILD SPONSORSHIP ==========
+
+@router.get("/financial/sponsors")
+async def list_sponsors(location_id: Optional[str] = None, current_user: dict = Depends(require_staff)):
+    """List child sponsors, filtered by campus"""
+    campus = await _financial_campus_filter(current_user)
+    query = {**campus}
+    if location_id:
+        query["location_id"] = location_id
+    sponsors = await db.sponsors.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # For each sponsor, only show sponsor first name in child's context
+    for s in sponsors:
+        s["sponsor_display_name"] = s.get("name", "").split(" ")[0] if s.get("name") else "Anonymous"
+    return sponsors
+
+
+@router.post("/financial/sponsors")
+async def create_sponsor(data: dict, current_user: dict = Depends(require_staff)):
+    """Create a child sponsor. Auto-creates child profile if child doesn't exist."""
+    sponsor_id = f"spon_{str(uuid.uuid4())[:8]}"
+    child_id = data.get("child_id")
+    child_name = data.get("child_name", "")
+    location_id = data.get("location_id", "")
+
+    # If no child_id but child_name provided, find or create child
+    if not child_id and child_name:
+        existing_child = await db.children.find_one({"name": {"$regex": f"^{child_name}$", "$options": "i"}})
+        if existing_child:
+            child_id = existing_child["id"]
+        else:
+            child_id = f"chd_{str(uuid.uuid4())[:8]}"
+            await db.children.insert_one({
+                "id": child_id, "name": child_name, "location_id": location_id,
+                "is_sponsored": True, "sponsor_id": sponsor_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    doc = {
+        "id": sponsor_id,
+        "name": data.get("name", ""),
+        "first_name": data.get("name", "").split(" ")[0] if data.get("name") else "",
+        "email": data.get("email", ""),
+        "phone": data.get("phone", ""),
+        "address": data.get("address", ""),
+        "child_id": child_id,
+        "child_name": child_name or "",
+        "amount": float(data.get("amount", 0)),
+        "currency": data.get("currency", "USD"),
+        "frequency": data.get("frequency", "monthly"),  # monthly, quarterly, yearly, one_time
+        "location_id": location_id,
+        "status": "active",
+        "notes": data.get("notes", ""),
+        "visibility": data.get("visibility", "restricted"),  # restricted = need-to-know
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.sponsors.insert_one(doc)
+    doc.pop("_id", None)
+
+    # Tag child as sponsored (only first name visible to authorized staff)
+    if child_id:
+        await db.children.update_one({"id": child_id}, {"$set": {
+            "is_sponsored": True, "sponsor_id": sponsor_id,
+            "sponsor_first_name": doc["first_name"],
+        }})
+
+    return doc
+
+
+@router.put("/financial/sponsors/{sponsor_id}")
+async def update_sponsor(sponsor_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    allowed = {"name", "email", "phone", "address", "amount", "currency", "frequency", "status", "notes", "child_id", "child_name", "visibility"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if "name" in update:
+        update["first_name"] = update["name"].split(" ")[0] if update["name"] else ""
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.sponsors.update_one({"id": sponsor_id}, {"$set": update})
+    # Update child's sponsor first name if name changed
+    sponsor = await db.sponsors.find_one({"id": sponsor_id}, {"_id": 0})
+    if sponsor and sponsor.get("child_id"):
+        await db.children.update_one({"id": sponsor["child_id"]}, {"$set": {"sponsor_first_name": update.get("first_name", sponsor.get("first_name", ""))}})
+    return sponsor
+
+
+@router.delete("/financial/sponsors/{sponsor_id}")
+async def delete_sponsor(sponsor_id: str, current_user: dict = Depends(require_admin)):
+    sponsor = await db.sponsors.find_one({"id": sponsor_id}, {"_id": 0})
+    if sponsor and sponsor.get("child_id"):
+        await db.children.update_one({"id": sponsor["child_id"]}, {"$unset": {"is_sponsored": "", "sponsor_id": "", "sponsor_first_name": ""}})
+    await db.sponsors.delete_one({"id": sponsor_id})
+    return {"message": "Sponsor removed"}
+
+
+@router.get("/financial/sponsors/{sponsor_id}")
+async def get_sponsor(sponsor_id: str, current_user: dict = Depends(require_staff)):
+    """Get full sponsor details — need-to-know access based on user's location"""
+    sponsor = await db.sponsors.find_one({"id": sponsor_id}, {"_id": 0})
+    if not sponsor:
+        raise HTTPException(status_code=404, detail="Sponsor not found")
+    # Check access: director of the child's location, campus director, or ED/admin
+    user_role = (current_user.get("role") or "").lower()
+    if user_role not in {"admin", "system_admin", "executive director"}:
+        user_locs = current_user.get("location_ids") or []
+        user_loc = current_user.get("location_id", "")
+        if user_loc and user_loc not in user_locs:
+            user_locs.append(user_loc)
+        sponsor_loc = sponsor.get("location_id", "")
+        if sponsor_loc not in user_locs:
+            # Hide sensitive info
+            sponsor = {k: v for k, v in sponsor.items() if k in {"id", "child_id", "child_name", "first_name", "status", "frequency"}}
+    return sponsor

@@ -139,6 +139,12 @@ export const financialApi = {
   balanceSheet: (params) => api.get('/financial/balance-sheet', { params }),
   setReceiptUrl: (expenseId, data) => api.put(`/financial/expenses/${expenseId}/receipt-url`, data),
   importExport: (data) => api.post('/financial/import', data),
+  // Sponsorship
+  listSponsors: (params) => api.get('/financial/sponsors', { params }),
+  createSponsor: (data) => api.post('/financial/sponsors', data),
+  getSponsor: (id) => api.get(`/financial/sponsors/${id}`),
+  updateSponsor: (id, data) => api.put(`/financial/sponsors/${id}`, data),
+  deleteSponsor: (id) => api.delete(`/financial/sponsors/${id}`),
 };
 
 // ---- PRODUCTS & SALES ----
@@ -175,6 +181,10 @@ export const childrenApi = {
   delete: (id) => api.delete(`/children/${id}`),
   bulkUpdate: (ids, updates) => api.put('/children/bulk-update', { ids, updates }),
   bulkDelete: (ids) => api.post('/children/bulk-delete', { ids }),
+  updateEducation: (id, data) => api.put(`/children/${id}/education`, data),
+  addReportCard: (id, data) => api.post(`/children/${id}/report-card`, data),
+  setResidency: (id, data) => api.put(`/children/${id}/residency`, data),
+  getFullProfile: (id) => api.get(`/children/${id}/full-profile`),
 };
 export const guestsApi = {
   list: (params) => api.get('/guests', { params }),

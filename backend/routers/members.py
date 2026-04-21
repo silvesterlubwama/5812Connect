@@ -1,7 +1,7 @@
 """Members, Families, Children, Guests, Badges, Approvals routes"""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from deps import (
-    db, get_current_user, _audit, require_coordinator, require_manager,
+    db, get_current_user, _audit, require_staff, require_manager, require_coordinator, require_admin,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter
 )
 from models import MemberCreate, MemberUpdate, FamilyCreate, ChildCreate, GuestCreate
@@ -524,6 +524,94 @@ async def delete_child(child_id: str, current_user: dict = Depends(get_current_u
     await db.children.delete_one({"id": child_id})
     await _audit(current_user["id"], "delete", "child", child_id, {"name": child.get("name")})
     return {"message": "Child deleted"}
+
+
+
+# ========== CHILD EDUCATION & PROFILE INFO ==========
+
+@router.put("/children/{child_id}/education")
+async def update_child_education(child_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Update child's school, grade, report cards — staff or parent can update"""
+    allowed = {"school", "grade", "class_group", "report_cards", "achievements", "special_needs", "notes"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.children.update_one({"id": child_id}, {"$set": update})
+    return await db.children.find_one({"id": child_id}, {"_id": 0})
+
+
+@router.post("/children/{child_id}/report-card")
+async def add_report_card(child_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Add a report card entry to a child's profile"""
+    entry = {
+        "id": f"rc_{str(uuid.uuid4())[:8]}",
+        "term": data.get("term", ""),
+        "year": data.get("year", ""),
+        "school": data.get("school", ""),
+        "grade": data.get("grade", ""),
+        "gpa": data.get("gpa", ""),
+        "notes": data.get("notes", ""),
+        "document_id": data.get("document_id"),
+        "added_by": current_user["id"],
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.children.update_one({"id": child_id}, {"$push": {"report_cards": entry}})
+    return entry
+
+
+@router.put("/children/{child_id}/residency")
+async def set_child_residency(child_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Set a child as a resident of a restricted location"""
+    resident_loc = data.get("resident_location_id", "")
+    is_resident = data.get("is_resident", True)
+    update = {"is_resident": is_resident, "resident_location_id": resident_loc if is_resident else None, "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.children.update_one({"id": child_id}, {"$set": update})
+    # Also add to location's resident_ids
+    if is_resident and resident_loc:
+        await db.locations.update_one({"id": resident_loc}, {"$addToSet": {"resident_ids": child_id}})
+    elif not is_resident and resident_loc:
+        await db.locations.update_one({"id": resident_loc}, {"$pull": {"resident_ids": child_id}})
+    return {"message": "Residency updated"}
+
+
+@router.get("/children/{child_id}/full-profile")
+async def get_child_full_profile(child_id: str, current_user: dict = Depends(get_current_user)):
+    """Get full child profile — restricted info hidden based on access level"""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+
+    user_role = (current_user.get("role") or "").lower()
+    is_authorized = user_role in {"admin", "system_admin", "executive director"}
+
+    # Check if user is director/manager/staff of child's location
+    if not is_authorized:
+        user_locs = current_user.get("location_ids") or []
+        user_loc = current_user.get("location_id", "")
+        if user_loc and user_loc not in user_locs: user_locs.append(user_loc)
+        child_loc = child.get("location_id") or child.get("resident_location_id") or ""
+        if child_loc:
+            # Check if child's location is user's location or sub-location
+            loc = await db.locations.find_one({"id": child_loc}, {"_id": 0, "parent_id": 1})
+            if child_loc in user_locs or (loc and loc.get("parent_id") in user_locs):
+                if user_role in {"director", "manager", "coordinator", "staff"}:
+                    is_authorized = True
+        # Check if user is a parent of this child
+        if current_user["id"] in (child.get("parent_ids") or []):
+            is_authorized = True
+
+    # Get documents
+    docs = await db.member_documents.find({"member_id": child_id}, {"_id": 0}).to_list(50)
+
+    result = {**child, "documents": docs}
+
+    # Hide restricted info if not authorized
+    if not is_authorized and child.get("is_resident"):
+        result.pop("resident_location_id", None)
+        result.pop("sponsor_first_name", None)
+        result.pop("sponsor_id", None)
+
+    return result
+
 
 
 # ========== GUESTS ==========
