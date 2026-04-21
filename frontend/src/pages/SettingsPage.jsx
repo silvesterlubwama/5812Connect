@@ -224,12 +224,19 @@ export default function SettingsPage() {
     try {
       const payload = { ...newVenue, hourly_rate: newVenue.hourly_rate ? parseFloat(newVenue.hourly_rate) : undefined, capacity: parseInt(newVenue.capacity) };
       if (!payload.hourly_rate) delete payload.hourly_rate;
-      const res = await venuesApi.create(payload);
-      setVenues(prev => [...prev, res.data]);
+      if (editingVenue) {
+        await venuesApi.update(editingVenue.id, payload);
+        setVenues(prev => prev.map(v => v.id === editingVenue.id ? { ...v, ...payload } : v));
+        toast.success('Venue updated!');
+      } else {
+        const res = await venuesApi.create(payload);
+        setVenues(prev => [...prev, res.data]);
+        toast.success('Venue added!');
+      }
       setShowAddVenue(false);
-      setNewVenue({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true });
-      toast.success('Venue added!');
-    } catch { toast.error('Failed to add venue'); }
+      setEditingVenue(null);
+      setNewVenue({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true, is_offsite: false, is_bookable: true, country: '', address: '' });
+    } catch { toast.error('Failed to save venue'); }
   };
 
   const toggleVenueAvailability = async (venue) => {
@@ -247,6 +254,12 @@ export default function SettingsPage() {
       setVenues(prev => prev.filter(v => v.id !== venue.id));
       toast.success('Venue deleted');
     } catch { toast.error('Failed to delete venue'); }
+  };
+
+  const editVenue = (venue) => {
+    setEditingVenue(venue);
+    setNewVenue({ name: venue.name || '', capacity: venue.capacity || 50, type: venue.type || 'hall', description: venue.description || '', hourly_rate: venue.hourly_rate || '', available: venue.available !== false, is_offsite: venue.is_offsite || false, is_bookable: venue.is_bookable !== false, country: venue.country || '', address: venue.address || '' });
+    setShowAddVenue(true);
   };
 
   const handleChangePassword = async (e) => {
@@ -375,6 +388,7 @@ export default function SettingsPage() {
                         <Button size="sm" variant="outline" className="flex-1" onClick={() => toggleVenueAvailability(venue)}>
                           {venue.available ? 'Mark Booked' : 'Mark Available'}
                         </Button>
+                        <Button size="sm" variant="ghost" onClick={() => editVenue(venue)} data-testid={`edit-venue-${venue.id}`}><Edit2 size={13} /></Button>
                         <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteVenue(venue)}>
                           <Trash2 size={13} />
                         </Button>
@@ -388,7 +402,7 @@ export default function SettingsPage() {
 
           <Dialog open={showAddVenue} onOpenChange={setShowAddVenue}>
             <DialogContent className="max-w-md">
-              <DialogHeader><DialogTitle>Add New Venue</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{editingVenue ? "Edit Venue" : "Add New Venue"}</DialogTitle></DialogHeader>
               <form onSubmit={handleAddVenue} className="space-y-4 mt-2">
                 <div className="space-y-2"><Label>Name *</Label><Input placeholder="Venue name" value={newVenue.name} onChange={e => setNewVenue({...newVenue, name: e.target.value})} required /></div>
                 <div className="grid grid-cols-2 gap-4">
@@ -422,7 +436,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex gap-3 pt-2">
                   <Button type="button" variant="outline" className="flex-1" onClick={() => setShowAddVenue(false)}>Cancel</Button>
-                  <Button type="submit" className="flex-1">Add Venue</Button>
+                  <Button type="submit" className="flex-1">{editingVenue ? "Save Changes" : "Add Venue"}</Button>
                 </div>
               </form>
             </DialogContent>

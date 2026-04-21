@@ -598,6 +598,21 @@ export const inventoryApi = {
   alerts: () => api.get('/inventory/alerts'),
 };
 
+// ---- ADMIN CONFIG ----
+export const configApi = {
+  getRoles: () => api.get('/config/roles'),
+  updateRoles: (roles) => api.put('/config/roles', { roles }),
+  getDocTypes: () => api.get('/config/document-types'),
+  updateDocTypes: (types) => api.put('/config/document-types', { types }),
+  getRestrictedSpaces: (campusId) => api.get('/restricted-spaces', { params: { campus_id: campusId } }),
+  addStaffToRestricted: (spaceId, staffIds) => api.post(`/restricted-spaces/${spaceId}/staff`, { staff_ids: staffIds }),
+  removeStaffFromRestricted: (spaceId, staffId) => api.delete(`/restricted-spaces/${spaceId}/staff/${staffId}`),
+  addResidents: (spaceId, residentIds) => api.post(`/restricted-spaces/${spaceId}/residents`, { resident_ids: residentIds }),
+  getResidents: (spaceId) => api.get(`/restricted-spaces/${spaceId}/residents`),
+  getVolunteerAttendees: (eventId) => api.get(`/volunteer/event-attendees/${eventId}`),
+};
+
+
 // ---- FINANCIAL APIS ----
 export const financialApisApi = {
   list: () => api.get('/financial-apis'),

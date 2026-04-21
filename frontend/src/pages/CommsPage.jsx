@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall } from 'lucide-react';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -22,6 +22,7 @@ const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', 
 
 const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon: 'bot' };
 const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
+const ORG_ROLES = ['Adviser', 'Executive Director', 'Director', 'Manager', 'Leader', 'Coordinator', 'Staff', 'Volunteer'];
 
 const PRESENCE_DOTS = {
   online: 'bg-green-500', idle: 'bg-yellow-500', pbx_only: 'bg-blue-500',
@@ -70,6 +71,7 @@ export default function CommsPage() {
 
   // Conference
   const [showConference, setShowConference] = useState(false);
+  const [showOrgChart, setShowOrgChart] = useState(false);
   const [confForm, setConfForm] = useState({ title: '', description: '', scheduled_at: '', duration_minutes: 60, user_ids: [], external_emails: '', is_video_enabled: true, password: '', create_calendar_event: true, send_email_invites: true });
 
   const messagesEndRef = useRef(null);
@@ -538,6 +540,36 @@ export default function CommsPage() {
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Pinned</p>
             <SidebarItem room={AI_ROOM} selected={selectedRoom?.id === '__ai__'} icon={<Bot size={14} className="text-primary" />} subtitle="Powered by Gemini" onClick={() => selectRoom(AI_ROOM)} />
             <SidebarItem room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'} icon={<Megaphone size={14} className="text-amber-600" />} subtitle={`${announcements.length} announcements`} badge={announcements.length > 0 ? announcements.length : null} onClick={() => selectRoom(ANNOUNCE_ROOM)} />
+          </div>
+
+          {/* Org Chart - Staff by Role */}
+          <div className="border-b border-border">
+            <button onClick={() => setShowOrgChart(!showOrgChart)} className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1 flex items-center gap-1 w-full hover:text-foreground">
+              <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization
+            </button>
+            {showOrgChart && (
+              <div className="px-2 pb-2 space-y-0.5 max-h-48 overflow-y-auto">
+                {ORG_ROLES.map(role => {
+                  const roleStaff = allStaff.filter(s => s.role === role);
+                  if (roleStaff.length === 0) return null;
+                  return (
+                    <div key={role}>
+                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1">{role}s</p>
+                      {roleStaff.map(s => (
+                        <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" onClick={() => {
+                          const existing = conversations.find(c => c.type === 'direct' && c.participants?.includes(s.id));
+                          if (existing) selectRoom(existing);
+                          else { setConvForm({ name: s.name, participants: [s.id], type: 'direct' }); handleCreateConv(); }
+                        }}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[getUserPresence(s.id)] || 'bg-gray-400'}`} />
+                          <span className="truncate">{s.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="overflow-y-auto flex-1">

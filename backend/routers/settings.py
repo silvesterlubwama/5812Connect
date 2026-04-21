@@ -1,6 +1,6 @@
 """App settings, global settings, currencies, GDPR/privacy — extracted from server.py"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin
+from deps import db, get_current_user, require_admin, require_manager, require_staff
 from datetime import datetime, timezone
 import os
 
@@ -119,3 +119,105 @@ async def inventory_alerts(current_user: dict = Depends(get_current_user)):
     if not products:
         products = await db.products.find({"stock": {"$lte": 5}}, {"_id": 0}).to_list(100)
     return {"alerts": products, "count": len(products)}
+
+
+
+# ========== ADMIN-EDITABLE CONFIGURATION ==========
+
+DEFAULT_ROLES = ["Executive Director", "Adviser", "Director", "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer", "Member", "Parent", "Customer", "Guest"]
+DEFAULT_DOC_TYPES = [
+    {"value": "national_id", "label": "National ID / State ID"},
+    {"value": "passport", "label": "Passport"},
+    {"value": "drivers_license", "label": "Driver's License"},
+    {"value": "birth_certificate", "label": "Birth Certificate"},
+    {"value": "refugee_id", "label": "Refugee ID"},
+    {"value": "voter_card", "label": "Voter Card"},
+    {"value": "student_id", "label": "Student ID"},
+    {"value": "employee_id", "label": "Employee ID"},
+    {"value": "other", "label": "Other"},
+]
+
+
+@router.get("/config/roles")
+async def get_roles(current_user: dict = Depends(get_current_user)):
+    stored = await db.app_config.find_one({"_key": "roles"}, {"_id": 0})
+    return stored.get("roles", DEFAULT_ROLES) if stored else DEFAULT_ROLES
+
+
+@router.put("/config/roles")
+async def update_roles(data: dict, current_user: dict = Depends(require_admin)):
+    roles = data.get("roles", [])
+    await db.app_config.update_one({"_key": "roles"}, {"$set": {"_key": "roles", "roles": roles}}, upsert=True)
+    return roles
+
+
+@router.get("/config/document-types")
+async def get_document_types(current_user: dict = Depends(get_current_user)):
+    stored = await db.app_config.find_one({"_key": "doc_types"}, {"_id": 0})
+    return stored.get("types", DEFAULT_DOC_TYPES) if stored else DEFAULT_DOC_TYPES
+
+
+@router.put("/config/document-types")
+async def update_document_types(data: dict, current_user: dict = Depends(require_admin)):
+    types = data.get("types", [])
+    await db.app_config.update_one({"_key": "doc_types"}, {"$set": {"_key": "doc_types", "types": types}}, upsert=True)
+    return types
+
+
+# ========== RESTRICTED SPACE MANAGEMENT ==========
+
+@router.get("/restricted-spaces")
+async def list_restricted_spaces(campus_id: str = None, current_user: dict = Depends(get_current_user)):
+    """List restricted sub-locations/venues for a campus"""
+    query = {"is_restricted": True}
+    if campus_id:
+        query["$or"] = [{"id": campus_id}, {"parent_id": campus_id}]
+    spaces = await db.locations.find(query, {"_id": 0}).to_list(100)
+    return spaces
+
+
+@router.post("/restricted-spaces/{space_id}/staff")
+async def add_staff_to_restricted(space_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Add staff access to a restricted space from campus staff list"""
+    staff_ids = data.get("staff_ids", [])
+    await db.locations.update_one({"id": space_id}, {"$addToSet": {"staff_ids": {"$each": staff_ids}}})
+    return {"message": f"Added {len(staff_ids)} staff to restricted space"}
+
+
+@router.delete("/restricted-spaces/{space_id}/staff/{staff_id}")
+async def remove_staff_from_restricted(space_id: str, staff_id: str, current_user: dict = Depends(require_manager)):
+    await db.locations.update_one({"id": space_id}, {"$pull": {"staff_ids": staff_id}})
+    return {"message": "Staff removed from restricted space"}
+
+
+@router.post("/restricted-spaces/{space_id}/residents")
+async def add_residents(space_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Add residents (members/children) to a restricted location"""
+    resident_ids = data.get("resident_ids", [])
+    await db.locations.update_one({"id": space_id}, {"$addToSet": {"resident_ids": {"$each": resident_ids}}})
+    return {"message": f"Added {len(resident_ids)} residents"}
+
+
+@router.get("/restricted-spaces/{space_id}/residents")
+async def get_residents(space_id: str, current_user: dict = Depends(get_current_user)):
+    loc = await db.locations.find_one({"id": space_id}, {"_id": 0})
+    if not loc: return []
+    ids = loc.get("resident_ids", [])
+    if not ids: return []
+    members = await db.members.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(200)
+    children = await db.children.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+    return {"members": members, "children": children}
+
+
+# ========== VOLUNTEER EVENT ATTENDEES ==========
+
+@router.get("/volunteer/event-attendees/{event_id}")
+async def volunteer_event_attendees(event_id: str, current_user: dict = Depends(get_current_user)):
+    """Get attendees of an event that a volunteer is assigned to"""
+    # Verify volunteer is assigned to this event
+    shift = await db.volunteer_shifts.find_one({"event_id": event_id, "assigned_volunteers": {"$elemMatch": {"member_id": current_user["id"]}}})
+    is_staff = current_user.get("role", "").lower() in {"admin", "system_admin", "executive director", "director", "manager", "coordinator", "staff"}
+    if not shift and not is_staff:
+        raise HTTPException(status_code=403, detail="Not assigned to this event")
+    checkins = await db.checkins.find({"event_id": event_id}, {"_id": 0}).sort("check_in_time", -1).to_list(500)
+    return checkins
