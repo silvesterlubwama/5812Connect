@@ -450,7 +450,7 @@ export default function Layout() {
             {searching && <div className="px-4 py-3 text-sm text-muted-foreground">Searching...</div>}
             {!searching && searchQuery.length >= 2 && searchResults.length === 0 && <div className="px-4 py-6 text-sm text-muted-foreground text-center">No results for "{searchQuery}"</div>}
             {searchResults.map((r, i) => (
-              <button key={i} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/60 transition-colors text-left" onClick={() => handleResultClick(r)} data-testid="search-result">
+              <button key={r.url || r.title || i} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/60 transition-colors text-left" onClick={() => handleResultClick(r)} data-testid="search-result">
                 <Badge variant="outline" className="text-[10px] capitalize shrink-0 h-5 w-5 flex items-center justify-center p-0">{resultTypeIcon[r.type]}</Badge>
                 <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{r.title}</p><p className="text-xs text-muted-foreground truncate">{r.subtitle}</p></div>
               </button>

@@ -21,7 +21,7 @@ export function UserImportDialog({ open, onOpenChange, importJson, setImportJson
               <div className="p-3 bg-amber-50 rounded-lg border border-amber-200"><p className="text-2xl font-bold text-amber-700">{importResult.skipped}</p><p className="text-xs text-muted-foreground">Skipped</p></div>
               <div className="p-3 bg-red-50 rounded-lg border border-red-200"><p className="text-2xl font-bold text-red-700">{importResult.errors?.length || 0}</p><p className="text-xs text-muted-foreground">Errors</p></div>
             </div>
-            {importResult.errors?.length > 0 && <div className="text-xs text-red-600 bg-red-50 rounded-lg p-3 space-y-1">{importResult.errors.map((e, i) => <p key={i}>{e}</p>)}</div>}
+            {importResult.errors?.length > 0 && <div className="text-xs text-red-600 bg-red-50 rounded-lg p-3 space-y-1">{importResult.errors.map((e, i) => <p key={`err-${i}-${e?.slice(0,10)}`}>{e}</p>)}</div>}
             <Button className="w-full" onClick={() => onOpenChange(false)}>Done</Button>
           </div>
         ) : (
