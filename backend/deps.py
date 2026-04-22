@@ -78,7 +78,7 @@ async def _audit(user_id: str, action: str, resource: str, resource_id: str = No
 ROLE_LEVELS = {
     "system_admin": 10, "admin": 10,
     "Executive Director": 9, "Adviser": 8.5, "Director": 8,
-    "Manager": 7, "Coordinator": 6,
+    "Manager": 7, "Leader": 6.5, "Coordinator": 6,
     "Staff": 5, "Volunteer": 4,
     "Member": 3, "Parent": 2,
     "Customer": 1, "Guest": 1,
@@ -91,7 +91,19 @@ SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director"}
 CAMPUS_SWITCHER_ROLES = {"admin", "system_admin", "executive director", "adviser"}
 
 def get_role_level(role: str) -> int:
-    return ROLE_LEVELS.get(role, 0)
+    """Get numeric role level — case-insensitive lookup"""
+    if not role:
+        return 0
+    # Try exact match first
+    level = ROLE_LEVELS.get(role)
+    if level is not None:
+        return level
+    # Try case-insensitive match
+    role_lower = role.lower()
+    for k, v in ROLE_LEVELS.items():
+        if k.lower() == role_lower:
+            return v
+    return 0
 
 
 def is_system_admin(user: dict) -> bool:
