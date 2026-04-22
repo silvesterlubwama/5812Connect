@@ -1,6 +1,6 @@
 """Staff/Member Self-Service Portal — scoped to logged-in user's own data"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, _audit, logger
+from deps import db, get_current_user, _audit, logger, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -23,7 +23,11 @@ async def portal_dashboard(current_user: dict = Depends(get_current_user)):
 
     # My tasks
     my_tasks = await db.tasks.find(
-        {"assignee": {"$in": [uid, email, current_user.get("name", "")]}},
+        {"$or": [
+            {"assignees": {"$in": [uid, email, current_user.get("name", "")]}},
+            {"assignee": {"$in": [uid, email, current_user.get("name", "")]}},
+            {"created_by": uid},
+        ]},
         {"_id": 0}
     ).to_list(200)
     tasks_todo = sum(1 for t in my_tasks if t.get("status") == "todo")
@@ -43,10 +47,14 @@ async def portal_dashboard(current_user: dict = Depends(get_current_user)):
         {"_id": 0}
     ).sort("check_in_time", -1).limit(5).to_list(5)
 
-    # My upcoming events
+    # My upcoming events (scoped to user's campus)
     now_str = datetime.now(timezone.utc).isoformat()[:10]
+    event_query = {"date": {"$gte": now_str}, "status": "upcoming"}
+    campus = await get_campus_filter(current_user)
+    if campus:
+        event_query.update(campus)
     upcoming_events = await db.events.find(
-        {"date": {"$gte": now_str}}, {"_id": 0}
+        event_query, {"_id": 0}
     ).sort("date", 1).limit(5).to_list(5)
 
     # Unread messages

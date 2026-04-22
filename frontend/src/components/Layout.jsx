@@ -83,14 +83,10 @@ const NAV_SECTIONS = [
     ]
   },
   {
-    label: 'Analytics',
+    label: 'Reports',
     collapsible: true,
     roles: MANAGER_PLUS,
     items: [
-      { to: '/attendance', icon: UserCheck, label: 'Attendance' },
-      { to: '/sales-analytics', icon: TrendingUp, label: 'Sales Analytics' },
-      { to: '/location-analytics', icon: BarChart3, label: 'Location Stats' },
-      { to: '/analytics', icon: PieChart, label: 'Advanced Analytics' },
       { to: '/reports', icon: FileText, label: 'Reports' },
       { to: '/report-builder', icon: FileSpreadsheet, label: 'Report Builder' },
     ]

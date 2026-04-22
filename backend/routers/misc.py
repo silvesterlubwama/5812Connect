@@ -75,6 +75,10 @@ class ResourceCreate(BaseModel):
     is_bookable: bool = True
     staff_only: bool = False
     is_consumable: bool = False
+    serial_number: Optional[str] = None
+    mac_address: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
 
 class ResourceBookingCreate(BaseModel):
     resource_id: str
@@ -147,13 +151,31 @@ class AnnouncementCreate(BaseModel):
 
 @router.get("/announcements")
 async def list_announcements(current_user: dict = Depends(get_current_user)):
-    role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    """List announcements — campus-specific + org-wide"""
+    campus = await get_campus_filter(current_user)
+    user_locs = current_user.get("location_ids") or []
+    user_loc = current_user.get("location_id", "")
+    all_locs = list(set(user_locs + ([user_loc] if user_loc else [])))
+    # Show: org-wide (no location_id) + user's campus announcements
+    query = {"$or": [
+        {"location_id": {"$exists": False}}, {"location_id": None}, {"location_id": ""},
+        {"scope": "organization"},
+    ]}
+    if all_locs:
+        query["$or"].append({"location_id": {"$in": all_locs}})
     return await db.announcements.find(query, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).to_list(100)
 
 @router.post("/announcements")
 async def create_announcement(data: AnnouncementCreate, current_user: dict = Depends(get_current_user)):
-    doc = {"id": f"ann_{str(uuid.uuid4())[:8]}", **data.model_dump(), "author_name": current_user.get("name", "Admin"), "author_role": current_user.get("role", "admin"), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    doc = {
+        "id": f"ann_{str(uuid.uuid4())[:8]}", **data.model_dump(),
+        "author_name": current_user.get("name", "Admin"),
+        "author_role": current_user.get("role", "admin"),
+        "location_id": getattr(data, 'location_id', None) or current_user.get("location_id"),
+        "scope": getattr(data, 'scope', 'campus'),  # campus or organization
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
     await db.announcements.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "announcement", doc["id"])
     return doc

@@ -168,7 +168,7 @@ async def list_pending_expenses(current_user: dict = Depends(require_manager)):
 
 
 @router.put("/financial/expenses/{expense_id}/approve")
-async def approve_expense(expense_id: str, data: dict = None, current_user: dict = Depends(require_manager)):
+async def approve_expense(expense_id: str, data: dict = None, current_user: dict = Depends(require_director)):
     data = data or {}
     expense = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
     if not expense: raise HTTPException(status_code=404, detail="Expense not found")

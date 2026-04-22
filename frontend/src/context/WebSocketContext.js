@@ -125,8 +125,14 @@ export const WebSocketProvider = ({ children }) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       sendChatMessage(conversationId, text, senderName, replyTo);
     } else {
-      // Queue for background sync
-      queueOfflineMessage({ conversation_id: conversationId, text, reply_to: replyTo || null, id: `offline_${Date.now()}`, created_at: new Date().toISOString() });
+      // Fallback: send via REST API when WebSocket is down
+      const token = secureStorage.getToken();
+      fetch(`${process.env.REACT_APP_BACKEND_URL}/api/chat/conversations/${conversationId}/messages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ text, reply_to: replyTo || null }),
+      }).catch(() => {
+        queueOfflineMessage({ conversation_id: conversationId, text, reply_to: replyTo || null, id: `offline_${Date.now()}`, created_at: new Date().toISOString() });
+      });
     }
   }, [sendChatMessage, queueOfflineMessage]);
 
