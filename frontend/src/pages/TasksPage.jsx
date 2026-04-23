@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays, CheckSquare } from 'lucide-react';
+import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays, CheckSquare, Settings, Users } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
+import { Switch } from '../components/ui/switch';
+import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { boardsApi, tasksApi, locationsApi, adminApi } from '../services/api';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -451,6 +453,10 @@ export default function TasksPage() {
                 }}>
                 <Globe size={13} /> {currentBoard.is_shared ? 'Unshare' : 'Share'}
               </Button>
+              {/* Board Edit/Settings */}
+              <Button size="sm" variant="ghost" className="text-slate-400 hover:text-white hover:bg-white/10 gap-1.5 h-8 text-xs" onClick={() => { setNewBoardForm({ name: currentBoard.name, location_id: currentBoard.location_id || '', background: currentBoard.background || '#3b82f6', is_restricted: currentBoard.is_restricted || false, is_private: currentBoard.is_private || false }); setShowBoardEdit(true); }} data-testid="board-settings-btn">
+                <Settings size={13} /> Edit Board
+              </Button>
               <Button size="sm" variant="ghost" className={`text-xs h-8 gap-1.5 ${bulkMode ? 'bg-blue-500/20 text-blue-400' : 'text-slate-400 hover:text-white hover:bg-white/10'}`}
                 onClick={() => { setBulkMode(!bulkMode); setSelectedCards(new Set()); }} data-testid="bulk-mode-btn">
                 <CheckSquare size={13} /> {bulkMode ? `${selectedCards.size} selected` : 'Multi-select'}
@@ -632,6 +638,71 @@ export default function TasksPage() {
               <Button className="flex-1 bg-blue-600 hover:bg-blue-700 text-white" onClick={importTrello} disabled={importing || !trelloJson.trim()} data-testid="import-trello-btn">
                 {importing ? 'Importing...' : 'Import Board'}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Board Edit Dialog */}
+      <Dialog open={showBoardEdit} onOpenChange={setShowBoardEdit}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit Board: {currentBoard?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Board Name</Label><Input value={newBoardForm.name} onChange={e => setNewBoardForm({...newBoardForm, name: e.target.value})} data-testid="edit-board-name" /></div>
+            <div className="space-y-2"><Label>Campus / Location</Label>
+              <Select value={newBoardForm.location_id || '__none__'} onValueChange={v => setNewBoardForm({...newBoardForm, location_id: v === '__none__' ? '' : v})}>
+                <SelectTrigger><SelectValue placeholder="Global (all campuses)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Global (all campuses)</SelectItem>
+                  {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label>Background Color</Label>
+              <div className="flex gap-2">
+                {['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#0ea5e9'].map(c => (
+                  <button key={c} className={`w-7 h-7 rounded-full border-2 ${newBoardForm.background === c ? 'border-white' : 'border-transparent'}`} style={{background: c}} onClick={() => setNewBoardForm({...newBoardForm, background: c})} />
+                ))}
+              </div>
+            </div>
+            <div className="space-y-3 p-3 border border-border rounded-lg">
+              <div className="flex items-center justify-between"><Label className="text-sm">Restricted</Label>
+                <Switch checked={newBoardForm.is_restricted || false} onCheckedChange={v => setNewBoardForm({...newBoardForm, is_restricted: v})} /></div>
+              <div className="flex items-center justify-between"><Label className="text-sm">Private</Label>
+                <Switch checked={newBoardForm.is_private || false} onCheckedChange={v => setNewBoardForm({...newBoardForm, is_private: v})} /></div>
+              <p className="text-[10px] text-muted-foreground">Restricted/Private boards are only visible to tagged members</p>
+            </div>
+            {/* Board Members */}
+            <div className="space-y-2"><Label>Assign Members</Label>
+              <Select onValueChange={v => {
+                if (v && !(currentBoard?.tagged_members || []).includes(v)) {
+                  boardsApi.update(currentBoard.id, { tagged_members: [...(currentBoard?.tagged_members || []), v] }).then(() => { fetchBoards(); toast.success('Member added'); }).catch(() => toast.error('Failed'));
+                }
+              }}>
+                <SelectTrigger><SelectValue placeholder="Add staff to board..." /></SelectTrigger>
+                <SelectContent>{staffUsers.filter(s => !(currentBoard?.tagged_members || []).includes(s.id)).map(s => (
+                  <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
+                ))}</SelectContent>
+              </Select>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {(currentBoard?.tagged_members || []).map(uid => {
+                  const s = staffUsers.find(u => u.id === uid);
+                  return s ? <Badge key={uid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => {
+                    boardsApi.update(currentBoard.id, { tagged_members: (currentBoard.tagged_members || []).filter(m => m !== uid) }).then(() => { fetchBoards(); toast.success('Removed'); }).catch(() => toast.error('Failed'));
+                  }}>{s.name} &times;</Badge> : null;
+                })}
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBoardEdit(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                try {
+                  const loc = allLocations.find(l => l.id === newBoardForm.location_id);
+                  await boardsApi.update(currentBoard.id, { name: newBoardForm.name, location_id: newBoardForm.location_id, location_name: loc?.name || '', background: newBoardForm.background, is_restricted: newBoardForm.is_restricted, is_private: newBoardForm.is_private, is_global: !newBoardForm.location_id });
+                  toast.success('Board updated');
+                  setShowBoardEdit(false); fetchBoards();
+                } catch { toast.error('Failed'); }
+              }} data-testid="save-board-edit">Save</Button>
             </div>
           </div>
         </DialogContent>
