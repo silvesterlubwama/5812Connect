@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -167,6 +167,9 @@ export default function UnifiedPeoplePage() {
   const [selFamilies, setSelFamilies] = useState(new Set());
   const [selGuests, setSelGuests] = useState(new Set());
   const [showBulkChildEdit, setShowBulkChildEdit] = useState(false);
+  const [showResetPw, setShowResetPw] = useState(false);
+  const [resetPwUser, setResetPwUser] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
   const [showBulkFamilyEdit, setShowBulkFamilyEdit] = useState(false);
   const [bulkChildForm, setBulkChildForm] = useState({ family_id: '', location_id: '', class_group: '' });
   const [bulkFamilyForm, setBulkFamilyForm] = useState({ location_id: '' });
@@ -261,10 +264,13 @@ export default function UnifiedPeoplePage() {
     if (!editMember) return;
     setSavingEdit(true);
     try {
+      // Save to both members and users collections
       const res = await membersApi.update(editMember.id, editMemberForm);
-      setMembers(prev => prev.map(m => m.id === editMember.id ? { ...m, ...res.data } : m));
-      // Also update in selectedMember view if open
-      if (selectedMember?.id === editMember.id) setMemberDetail(prev => ({ ...prev, ...res.data }));
+      // Also update users collection for flag fields (is_parent, is_guest, etc.)
+      const flagFields = { is_parent: editMemberForm.is_parent, is_guest: editMemberForm.is_guest, is_customer: editMemberForm.is_customer, is_donor: editMemberForm.is_donor };
+      try { await adminApi.updateUser(editMember.id, flagFields); } catch (e) { console.warn(e.message || e); }
+      setMembers(prev => prev.map(m => m.id === editMember.id ? { ...m, ...res.data, ...flagFields } : m));
+      if (selectedMember?.id === editMember.id) setMemberDetail(prev => ({ ...prev, ...res.data, ...flagFields }));
       setEditMember(null);
       toast.success('Profile saved');
     } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
@@ -517,6 +523,7 @@ export default function UnifiedPeoplePage() {
                     {isCoordinator && (
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
+                        {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser(m); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
                         <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>
                       </div>
                     )}
@@ -1035,6 +1042,32 @@ export default function UnifiedPeoplePage() {
                 try { await familiesApi.bulkUpdate([...selFamilies], updates); toast.success(`Updated ${selFamilies.size} families`); setShowBulkFamilyEdit(false); setSelFamilies(new Set()); setBulkFamilyForm({ location_id: '' }); fetchPeople(); }
                 catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
               }}>Apply to {selFamilies.size} Families</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={showResetPw} onOpenChange={setShowResetPw}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+            <DialogDescription>Set a new password for {resetPwUser?.name}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label>New Password</Label>
+              <Input type="password" placeholder="Min 6 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)} data-testid="reset-pw-input" />
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowResetPw(false); setNewPassword(''); }}>Cancel</Button>
+              <Button className="flex-1" disabled={newPassword.length < 6} onClick={async () => {
+                try {
+                  await adminApi.resetPassword(resetPwUser.id, newPassword);
+                  toast.success(`Password reset for ${resetPwUser.name}`);
+                  setShowResetPw(false); setNewPassword('');
+                } catch (err) { toast.error(err.response?.data?.detail || 'Reset failed'); }
+              }} data-testid="confirm-reset-pw">Reset Password</Button>
             </div>
           </div>
         </DialogContent>

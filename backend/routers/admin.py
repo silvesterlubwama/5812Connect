@@ -205,7 +205,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     # Update members collection — auto-create if missing
     if user and user.get("email"):
-        member_update = {k: v for k, v in update.items() if k in (ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS)}
+        member_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
         if member_update:
             member_exists = await db.members.find_one(
                 {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
@@ -229,7 +229,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                     "departments": update.get("departments", []),
                     "title": update.get("title", ""),
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                    **{k: v for k, v in member_update.items() if k in MEMBER_ONLY_FIELDS},
+                    **{k: v for k, v in member_update.items() if k in ACCOUNT_FIELDS},
                 })
     await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
     return user
