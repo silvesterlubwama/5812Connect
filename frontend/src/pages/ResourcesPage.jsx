@@ -268,6 +268,14 @@ export default function ResourcesPage() {
             <div className="space-y-2"><Label>Description</Label>
               <Textarea rows={2} placeholder="Describe this resource" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Serial Number</Label><Input placeholder="SN-12345" value={form.serial_number || ''} onChange={e => setForm({...form, serial_number: e.target.value})} /></div>
+              <div className="space-y-2"><Label>MAC Address</Label><Input placeholder="AA:BB:CC:DD:EE:FF" value={form.mac_address || ''} onChange={e => setForm({...form, mac_address: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Manufacturer</Label><Input placeholder="e.g. Dell, Apple" value={form.manufacturer || ''} onChange={e => setForm({...form, manufacturer: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Model</Label><Input placeholder="e.g. XPS 15" value={form.model || ''} onChange={e => setForm({...form, model: e.target.value})} /></div>
+            </div>
             <div className="space-y-3 p-3 border border-border rounded-lg">
               <div className="flex items-center justify-between">
                 <div><p className="text-sm font-medium">Bookable</p>

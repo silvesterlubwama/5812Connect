@@ -36,7 +36,8 @@ export default function TasksPage() {
   // Dialogs
   const [openCard, setOpenCard] = useState(null);
   const [showNewBoard, setShowNewBoard] = useState(false);
-  const [newBoardForm, setNewBoardForm] = useState({ name: '', location_id: '', background: '#3b82f6' });
+  const [newBoardForm, setNewBoardForm] = useState({ name: '', location_id: '', background: '#3b82f6', is_restricted: false, is_private: false });
+  const [showBoardEdit, setShowBoardEdit] = useState(false);
   const [showTrelloImport, setShowTrelloImport] = useState(false);
   const [trelloJson, setTrelloJson] = useState('');
   const [importLocationId, setImportLocationId] = useState('');

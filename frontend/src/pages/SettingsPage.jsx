@@ -315,10 +315,15 @@ export default function SettingsPage() {
                     <Label>Timezone</Label>
                     <Select value={orgSettings.timezone} onValueChange={v => setOrgSettings({...orgSettings, timezone: v})}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Africa/Kampala">Africa/Kampala (EAT)</SelectItem>
-                        <SelectItem value="Africa/Nairobi">Africa/Nairobi (EAT)</SelectItem>
-                        <SelectItem value="UTC">UTC</SelectItem>
+                      <SelectContent className="max-h-64">
+                        {['UTC','US/Eastern','US/Central','US/Mountain','US/Pacific','US/Alaska','US/Hawaii',
+                          'America/New_York','America/Chicago','America/Denver','America/Los_Angeles','America/Anchorage',
+                          'America/Port-au-Prince','America/Mexico_City','America/Toronto','America/Sao_Paulo',
+                          'Europe/London','Europe/Paris','Europe/Berlin','Europe/Rome','Europe/Moscow',
+                          'Africa/Kampala','Africa/Nairobi','Africa/Johannesburg','Africa/Lagos','Africa/Cairo','Africa/Accra','Africa/Addis_Ababa',
+                          'Asia/Bangkok','Asia/Tokyo','Asia/Shanghai','Asia/Dubai','Asia/Kolkata','Asia/Singapore','Asia/Seoul','Asia/Hong_Kong',
+                          'Australia/Sydney','Australia/Melbourne','Pacific/Auckland','Pacific/Honolulu',
+                        ].map(tz => <SelectItem key={tz} value={tz}>{tz}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>

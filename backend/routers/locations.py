@@ -48,6 +48,8 @@ class LocationUpdate(BaseModel):
     departments: Optional[List[str]] = None
     payment_apis: Optional[List[dict]] = None
     active: Optional[bool] = None
+    financial_enabled: Optional[bool] = None
+    marketplace_enabled: Optional[bool] = None
 
 
 @router.get("/locations")

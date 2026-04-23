@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_admin, require_manager, require_staff
 from datetime import datetime, timezone
-import os
+import os, uuid
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -221,3 +221,115 @@ async def volunteer_event_attendees(event_id: str, current_user: dict = Depends(
         raise HTTPException(status_code=403, detail="Not assigned to this event")
     checkins = await db.checkins.find({"event_id": event_id}, {"_id": 0}).sort("check_in_time", -1).to_list(500)
     return checkins
+
+
+
+# ========== ENROLLMENT LINKS ==========
+
+@router.post("/enrollment-links")
+async def create_enrollment_link(data: dict, current_user: dict = Depends(require_manager)):
+    """Create enrollment link unique to a sublocation for families to enroll"""
+    import secrets as sec
+    token = sec.token_urlsafe(24)
+    doc = {
+        "id": f"enroll_{str(uuid.uuid4())[:8]}",
+        "token": token,
+        "location_id": data.get("location_id"),
+        "location_name": data.get("location_name", ""),
+        "form_fields": data.get("form_fields", ["name", "phone", "email", "children"]),
+        "welcome_message": data.get("welcome_message", ""),
+        "requires_approval": data.get("requires_approval", True),
+        "max_enrollments": data.get("max_enrollments", 0),
+        "enrollments": 0,
+        "active": True,
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.enrollment_links.insert_one(doc)
+    doc.pop("_id", None)
+    doc["link"] = f"/enroll/{token}"
+    return doc
+
+
+@router.get("/enrollment-links")
+async def list_enrollment_links(current_user: dict = Depends(require_manager)):
+    links = await db.enrollment_links.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    for l in links:
+        l["link"] = f"/enroll/{l['token']}"
+    return links
+
+
+@router.post("/public/enroll/{token}")
+async def public_enrollment(token: str, data: dict):
+    """Public enrollment endpoint — no auth required"""
+    link = await db.enrollment_links.find_one({"token": token, "active": True}, {"_id": 0})
+    if not link:
+        raise HTTPException(status_code=404, detail="Invalid or expired enrollment link")
+    if link.get("max_enrollments") and link["enrollments"] >= link["max_enrollments"]:
+        raise HTTPException(status_code=400, detail="Enrollment limit reached")
+    
+    enrollment = {
+        "id": f"enr_{str(uuid.uuid4())[:8]}",
+        "link_id": link["id"],
+        "location_id": link.get("location_id"),
+        "name": data.get("name", ""),
+        "phone": data.get("phone", ""),
+        "email": data.get("email", ""),
+        "children": data.get("children", []),
+        "status": "pending" if link.get("requires_approval") else "approved",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.enrollments.insert_one(enrollment)
+    enrollment.pop("_id", None)
+    await db.enrollment_links.update_one({"id": link["id"]}, {"$inc": {"enrollments": 1}})
+    
+    # Auto-create guest and child profiles if approved
+    if enrollment["status"] == "approved":
+        guest_id = f"gst_{str(uuid.uuid4())[:8]}"
+        await db.guests.insert_one({
+            "id": guest_id, "name": enrollment["name"], "phone": enrollment["phone"],
+            "email": enrollment["email"], "location_id": link.get("location_id"),
+            "is_parent": len(enrollment.get("children", [])) > 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        for child in enrollment.get("children", []):
+            await db.children.insert_one({
+                "id": f"chd_{str(uuid.uuid4())[:8]}", "name": child.get("name", ""),
+                "age": child.get("age"), "parent_ids": [guest_id],
+                "location_id": link.get("location_id"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+    
+    return enrollment
+
+
+@router.get("/enrollments")
+async def list_enrollments(location_id: str = None, current_user: dict = Depends(require_manager)):
+    query = {}
+    if location_id: query["location_id"] = location_id
+    return await db.enrollments.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@router.put("/enrollments/{enrollment_id}/approve")
+async def approve_enrollment(enrollment_id: str, current_user: dict = Depends(require_manager)):
+    """Approve enrollment — creates guest and child profiles"""
+    enrollment = await db.enrollments.find_one({"id": enrollment_id}, {"_id": 0})
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    await db.enrollments.update_one({"id": enrollment_id}, {"$set": {"status": "approved", "approved_by": current_user["id"], "approved_at": datetime.now(timezone.utc).isoformat()}})
+    # Create profiles
+    guest_id = f"gst_{str(uuid.uuid4())[:8]}"
+    await db.guests.insert_one({
+        "id": guest_id, "name": enrollment["name"], "phone": enrollment.get("phone", ""),
+        "email": enrollment.get("email", ""), "location_id": enrollment.get("location_id"),
+        "is_parent": len(enrollment.get("children", [])) > 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    for child in enrollment.get("children", []):
+        await db.children.insert_one({
+            "id": f"chd_{str(uuid.uuid4())[:8]}", "name": child.get("name", ""),
+            "age": child.get("age"), "parent_ids": [guest_id],
+            "location_id": enrollment.get("location_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    return {"message": "Enrollment approved, profiles created"}
