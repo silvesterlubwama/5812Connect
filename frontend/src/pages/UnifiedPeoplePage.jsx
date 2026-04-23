@@ -103,7 +103,9 @@ export default function UnifiedPeoplePage() {
   const { user } = useAuth();
   const userRole = user?.role || '';
   const isManager = ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'].includes(userRole);
-  const isCoordinator = isManager || userRole === 'Coordinator';
+  const isDirector = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(userRole);
+  const isCoordinator = isManager || ['Coordinator', 'Leader'].includes(userRole);
+  const canEditStaff = isDirector; // Directors+ can edit staff in their location
 
   // Members state
   const [members, setMembers] = useState([]);
@@ -188,7 +190,7 @@ export default function UnifiedPeoplePage() {
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, limit: 100 });
+      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, limit: 100, staff_only: true });
       setMembers(res.data.members || res.data || []);
       setTotal(res.data.total || (res.data.members || res.data || []).length);
     } catch { toast.error('Failed to load members'); }
@@ -273,7 +275,7 @@ export default function UnifiedPeoplePage() {
   const openEditChild = (c, e) => {
     if (e) e.stopPropagation();
     setEditChild(c);
-    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '' });
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '' });
   };
   const saveEditChild = async () => {
     if (!editChild) return;
@@ -441,10 +443,10 @@ export default function UnifiedPeoplePage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList data-testid="people-tabs">
-          <TabsTrigger value="members" className="gap-1.5" data-testid="tab-members"><Users size={13} /> Members ({total})</TabsTrigger>
+          <TabsTrigger value="members" className="gap-1.5" data-testid="tab-members"><Users size={13} /> Staff ({total})</TabsTrigger>
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
-          <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests ({guests.length})</TabsTrigger>
+          <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
           {pendingMembers.length > 0 && <TabsTrigger value="pending" className="gap-1.5" data-testid="tab-pending"><Award size={13} /> Pending ({pendingMembers.length})</TabsTrigger>}
         </TabsList>
 
@@ -603,8 +605,16 @@ export default function UnifiedPeoplePage() {
                         <input type="checkbox" className="accent-primary mt-1" checked={selChildren.has(c.id)} onChange={() => setSelChildren(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} />
                         <div className="flex-1">
                           <p className="font-medium text-sm">{c.name}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">{c.class_group} &middot; DOB: {c.date_of_birth || 'N/A'}</p>
-                          {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1.5">{c.allergies}</Badge>}
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {c.class_group || c.grade ? `${c.grade || ''} ${c.class_group || ''}`.trim() : 'No class'} &middot; DOB: {c.date_of_birth || 'N/A'}
+                          </p>
+                          {c.school && <p className="text-xs text-muted-foreground">School: {c.school}</p>}
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {c.allergies && <Badge variant="destructive" className="text-[10px]">{c.allergies}</Badge>}
+                            {c.is_sponsored && <Badge className="text-[10px] bg-purple-100 text-purple-700">Sponsored{c.sponsor_first_name ? ` by ${c.sponsor_first_name}` : ''}</Badge>}
+                            {c.is_resident && <Badge className="text-[10px] bg-blue-100 text-blue-700">Resident</Badge>}
+                          </div>
+                          {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.length}</p>}
                         </div>
                       </div>
                       {isCoordinator && (
@@ -693,7 +703,7 @@ export default function UnifiedPeoplePage() {
           <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle></DialogHeader>
           {memberDetail && (
             <Tabs defaultValue={defaultMemberTab} key={defaultMemberTab}>
-              <TabsList><TabsTrigger value="info">Info</TabsTrigger>{isCoordinator && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
+              <TabsList><TabsTrigger value="info">Info</TabsTrigger>{canEditStaff && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
               <TabsContent value="info" className="space-y-4 mt-3">
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-xs text-muted-foreground">Name</span><p className="font-medium">{memberDetail.name}</p></div>
@@ -874,11 +884,28 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5"><Label>Medical Notes</Label><Textarea rows={2} value={editChildForm.medical_notes || ''} onChange={e => setEditChildForm({ ...editChildForm, medical_notes: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Allergies</Label><Input value={editChildForm.allergies || ''} onChange={e => setEditChildForm({ ...editChildForm, allergies: e.target.value })} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>School</Label><Input value={editChildForm.school || ''} onChange={e => setEditChildForm({ ...editChildForm, school: e.target.value })} placeholder="School name" /></div>
+              <div className="space-y-1.5"><Label>Grade</Label><Input value={editChildForm.grade || ''} onChange={e => setEditChildForm({ ...editChildForm, grade: e.target.value })} placeholder="e.g. 5th" /></div>
+            </div>
             <div className="space-y-1.5"><Label>Campus / Location</Label>
-              <Select value={editChildForm.location_id || ''} onValueChange={v => setEditChildForm({ ...editChildForm, location_id: v })}>
+              <Select value={editChildForm.location_id || '__none__'} onValueChange={v => setEditChildForm({ ...editChildForm, location_id: v === '__none__' ? '' : v })}>
                 <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
-                <SelectContent>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                <SelectContent><SelectItem value="__none__">None</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            {/* Residency (for restricted locations) */}
+            <div className="p-3 border border-border rounded-lg space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="accent-primary" checked={editChildForm.is_resident || false} onChange={e => setEditChildForm({ ...editChildForm, is_resident: e.target.checked })} />
+                Resident of a restricted location
+              </label>
+              {editChildForm.is_resident && (
+                <Select value={editChildForm.resident_location_id || '__none__'} onValueChange={v => setEditChildForm({ ...editChildForm, resident_location_id: v === '__none__' ? '' : v })}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select restricted location" /></SelectTrigger>
+                  <SelectContent><SelectItem value="__none__">None</SelectItem>{allLocations.filter(l => l.is_restricted).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Linked Parents</Label>

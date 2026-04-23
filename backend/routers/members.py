@@ -21,15 +21,19 @@ async def list_members(
     status: Optional[str] = None,
     role: Optional[str] = None,
     location_id: Optional[str] = None,
+    staff_only: Optional[bool] = None,
     skip: int = 0,
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
 ):
+    STAFF_ROLES = {"Executive Director", "Adviser", "Director", "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer", "admin", "system_admin"}
     campus = await get_campus_filter(current_user)
     query = {}
     conditions = []
     if campus:
         conditions.append(campus)
+    if staff_only:
+        query["role"] = {"$in": list(STAFF_ROLES)}
     if search:
         conditions.append({"$or": [
             {"name": {"$regex": search, "$options": "i"}},
