@@ -146,15 +146,30 @@ export default function Layout() {
   const canSwitchCampus = isGlobalAdmin; // Only system admin, ED, Adviser can switch
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [campusFeatures, setCampusFeatures] = useState({ financial_enabled: true, marketplace_enabled: true, financial_apis_enabled: true });
   const { addListener } = useWebSocket();
   const { t, lang, changeLang, languages } = useI18n();
 
   // Fetch campuses for switcher (only for those who can switch)
   useEffect(() => {
     if (canSwitchCampus) {
-      locationsApi.list().then(res => setCampuses(res.data || [])).catch(() => {});
+      locationsApi.list().then(res => {
+        setCampuses(res.data || []);
+        // Check active campus features
+        const activeId = activeCampus || user?.location_id;
+        if (activeId && res.data) {
+          const loc = res.data.find(l => l.id === activeId);
+          if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false });
+        }
+      }).catch(() => {});
+    } else if (user?.location_id) {
+      // Non-admin: fetch their own campus features
+      locationsApi.list().then(res => {
+        const loc = (res.data || []).find(l => l.id === user.location_id);
+        if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false });
+      }).catch(() => {});
     }
-  }, [canSwitchCampus]);
+  }, [canSwitchCampus, activeCampus, user?.location_id]);
 
   // Auto-expand ONLY the section containing the active route, collapse all others
   useEffect(() => {
@@ -246,6 +261,10 @@ export default function Layout() {
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
+    // Campus feature toggles
+    if (item.to === '/financial' && !campusFeatures.financial_enabled) return false;
+    if (item.to === '/sales' && !campusFeatures.marketplace_enabled) return false;
+    if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
     return true;
   };
 

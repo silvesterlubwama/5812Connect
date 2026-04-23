@@ -1,6 +1,6 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus
+from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -236,7 +236,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
 
 
 @router.post("/users/{user_id}/reset-password")
-async def admin_reset_password(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
+async def admin_reset_password(user_id: str, data: dict, current_user: dict = Depends(require_director)):
     new_password = data.get("new_password", "").strip()
     if not new_password or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
