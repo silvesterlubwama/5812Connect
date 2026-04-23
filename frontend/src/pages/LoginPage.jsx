@@ -171,7 +171,7 @@ export default function LoginPage() {
             </div>
 
             <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button">
-              <Users size={16} /> Parent Portal Login
+              <Users size={16} /> Guest & Parent Portal
             </Button>
 
             <p className="text-center text-sm text-muted-foreground mt-2">

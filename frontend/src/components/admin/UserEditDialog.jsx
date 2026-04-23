@@ -117,7 +117,7 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
                   <SelectContent><SelectItem value="Male">Male</SelectItem><SelectItem value="Female">Female</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>National ID / Passport No.</Label><Input value={editForm.national_id || ''} onChange={e => setEditForm({...editForm, national_id: e.target.value})} /></div>
+              <div className="space-y-2"><Label>ID Number (last 4 for check-in)</Label><Input value={editForm.national_id || ''} onChange={e => setEditForm({...editForm, national_id: e.target.value})} /></div>
             </div>
             <div className="space-y-2"><Label>Address</Label><Textarea rows={2} value={editForm.address || ''} onChange={e => setEditForm({...editForm, address: e.target.value})} /></div>
             <div className="space-y-2"><Label>Emergency Contact</Label><Input value={editForm.emergency_contact || ''} onChange={e => setEditForm({...editForm, emergency_contact: e.target.value})} /></div>
@@ -197,6 +197,7 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
             <div className="space-y-3 p-3 rounded-lg border border-border">
               <p className="text-sm font-medium">Role Flags</p>
               <div className="flex items-center justify-between"><Label className="text-sm">Is Parent</Label><Switch data-testid="flag-is_parent" checked={editForm.is_parent || false} onCheckedChange={v => setEditForm({...editForm, is_parent: v})} /></div>
+              <div className="flex items-center justify-between"><Label className="text-sm">Is Guest</Label><Switch checked={editForm.is_guest || false} onCheckedChange={v => setEditForm({...editForm, is_guest: v})} /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Is Customer</Label><Switch checked={editForm.is_customer || false} onCheckedChange={v => setEditForm({...editForm, is_customer: v})} /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Is Donor</Label><Switch checked={editForm.is_donor || false} onCheckedChange={v => setEditForm({...editForm, is_donor: v})} /></div>
             </div>

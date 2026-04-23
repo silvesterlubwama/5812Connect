@@ -83,6 +83,9 @@ export default function LocationsPage() {
       contact_phone: loc.contact_phone || '', director_id: loc.director_id || '',
       is_venue: loc.is_venue || false, is_bookable: loc.is_bookable || false,
       is_restricted: loc.is_restricted || false, departments: loc.departments || [],
+      financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false,
+      financial_apis_enabled: loc.financial_apis_enabled !== false,
+      allows_residents: loc.allows_residents !== false,
     });
     setDeptInput('');
     setShowModal(true);
@@ -315,13 +318,18 @@ export default function LocationsPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase">Feature Access</p>
                 <div className="flex items-center justify-between">
                   <div><p className="text-sm font-medium">Financial Module</p>
-                    <p className="text-xs text-muted-foreground">Enable donations, expenses, balance sheets</p></div>
+                    <p className="text-xs text-muted-foreground">Donations, expenses, balance sheets</p></div>
                   <Switch checked={form.financial_enabled !== false} onCheckedChange={v => setForm({...form, financial_enabled: v})} data-testid="financial-toggle" />
                 </div>
                 <div className="flex items-center justify-between">
                   <div><p className="text-sm font-medium">Marketplace</p>
-                    <p className="text-xs text-muted-foreground">Enable products, sales, POS</p></div>
+                    <p className="text-xs text-muted-foreground">Products, sales, POS</p></div>
                   <Switch checked={form.marketplace_enabled !== false} onCheckedChange={v => setForm({...form, marketplace_enabled: v})} data-testid="marketplace-toggle" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Financial APIs</p>
+                    <p className="text-xs text-muted-foreground">Payment gateways, mobile money</p></div>
+                  <Switch checked={form.financial_apis_enabled !== false} onCheckedChange={v => setForm({...form, financial_apis_enabled: v})} data-testid="apis-toggle" />
                 </div>
               </div>
             )}

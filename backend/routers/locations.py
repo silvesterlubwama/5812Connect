@@ -50,6 +50,7 @@ class LocationUpdate(BaseModel):
     active: Optional[bool] = None
     financial_enabled: Optional[bool] = None
     marketplace_enabled: Optional[bool] = None
+    financial_apis_enabled: Optional[bool] = None
 
 
 @router.get("/locations")
