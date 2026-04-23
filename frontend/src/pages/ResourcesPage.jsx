@@ -40,7 +40,6 @@ export default function ResourcesPage() {
   const [form, setForm] = useState(emptyForm);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [locationFilter, setLocationFilter] = useState('all');
   const [showBooking, setShowBooking] = useState(false);
   const [bookingResource, setBookingResource] = useState(null);
   const [bookingForm, setBookingForm] = useState({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
@@ -163,13 +162,13 @@ export default function ResourcesPage() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input className="pl-9 h-8 text-xs" placeholder="Search resources..." value={search} onChange={e => setSearch(e.target.value)} data-testid="resource-search" />
         </div>
-        <Select value={locationFilter} onValueChange={setLocationFilter}>
-          <SelectTrigger className="w-40 h-8 text-xs"><SelectValue placeholder="All Locations" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Locations</SelectItem>
-            {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+
+
+
+
+
+
+
       </div>
 
       {/* Resources Grid */}

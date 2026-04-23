@@ -176,15 +176,12 @@ export default function VolunteerSchedulingPage() {
           onChange={e => setDateFilter(e.target.value)}
           data-testid="shift-date-filter"
         />
-        <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)}>
-          <SelectTrigger className="w-48" data-testid="shift-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="_all">All Locations</SelectItem>
-            {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-          </SelectContent>
+        <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)} className="hidden">
+          <SelectTrigger className="w-48 hidden"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="_all">All</SelectItem></SelectContent>
         </Select>
-        {(dateFilter || locationFilter) && (
-          <Button variant="ghost" size="sm" onClick={() => { setDateFilter(''); setLocationFilter(''); }}>Clear</Button>
+        {dateFilter && (
+          <Button variant="ghost" size="sm" onClick={() => setDateFilter('')}>Clear</Button>
         )}
       </div>
 

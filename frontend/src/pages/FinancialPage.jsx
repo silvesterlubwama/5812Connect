@@ -225,17 +225,6 @@ export default function FinancialPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Track donations, expenses, and cashflow</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {isFinanceAdmin ? (
-            <Select value={locationFilter || '_all'} onValueChange={v => setLocationFilter(v === '_all' ? '' : v)}>
-              <SelectTrigger className="w-44 h-8 text-xs" data-testid="financial-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="_all">All Locations</SelectItem>
-                {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Badge variant="outline" className="text-xs">{allLocations.find(l => l.id === locationFilter)?.name || 'My Campus'}</Badge>
-          )}
           <Button variant="outline" size="sm" onClick={() => setShowDistribute(true)} className="gap-1.5" data-testid="distribute-funds-btn"><DollarSign size={14} /> Transfer</Button>
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="financial-refresh"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-2" data-testid="financial-export">

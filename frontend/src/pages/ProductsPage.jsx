@@ -229,14 +229,7 @@ export default function ProductsPage() {
           <p className="text-sm text-muted-foreground mt-0.5">{products.length} products &middot; {sales.length} sales recorded</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Select value={locationFilter} onValueChange={v => { setLocationFilter(v); setCart([]); }}>
-            <SelectTrigger className="w-[180px] h-8 text-xs" data-testid="sales-location-filter"><SelectValue placeholder="All Locations" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Locations</SelectItem>
-              {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {isAdmin && locationFilter !== 'all' && (
+          {isAdmin && (
             <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => openStoreSettings(locationFilter)} data-testid="store-settings-btn">
               <Settings size={12} /> Store
             </Button>

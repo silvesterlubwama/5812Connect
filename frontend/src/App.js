@@ -57,7 +57,6 @@ import GdprSettingsPage from './pages/GdprSettingsPage';
 // Calling Feature Pages
 import CallHistoryPage from './pages/CallHistoryPage';
 import PbxSettingsPage from './pages/PbxSettingsPage';
-import WavePage from './pages/WavePage';
 // ExtensionsPage removed — PBX page handles extensions
 // Calling Components
 import { CallProvider } from './context/CallContext';
@@ -125,7 +124,6 @@ function AppRoutes() {
         <Route path="gdpr" element={<GdprSettingsPage />} />
         {/* Calling Feature Routes */}
         <Route path="call-history" element={<CallHistoryPage />} />
-        <Route path="wave" element={<WavePage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>

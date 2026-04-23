@@ -36,15 +36,10 @@ const STAFF_PLUS = [...COORDINATOR_PLUS, 'Staff', 'HR'];
 
 const NAV_SECTIONS = [
   {
-    label: null,
-    items: [
-      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    ]
-  },
-  {
     label: 'Ministry',
     collapsible: true,
     items: [
+      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { to: '/outreach', icon: Globe, label: 'Outreach', roles: STAFF_PLUS },
       { to: '/events', icon: Calendar, label: 'Events' },
       { to: '/check-ins', icon: UserCheck, label: 'Check-ins', roles: STAFF_PLUS },
@@ -148,8 +143,7 @@ export default function Layout() {
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
   const isGlobalAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
-  // Non-admin users cannot switch campuses
-  const canSwitchCampus = isGlobalAdmin;
+  const canSwitchCampus = isGlobalAdmin; // Only system admin, ED, Adviser can switch
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { addListener } = useWebSocket();

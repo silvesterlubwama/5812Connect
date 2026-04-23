@@ -241,7 +241,7 @@ export default function AccessPage() {
       ) : (
         <>
           <div className="flex items-center gap-3">
-            <Label className="text-sm font-medium whitespace-nowrap">Location:</Label>
+            <Label className="text-sm font-medium whitespace-nowrap">Restricted Space:</Label>
             <Select value={selectedLocation} onValueChange={setSelectedLocation}>
               <SelectTrigger className="w-64" data-testid="access-location-select"><SelectValue /></SelectTrigger>
               <SelectContent>

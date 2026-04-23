@@ -309,6 +309,23 @@ export default function LocationsPage() {
               </div>
             )}
 
+            {/* Feature Toggles (campus level) */}
+            {(form.type === 'campus' || form.type === 'main') && (
+              <div className="space-y-3 p-3 border border-border rounded-lg">
+                <p className="text-xs font-semibold text-muted-foreground uppercase">Feature Access</p>
+                <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Financial Module</p>
+                    <p className="text-xs text-muted-foreground">Enable donations, expenses, balance sheets</p></div>
+                  <Switch checked={form.financial_enabled !== false} onCheckedChange={v => setForm({...form, financial_enabled: v})} data-testid="financial-toggle" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Marketplace</p>
+                    <p className="text-xs text-muted-foreground">Enable products, sales, POS</p></div>
+                  <Switch checked={form.marketplace_enabled !== false} onCheckedChange={v => setForm({...form, marketplace_enabled: v})} data-testid="marketplace-toggle" />
+                </div>
+              </div>
+            )}
+
             {/* Departments */}
             <div className="space-y-2">
               <Label>Departments</Label>
