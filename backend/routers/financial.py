@@ -1,7 +1,7 @@
 """Financial routes: donations, expenses, products, sales, cashflow, balance, approval workflow"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter, get_role_level
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -310,6 +310,57 @@ async def update_store_settings(location_id: str, data: dict, current_user: dict
 async def list_all_store_settings(current_user: dict = Depends(get_current_user)):
     """List store settings for all locations."""
     return await db.store_settings.find({}, {"_id": 0}).to_list(100)
+
+
+
+
+@router.delete("/sales/{sale_id}")
+async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a sale entry with time-based approval tiers:
+    - Within 5 min: user can delete own entry
+    - 5-30 min: manager approval needed
+    - 7+ days: director approval needed
+    - 30+ days: admin only"""
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    
+    created = sale.get("created_at", "")
+    role = (current_user.get("role") or "").lower()
+    role_level = get_role_level(current_user.get("role", ""))
+    is_owner = sale.get("created_by") == current_user["id"]
+    
+    minutes_old = 999999
+    if created:
+        try:
+            from dateutil.parser import parse as dt_parse
+            age = datetime.now(timezone.utc) - dt_parse(created).replace(tzinfo=timezone.utc)
+            minutes_old = age.total_seconds() / 60
+        except: pass
+    
+    can_delete = False
+    if role_level >= 10:  # Admin — always
+        can_delete = True
+    elif minutes_old <= 5 and is_owner:  # Own entry within 5 min
+        can_delete = True
+    elif minutes_old <= 30 and role_level >= 7:  # Manager+ within 30 min
+        can_delete = True
+    elif minutes_old <= (7 * 24 * 60) and role_level >= 8:  # Director+ within 7 days
+        can_delete = True
+    elif minutes_old <= (30 * 24 * 60) and role_level >= 8:  # Director+ within 30 days
+        can_delete = True
+    
+    if not can_delete:
+        if minutes_old <= 30:
+            raise HTTPException(status_code=403, detail="Manager approval required to delete entries older than 5 minutes")
+        elif minutes_old <= (7 * 24 * 60):
+            raise HTTPException(status_code=403, detail="Director approval required to delete entries older than 30 minutes")
+        else:
+            raise HTTPException(status_code=403, detail="Only administrators can delete entries older than 30 days")
+    
+    await db.sales.delete_one({"id": sale_id})
+    await _audit(current_user["id"], "delete", "sale", sale_id)
+    return {"message": "Sale entry deleted"}
 
 
 # ========== SALES EXPORT / IMPORT ==========

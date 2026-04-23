@@ -13,11 +13,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 @router.get("/users")
 async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)):
-    query = {**await get_campus_filter(current_user)}
+    campus = await get_campus_filter(current_user)
+    query = {}
+    conditions = []
+    if campus:
+        conditions.append(campus)
     if search:
-        query["$or"] = [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]
+        conditions.append({"$or": [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]})
     if role and role != "all": query["role"] = role
     if status and status != "all": query["status"] = status
+    if conditions:
+        query["$and"] = conditions
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
     # Enrich with member profile existence and location name
     loc_cache = {}
@@ -161,11 +167,11 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments", "notes",
-                      "secondary_roles", "is_parent", "is_customer", "is_donor", "pin",
-                      "location_id", "location_ids", "title"}
-    MEMBER_ONLY_FIELDS = {"gender", "date_of_birth", "group", "program"}
-    all_allowed = ACCOUNT_FIELDS | MEMBER_ONLY_FIELDS
-    update = {k: v for k, v in data.items() if k in all_allowed and v is not None}
+                      "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "pin",
+                      "location_id", "location_ids", "title", "extension", "forward_to",
+                      "gender", "date_of_birth", "group", "program"}
+    all_allowed = ACCOUNT_FIELDS
+    update = {k: v for k, v in data.items() if k in all_allowed}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -179,14 +185,8 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
         parent = await resolve_parent_campus(lid)
         if parent and parent not in expanded:
             expanded.append(parent)
-    # Also expand downward: campus → sub-locations
-    sub_locs = await db.locations.find(
-        {"parent_id": {"$in": expanded}},
-        {"_id": 0, "id": 1}
-    ).to_list(200)
-    for sl in sub_locs:
-        if sl["id"] not in expanded:
-            expanded.append(sl["id"])
+    # Do NOT auto-expand downward — staff at main location should NOT get sub-location access
+    # Sub-location access is only granted by explicitly adding the sub-location to location_ids
     if expanded:
         update["location_ids"] = expanded
     if loc_id:

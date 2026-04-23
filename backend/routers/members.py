@@ -25,14 +25,18 @@ async def list_members(
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {**await get_campus_filter(current_user)}
+    campus = await get_campus_filter(current_user)
+    query = {}
+    conditions = []
+    if campus:
+        conditions.append(campus)
     if search:
-        query["$or"] = [
+        conditions.append({"$or": [
             {"name": {"$regex": search, "$options": "i"}},
             {"email": {"$regex": search, "$options": "i"}},
             {"phone": {"$regex": search, "$options": "i"}},
             {"national_id": {"$regex": search, "$options": "i"}},
-        ]
+        ]})
     if group and group != "all":
         query["group"] = group
     if status and status != "all":
@@ -41,6 +45,8 @@ async def list_members(
         query["role"] = role
     if location_id and location_id != "all":
         query["location_id"] = location_id
+    if conditions:
+        query["$and"] = conditions
     total = await db.members.count_documents(query)
     members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
     # Enrich with location names
