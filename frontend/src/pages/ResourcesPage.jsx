@@ -125,7 +125,7 @@ export default function ResourcesPage() {
   const filtered = resources.filter(r => {
     if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
     if (typeFilter !== 'all' && r.type !== typeFilter) return false;
-    if (locationFilter !== 'all' && r.location_id !== locationFilter) return false;
+    if (false) return false;
     return true;
   });
 
@@ -179,7 +179,7 @@ export default function ResourcesPage() {
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-sm text-muted-foreground">
           <Package size={40} className="mx-auto mb-3 opacity-30" />
-          {search || typeFilter !== 'all' || locationFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
+          {search || typeFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
         </div>
       ) : (
         <div>

@@ -654,7 +654,7 @@ export default function TasksPage() {
                 <SelectTrigger><SelectValue placeholder="Global (all campuses)" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">Global (all campuses)</SelectItem>
-                  {allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -697,7 +697,7 @@ export default function TasksPage() {
               <Button variant="outline" className="flex-1" onClick={() => setShowBoardEdit(false)}>Cancel</Button>
               <Button className="flex-1" onClick={async () => {
                 try {
-                  const loc = allLocations.find(l => l.id === newBoardForm.location_id);
+                  const loc = locations.find(l => l.id === newBoardForm.location_id);
                   await boardsApi.update(currentBoard.id, { name: newBoardForm.name, location_id: newBoardForm.location_id, location_name: loc?.name || '', background: newBoardForm.background, is_restricted: newBoardForm.is_restricted, is_private: newBoardForm.is_private, is_global: !newBoardForm.location_id });
                   toast.success('Board updated');
                   setShowBoardEdit(false); fetchBoards();

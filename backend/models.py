@@ -13,6 +13,7 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     identifier: str
     password: str
+    totp_code: Optional[str] = None
 
 class UserOut(BaseModel):
     model_config = ConfigDict(extra="ignore")

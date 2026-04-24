@@ -101,6 +101,14 @@ async def login(data: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if user.get("status") == "pending":
         raise HTTPException(status_code=403, detail="Your account is pending approval. Please contact your administrator.")
+    # Check if 2FA is enabled - require code
+    if user.get("totp_enabled") and not data.totp_code:
+        return {"requires_2fa": True, "user_id": user["id"], "message": "2FA code required"}
+    if user.get("totp_enabled") and data.totp_code:
+        import pyotp
+        totp = pyotp.TOTP(user.get("totp_secret", ""))
+        if not totp.verify(data.totp_code):
+            raise HTTPException(status_code=401, detail="Invalid 2FA code")
     # Default active campus to user's primary location on every login
     user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
     if user_loc and not user.get("active_campus_id"):
