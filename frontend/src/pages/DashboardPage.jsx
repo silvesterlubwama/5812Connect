@@ -171,31 +171,9 @@ export default function DashboardPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Welcome back, {user?.name?.split(' ')[0]}</p>
         </div>
         <div className="flex items-center gap-2">
-          {isSystemAdmin && campuses.length > 0 && (
-            <Select value={selectedCampus} onValueChange={setSelectedCampus} data-testid="campus-switcher">
-              <SelectTrigger className="w-[200px] h-9 text-sm" data-testid="campus-switcher-trigger">
-                <Building2 size={14} className="mr-1.5 shrink-0 text-muted-foreground" />
-                <SelectValue placeholder="All Campuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Campuses</SelectItem>
-                {campuses.map(c => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>
         </div>
       </div>
-
-      {selectedCampus !== 'all' && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20">
-          <Building2 size={14} className="text-primary" />
-          <span className="text-sm font-medium text-primary">Viewing: {campusName}</span>
-          <Button variant="ghost" size="sm" className="ml-auto text-xs h-7" onClick={() => setSelectedCampus('all')}>Show All</Button>
-        </div>
-      )}
 
       {/* Primary stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
