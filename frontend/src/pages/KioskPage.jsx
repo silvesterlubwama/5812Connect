@@ -204,17 +204,34 @@ export default function KioskPage() {
     } catch (e) { toast.error('Camera access denied'); setQrScanActive(false); }
   };
 
-  // NFC scan
+  // NFC scan with retry
   const startNfcScan = async () => {
-    if (!peripherals.nfc || !('NDEFReader' in window)) { toast.error('NFC not available'); return; }
+    if (!('NDEFReader' in window)) { toast.error('NFC not supported on this device/browser'); return; }
     try {
       const ndef = new window.NDEFReader();
       await ndef.scan();
-      toast.info('Hold NFC tag near device...');
-      ndef.addEventListener('reading', ({ serialNumber }) => {
-        handleIdScan(serialNumber);
+      toast.info('Ready — hold NFC tag/card near device...');
+      ndef.addEventListener('reading', ({ serialNumber, message }) => {
+        let data = serialNumber;
+        // Try to read text records from NFC tag
+        if (message?.records) {
+          for (const record of message.records) {
+            if (record.recordType === 'text') {
+              const decoder = new TextDecoder();
+              data = decoder.decode(record.data);
+              break;
+            }
+          }
+        }
+        handleIdScan(data);
+        toast.success('NFC tag read!');
       });
-    } catch (e) { toast.error('NFC scan failed: ' + (e.message || e)); }
+      ndef.addEventListener('readingerror', () => { toast.error('NFC read error — try again'); });
+    } catch (e) {
+      if (e.name === 'NotAllowedError') toast.error('NFC permission denied. Enable in browser settings.');
+      else if (e.name === 'NotSupportedError') toast.error('NFC not supported on this device');
+      else toast.error('NFC scan failed: ' + (e.message || e));
+    }
   };
 
   useEffect(() => {
@@ -416,10 +433,17 @@ export default function KioskPage() {
               <UserPlus size={22} />
               <span className="text-xs">Quick Signup</span>
             </Button>
-            <Button variant="secondary" className="h-16 gap-2 flex-col" onClick={() => { setScanType('manual'); setView('scan'); }} data-testid="kiosk-scan-btn">
-              <ScanLine size={22} />
-              <span className="text-xs">Access Scan</span>
-            </Button>
+            {peripherals.fingerprint && (
+              <Button variant="outline" className="h-16 gap-2 flex-col text-purple-600 border-purple-200" onClick={async () => {
+                try {
+                  const cred = await navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32), timeout: 30000, userVerification: 'required', rpId: window.location.hostname } });
+                  if (cred) { handleIdScan(cred.id); }
+                } catch (e) { toast.error('Fingerprint scan failed: ' + (e.message || e)); }
+              }} data-testid="kiosk-fingerprint-btn">
+                <Fingerprint size={22} />
+                <span className="text-xs">Fingerprint</span>
+              </Button>
+            )}
             <Button variant="outline" className="h-16 gap-2 flex-col" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
               <UserPlus size={22} />
               <span className="text-xs">Register Guest</span>

@@ -68,7 +68,7 @@ async def visitor_register(data: dict):
         "national_id": data.get("national_id"),
         "password_hash": hash_password(pin),
         "role": role,
-        "status": "active",
+        "status": "pending",
         "guest_pin": pin,
         "expires_at": expiry,
         "notes": data.get("notes", ""),
@@ -79,7 +79,7 @@ async def visitor_register(data: dict):
     member_id = str(uuid.uuid4())
     await db.members.insert_one({
         "id": member_id, "user_id": user_id, "name": name, "email": email,
-        "phone": phone, "role": "member", "status": "active",
+        "phone": phone, "role": "Guest", "status": "pending",
         "membership_type": role, "national_id": data.get("national_id"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -99,6 +99,8 @@ async def login(data: UserLogin):
     })
     if not user or not verify_password(data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.get("status") == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval. Please contact your administrator.")
     # Default active campus to user's primary location on every login
     user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
     if user_loc and not user.get("active_campus_id"):
@@ -156,7 +158,7 @@ async def google_auth_session(data: dict):
                 "id": user_id, "name": name, "email": email,
                 "phone": None, "national_id": None,
                 "password_hash": hash_password(str(uuid.uuid4())),
-                "role": "volunteer", "status": "active", "picture": picture,
+                "role": "Guest", "status": "pending", "picture": picture,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.users.insert_one(new_user)

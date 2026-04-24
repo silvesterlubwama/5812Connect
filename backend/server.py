@@ -489,7 +489,7 @@ async def google_auth(data: dict):
         user = {
             "id": str(uuid.uuid4()), "name": google_user.get("name", email.split("@")[0]),
             "email": email, "phone": "", "password_hash": "",
-            "role": "Member", "status": "active", "avatar": google_user.get("picture", ""),
+            "role": "Guest", "status": "pending", "avatar": google_user.get("picture", ""),
             "auth_provider": "google",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
