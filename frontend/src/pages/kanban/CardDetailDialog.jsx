@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { tasksApi, tasksExtApi } from '../../services/api';
+import { tasksApi, tasksExtApi, adminApi } from '../../services/api';
 import { toast } from 'sonner';
 
 const LABEL_COLORS = ['#10b981','#f59e0b','#f97316','#ef4444','#8b5cf6','#3b82f6','#06b6d4','#84cc16','#ec4899','#6366f1'];
@@ -170,18 +170,16 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
               {attachments.map((att, i) => {
                 const isImage = att.name?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
                 const isPdf = att.name?.match(/\.pdf$/i);
-                const isPreviewable = isImage || isPdf;
+                const fullUrl = att.url?.startsWith('http') ? att.url : (att.url ? `${process.env.REACT_APP_BACKEND_URL}${att.url.startsWith('/') ? '' : '/'}${att.url}` : '');
                 return (
                 <div key={att.id || att.name || i} className="rounded-lg bg-[#0f172a] border border-white/10 group overflow-hidden">
-                  {/* Inline preview for images */}
-                  {isImage && att.url && (
-                    <a href={att.url} target="_blank" rel="noopener noreferrer">
-                      <img src={att.url} alt={att.name} className="w-full h-32 object-cover rounded-t-lg hover:opacity-80 transition-opacity" />
+                  {isImage && fullUrl && (
+                    <a href={fullUrl} target="_blank" rel="noopener noreferrer">
+                      <img src={fullUrl} alt={att.name} className="w-full h-32 object-cover rounded-t-lg hover:opacity-80 transition-opacity" onError={e => { e.target.style.display = 'none'; }} />
                     </a>
                   )}
-                  {/* PDF preview */}
-                  {isPdf && att.url && (
-                    <div className="w-full h-32 bg-slate-800 flex items-center justify-center rounded-t-lg cursor-pointer hover:bg-slate-700" onClick={() => window.open(att.url, '_blank')}>
+                  {isPdf && fullUrl && (
+                    <div className="w-full h-32 bg-slate-800 flex items-center justify-center rounded-t-lg cursor-pointer hover:bg-slate-700" onClick={() => window.open(fullUrl, '_blank')}>
                       <div className="text-center"><Paperclip size={24} className="text-red-400 mx-auto mb-1" /><p className="text-[10px] text-slate-400">PDF — Click to view</p></div>
                     </div>
                   )}
@@ -192,8 +190,8 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                       {att.source === 'trello' && <p className="text-[10px] text-slate-500">From Trello</p>}
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {att.url && <a href={att.url} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-400 p-1" title="View"><Eye size={11} /></a>}
-                      {att.url && <a href={att.url} download className="text-slate-400 hover:text-green-400 p-1" title="Download"><Download size={11} /></a>}
+                      {fullUrl && <a href={fullUrl} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-blue-400 p-1" title="View"><Eye size={11} /></a>}
+                      {fullUrl && <a href={fullUrl} download className="text-slate-400 hover:text-green-400 p-1" title="Download"><Download size={11} /></a>}
                       <button onClick={() => removeAttachment(att.id)} className="text-slate-400 hover:text-red-400 p-1" title="Delete"><X size={11} /></button>
                     </div>
                   </div>
@@ -272,6 +270,32 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                   </label>
                 ))}
                 {boardStaff.length === 0 && <p className="text-xs text-slate-500 text-center py-1">No staff found</p>}
+              </div>
+              {/* External user search */}
+              <div className="mt-2">
+                <Input className="h-7 text-xs bg-[#0f172a] border-white/10 text-white placeholder:text-slate-500" placeholder="Search other campuses..." 
+                  onChange={async (e) => {
+                    const q = e.target.value.trim();
+                    if (q.length < 2) return;
+                    try {
+                      const res = await adminApi.users({ search: q, limit: 10 });
+                      const ext = (res.data || []).filter(u => !boardStaff.find(s => s.id === u.id));
+                      const container = e.target.parentElement.querySelector('.ext-results');
+                      if (container) container.innerHTML = ext.map(u => `<div class="ext-user" data-id="${u.id}" data-name="${u.name}">${u.name} (${u.role || '?'})</div>`).join('') || '<div class="text-slate-500 text-center py-1">No matches</div>';
+                    } catch {}
+                  }}
+                  onClick={(e) => {
+                    const handler = (ev) => {
+                      if (ev.target.classList.contains('ext-user')) {
+                        toggleAssignee(ev.target.dataset.id);
+                        ev.target.style.opacity = '0.5';
+                      }
+                    };
+                    const container = e.target.parentElement.querySelector('.ext-results');
+                    if (container) container.addEventListener('click', handler);
+                  }}
+                />
+                <div className="ext-results max-h-24 overflow-y-auto mt-1 space-y-0.5 text-xs text-slate-300 [&_.ext-user]:px-2 [&_.ext-user]:py-1 [&_.ext-user]:rounded [&_.ext-user]:cursor-pointer [&_.ext-user:hover]:bg-white/10"></div>
               </div>
             </div>
 

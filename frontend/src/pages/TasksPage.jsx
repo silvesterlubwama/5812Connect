@@ -399,6 +399,15 @@ export default function TasksPage() {
               className={`flex items-center gap-2 w-full px-2 py-2 rounded-md text-sm transition-all text-left group ${b.id === activeBoardId ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/8 hover:text-slate-200'}`}>
               <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: b.background || '#3b82f6' }} />
               <span className="flex-1 truncate text-xs">{b.name}</span>
+              {/* Member avatars */}
+              <div className="flex -space-x-1.5 shrink-0">
+                {(b.tagged_members || []).slice(0, 3).map(uid => {
+                  const s = staffUsers.find(u => u.id === uid);
+                  const init = s ? (s.name || '?').charAt(0).toUpperCase() : '?';
+                  return <div key={uid} className="w-5 h-5 rounded-full bg-primary/30 border border-slate-700 flex items-center justify-center text-[8px] font-bold text-white" title={s?.name || uid}>{init}</div>;
+                })}
+                {(b.tagged_members || []).length > 3 && <div className="w-5 h-5 rounded-full bg-slate-600 border border-slate-700 flex items-center justify-center text-[8px] text-white">+{b.tagged_members.length - 3}</div>}
+              </div>
               <span className="text-[10px] opacity-50 flex-shrink-0">{b.card_count || 0}</span>
             </button>
           ))}

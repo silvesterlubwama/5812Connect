@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { accessApi, locationsApi, membersApi, biometricApi, nfcApi } from '../services/api';
+import { accessApi, locationsApi, membersApi, biometricApi, nfcApi, configApi } from '../services/api';
+import api from '../services/api';
 import { toast } from 'sonner';
 import { Fingerprint, Smartphone } from 'lucide-react';
 
@@ -103,15 +104,33 @@ export default function AccessPage() {
 
   const handleAssignResident = async (e) => {
     e.preventDefault();
+    if (!residentForm.member_id) { toast.error('Select a person'); return; }
     setSaving(true);
     try {
-      await accessApi.assignResident({ member_id: residentForm.member_id, location_id: selectedLocation, tags: residentForm.tags.split(',').map(t => t.trim()).filter(Boolean) });
-      toast.success('Resident assigned');
+      await configApi.addResidents(selectedLocation, [residentForm.member_id]);
+      toast.success('Resident added');
       setShowAssignResident(false);
-      setResidentForm({ member_id: '', tags: '' });
+      setResidentForm({ member_id: '', search: '', searchResults: [] });
       fetchLocationData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
+  };
+
+  const searchResidents = async (q) => {
+    if (q.length < 2) { setResidentForm(prev => ({ ...prev, searchResults: [] })); return; }
+    try {
+      const [childRes, guestRes, memberRes] = await Promise.all([
+        api.get('/children', { params: { search: q, limit: 10 } }),
+        api.get('/guests', { params: { search: q, limit: 10 } }),
+        api.get('/members', { params: { search: q, limit: 10 } }),
+      ]);
+      const results = [
+        ...(childRes.data || []).map(c => ({ id: c.id, name: c.name, type: 'child' })),
+        ...(guestRes.data || []).map(g => ({ id: g.id, name: g.name, type: 'guest' })),
+        ...((memberRes.data?.members || memberRes.data || []).map(m => ({ id: m.id, name: m.name, type: m.role || 'member' }))),
+      ];
+      setResidentForm(prev => ({ ...prev, searchResults: results }));
+    } catch (e) { console.warn(e.message || e); }
   };
 
   const handleAssignStaff = async (e) => {

@@ -95,7 +95,19 @@ export default function CommsPage() {
           membersApi.list({ limit: 200 }),
         ]);
         setAnnouncements(annRes.data || []);
-        setAllStaff(staffRes.data?.members || staffRes.data || []);
+        let staff = staffRes.data?.members || staffRes.data || [];
+        // For directors+, also load directors from other campuses for cross-campus messaging
+        const userRole = (user?.role || '').toLowerCase();
+        if (['admin', 'system_admin', 'executive director', 'adviser', 'director'].includes(user?.role)) {
+          try {
+            const dirRes = await api.get('/admin/users', { params: { role: 'Director', limit: 50 } });
+            const edRes = await api.get('/admin/users', { params: { role: 'Executive Director', limit: 20 } });
+            const allDirs = [...(dirRes.data || []), ...(edRes.data || [])];
+            const existingIds = new Set(staff.map(s => s.id));
+            for (const d of allDirs) { if (!existingIds.has(d.id)) { staff.push({ ...d, is_cross_campus: true }); } }
+          } catch (e) { console.warn(e.message || e); }
+        }
+        setAllStaff(staff);
       } catch (e) { console.warn(e.message || e); }
       try {
         const aiRes = await chatApi.messages(`ai_${user?.id}`, { limit: 50 });
