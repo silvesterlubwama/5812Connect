@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -15,6 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Checkbox } from '../components/ui/checkbox';
 import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, familiesApi, childrenApi, guestsApi, adminApi } from '../services/api';
 import { BulkActionBar, exportToCSV } from '../components/BulkActions';
+import { UnifiedBadge } from '../components/UnifiedBadge';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
@@ -168,6 +169,8 @@ export default function UnifiedPeoplePage() {
   const [selGuests, setSelGuests] = useState(new Set());
   const [showBulkChildEdit, setShowBulkChildEdit] = useState(false);
   const [showResetPw, setShowResetPw] = useState(false);
+  const [showBadge, setShowBadge] = useState(false);
+  const [badgePerson, setBadgePerson] = useState(null);
   const [resetPwUser, setResetPwUser] = useState(null);
   const [newPassword, setNewPassword] = useState('');
   const [showBulkFamilyEdit, setShowBulkFamilyEdit] = useState(false);
@@ -517,6 +520,7 @@ export default function UnifiedPeoplePage() {
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
                         {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser(m); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={e => { e.stopPropagation(); setBadgePerson(m); setShowBadge(true); }} title="Badge"><Printer size={13} /></Button>
                         <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>
                       </div>
                     )}
@@ -1037,6 +1041,14 @@ export default function UnifiedPeoplePage() {
               }}>Apply to {selFamilies.size} Families</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Badge Dialog */}
+      <Dialog open={showBadge} onOpenChange={setShowBadge}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Badge — {badgePerson?.name}</DialogTitle></DialogHeader>
+          {badgePerson && <div className="mt-2"><UnifiedBadge person={badgePerson} /></div>}
         </DialogContent>
       </Dialog>
 

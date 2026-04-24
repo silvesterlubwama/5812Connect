@@ -12,6 +12,7 @@ import { adminApi, documentsApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
+import { UnifiedBadge } from '../components/UnifiedBadge';
 import { UserCreateDialog } from '../components/admin/UserCreateDialog';
 import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
@@ -313,7 +314,7 @@ export default function AdminPage() {
       <Dialog open={showBadge} onOpenChange={setShowBadge}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Print Badge - {selectedUser?.name}</DialogTitle></DialogHeader>
-          {selectedUser && <BadgePrintView user={selectedUser} onClose={() => setShowBadge(false)} />}
+          {selectedUser && <UnifiedBadge person={selectedUser} />}
         </DialogContent>
       </Dialog>
     </div>
