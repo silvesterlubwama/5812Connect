@@ -119,12 +119,16 @@ def has_campus_switcher(user: dict) -> bool:
 
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
-    Also matches documents where location_ids array overlaps with user's locations.
+    Only expands to actual sub-locations (rooms, buildings), NOT sibling campuses.
     System admins/EDs get an empty dict unless they have active_campus_id set."""
     if is_system_admin(user) or has_campus_switcher(user):
         active = user.get("active_campus_id")
         if active:
-            sub_locs = await db.locations.find({"parent_id": active}, {"_id": 0, "id": 1}).to_list(200)
+            # Only include sub-locations (type=sub-location), not sibling campuses
+            sub_locs = await db.locations.find(
+                {"parent_id": active, "type": "sub-location"},
+                {"_id": 0, "id": 1}
+            ).to_list(200)
             all_locs = [active] + [s["id"] for s in sub_locs]
             if len(all_locs) == 1:
                 return {"$or": [{field: active}, {"location_ids": active}]}
@@ -137,7 +141,11 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
         locs.append(loc)
     if not locs:
         return {}
-    sub_locs = await db.locations.find({"parent_id": {"$in": locs}}, {"_id": 0, "id": 1}).to_list(200)
+    # Only expand to sub-locations, not sibling campuses
+    sub_locs = await db.locations.find(
+        {"parent_id": {"$in": locs}, "type": "sub-location"},
+        {"_id": 0, "id": 1}
+    ).to_list(200)
     all_locs = list(set(locs + [s["id"] for s in sub_locs]))
     if len(all_locs) == 1:
         return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}

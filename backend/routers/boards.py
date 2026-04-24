@@ -64,7 +64,7 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
         # Admins see boards filtered by active campus if set, otherwise all
         active = current_user.get("active_campus_id")
         if active:
-            sub_locs = await db.locations.find({"parent_id": active}, {"_id": 0, "id": 1}).to_list(200)
+            sub_locs = await db.locations.find({"parent_id": active, "type": "sub-location"}, {"_id": 0, "id": 1}).to_list(200)
             all_locs = [active] + [s["id"] for s in sub_locs]
             boards = await db.boards.find({"$or": [
                 {"location_id": {"$in": all_locs}},
@@ -81,7 +81,7 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
             user_locs_raw.append(user_loc)
         # Expand sub-locations
         if user_locs_raw:
-            sub_locs = await db.locations.find({"parent_id": {"$in": user_locs_raw}}, {"_id": 0, "id": 1}).to_list(200)
+            sub_locs = await db.locations.find({"parent_id": {"$in": user_locs_raw}, "type": "sub-location"}, {"_id": 0, "id": 1}).to_list(200)
             user_locs = list(set(user_locs_raw + [s["id"] for s in sub_locs]))
         else:
             user_locs = user_locs_raw
