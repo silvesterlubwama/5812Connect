@@ -204,7 +204,13 @@ export default function EventsPage() {
         </Select>
       </div>
 
-      {/* Bulk Action Bar */}
+      {/* Select All + Bulk Action Bar */}
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-xs cursor-pointer">
+          <input type="checkbox" className="accent-primary" checked={selectedIds.size > 0 && selectedIds.size === events.length} onChange={() => selectedIds.size === events.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(events.map(e => e.id)))} data-testid="select-all-events" />
+          Select All ({events.length})
+        </label>
+      </div>
       <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())}
         onBulkDelete={async () => {
           if (!window.confirm(`Delete ${selectedIds.size} events?`)) return;
