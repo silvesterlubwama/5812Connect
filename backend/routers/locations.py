@@ -68,7 +68,7 @@ async def create_location(data: LocationCreate, current_user: dict = Depends(req
 
 
 @router.put("/locations/{loc_id}")
-async def update_location(loc_id: str, data: LocationUpdate, current_user: dict = Depends(get_current_user)):
+async def update_location(loc_id: str, data: LocationUpdate, current_user: dict = Depends(require_admin)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.locations.update_one({"id": loc_id}, {"$set": update_data})

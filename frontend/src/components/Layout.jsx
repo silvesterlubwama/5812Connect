@@ -150,26 +150,28 @@ export default function Layout() {
   const { addListener } = useWebSocket();
   const { t, lang, changeLang, languages } = useI18n();
 
-  // Fetch campuses for switcher (only for those who can switch)
+  // Fetch campuses for switcher and check feature flags
   useEffect(() => {
-    if (canSwitchCampus) {
-      locationsApi.list().then(res => {
-        setCampuses(res.data || []);
-        // Check active campus features
+    const loadCampuses = async () => {
+      try {
+        const res = await locationsApi.list();
+        const locs = res.data || [];
+        setCampuses(locs);
         const activeId = activeCampus || user?.location_id;
-        if (activeId && res.data) {
-          const loc = res.data.find(l => l.id === activeId);
+        if (activeId) {
+          const loc = locs.find(l => l.id === activeId);
           if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false });
+        } else {
+          // "All Locations" — check user's primary campus features
+          const userLoc = locs.find(l => l.id === user?.location_id);
+          if (userLoc) {
+            setCampusFeatures({ financial_enabled: userLoc.financial_enabled !== false, marketplace_enabled: userLoc.marketplace_enabled !== false, financial_apis_enabled: userLoc.financial_apis_enabled !== false });
+          }
         }
-      }).catch(() => {});
-    } else if (user?.location_id) {
-      // Non-admin: fetch their own campus features
-      locationsApi.list().then(res => {
-        const loc = (res.data || []).find(l => l.id === user.location_id);
-        if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false });
-      }).catch(() => {});
-    }
-  }, [canSwitchCampus, activeCampus, user?.location_id]);
+      } catch (e) { console.warn(e.message || e); }
+    };
+    loadCampuses();
+  }, [activeCampus, user?.location_id]);
 
   // Auto-expand ONLY the section containing the active route, collapse all others
   useEffect(() => {
@@ -204,7 +206,7 @@ export default function Layout() {
         await api.put('/user/active-campus/clear');
       }
       window.location.reload(); // Reload to apply new filter across all pages
-    } catch { toast.error('Failed to switch campus'); }
+    } catch (e) { console.warn(e.message || e); toast.error('Failed to switch campus'); }
   };
 
   // Online/offline detection

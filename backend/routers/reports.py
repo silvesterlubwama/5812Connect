@@ -63,27 +63,32 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
     data = {}
     campus = await get_campus_filter(current_user)
     if rtype in ("members", "custom"):
-        query = {**campus}
+        query = {}
         if filters.get("location_id"): query["location_id"] = filters["location_id"]
         if filters.get("status"): query["status"] = filters["status"]
-        members = await db.members.find(query, {"_id": 0}).to_list(5000)
+        mem_query = {"$and": [campus, query]} if campus else query
+        members = await db.members.find(mem_query, {"_id": 0}).to_list(5000)
         data["members"] = members; data["members_count"] = len(members)
     if rtype in ("financial", "custom"):
         dq = {}
         if filters.get("date_from"): dq["date"] = {"$gte": filters["date_from"]}
         if filters.get("date_to"): dq.setdefault("date", {})["$lte"] = filters["date_to"]
-        donations = await db.donations.find(dq, {"_id": 0}).to_list(5000)
-        expenses = await db.expenses.find(dq, {"_id": 0}).to_list(5000)
+        fin_query = {"$and": [campus, dq]} if campus else dq
+        donations = await db.donations.find(fin_query, {"_id": 0}).to_list(5000)
+        expenses = await db.expenses.find(fin_query, {"_id": 0}).to_list(5000)
         data["donations"] = donations; data["expenses"] = expenses
         data["total_donations"] = sum(d.get("amount", 0) for d in donations)
         data["total_expenses"] = sum(e.get("amount", 0) for e in expenses)
     if rtype in ("events", "custom"):
         eq = {}
         if filters.get("date_from"): eq["date"] = {"$gte": filters["date_from"]}
-        events = await db.events.find(eq, {"_id": 0}).to_list(5000)
+        evt_query = {"$and": [campus, eq]} if campus else eq
+        events = await db.events.find(evt_query, {"_id": 0}).to_list(5000)
         data["events"] = events; data["events_count"] = len(events)
     if rtype in ("attendance", "custom"):
-        checkins = await db.checkins.find({**campus}, {"_id": 0}).to_list(5000)
+        aq = {}
+        att_query = {"$and": [campus, aq]} if campus else aq
+        checkins = await db.checkins.find(att_query, {"_id": 0}).to_list(5000)
         data["checkins"] = checkins; data["checkins_count"] = len(checkins)
     now = datetime.now(timezone.utc).isoformat()
     await db.reports.update_one({"id": report_id}, {"$set": {"data_snapshot": data, "last_generated": now}})

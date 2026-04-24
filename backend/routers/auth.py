@@ -100,7 +100,7 @@ async def login(data: UserLogin):
     if not user or not verify_password(data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     # Default active campus to user's primary location on every login
-    user_loc = user.get("location_id", "")
+    user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
     if user_loc and not user.get("active_campus_id"):
         await db.users.update_one({"id": user["id"]}, {"$set": {"active_campus_id": user_loc}})
         user["active_campus_id"] = user_loc
