@@ -279,9 +279,6 @@ async def reorder_lists(board_id: str, data: dict, current_user: dict = Depends(
 @router.post("/boards/import-trello")
 async def import_trello_board(data: dict, current_user: dict = Depends(get_current_user)):
     """Full Trello board JSON import — creates board + lists + cards + attachments"""
-    import asyncio
-    import httpx
-
     board_name = data.get("name", "Imported Board")
     location_id = data.get("location_id")
     lists_raw = [l for l in data.get("lists", []) if not l.get("closed", False)]
@@ -304,6 +301,16 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
     }
     await db.boards.insert_one(board_doc)
 
+    list_id_map = await _import_board_lists(lists_raw, board_id)
+    imported = await _import_trello_cards(cards_raw, lists_raw, checklists_raw, labels_raw, list_id_map, board_id, current_user["id"])
+
+    board_doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "trello_import", board_id, {"board": board_name, "cards": imported})
+    return {"board_id": board_id, "board_name": board_name, "lists": len(list_id_map), "imported": imported}
+
+
+async def _import_board_lists(lists_raw: list, board_id: str) -> dict:
+    """Create board lists from Trello data. Returns mapping of trello_list_id -> new_list_id."""
     list_id_map = {}
     for i, lst in enumerate(sorted(lists_raw, key=lambda x: x.get("pos", 0))):
         new_list_id = f"list_{str(uuid.uuid4())[:8]}"
@@ -318,6 +325,12 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
         }
         await db.board_lists.insert_one(list_doc)
         list_id_map[lst["id"]] = new_list_id
+    return list_id_map
+
+
+async def _import_trello_cards(cards_raw: list, lists_raw: list, checklists_raw: list, labels_raw: list, list_id_map: dict, board_id: str, user_id: str) -> int:
+    """Import Trello cards into the board. Returns count of imported cards."""
+    import httpx
 
     checklist_map = {cl["id"]: cl for cl in checklists_raw}
     label_map = {}
@@ -327,100 +340,99 @@ async def import_trello_board(data: dict, current_user: dict = Depends(get_curre
 
     imported = 0
     for card in sorted(cards_raw, key=lambda x: x.get("pos", 0)):
-        trello_list_id = card.get("idList", "")
-        list_id = list_id_map.get(trello_list_id)
-
-        labels = []
-        for lbl in card.get("labels", []):
-            if isinstance(lbl, dict):
-                labels.append({"name": lbl.get("name", lbl.get("color", "")), "color": lbl.get("color", "")})
-        for lbl_id in card.get("idLabels", []):
-            if lbl_id in label_map and not any(l.get("name") == label_map[lbl_id]["name"] for l in labels):
-                labels.append(label_map[lbl_id])
-
-        checklist_items = []
-        for cl_id in card.get("idChecklists", []):
-            cl = checklist_map.get(cl_id, {})
-            for item in cl.get("checkItems", []):
-                checklist_items.append({
-                    "text": item.get("name", ""),
-                    "completed": item.get("state", "") == "complete",
-                })
-
-        assignees = card.get("idMembers", [])
-
-        list_name = next((lst.get("name", "") for lst in lists_raw if lst["id"] == trello_list_id), "")
-        status_map = {
-            "to do": "todo", "todo": "todo", "backlog": "todo",
-            "in progress": "in-progress", "doing": "in-progress",
-            "done": "done", "complete": "done", "completed": "done",
-        }
-        status = status_map.get(list_name.lower().strip(), "todo")
-
-        # Parse attachments — store URL + metadata; attempt to download small images
-        attachments = []
-        for att in card.get("attachments", []):
-            att_url = att.get("url", "")
-            att_name = att.get("name", "") or att.get("fileName", "") or "attachment"
-            att_mime = att.get("mimeType", "")
-            att_bytes = att.get("bytes")
-            att_is_upload = att.get("isUpload", False)
-
-            attachment_doc = {
-                "id": f"att_{str(uuid.uuid4())[:8]}",
-                "name": att_name,
-                "url": att_url,
-                "mime_type": att_mime,
-                "source": "trello",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            # Attempt to copy to our storage for small files (<10MB) with direct URLs
-            if att_url and att_bytes and int(att_bytes or 0) < 10 * 1024 * 1024:
-                try:
-                    from storage import put_object, init_storage
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        resp = await client.get(att_url)
-                        if resp.status_code == 200:
-                            storage_path = f"card-attachments/{board_id}/{str(uuid.uuid4())[:8]}_{att_name}"
-                            put_object(storage_path, resp.content, att_mime or "application/octet-stream")
-                            attachment_doc["storage_path"] = storage_path
-                            attachment_doc["copied"] = True
-                except Exception as e:
-                    logger.warning(f"Could not copy Trello attachment: {e}")
-
-            attachments.append(attachment_doc)
-
-        task = {
-            "id": f"task_{str(uuid.uuid4())[:8]}",
-            "board_id": board_id,
-            "list_id": list_id,
-            "list_name": list_name,
-            "title": card.get("name", ""),
-            "description": card.get("desc", ""),
-            "status": status,
-            "priority": "medium",
-            "assignees": assignees,
-            "assignee": None,
-            "due_date": (card.get("due") or "")[:10] if card.get("due") else None,
-            "labels": labels,
-            "tags": [l.get("name") or l.get("color", "") for l in labels][:5],
-            "checklist": checklist_items,
-            "attachments": attachments,
-            "trello_id": card.get("id"),
-            "position": card.get("pos", 0),
-            "cover_color": (card.get("cover") or {}).get("color"),
-            "source": "trello_import",
-            "is_archived": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "created_by": current_user["id"],
-        }
+        task = _build_trello_card_doc(card, lists_raw, checklist_map, label_map, list_id_map, board_id, user_id)
+        task["attachments"] = await _process_card_attachments(card.get("attachments", []), board_id)
         await db.tasks.insert_one(task)
         imported += 1
+    return imported
 
-    board_doc.pop("_id", None)
-    await _audit(current_user["id"], "create", "trello_import", board_id, {"board": board_name, "cards": imported})
-    return {"board_id": board_id, "board_name": board_name, "lists": len(list_id_map), "imported": imported}
+
+def _build_trello_card_doc(card: dict, lists_raw: list, checklist_map: dict, label_map: dict, list_id_map: dict, board_id: str, user_id: str) -> dict:
+    """Build a task document from a Trello card."""
+    trello_list_id = card.get("idList", "")
+    list_id = list_id_map.get(trello_list_id)
+    list_name = next((lst.get("name", "") for lst in lists_raw if lst["id"] == trello_list_id), "")
+
+    labels = []
+    for lbl in card.get("labels", []):
+        if isinstance(lbl, dict):
+            labels.append({"name": lbl.get("name", lbl.get("color", "")), "color": lbl.get("color", "")})
+    for lbl_id in card.get("idLabels", []):
+        if lbl_id in label_map and not any(l.get("name") == label_map[lbl_id]["name"] for l in labels):
+            labels.append(label_map[lbl_id])
+
+    checklist_items = []
+    for cl_id in card.get("idChecklists", []):
+        cl = checklist_map.get(cl_id, {})
+        for item in cl.get("checkItems", []):
+            checklist_items.append({"text": item.get("name", ""), "completed": item.get("state", "") == "complete"})
+
+    status_map = {
+        "to do": "todo", "todo": "todo", "backlog": "todo",
+        "in progress": "in-progress", "doing": "in-progress",
+        "done": "done", "complete": "done", "completed": "done",
+    }
+
+    return {
+        "id": f"task_{str(uuid.uuid4())[:8]}",
+        "board_id": board_id,
+        "list_id": list_id,
+        "list_name": list_name,
+        "title": card.get("name", ""),
+        "description": card.get("desc", ""),
+        "status": status_map.get(list_name.lower().strip(), "todo"),
+        "priority": "medium",
+        "assignees": card.get("idMembers", []),
+        "assignee": None,
+        "due_date": (card.get("due") or "")[:10] if card.get("due") else None,
+        "labels": labels,
+        "tags": [l.get("name") or l.get("color", "") for l in labels][:5],
+        "checklist": checklist_items,
+        "attachments": [],
+        "trello_id": card.get("id"),
+        "position": card.get("pos", 0),
+        "cover_color": (card.get("cover") or {}).get("color"),
+        "source": "trello_import",
+        "is_archived": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user_id,
+    }
+
+
+async def _process_card_attachments(attachments_raw: list, board_id: str) -> list:
+    """Process and optionally download Trello card attachments."""
+    import httpx
+    attachments = []
+    for att in attachments_raw:
+        att_url = att.get("url", "")
+        att_name = att.get("name", "") or att.get("fileName", "") or "attachment"
+        att_mime = att.get("mimeType", "")
+        att_bytes = att.get("bytes")
+
+        attachment_doc = {
+            "id": f"att_{str(uuid.uuid4())[:8]}",
+            "name": att_name,
+            "url": att_url,
+            "mime_type": att_mime,
+            "source": "trello",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if att_url and att_bytes and int(att_bytes or 0) < 10 * 1024 * 1024:
+            try:
+                from storage import put_object
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(att_url)
+                    if resp.status_code == 200:
+                        storage_path = f"card-attachments/{board_id}/{str(uuid.uuid4())[:8]}_{att_name}"
+                        put_object(storage_path, resp.content, att_mime or "application/octet-stream")
+                        attachment_doc["storage_path"] = storage_path
+                        attachment_doc["copied"] = True
+            except Exception as e:
+                logger.warning(f"Could not copy Trello attachment: {e}")
+
+        attachments.append(attachment_doc)
+    return attachments
 
 
 

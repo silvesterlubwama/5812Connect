@@ -170,12 +170,29 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "pin",
                       "location_id", "location_ids", "title", "extension", "forward_to",
                       "gender", "date_of_birth", "group", "program"}
-    all_allowed = ACCOUNT_FIELDS
-    update = {k: v for k, v in data.items() if k in all_allowed}
+    update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Sub-location → auto-add parent campus to location_ids
+    loc_id, expanded = await _expand_user_locations(update, data)
+
+    if "title" not in data or not data.get("title"):
+        role = update.get("role") or (await db.users.find_one({"id": user_id}, {"_id": 0, "role": 1}) or {}).get("role", "")
+        dept = update.get("department") or ""
+        update["title"] = await generate_title(role, expanded or ([loc_id] if loc_id else []), dept)
+
+    user_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
+    if user_update:
+        await db.users.update_one({"id": user_id}, {"$set": user_update})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+
+    await _sync_member_profile(user_id, user, update, ACCOUNT_FIELDS, loc_id, expanded)
+    await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
+    return user
+
+
+async def _expand_user_locations(update: dict, data: dict) -> tuple:
+    """Expand location_ids with parent campuses. Returns (loc_id, expanded)."""
     loc_ids = update.get("location_ids") or data.get("location_ids") or []
     loc_id = update.get("location_id") or data.get("location_id") or ""
     if loc_id and loc_id not in loc_ids:
@@ -185,54 +202,44 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
         parent = await resolve_parent_campus(lid)
         if parent and parent not in expanded:
             expanded.append(parent)
-    # Do NOT auto-expand downward — staff at main location should NOT get sub-location access
-    # Sub-location access is only granted by explicitly adding the sub-location to location_ids
     if expanded:
         update["location_ids"] = expanded
     if loc_id:
         update["location_id"] = loc_id
+    return loc_id, expanded
 
-    # Auto-generate title if not explicitly provided
-    if "title" not in data or not data.get("title"):
-        role = update.get("role") or (await db.users.find_one({"id": user_id}, {"_id": 0, "role": 1}) or {}).get("role", "")
-        dept = update.get("department") or ""
-        update["title"] = await generate_title(role, expanded or ([loc_id] if loc_id else []), dept)
 
-    # Update users collection (account fields only)
-    user_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
-    if user_update:
-        await db.users.update_one({"id": user_id}, {"$set": user_update})
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    # Update members collection — auto-create if missing
-    if user and user.get("email"):
-        member_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
-        if member_update:
-            member_exists = await db.members.find_one(
-                {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
-                {"_id": 0, "id": 1}
-            )
-            if member_exists:
-                await db.members.update_one(
-                    {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
-                    {"$set": member_update}
-                )
-            else:
-                member_id = str(uuid.uuid4())
-                await db.members.insert_one({
-                    "id": member_id, "user_id": user_id,
-                    "name": user.get("name", ""), "email": user.get("email", ""),
-                    "phone": user.get("phone", ""),
-                    "role": "member", "membership_type": (user.get("role") or "Staff").lower(),
-                    "status": "active",
-                    "location_id": loc_id, "location_ids": expanded,
-                    "department": user.get("department", ""),
-                    "departments": update.get("departments", []),
-                    "title": update.get("title", ""),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    **{k: v for k, v in member_update.items() if k in ACCOUNT_FIELDS},
-                })
-    await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
-    return user
+async def _sync_member_profile(user_id: str, user: dict, update: dict, account_fields: set, loc_id: str, expanded: list):
+    """Sync user update to linked member profile, creating if missing."""
+    if not user or not user.get("email"):
+        return
+    member_update = {k: v for k, v in update.items() if k in account_fields}
+    if not member_update:
+        return
+    member_exists = await db.members.find_one(
+        {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
+        {"_id": 0, "id": 1}
+    )
+    if member_exists:
+        await db.members.update_one(
+            {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
+            {"$set": member_update}
+        )
+    else:
+        member_id = str(uuid.uuid4())
+        await db.members.insert_one({
+            "id": member_id, "user_id": user_id,
+            "name": user.get("name", ""), "email": user.get("email", ""),
+            "phone": user.get("phone", ""),
+            "role": "member", "membership_type": (user.get("role") or "Staff").lower(),
+            "status": "active",
+            "location_id": loc_id, "location_ids": expanded,
+            "department": user.get("department", ""),
+            "departments": update.get("departments", []),
+            "title": update.get("title", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            **{k: v for k, v in member_update.items() if k in account_fields},
+        })
 
 
 @router.post("/users/{user_id}/reset-password")

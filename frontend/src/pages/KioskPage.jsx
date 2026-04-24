@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Html5Qrcode } from 'html5-qrcode';
 import { Link } from 'react-router-dom';
 import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone, UserPlus, History, Star, X, Camera, Settings } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -79,6 +80,7 @@ export default function KioskPage() {
   const [setupForm, setSetupForm] = useState({ name: '', location_id: '', type: 'regular', is_restricted: false, lock_password: '', check_in_types: ['staff', 'parent', 'guest', 'child_self'] });
   const [peripherals, setPeripherals] = useState({ nfc: false, fingerprint: false, camera: false, qr_scanner: false });
   const [qrScanActive, setQrScanActive] = useState(false);
+  const qrScannerRef = useRef(null);
 
   // Detect available peripherals on mount
   useEffect(() => {
@@ -219,20 +221,60 @@ export default function KioskPage() {
   };
 
   // Camera QR scan
-  const startQrScan = async () => {
+  const handleIdScanRef = useRef(null);
+  handleIdScanRef.current = handleIdScan;
+
+  const startQrScan = () => {
     if (!peripherals.camera) { toast.error('No camera detected'); return; }
     setQrScanActive(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.play();
-      // Use simple interval-based frame capture for QR detection
-      toast.info('Point camera at QR code or ID...');
-      // Auto-stop after 15 seconds
-      setTimeout(() => { stream.getTracks().forEach(t => t.stop()); setQrScanActive(false); }, 15000);
-    } catch (e) { toast.error('Camera access denied'); setQrScanActive(false); }
   };
+
+  const stopQrScan = useCallback(() => {
+    if (qrScannerRef.current) {
+      qrScannerRef.current.stop().then(() => {
+        qrScannerRef.current.clear();
+        qrScannerRef.current = null;
+      }).catch(() => { qrScannerRef.current = null; });
+    }
+    setQrScanActive(false);
+  }, []);
+
+  useEffect(() => {
+    if (!qrScanActive) return;
+    let cancelled = false;
+    const initScanner = async () => {
+      await new Promise(r => setTimeout(r, 400));
+      if (cancelled) return;
+      const el = document.getElementById('kiosk-qr-reader');
+      if (!el) return;
+      try {
+        const scanner = new Html5Qrcode('kiosk-qr-reader');
+        qrScannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1 },
+          (decodedText) => {
+            if (handleIdScanRef.current) handleIdScanRef.current(decodedText);
+            scanner.stop().then(() => scanner.clear()).catch(() => {});
+            qrScannerRef.current = null;
+            setQrScanActive(false);
+          },
+          () => {}
+        );
+      } catch (err) {
+        toast.error('Camera access denied or unavailable');
+        setQrScanActive(false);
+      }
+    };
+    initScanner();
+    return () => {
+      cancelled = true;
+      if (qrScannerRef.current) {
+        qrScannerRef.current.stop().catch(() => {});
+        qrScannerRef.current = null;
+      }
+    };
+  }, [qrScanActive]);
 
   // NFC scan with retry
   const startNfcScan = async () => {
@@ -519,6 +561,16 @@ export default function KioskPage() {
                   <Button className="flex-1" onClick={handleQuickSignup} data-testid="signup-submit-btn">Sign Up</Button>
                 </div>
               </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* QR Camera Scanner Dialog */}
+          <Dialog open={qrScanActive} onOpenChange={(o) => { if (!o) stopQrScan(); }}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Camera size={18} /> Scan QR Code</DialogTitle></DialogHeader>
+              <div id="kiosk-qr-reader" className="w-full rounded-lg overflow-hidden" data-testid="kiosk-qr-scanner" />
+              <p className="text-xs text-center text-muted-foreground mt-2">Point the camera at a QR code or badge</p>
+              <Button variant="outline" className="w-full mt-2" onClick={stopQrScan} data-testid="stop-qr-scan">Cancel Scan</Button>
             </DialogContent>
           </Dialog>
 

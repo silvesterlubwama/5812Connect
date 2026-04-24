@@ -12,6 +12,8 @@ import { ChildTag, ParentBadge } from '../components/PrintableBadges';
 import { checkinsApi, eventsApi, membersApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
+import { NfcCheckInDialog } from '../components/checkins/NfcCheckInDialog';
+import { ParentCheckInDialog } from '../components/checkins/ParentCheckInDialog';
 
 const methodStyle = { qr: 'bg-blue-100 text-blue-700', manual: 'bg-slate-100 text-slate-700', id: 'bg-purple-100 text-purple-700', pin: 'bg-green-100 text-green-700', biometric: 'bg-indigo-100 text-indigo-700', nfc: 'bg-cyan-100 text-cyan-700', parent_id: 'bg-pink-100 text-pink-700' };
 const typeStyle = { member: 'border-green-500 text-green-600', staff: 'border-blue-500 text-blue-600', visitor: 'border-orange-500 text-orange-600', child: 'border-emerald-500 text-emerald-600' };
@@ -472,184 +474,43 @@ export default function CheckInsPage() {
         </DialogContent>
       </Dialog>
       {/* NFC Check-In Dialog */}
-      <Dialog open={showNfc} onOpenChange={(o) => { if (!o) { setShowNfc(false); setNfcStatus('idle'); setNfcMember(null); } }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>NFC Check-In</DialogTitle>
-            <DialogDescription>Tap an NFC tag to check in a member</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 mt-2">
-            {nfcStatus === 'idle' && (
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label>Event (optional)</Label>
-                  <Select value={nfcEventId || '_none'} onValueChange={v => setNfcEventId(v === '_none' ? '' : v)}>
-                    <SelectTrigger><SelectValue placeholder="Select event" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">No event</SelectItem>
-                      {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button className="w-full gap-2" onClick={handleNfcScan} data-testid="start-nfc-scan">
-                  <Wifi size={16} /> Start NFC Scan
-                </Button>
-              </div>
-            )}
-            {nfcStatus === 'scanning' && (
-              <div className="flex flex-col items-center gap-4 py-6">
-                <div className="relative">
-                  <div className="h-20 w-20 rounded-full border-4 border-primary/30 flex items-center justify-center">
-                    <Wifi size={32} className="text-primary animate-pulse" />
-                  </div>
-                  <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-                </div>
-                <p className="text-sm font-medium">Waiting for NFC tag...</p>
-                <p className="text-xs text-muted-foreground text-center">Hold the NFC card or phone near the reader</p>
-                <Button variant="outline" size="sm" onClick={() => setNfcStatus('idle')}>Cancel</Button>
-              </div>
-            )}
-            {nfcStatus === 'success' && nfcMember && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-green-50 border border-green-200 text-center">
-                  <p className="text-xs text-green-600 mb-1">NFC Tag Detected</p>
-                  <p className="font-semibold text-green-900">{nfcMember.name}</p>
-                  <p className="text-xs text-green-700">{nfcMember.role} · {nfcMember.group}</p>
-                </div>
-                <div className="flex gap-3">
-                  <Button variant="outline" className="flex-1" onClick={() => { setNfcStatus('idle'); setNfcMember(null); }}>Cancel</Button>
-                  <Button className="flex-1" onClick={confirmNfcCheckin} data-testid="confirm-nfc-checkin">Confirm Check-In</Button>
-                </div>
-              </div>
-            )}
-            {nfcStatus === 'unsupported' && (
-              <div className="space-y-3">
-                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
-                  <p className="font-medium mb-1">NFC Not Supported</p>
-                  <p className="text-xs">Web NFC (NDEFReader) requires Chrome on Android. Desktop browsers and Safari are not supported.</p>
-                  <p className="text-xs mt-2">Please use PIN check-in or manual entry instead.</p>
-                </div>
-                <Button variant="outline" className="w-full" onClick={() => setShowNfc(false)}>Close</Button>
-              </div>
-            )}
-            {nfcStatus === 'error' && (
-              <div className="space-y-3">
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-800">NFC scan failed. Please try again.</div>
-                <div className="flex gap-3">
-                  <Button variant="outline" className="flex-1" onClick={() => setShowNfc(false)}>Close</Button>
-                  <Button className="flex-1" onClick={() => { setNfcStatus('idle'); handleNfcScan(); }}>Retry</Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <NfcCheckInDialog
+        open={showNfc}
+        onOpenChange={setShowNfc}
+        nfcStatus={nfcStatus}
+        setNfcStatus={setNfcStatus}
+        nfcMember={nfcMember}
+        setNfcMember={setNfcMember}
+        nfcEventId={nfcEventId}
+        setNfcEventId={setNfcEventId}
+        events={events}
+        onStartScan={handleNfcScan}
+        onConfirmCheckin={confirmNfcCheckin}
+      />
 
       {/* Parent Check-In Dialog */}
-      <Dialog open={showParentCheckin} onOpenChange={(o) => { if (!o) { setShowParentCheckin(false); stopQrScan(); } }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Baby size={18} className="text-emerald-500" /> Parent Check-In</DialogTitle>
-            <DialogDescription>Look up a parent by phone, email, ID, or QR code to check in their children</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 mt-2">
-            <div className="space-y-2">
-              <Label>Event (optional)</Label>
-              <Select value={parentEventId || '_none'} onValueChange={v => setParentEventId(v === '_none' ? '' : v)}>
-                <SelectTrigger data-testid="parent-event-select"><SelectValue placeholder="Select event" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_none">No event</SelectItem>
-                  {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {!parentData && (
-              <>
-                <div className="space-y-2">
-                  <Label>Parent Phone, Email, or ID *</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      data-testid="parent-lookup-input"
-                      placeholder="e.g. +256 700 123456"
-                      value={parentLookup}
-                      onChange={e => setParentLookup(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleParentLookup(); } }}
-                      className="flex-1"
-                    />
-                    <Button variant="outline" size="icon" onClick={startQrScan} title="Scan QR" data-testid="qr-scan-btn"><QrCode size={16} /></Button>
-                  </div>
-                </div>
-
-                {showQrScanner && (
-                  <div className="relative rounded-lg overflow-hidden border border-border bg-black">
-                    <video ref={videoRef} className="w-full h-48 object-cover" muted playsInline />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-40 h-40 border-2 border-white/60 rounded-lg" />
-                    </div>
-                    <Button size="sm" variant="secondary" className="absolute bottom-2 right-2" onClick={stopQrScan}>Close</Button>
-                  </div>
-                )}
-
-                <Button className="w-full gap-2" onClick={handleParentLookup} disabled={lookingUp || !parentLookup.trim()} data-testid="lookup-parent-btn">
-                  <Phone size={14} /> {lookingUp ? 'Looking up...' : 'Find Children'}
-                </Button>
-              </>
-            )}
-
-            {parentData && (
-              <>
-                <div className="p-3 rounded-lg bg-accent/30 border border-border">
-                  <p className="text-xs text-muted-foreground">Parent Found</p>
-                  <p className="font-medium">{parentData.name}</p>
-                  <div className="flex gap-3 text-xs text-muted-foreground mt-0.5">
-                    {parentData.phone && <span>{parentData.phone}</span>}
-                    {parentData.email && <span>{parentData.email}</span>}
-                  </div>
-                </div>
-
-                {parentChildren.length > 0 ? (
-                  <div className="space-y-2">
-                    <Label>Select Children to Check In</Label>
-                    {parentChildren.map(child => (
-                      <div key={child.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-accent/20 transition-colors" data-testid={`parent-child-${child.id}`}>
-                        <Checkbox
-                          checked={selectedChildIds.includes(child.id)}
-                          onCheckedChange={() => toggleChildSelection(child.id)}
-                          data-testid={`select-child-${child.id}`}
-                        />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium">{child.name}</p>
-                          <div className="flex gap-2 text-xs text-muted-foreground">
-                            {child.class_group && <span>{child.class_group}</span>}
-                            {child.gender && <span className="capitalize">{child.gender}</span>}
-                          </div>
-                          {child.allergies && <Badge variant="destructive" className="text-[10px] mt-1">{child.allergies}</Badge>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">No children found for this parent</p>
-                )}
-
-                <div className="flex gap-3 pt-2">
-                  <Button variant="outline" className="flex-1" onClick={resetParentCheckin} data-testid="parent-checkin-back">Back</Button>
-                  <Button
-                    className="flex-1 gap-1.5"
-                    onClick={handleCheckinChildren}
-                    disabled={checkingInChildren || selectedChildIds.length === 0}
-                    data-testid="checkin-children-btn"
-                  >
-                    <UserCheck size={14} />
-                    {checkingInChildren ? 'Checking in...' : `Check In ${selectedChildIds.length} Child${selectedChildIds.length > 1 ? 'ren' : ''}`}
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ParentCheckInDialog
+        open={showParentCheckin}
+        onOpenChange={setShowParentCheckin}
+        parentLookup={parentLookup}
+        setParentLookup={setParentLookup}
+        parentEventId={parentEventId}
+        setParentEventId={setParentEventId}
+        parentData={parentData}
+        parentChildren={parentChildren}
+        selectedChildIds={selectedChildIds}
+        toggleChildSelection={toggleChildSelection}
+        lookingUp={lookingUp}
+        checkingInChildren={checkingInChildren}
+        events={events}
+        onLookup={handleParentLookup}
+        onCheckinChildren={handleCheckinChildren}
+        onReset={resetParentCheckin}
+        showQrScanner={showQrScanner}
+        videoRef={videoRef}
+        onStartQrScan={startQrScan}
+        onStopQrScan={stopQrScan}
+      />
       {/* Child Tags Print Dialog */}
       <Dialog open={showChildTags} onOpenChange={(o) => { if (!o) { setShowChildTags(false); setCheckedInData(null); } }}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">

@@ -16,6 +16,9 @@ import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { useCall } from '../context/CallContext';
 import { toast } from 'sonner';
+import { ConferenceDialog } from '../components/comms/ConferenceDialog';
+import { NewConversationDialog } from '../components/comms/NewConversationDialog';
+import { AnnouncementDialog } from '../components/comms/AnnouncementDialog';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
@@ -741,132 +744,37 @@ export default function CommsPage() {
       </div>
 
       {/* Schedule Conference Dialog */}
-      <Dialog open={showConference} onOpenChange={setShowConference}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Schedule Conference</DialogTitle></DialogHeader>
-          <form onSubmit={handleCreateConference} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Title *</Label><Input placeholder="Team Standup" value={confForm.title} onChange={e => setConfForm({...confForm, title: e.target.value})} required data-testid="conf-title" /></div>
-            <div className="space-y-2"><Label>Description</Label><Textarea rows={2} placeholder="Meeting agenda..." value={confForm.description} onChange={e => setConfForm({...confForm, description: e.target.value})} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Date & Time</Label><Input type="datetime-local" value={confForm.scheduled_at} onChange={e => setConfForm({...confForm, scheduled_at: e.target.value})} data-testid="conf-datetime" /></div>
-              <div className="space-y-2"><Label>Duration (min)</Label><Input type="number" min={15} max={480} value={confForm.duration_minutes} onChange={e => setConfForm({...confForm, duration_minutes: parseInt(e.target.value) || 60})} /></div>
-            </div>
-            <div className="space-y-2">
-              <Label>Invite Staff</Label>
-              <Select onValueChange={v => { if (v && !confForm.user_ids.includes(v)) setConfForm({...confForm, user_ids: [...confForm.user_ids, v]}); }}>
-                <SelectTrigger><SelectValue placeholder="Add participants..." /></SelectTrigger>
-                <SelectContent>{allStaff.filter(s => s.id !== user?.id && !confForm.user_ids.includes(s.id)).map(s => (
-                  <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
-                ))}</SelectContent>
-              </Select>
-              <div className="flex flex-wrap gap-1">{confForm.user_ids.map(uid => {
-                const s = allStaff.find(x => x.id === uid);
-                return <Badge key={uid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => setConfForm({...confForm, user_ids: confForm.user_ids.filter(i => i !== uid)})}>{s?.name || uid} <X size={10} /></Badge>;
-              })}</div>
-            </div>
-            <div className="space-y-2">
-              <Label>External Email Invites</Label>
-              <Input placeholder="email1@example.com, email2@example.com" value={confForm.external_emails} onChange={e => setConfForm({...confForm, external_emails: e.target.value})} data-testid="conf-ext-emails" />
-              <p className="text-[10px] text-muted-foreground">Comma-separated emails for non-users</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Password (optional)</Label><Input placeholder="Meeting password" value={confForm.password} onChange={e => setConfForm({...confForm, password: e.target.value})} /></div>
-              <div className="flex items-center gap-2 pt-6"><input type="checkbox" id="conf-video" checked={confForm.is_video_enabled} onChange={e => setConfForm({...confForm, is_video_enabled: e.target.checked})} /><Label htmlFor="conf-video" className="cursor-pointer text-xs">Video enabled</Label></div>
-            </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={confForm.create_calendar_event} onChange={e => setConfForm({...confForm, create_calendar_event: e.target.checked})} />Add to Calendar</label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={confForm.send_email_invites} onChange={e => setConfForm({...confForm, send_email_invites: e.target.checked})} />Send Email Invites</label>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowConference(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" data-testid="create-conf-btn">Schedule</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <ConferenceDialog
+        open={showConference}
+        onOpenChange={setShowConference}
+        confForm={confForm}
+        setConfForm={setConfForm}
+        allStaff={allStaff}
+        userId={user?.id}
+        onSubmit={handleCreateConference}
+      />
 
       {/* New Conversation Dialog */}
-      <Dialog open={showNewConv} onOpenChange={setShowNewConv}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>New Conversation</DialogTitle></DialogHeader>
-          <div className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>{convForm.participants.length > 1 ? 'Group Name *' : 'Conversation Name'}</Label>
-              <Input placeholder={convForm.participants.length > 1 ? 'e.g. Entebbe Team' : 'Optional name'} value={convForm.name} onChange={e => setConvForm({...convForm, name: e.target.value})} data-testid="conv-name-input" />
-            </div>
-            {convForm.participants.length > 1 && (
-              <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950 px-3 py-1.5 rounded-lg">Group chat (2+ participants selected)</p>
-            )}
-            <div className="space-y-2"><Label>Add Participants</Label>
-              <Select onValueChange={v => {
-                if (!convForm.participants.includes(v)) {
-                  const newP = [...convForm.participants, v];
-                  setConvForm({...convForm, participants: newP, type: newP.length > 1 ? 'group' : 'direct'});
-                }
-              }}>
-                <SelectTrigger><SelectValue placeholder="Select staff..." /></SelectTrigger>
-                <SelectContent>
-                  {allStaff.filter(s => s.id !== user?.id).map(s => (
-                    <SelectItem key={s.id} value={s.id}>
-                      <span className="flex items-center gap-2">
-                        {s.name} ({s.role})
-                        <span className={`w-2 h-2 rounded-full ${PRESENCE_DOTS[getUserPresence(s.id)] || 'bg-gray-400'}`} />
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {convForm.participants.map(pid => {
-                  const staff = allStaff.find(s => s.id === pid);
-                  return (
-                    <Badge key={pid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => {
-                      const newP = convForm.participants.filter(p => p !== pid);
-                      setConvForm({...convForm, participants: newP, type: newP.length > 1 ? 'group' : 'direct'});
-                    }}>
-                      {staff?.name || pid} &times;
-                    </Badge>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <Button variant="outline" className="flex-1" onClick={() => setShowNewConv(false)}>Cancel</Button>
-              <Button className="flex-1" disabled={convForm.participants.length === 0} onClick={handleCreateConv} data-testid="create-conv-btn">
-                {convForm.participants.length > 1 ? 'Create Group' : 'Start Chat'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <NewConversationDialog
+        open={showNewConv}
+        onOpenChange={setShowNewConv}
+        convForm={convForm}
+        setConvForm={setConvForm}
+        allStaff={allStaff}
+        userId={user?.id}
+        getUserPresence={getUserPresence}
+        PRESENCE_DOTS={PRESENCE_DOTS}
+        onCreateConv={handleCreateConv}
+      />
 
       {/* Post Announcement Dialog */}
-      <Dialog open={showNewAnnouncement} onOpenChange={setShowNewAnnouncement}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Post Announcement</DialogTitle></DialogHeader>
-          <form onSubmit={handlePostAnnouncement} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Title *</Label>
-              <Input placeholder="Announcement title" value={announcementForm.title} onChange={e => setAnnouncementForm({...announcementForm, title: e.target.value})} required data-testid="announcement-title-input" />
-            </div>
-            <div className="space-y-2"><Label>Content *</Label>
-              <Textarea rows={4} placeholder="Write your announcement..." value={announcementForm.content} onChange={e => setAnnouncementForm({...announcementForm, content: e.target.value})} required data-testid="announcement-content-input" />
-            </div>
-            <div className="space-y-2"><Label>Type</Label>
-              <Select value={announcementForm.type} onValueChange={v => setAnnouncementForm({...announcementForm, type: v})}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="general">General</SelectItem>
-                  <SelectItem value="urgent">Urgent</SelectItem>
-                  <SelectItem value="event">Event</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setShowNewAnnouncement(false)}>Cancel</Button>
-              <Button type="submit" className="flex-1" data-testid="post-announcement-submit">Post</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <AnnouncementDialog
+        open={showNewAnnouncement}
+        onOpenChange={setShowNewAnnouncement}
+        form={announcementForm}
+        setForm={setAnnouncementForm}
+        onSubmit={handlePostAnnouncement}
+      />
     </div>
   );
 }
