@@ -612,7 +612,7 @@ export default function KioskPage() {
                   {['staff', 'parent', 'guest', 'child_self'].map(t => (
                     <label key={t} className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" className="accent-primary" checked={(setupForm.check_in_types || []).includes(t)} onChange={e => { const types = e.target.checked ? [...(setupForm.check_in_types || []), t] : (setupForm.check_in_types || []).filter(x => x !== t); setSetupForm({...setupForm, check_in_types: types}); }} />
-                      {t === 'staff' ? 'Staff Check-in (with children)' : t === 'parent' ? 'Parent Check-in (with children)' : t === 'guest' ? 'Guest Check-in (with children)' : 'Child Self Check-in'}
+                      {({ staff: 'Staff Check-in (with children)', parent: 'Parent Check-in (with children)', guest: 'Guest Check-in (with children)', child_self: 'Child Self Check-in' })[t] || t}
                     </label>
                   ))}
                 </div>
@@ -778,7 +778,9 @@ export default function KioskPage() {
         <Card className="w-full max-w-md shadow rounded-xl">
           <CardHeader className="text-center space-y-3">
             <div className="mx-auto w-20 h-20 rounded-full bg-primary flex items-center justify-center">
-              {scanType === 'nfc' ? <Smartphone size={36} className="text-primary-foreground" /> : scanType === 'biometric' ? <Fingerprint size={36} className="text-primary-foreground" /> : <ScanLine size={36} className="text-primary-foreground" />}
+              {scanType === 'nfc' ? <Smartphone size={36} className="text-primary-foreground" />
+               : scanType === 'biometric' ? <Fingerprint size={36} className="text-primary-foreground" />
+               : <ScanLine size={36} className="text-primary-foreground" />}
             </div>
             <CardTitle className="text-2xl font-heading">{scanType === 'nfc' ? 'NFC Scan' : scanType === 'biometric' ? 'Biometric Scan' : 'Access Scan'}</CardTitle>
             <CardDescription>{scanType === 'nfc' ? 'Place NFC tag on device to scan' : scanType === 'biometric' ? 'Use fingerprint sensor to verify' : 'Scan residents/staff in or out of restricted areas'}</CardDescription>

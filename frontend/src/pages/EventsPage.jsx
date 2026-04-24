@@ -330,7 +330,7 @@ export default function EventsPage() {
                   </div>
                 )}
                 {['daily', 'weekly', 'monthly', 'yearly'].includes(newEvent.recurrence_type) && (
-                  <div className="space-y-2"><Label>Repeat every N {newEvent.recurrence_type === 'daily' ? 'days' : newEvent.recurrence_type === 'weekly' ? 'weeks' : newEvent.recurrence_type === 'yearly' ? 'years' : 'months'}</Label>
+                  <div className="space-y-2"><Label>Repeat every N {{ daily: 'days', weekly: 'weeks', yearly: 'years', monthly: 'months' }[newEvent.recurrence_type] || 'units'}</Label>
                     <Input type="number" min={1} max={12} value={newEvent.recurrence_interval || 1} onChange={e => setNewEvent({...newEvent, recurrence_interval: parseInt(e.target.value) || 1})} />
                   </div>
                 )}

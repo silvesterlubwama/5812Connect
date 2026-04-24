@@ -341,7 +341,7 @@ export default function CalendarPage() {
               </div>
             </div>
             {['daily', 'weekly', 'monthly', 'yearly'].includes(recurForm.recurrence) && (
-              <div className="space-y-2"><Label>Every N {recurForm.recurrence === 'weekly' ? 'weeks' : recurForm.recurrence === 'daily' ? 'days' : recurForm.recurrence === 'yearly' ? 'years' : 'months'}</Label>
+              <div className="space-y-2"><Label>Every N {{ weekly: 'weeks', daily: 'days', yearly: 'years', monthly: 'months' }[recurForm.recurrence] || 'units'}</Label>
                 <Input type="number" min={1} max={recurForm.recurrence === 'yearly' ? 5 : 12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
               </div>
             )}

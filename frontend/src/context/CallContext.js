@@ -3,6 +3,8 @@ import { useAuth } from './AuthContext';
 import { useWebSocket } from './WebSocketContext';
 import { callingApi } from '../services/api';
 import { toast } from 'sonner';
+import { useMediaControls } from '../hooks/useMediaControls';
+import { usePeerConnections, formatCallDuration } from '../hooks/usePeerConnections';
 
 const CallContext = createContext(null);
 
@@ -24,6 +26,7 @@ export const CallProvider = ({ children }) => {
   const { user } = useAuth();
   const { send, addListener } = useWebSocket();
 
+  // Call state
   const [activeCall, setActiveCall] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [callStatus, setCallStatus] = useState('idle');
@@ -36,12 +39,14 @@ export const CallProvider = ({ children }) => {
   const [participants, setParticipants] = useState([]);
   const [callableContacts, setCallableContacts] = useState([]);
 
+  // Refs
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
-  const peerConnectionsRef = useRef({});
   const iceServersRef = useRef([{ urls: 'stun:stun.l.google.com:19302' }]);
   const durationIntervalRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const activeCallRef = useRef(null);
+  activeCallRef.current = activeCall;
 
   // Hidden audio element
   useEffect(() => {
@@ -61,7 +66,7 @@ export const CallProvider = ({ children }) => {
     callingApi.getIceServers().then(r => { if (r.data?.ice_servers) iceServersRef.current = r.data.ice_servers; }).catch(() => {});
   }, [user?.id]);
 
-  // Duration timer helpers
+  // Duration timer
   const startDurationTimer = useCallback(() => {
     if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
     setCallDuration(0);
@@ -72,68 +77,47 @@ export const CallProvider = ({ children }) => {
     if (durationIntervalRef.current) { clearInterval(durationIntervalRef.current); durationIntervalRef.current = null; }
   }, []);
 
-  // Cleanup call state
+  // Cleanup
   const cleanupCall = useCallback(() => {
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
     if (screenStreamRef.current) { screenStreamRef.current.getTracks().forEach(t => t.stop()); screenStreamRef.current = null; }
-    Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
-    peerConnectionsRef.current = {};
     stopDurationTimer();
     setActiveCall(null); setCallStatus('idle'); setIsMuted(false); setIsVideoEnabled(false);
     setIsScreenSharing(false); setIsRecording(false); setCallDuration(0);
     setRemoteStreams({}); setParticipants([]);
   }, [stopDurationTimer]);
 
-  // Get user media
-  const getUserMedia = useCallback(async (withVideo = false) => {
-    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true, video: withVideo ? { width: 1280, height: 720, facingMode: 'user' } : false
-    });
-    localStreamRef.current = stream;
-    setIsVideoEnabled(withVideo);
-    return stream;
-  }, []);
+  // Extracted hooks
+  const { peerConnectionsRef, getUserMedia, createPeerConnection, closeAllConnections } =
+    usePeerConnections(iceServersRef, localStreamRef, remoteAudioRef, send, setRemoteStreams, setCallStatus, startDurationTimer, cleanupCall);
 
-  // Create peer connection
-  const createPeerConnection = useCallback((targetUserId) => {
-    if (peerConnectionsRef.current[targetUserId]) peerConnectionsRef.current[targetUserId].close();
-    const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
-    peerConnectionsRef.current[targetUserId] = pc;
-    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current));
-    pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      setRemoteStreams(prev => ({ ...prev, [targetUserId]: stream }));
-      if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = stream; remoteAudioRef.current.play().catch(() => {}); }
-    };
-    pc.onicecandidate = (event) => {
-      if (event.candidate) send({ type: 'ice_candidate', target_user_id: targetUserId, candidate: event.candidate, call_id: activeCall?.call_id });
-    };
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') { setCallStatus('connected'); startDurationTimer(); }
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') { toast.error('Connection lost'); cleanupCall(); }
-    };
-    return pc;
-  }, [send, activeCall, startDurationTimer, cleanupCall]);
+  const mediaControls = useMediaControls(localStreamRef, screenStreamRef, peerConnectionsRef);
+
+  // Override cleanupCall to also close peer connections
+  const fullCleanup = useCallback(() => {
+    closeAllConnections();
+    cleanupCall();
+  }, [closeAllConnections, cleanupCall]);
 
   // Initiate call
   const initiateCall = useCallback(async (targetUserId, callType = 'audio') => {
     if (!user?.id) { toast.error('Not connected'); return; }
     try {
-      await getUserMedia(callType === 'video');
+      const stream = await getUserMedia(callType === 'video');
+      setIsVideoEnabled(callType === 'video');
       const res = await callingApi.initiateCall({ to_user_id: targetUserId, call_type: callType, use_pbx: false }, user.id);
       const { call_id, ice_servers, call } = res.data;
       if (ice_servers) iceServersRef.current = ice_servers;
       const target = callableContacts.find(c => c.user_id === targetUserId);
       setActiveCall({ ...call, call_id, target_name: target?.name || targetUserId, call_type: callType });
       setCallStatus('ringing'); setParticipants([user.id, targetUserId]);
-      const pc = createPeerConnection(targetUserId);
+      const pc = createPeerConnection(targetUserId, activeCallRef);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       send({ type: 'call_offer', call_id, target_user_id: targetUserId, sdp: offer, call_type: callType, caller_name: user.name });
       return call_id;
-    } catch (err) { console.error('Call failed:', err); cleanupCall(); toast.error('Failed to start call'); }
-  }, [user, callableContacts, createPeerConnection, getUserMedia, send, cleanupCall]);
+    } catch (err) { console.error('Call failed:', err); fullCleanup(); toast.error('Failed to start call'); }
+  }, [user, callableContacts, createPeerConnection, getUserMedia, send, fullCleanup]);
 
   // Answer call
   const answerCall = useCallback(async (withVideo = false) => {
@@ -142,7 +126,8 @@ export const CallProvider = ({ children }) => {
       if (incomingCall.ringtone) { incomingCall.ringtone.pause(); incomingCall.ringtone.currentTime = 0; }
       const isVideoCall = withVideo || incomingCall.call_type === 'video';
       await getUserMedia(isVideoCall);
-      const pc = createPeerConnection(incomingCall.caller_id);
+      setIsVideoEnabled(isVideoCall);
+      const pc = createPeerConnection(incomingCall.caller_id, activeCallRef);
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -167,8 +152,8 @@ export const CallProvider = ({ children }) => {
       send({ type: 'call_hangup', call_id: activeCall.call_id });
       callingApi.callAction(activeCall.call_id, { action: 'hangup' }, user?.id).catch(() => {});
     }
-    cleanupCall();
-  }, [activeCall, send, user, cleanupCall]);
+    fullCleanup();
+  }, [activeCall, send, user, fullCleanup]);
 
   // WebSocket signaling
   useEffect(() => {
@@ -183,67 +168,24 @@ export const CallProvider = ({ children }) => {
         const pc = peerConnectionsRef.current[data.from_user_id || data.sender_id];
         if (pc && data.candidate) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
       }),
-      addListener('call_rejected', () => { toast.info('Call declined'); cleanupCall(); }),
-      addListener('call_ended', () => cleanupCall()),
+      addListener('call_rejected', () => { toast.info('Call declined'); fullCleanup(); }),
+      addListener('call_ended', () => fullCleanup()),
       addListener('call_hold_changed', (data) => setCallStatus(data.is_held ? 'on_hold' : 'connected')),
     ];
     return () => unsubs.forEach(u => u());
-  }, [addListener, startDurationTimer, cleanupCall]);
+  }, [addListener, startDurationTimer, fullCleanup, peerConnectionsRef]);
 
-  // Toggle functions
-  const toggleMute = useCallback(() => {
-    if (localStreamRef.current) {
-      const track = localStreamRef.current.getAudioTracks()[0];
-      if (track) { track.enabled = !track.enabled; setIsMuted(!track.enabled); }
-    }
-  }, []);
-
-  const toggleVideo = useCallback(async () => {
-    if (isVideoEnabled) {
-      localStreamRef.current?.getVideoTracks().forEach(t => { t.stop(); localStreamRef.current.removeTrack(t); });
-      setIsVideoEnabled(false);
-    } else {
-      try {
-        const vs = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-        const vt = vs.getVideoTracks()[0];
-        localStreamRef.current?.addTrack(vt);
-        Object.values(peerConnectionsRef.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) sender.replaceTrack(vt); else pc.addTrack(vt, localStreamRef.current);
-        });
-        setIsVideoEnabled(true);
-      } catch { toast.error('Camera not available'); }
-    }
-  }, [isVideoEnabled]);
-
-  const toggleScreenShare = useCallback(async () => {
-    if (isScreenSharing) {
-      screenStreamRef.current?.getTracks().forEach(t => t.stop()); screenStreamRef.current = null;
-      setIsScreenSharing(false);
-    } else {
-      try {
-        const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-        screenStreamRef.current = screen;
-        const st = screen.getVideoTracks()[0];
-        Object.values(peerConnectionsRef.current).forEach(pc => {
-          const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) sender.replaceTrack(st); else pc.addTrack(st, screen);
-        });
-        st.onended = () => setIsScreenSharing(false);
-        setIsScreenSharing(true);
-      } catch { toast.error('Screen sharing cancelled'); }
-    }
-  }, [isScreenSharing]);
+  // Wrapped toggle functions (bind current state)
+  const handleToggleMute = useCallback(() => mediaControls.toggleMute(isMuted, setIsMuted), [mediaControls, isMuted]);
+  const handleToggleVideo = useCallback(() => mediaControls.toggleVideo(isVideoEnabled, setIsVideoEnabled), [mediaControls, isVideoEnabled]);
+  const handleToggleScreenShare = useCallback(() => mediaControls.toggleScreenShare(isScreenSharing, setIsScreenSharing), [mediaControls, isScreenSharing]);
+  const handleToggleRecording = useCallback(() => mediaControls.toggleRecording(setIsRecording), [mediaControls]);
 
   const toggleHold = useCallback(() => {
     const held = callStatus === 'on_hold';
     setCallStatus(held ? 'connected' : 'on_hold');
     send({ type: 'call_hold', call_id: activeCall?.call_id, is_held: !held });
   }, [callStatus, activeCall, send]);
-
-  const toggleRecording = useCallback(() => {
-    setIsRecording(prev => { if (prev) toast.success('Recording stopped'); else toast.success('Recording started'); return !prev; });
-  }, []);
 
   const transferCall = useCallback((targetUserId) => {
     send({ type: 'call_transfer', call_id: activeCall?.call_id, transfer_to_user_id: targetUserId });
@@ -252,7 +194,7 @@ export const CallProvider = ({ children }) => {
 
   const addParticipant = useCallback(async (targetUserId) => {
     try {
-      const pc = createPeerConnection(targetUserId);
+      const pc = createPeerConnection(targetUserId, activeCallRef);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       send({ type: 'call_offer', call_id: activeCall?.call_id, target_user_id: targetUserId, sdp: offer, call_type: activeCall?.call_type || 'audio', caller_name: user?.name });
@@ -261,19 +203,16 @@ export const CallProvider = ({ children }) => {
     } catch { toast.error('Failed to add participant'); }
   }, [activeCall, user, createPeerConnection, send]);
 
-  const formatDuration = (s) => {
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}` : `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   return (
     <CallContext.Provider value={{
       activeCall, incomingCall, callStatus, isMuted, isVideoEnabled, isScreenSharing,
-      isRecording, callDuration, formattedDuration: formatDuration(callDuration),
+      isRecording, callDuration, formattedDuration: formatCallDuration(callDuration),
       remoteStreams, participants, callableContacts, localStream: localStreamRef.current,
       sipRegistered: false, sipError: null,
-      initiateCall, answerCall, rejectCall, endCall, toggleMute, toggleVideo,
-      toggleScreenShare, toggleHold, toggleRecording, transferCall, addParticipant,
+      initiateCall, answerCall, rejectCall, endCall,
+      toggleMute: handleToggleMute, toggleVideo: handleToggleVideo,
+      toggleScreenShare: handleToggleScreenShare, toggleHold, toggleRecording: handleToggleRecording,
+      transferCall, addParticipant,
       isInCall: !!activeCall, hasIncomingCall: !!incomingCall,
     }}>
       {children}

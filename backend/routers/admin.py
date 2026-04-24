@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ========== USER MANAGEMENT ==========
 
 @router.get("/users")
-async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)):
+async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)) -> list:
     campus = await get_campus_filter(current_user)
     query = {}
     conditions = []
@@ -46,7 +46,7 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
 
 
 @router.post("/users")
-async def create_user(data: dict, current_user: dict = Depends(require_admin)):
+async def create_user(data: dict, current_user: dict = Depends(require_admin)) -> dict:
     """Create a new user account. Optionally also creates a linked member record."""
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
@@ -92,7 +92,7 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)):
 
 
 @router.post("/users/import")
-async def import_users(data: dict, current_user: dict = Depends(require_admin)):
+async def import_users(data: dict, current_user: dict = Depends(require_admin)) -> dict:
     """Bulk import users from a JSON array or CSV-parsed data."""
     users_data = data.get("users", [])
     if not users_data:
@@ -139,14 +139,14 @@ async def import_users(data: dict, current_user: dict = Depends(require_admin)):
 
 
 @router.get("/users/{user_id}")
-async def get_user(user_id: str, current_user: dict = Depends(require_admin)):
+async def get_user(user_id: str, current_user: dict = Depends(require_admin)) -> dict:
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(status_code=404, detail="User not found")
     return user
 
 
 @router.get("/users/{user_id}/profile")
-async def get_user_full_profile(user_id: str, current_user: dict = Depends(require_admin)):
+async def get_user_full_profile(user_id: str, current_user: dict = Depends(require_admin)) -> dict:
     """Return merged user + member profile for admin full-edit"""
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(status_code=404, detail="User not found")
@@ -164,7 +164,7 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 
 
 @router.put("/users/{user_id}")
-async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
+async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)) -> dict:
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "pin",
@@ -243,7 +243,7 @@ async def _sync_member_profile(user_id: str, user: dict, update: dict, account_f
 
 
 @router.post("/users/{user_id}/reset-password")
-async def admin_reset_password(user_id: str, data: dict, current_user: dict = Depends(require_director)):
+async def admin_reset_password(user_id: str, data: dict, current_user: dict = Depends(require_director)) -> dict:
     new_password = data.get("new_password", "").strip()
     if not new_password or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
@@ -257,7 +257,7 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
 
 
 @router.delete("/users/{user_id}")
-async def admin_delete_user(user_id: str, current_user: dict = Depends(require_admin)):
+async def admin_delete_user(user_id: str, current_user: dict = Depends(require_admin)) -> dict:
     if user_id == current_user["id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     user = await db.users.find_one({"id": user_id}, {"_id": 0})
@@ -277,7 +277,7 @@ async def admin_delete_user(user_id: str, current_user: dict = Depends(require_a
 # ========== BULK OPERATIONS ==========
 
 @router.post("/users/bulk-update")
-async def bulk_update_users(data: dict, current_user: dict = Depends(require_admin)):
+async def bulk_update_users(data: dict, current_user: dict = Depends(require_admin)) -> dict:
     """Bulk update multiple users. Expects: { "user_ids": [...], "updates": { "role": "...", "status": "..." } }"""
     user_ids = data.get("user_ids", [])
     updates = data.get("updates", {})
@@ -294,7 +294,7 @@ async def bulk_update_users(data: dict, current_user: dict = Depends(require_adm
 
 
 @router.post("/users/bulk-delete")
-async def bulk_delete_users(data: dict, current_user: dict = Depends(require_admin)):
+async def bulk_delete_users(data: dict, current_user: dict = Depends(require_admin)) -> dict:
     """Bulk delete multiple users. Expects: { "user_ids": [...] }"""
     user_ids = data.get("user_ids", [])
     if not user_ids:
@@ -348,7 +348,7 @@ async def bulk_export_members(data: dict, current_user: dict = Depends(get_curre
 # ========== AUDIT LOG ==========
 
 @router.get("/audit")
-async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(require_admin)):
+async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(require_admin)) -> dict:
     logs = await db.audit_log.find({}, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
     total = await db.audit_log.count_documents({})
     return {"logs": logs, "total": total}

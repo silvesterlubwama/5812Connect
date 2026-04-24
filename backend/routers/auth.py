@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 
 @router.post("/auth/register")
-async def register(data: UserRegister):
+async def register(data: UserRegister) -> dict:
     existing = await db.users.find_one({"email": data.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -41,7 +41,7 @@ async def register(data: UserRegister):
 
 
 @router.post("/auth/visitor-register")
-async def visitor_register(data: dict):
+async def visitor_register(data: dict) -> dict:
     """Quick visitor/parent guest account creation — no password required, phone-based."""
     name = (data.get("name") or "").strip()
     phone = (data.get("phone") or "").strip()
@@ -88,7 +88,7 @@ async def visitor_register(data: dict):
 
 
 @router.post("/auth/login")
-async def login(data: UserLogin):
+async def login(data: UserLogin) -> dict:
     identifier = data.identifier.strip().lower()
     user = await db.users.find_one({
         "$or": [
@@ -124,7 +124,7 @@ async def login(data: UserLogin):
 
 
 @router.get("/auth/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
     user_out = {k: v for k, v in current_user.items() if k not in ("password_hash", "_id")}
     # Enrich with location name for campus display
     if user_out.get("location_id"):
@@ -134,12 +134,12 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/auth/logout")
-async def logout():
+async def logout() -> dict:
     return {"message": "Logged out successfully"}
 
 
 @router.post("/auth/google-session")
-async def google_auth_session(data: dict):
+async def google_auth_session(data: dict) -> dict:
     import httpx
     session_id = data.get("session_id")
     if not session_id:
@@ -185,7 +185,7 @@ async def google_auth_session(data: dict):
 
 
 @router.post("/auth/forgot-password")
-async def forgot_password(data: dict):
+async def forgot_password(data: dict) -> dict:
     email = (data.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -219,7 +219,7 @@ async def forgot_password(data: dict):
 
 
 @router.post("/auth/reset-password")
-async def reset_password(data: dict):
+async def reset_password(data: dict) -> dict:
     token = (data.get("token") or "").strip()
     new_password = (data.get("new_password") or "").strip()
     if not token or not new_password:

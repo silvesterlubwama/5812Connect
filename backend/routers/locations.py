@@ -54,12 +54,12 @@ class LocationUpdate(BaseModel):
 
 
 @router.get("/locations")
-async def list_locations(current_user: dict = Depends(get_current_user)):
+async def list_locations(current_user: dict = Depends(get_current_user)) -> list:
     return await db.locations.find({}, {"_id": 0}).sort("name", 1).to_list(200)
 
 
 @router.post("/locations")
-async def create_location(data: LocationCreate, current_user: dict = Depends(require_admin)):
+async def create_location(data: LocationCreate, current_user: dict = Depends(require_admin)) -> dict:
     doc = {"id": f"loc_{str(uuid.uuid4())[:8]}", **data.model_dump(), "active": True, "member_count": 0, "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
     await db.locations.insert_one(doc)
     doc.pop("_id", None)

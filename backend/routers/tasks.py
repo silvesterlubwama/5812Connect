@@ -35,7 +35,7 @@ async def list_tasks(
     list_id: Optional[str] = None,
     include_archived: bool = False,
     current_user: dict = Depends(get_current_user)
-):
+) -> list:
     query = {}
     if not include_archived:
         query["is_archived"] = {"$ne": True}
@@ -65,7 +65,7 @@ async def list_archived_tasks(
 
 
 @router.post("/tasks")
-async def create_task(data: TaskCreate, current_user: dict = Depends(get_current_user)):
+async def create_task(data: TaskCreate, current_user: dict = Depends(get_current_user)) -> dict:
     task = {
         "id": f"task_{str(uuid.uuid4())[:8]}",
         **data.model_dump(),
@@ -122,7 +122,7 @@ async def bulk_archive_tasks(data: dict, current_user: dict = Depends(get_curren
 # =================== SINGLE TASK OPERATIONS ===================
 
 @router.put("/tasks/{task_id}")
-async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depends(get_current_user)):
+async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depends(get_current_user)) -> dict:
     raw = data.model_dump()
     update_data = {}
     for k, v in raw.items():
@@ -211,7 +211,7 @@ async def restore_task(task_id: str, current_user: dict = Depends(get_current_us
 
 
 @router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_task(task_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

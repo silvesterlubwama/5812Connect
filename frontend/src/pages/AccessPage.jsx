@@ -14,6 +14,11 @@ import { toast } from 'sonner';
 import { Fingerprint, Smartphone } from 'lucide-react';
 import { ScanDialog } from '../components/access/ScanDialog';
 
+const STATUS_VARIANT = { approved: 'outline', rejected: 'destructive', pending: 'secondary' };
+const STATUS_CLASS = { approved: 'border-green-500 text-green-600', rejected: '', pending: '' };
+const PASS_STATUS_CLASS = { active: 'border-green-500 text-green-600', expired: 'border-red-400 text-red-500' };
+const CHECKIN_TYPE_MAP = { staff: 'Staff Check-in (with children)', parent: 'Parent Check-in (with children)', guest: 'Guest Check-in (with children)', child_self: 'Child Self Check-in' };
+
 export default function AccessPage() {
   const [locations, setLocations] = useState([]);
   const [restrictedLocations, setRestrictedLocations] = useState([]);
@@ -350,8 +355,8 @@ export default function AccessPage() {
                           <p className="text-xs text-muted-foreground">{g.visit_date} {g.visit_time && `at ${g.visit_time}`} — {g.purpose}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Badge variant={g.status === 'approved' ? 'outline' : g.status === 'rejected' ? 'destructive' : 'secondary'}
-                            className={`text-xs ${g.status === 'approved' ? 'border-green-500 text-green-600' : ''}`}>
+                          <Badge variant={STATUS_VARIANT[g.status] || 'secondary'}
+                            className={`text-xs ${STATUS_CLASS[g.status] || ''}`}>
                             {g.status}
                           </Badge>
                           {g.status === 'pending' && (
@@ -387,7 +392,7 @@ export default function AccessPage() {
                             <p className="text-xs text-muted-foreground">{gp.guest_phone}</p>
                           </div>
                           <Badge variant={gp.status === 'active' ? 'outline' : 'secondary'}
-                            className={`text-xs ${gp.status === 'active' ? 'border-green-500 text-green-600' : gp.status === 'expired' ? 'border-red-400 text-red-500' : 'border-border'}`}>
+                            className={`text-xs ${PASS_STATUS_CLASS[gp.status] || 'border-border'}`}>
                             {gp.status}
                           </Badge>
                         </div>

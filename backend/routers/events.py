@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api", tags=["events"])
 # ========== EVENT TYPES ==========
 
 @router.get("/event-types")
-async def list_event_types(current_user: dict = Depends(get_current_user)):
+async def list_event_types(current_user: dict = Depends(get_current_user)) -> list:
     types = await db.event_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
     if not types:
         defaults = [
@@ -34,7 +34,7 @@ async def list_event_types(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/event-types")
-async def create_event_type(data: dict, current_user: dict = Depends(require_manager)):
+async def create_event_type(data: dict, current_user: dict = Depends(require_manager)) -> dict:
     doc = {
         "id": f"etype_{str(uuid.uuid4())[:8]}",
         "name": data.get("name", "").lower().replace(" ", "_"),
@@ -65,7 +65,7 @@ async def delete_event_type(type_id: str, current_user: dict = Depends(require_a
 # ========== EVENTS ==========
 
 @router.get("/events")
-async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)) -> list:
     campus = await get_campus_filter(current_user)
     query = {}
     if campus:
@@ -106,7 +106,7 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
 
 
 @router.post("/events")
-async def create_event(data: EventCreate, current_user: dict = Depends(get_current_user)):
+async def create_event(data: EventCreate, current_user: dict = Depends(get_current_user)) -> dict:
     event_id = f"evt_{str(uuid.uuid4())[:8]}"
     event = {
         "id": event_id,
@@ -312,7 +312,7 @@ async def import_calendar_ical(data: dict, current_user: dict = Depends(get_curr
 
 
 @router.get("/events/{event_id}")
-async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
+async def get_event(event_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -324,7 +324,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
 
 
 @router.put("/events/{event_id}")
-async def update_event(event_id: str, data: EventUpdate, current_user: dict = Depends(get_current_user)):
+async def update_event(event_id: str, data: EventUpdate, current_user: dict = Depends(get_current_user)) -> dict:
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.events.update_one({"id": event_id}, {"$set": update_data})
@@ -334,7 +334,7 @@ async def update_event(event_id: str, data: EventUpdate, current_user: dict = De
 
 
 @router.delete("/events/{event_id}")
-async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     result = await db.events.delete_one({"id": event_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")

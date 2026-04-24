@@ -25,7 +25,7 @@ async def list_members(
     skip: int = 0,
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
-):
+) -> dict:
     STAFF_ROLES = {"Executive Director", "Adviser", "Director", "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer", "admin", "system_admin"}
     campus = await get_campus_filter(current_user)
     query = {}
@@ -66,7 +66,7 @@ async def list_members(
 
 
 @router.post("/members")
-async def create_member(data: MemberCreate, current_user: dict = Depends(get_current_user)):
+async def create_member(data: MemberCreate, current_user: dict = Depends(get_current_user)) -> dict:
     payload = data.model_dump()
     payload["gender"] = normalize_gender(payload.get("gender"))
     payload["department"] = await resolve_department(payload.get("location_id"), payload.get("department"))
@@ -107,7 +107,7 @@ async def list_pending_members(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/members/{member_id}")
-async def get_member(member_id: str, current_user: dict = Depends(get_current_user)):
+async def get_member(member_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -117,7 +117,7 @@ async def get_member(member_id: str, current_user: dict = Depends(get_current_us
 
 
 @router.put("/members/{member_id}")
-async def update_member(member_id: str, data: MemberUpdate, current_user: dict = Depends(get_current_user)):
+async def update_member(member_id: str, data: MemberUpdate, current_user: dict = Depends(get_current_user)) -> dict:
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -145,7 +145,7 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
 
 
 @router.delete("/members/{member_id}")
-async def delete_member(member_id: str, current_user: dict = Depends(require_coordinator)):
+async def delete_member(member_id: str, current_user: dict = Depends(require_coordinator)) -> dict:
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
