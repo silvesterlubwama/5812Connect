@@ -1,7 +1,7 @@
 """Programmes (Outreach), Programme Categories, Recurring Events"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, _audit, logger
+from deps import db, get_current_user, _audit, logger, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -90,10 +90,18 @@ async def delete_programme_category(cat_id: str, current_user: dict = Depends(ge
 
 @router.get("/outreach/programs")
 async def list_outreach_programs(category: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    campus = await get_campus_filter(current_user)
     query = {}
+    conditions = []
+    if campus: conditions.append(campus)
     if category and category != "all": query["category"] = category
     if status and status != "all": query["status"] = status
-    programs = await db.outreach_programs.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    if conditions:
+        if query: conditions.append(query)
+        final_query = {"$and": conditions}
+    else:
+        final_query = query
+    programs = await db.outreach_programs.find(final_query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return programs
 
 
@@ -310,8 +318,17 @@ async def _auto_generate_outreach_events(prog: dict, user_id: str, months_ahead:
 
 @router.get("/outreach/sessions")
 async def list_outreach_sessions(program_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {"program_id": program_id} if program_id else {}
-    sessions = await db.outreach_sessions.find(query, {"_id": 0}).sort("date", -1).to_list(500)
+    campus = await get_campus_filter(current_user)
+    query = {}
+    conditions = []
+    if campus: conditions.append(campus)
+    if program_id: query["program_id"] = program_id
+    if conditions:
+        if query: conditions.append(query)
+        final_query = {"$and": conditions}
+    else:
+        final_query = query
+    sessions = await db.outreach_sessions.find(final_query, {"_id": 0}).sort("date", -1).to_list(500)
     return sessions
 
 
