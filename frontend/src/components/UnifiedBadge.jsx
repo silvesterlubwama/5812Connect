@@ -57,9 +57,10 @@ function NfcSymbol({ size = 14, color = '#fbbf24' }) {
   );
 }
 
-export function UnifiedBadge({ person, size = 'normal', showActions = true, kioskMode = false }) {
+export function UnifiedBadge({ person, size = 'normal', showActions = true, kioskMode = false, canWriteNfc = false }) {
   const badgeRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
+  const [nfcWriting, setNfcWriting] = useState(false);
   const type = getBadgeType(person);
   const colors = BADGE_COLORS[type] || BADGE_COLORS.member;
   const firstName = (person.name || '').split(' ')[0] || '';
@@ -145,6 +146,44 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     downloadBadge();
   };
 
+  const writeToNfc = async () => {
+    if (!('NDEFReader' in window)) {
+      toast.error('NFC not supported on this device/browser. Use Chrome on Android with NFC enabled.');
+      return;
+    }
+    setNfcWriting(true);
+    try {
+      const ndef = new window.NDEFReader();
+      const writeData = person.id || person.name || '';
+      toast.info('Hold a blank NFC tag near the device...');
+      await ndef.write({
+        records: [
+          { recordType: 'text', data: writeData },
+          { recordType: 'url', data: `https://5812-global.org/member/${person.id || ''}` },
+        ]
+      });
+      // Record the write on the backend
+      const memberId = person.member_id || person.id;
+      try {
+        const scanResult = await new Promise((resolve) => {
+          ndef.scan().then(() => {
+            ndef.addEventListener('reading', ({ serialNumber }) => resolve(serialNumber), { once: true });
+            setTimeout(() => resolve('unknown'), 3000);
+          }).catch(() => resolve('unknown'));
+        });
+        await import('../services/api').then(({ default: api }) =>
+          api.post(`/members/${memberId}/nfc-write`, { serial_number: scanResult || 'written-tag', written_data: writeData, label: `Badge: ${person.name}` })
+        );
+      } catch (err) { console.warn('NFC write log failed:', err); }
+      toast.success(`NFC tag written for ${person.name}!`);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') toast.error('NFC permission denied');
+      else if (err.name === 'NotSupportedError') toast.error('NFC not supported on this device');
+      else toast.error('NFC write failed: ' + (err.message || err));
+    }
+    finally { setNfcWriting(false); }
+  };
+
   return (
     <div className="space-y-3">
       <div ref={badgeRef}>
@@ -205,7 +244,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
       </div>
 
       {showActions && (
-        <div className="flex justify-center gap-2">
+        <div className="flex justify-center gap-2 flex-wrap">
           <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={printBadge} data-testid="print-badge">
             <Printer size={12} /> Print
           </Button>
@@ -213,8 +252,13 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             <Download size={12} /> {downloading ? 'Saving...' : 'Download'}
           </Button>
           <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={addToWallet} data-testid="wallet-badge">
-            <Smartphone size={12} /> Add to Wallet
+            <Smartphone size={12} /> Wallet
           </Button>
+          {canWriteNfc && isStaffType && (
+            <Button size="sm" variant="outline" className="gap-1.5 text-xs text-blue-600 border-blue-200 hover:bg-blue-50" onClick={writeToNfc} disabled={nfcWriting} data-testid="write-nfc-badge">
+              <Wifi size={12} /> {nfcWriting ? 'Writing...' : 'Write NFC'}
+            </Button>
+          )}
         </div>
       )}
     </div>

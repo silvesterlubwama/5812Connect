@@ -22,7 +22,7 @@ const ID_TYPE_LABELS = {
   employee_id: 'Employee ID', other: 'Other',
 };
 
-export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, setEditForm, locations, saving, onSave, memberDocs, setMemberDocs, docRequests, setDocRequests, docsLoading }) {
+export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, setEditForm, locations, saving, onSave, memberDocs, setMemberDocs, docRequests, setDocRequests, docsLoading, currentUserRole }) {
   const fileInputRef = useRef(null);
   const [uploadDocType, setUploadDocType] = useState('other');
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -87,6 +87,52 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     } catch (err) {
       setNfcScanning(false);
       toast.error('NFC scan failed: ' + (err.message || err));
+    }
+  };
+
+  const isDirectorPlus = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(currentUserRole);
+  const [nfcWriteStatus, setNfcWriteStatus] = useState('idle');
+
+  const writeNfcTag = async () => {
+    if (!('NDEFReader' in window)) { toast.error('NFC not supported. Use Chrome on Android.'); return; }
+    const memberId = selectedUser?.member_id || selectedUser?.id;
+    if (!memberId) return;
+    setNfcWriteStatus('writing');
+    try {
+      const ndef = new window.NDEFReader();
+      const writeData = memberId;
+      toast.info('Hold a blank NFC tag near the device to write...');
+      await ndef.write({
+        records: [
+          { recordType: 'text', data: writeData },
+          { recordType: 'url', data: `https://5812-global.org/member/${memberId}` },
+        ]
+      });
+      // Read the serial after writing
+      let serial = 'written-tag';
+      try {
+        await ndef.scan();
+        serial = await new Promise((resolve) => {
+          ndef.addEventListener('reading', ({ serialNumber }) => resolve(serialNumber || 'written-tag'), { once: true });
+          setTimeout(() => resolve('written-tag'), 3000);
+        });
+      } catch { /* fallback serial */ }
+      // Log on backend
+      await api.post(`/members/${memberId}/nfc-write`, {
+        serial_number: serial,
+        written_data: writeData,
+        label: `Written for ${selectedUser?.name}`,
+      });
+      // Refresh tags list
+      const res = await api.get(`/members/${memberId}/nfc-tags`);
+      setNfcTags(res.data || []);
+      setNfcWriteStatus('success');
+      toast.success(`NFC tag written and linked to ${selectedUser?.name}!`);
+      setTimeout(() => setNfcWriteStatus('idle'), 3000);
+    } catch (err) {
+      setNfcWriteStatus('idle');
+      if (err.name === 'NotAllowedError') toast.error('NFC permission denied');
+      else toast.error('NFC write failed: ' + (err.response?.data?.detail || err.message || err));
     }
   };
 
@@ -328,6 +374,34 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
                 <p className="text-sm font-medium text-blue-800">Waiting for NFC tag...</p>
                 <p className="text-xs text-blue-600 mt-1">Hold the NFC card near your device</p>
                 <Button size="sm" variant="outline" className="mt-3" onClick={() => setNfcScanning(false)}>Cancel</Button>
+              </div>
+            )}
+
+            {/* Write NFC Tag - Director+ only */}
+            {isDirectorPlus && (
+              <div className="p-3 rounded-lg border-2 border-dashed border-blue-200 bg-blue-50/30 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Wifi size={16} className="text-blue-600" />
+                  <div>
+                    <p className="text-sm font-medium">Write NFC Tag</p>
+                    <p className="text-xs text-muted-foreground">Write this member's ID to a blank NFC card</p>
+                  </div>
+                </div>
+                {nfcWriteStatus === 'success' ? (
+                  <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-center">
+                    <p className="text-sm font-medium text-green-700">NFC tag written successfully!</p>
+                  </div>
+                ) : (
+                  <Button
+                    className="w-full gap-2 bg-blue-600 hover:bg-blue-700"
+                    onClick={writeNfcTag}
+                    disabled={nfcWriteStatus === 'writing'}
+                    data-testid="write-nfc-tag-btn"
+                  >
+                    <Wifi size={14} />
+                    {nfcWriteStatus === 'writing' ? 'Hold NFC tag near device...' : `Write NFC for ${selectedUser?.name?.split(' ')[0] || 'Member'}`}
+                  </Button>
+                )}
               </div>
             )}
           </TabsContent>

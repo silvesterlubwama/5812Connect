@@ -268,7 +268,7 @@ export default function AdminPage() {
       {/* Extracted Dialog Components */}
       <UserCreateDialog open={showCreateUser} onOpenChange={o => { setShowCreateUser(o); if (!o) setCreatedUser(null); }} form={createForm} setForm={setCreateForm} locations={locations} createdUser={createdUser} onCreateUser={handleCreateUser} />
       <UserImportDialog open={showImport} onOpenChange={o => { setShowImport(o); if (!o) { setImportResult(null); setImportJson(''); } }} importJson={importJson} setImportJson={setImportJson} importLoading={importLoading} importResult={importResult} onImport={handleImportUsers} onImportFile={handleImportFile} />
-      <UserEditDialog open={showEdit} onOpenChange={setShowEdit} selectedUser={selectedUser} editForm={editForm} setEditForm={setEditForm} locations={locations} saving={saving} onSave={saveEdit} memberDocs={memberDocs} setMemberDocs={setMemberDocs} docRequests={docRequests} setDocRequests={setDocRequests} docsLoading={docsLoading} />
+      <UserEditDialog open={showEdit} onOpenChange={setShowEdit} selectedUser={selectedUser} editForm={editForm} setEditForm={setEditForm} locations={locations} saving={saving} onSave={saveEdit} memberDocs={memberDocs} setMemberDocs={setMemberDocs} docRequests={docRequests} setDocRequests={setDocRequests} docsLoading={docsLoading} currentUserRole={currentUser?.role} />
 
       {/* Reset Password Dialog */}
       <Dialog open={showResetPw} onOpenChange={setShowResetPw}>
@@ -314,7 +314,7 @@ export default function AdminPage() {
       <Dialog open={showBadge} onOpenChange={setShowBadge}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Print Badge - {selectedUser?.name}</DialogTitle></DialogHeader>
-          {selectedUser && <UnifiedBadge person={{ ...selectedUser, country: locations.find(l => l.id === selectedUser.location_id)?.country }} />}
+          {selectedUser && <UnifiedBadge person={{ ...selectedUser, country: locations.find(l => l.id === selectedUser.location_id)?.country }} canWriteNfc={['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(currentUser?.role)} />}
         </DialogContent>
       </Dialog>
     </div>

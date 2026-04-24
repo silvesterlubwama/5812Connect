@@ -1048,7 +1048,7 @@ export default function UnifiedPeoplePage() {
       <Dialog open={showBadge} onOpenChange={setShowBadge}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Badge — {badgePerson?.name}</DialogTitle></DialogHeader>
-          {badgePerson && <div className="mt-2"><UnifiedBadge person={{ ...badgePerson, country: allLocations.find(l => l.id === badgePerson.location_id)?.country }} /></div>}
+          {badgePerson && <div className="mt-2"><UnifiedBadge person={{ ...badgePerson, country: allLocations.find(l => l.id === badgePerson.location_id)?.country }} canWriteNfc={isDirector} /></div>}
         </DialogContent>
       </Dialog>
 
