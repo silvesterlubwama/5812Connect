@@ -192,21 +192,60 @@ async def remove_staff_from_restricted(space_id: str, staff_id: str, current_use
 
 @router.post("/restricted-spaces/{space_id}/residents")
 async def add_residents(space_id: str, data: dict, current_user: dict = Depends(require_manager)):
-    """Add residents (members/children) to a restricted location"""
+    """Add residents (children, guests, or staff) to a restricted location. Auto-updates their profiles."""
     resident_ids = data.get("resident_ids", [])
+    if not resident_ids:
+        return {"message": "No IDs provided", "added": 0}
+    
+    # Add to location's resident_ids
     await db.locations.update_one({"id": space_id}, {"$addToSet": {"resident_ids": {"$each": resident_ids}}})
-    return {"message": f"Added {len(resident_ids)} residents"}
+    
+    # Auto-tag each person's profile as resident of this location
+    for rid in resident_ids:
+        # Try children
+        child = await db.children.find_one({"id": rid})
+        if child:
+            await db.children.update_one({"id": rid}, {"$set": {"is_resident": True, "resident_location_id": space_id}})
+            continue
+        # Try guests
+        guest = await db.guests.find_one({"id": rid})
+        if guest:
+            await db.guests.update_one({"id": rid}, {"$set": {"is_resident": True, "resident_location_id": space_id}})
+            continue
+        # Try staff/users
+        user = await db.users.find_one({"id": rid})
+        if user:
+            await db.users.update_one({"id": rid}, {"$set": {"is_resident": True, "resident_location_id": space_id}})
+            continue
+        # Try members
+        await db.members.update_one({"id": rid}, {"$set": {"is_resident": True, "resident_location_id": space_id}})
+    
+    return {"message": f"Added {len(resident_ids)} residents", "added": len(resident_ids)}
+
+
+@router.delete("/restricted-spaces/{space_id}/residents/{resident_id}")
+async def remove_resident(space_id: str, resident_id: str, current_user: dict = Depends(require_manager)):
+    """Remove a resident from a restricted location and untag their profile"""
+    await db.locations.update_one({"id": space_id}, {"$pull": {"resident_ids": resident_id}})
+    # Untag from all collections
+    for coll_name in ["children", "guests", "users", "members"]:
+        coll = getattr(db, coll_name)
+        await coll.update_one({"id": resident_id, "resident_location_id": space_id}, {"$set": {"is_resident": False}, "$unset": {"resident_location_id": ""}})
+    return {"message": "Resident removed"}
 
 
 @router.get("/restricted-spaces/{space_id}/residents")
 async def get_residents(space_id: str, current_user: dict = Depends(get_current_user)):
+    """Get all residents of a restricted space — children, guests, and staff"""
     loc = await db.locations.find_one({"id": space_id}, {"_id": 0})
-    if not loc: return []
+    if not loc: return {"children": [], "guests": [], "staff": [], "members": []}
     ids = loc.get("resident_ids", [])
-    if not ids: return []
-    members = await db.members.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(200)
-    children = await db.children.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
-    return {"members": members, "children": children}
+    if not ids: return {"children": [], "guests": [], "staff": [], "members": []}
+    children = await db.children.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200)
+    guests = await db.guests.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200)
+    staff = await db.users.find({"id": {"$in": ids}}, {"_id": 0, "password_hash": 0}).to_list(200)
+    members = await db.members.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200)
+    return {"children": children, "guests": guests, "staff": staff, "members": members}
 
 
 # ========== VOLUNTEER EVENT ATTENDEES ==========

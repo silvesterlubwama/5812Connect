@@ -518,7 +518,19 @@ async def bulk_delete_children(data: dict, current_user: dict = Depends(get_curr
 @router.put("/children/{child_id}")
 async def update_child(child_id: str, data: ChildCreate, current_user: dict = Depends(get_current_user)):
     update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    # Get old child to check residency changes
+    old_child = await db.children.find_one({"id": child_id}, {"_id": 0})
     await db.children.update_one({"id": child_id}, {"$set": update})
+    # Sync residency if changed
+    new_resident = update.get("is_resident", False)
+    new_loc = update.get("resident_location_id", "")
+    old_loc = old_child.get("resident_location_id", "") if old_child else ""
+    if new_resident and new_loc:
+        await db.locations.update_one({"id": new_loc}, {"$addToSet": {"resident_ids": child_id}})
+        if old_loc and old_loc != new_loc:
+            await db.locations.update_one({"id": old_loc}, {"$pull": {"resident_ids": child_id}})
+    elif not new_resident and old_loc:
+        await db.locations.update_one({"id": old_loc}, {"$pull": {"resident_ids": child_id}})
     return await db.children.find_one({"id": child_id}, {"_id": 0})
 
 
@@ -628,13 +640,36 @@ async def get_child_full_profile(child_id: str, current_user: dict = Depends(get
 
 @router.get("/guests")
 async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {**await get_campus_filter(current_user)}
+    campus = await get_campus_filter(current_user)
+    query = {}
+    conditions = []
+    if campus: conditions.append(campus)
     if search:
-        query["$or"] = [
+        conditions.append({"$or": [
             {"name": {"$regex": search, "$options": "i"}},
             {"email": {"$regex": search, "$options": "i"}},
-        ]
+        ]})
+    if conditions: query["$and"] = conditions
     guests = await db.guests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    
+    # Also include staff/users tagged as parents or guests
+    staff_query = {"$or": [{"is_parent": True}, {"is_guest": True}]}
+    if campus:
+        staff_conditions = [campus, staff_query]
+        if search: staff_conditions.append({"$or": [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]})
+        staff_parents = await db.users.find({"$and": staff_conditions}, {"_id": 0, "password_hash": 0, "totp_secret": 0}).to_list(200)
+    else:
+        sq = {**staff_query}
+        if search: sq["$and"] = [{"$or": [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]}]
+        staff_parents = await db.users.find(sq, {"_id": 0, "password_hash": 0, "totp_secret": 0}).to_list(200)
+    
+    # Merge without duplicates (by email)
+    guest_emails = {g.get("email", "").lower() for g in guests if g.get("email")}
+    for sp in staff_parents:
+        sp_email = (sp.get("email") or "").lower()
+        if sp_email and sp_email in guest_emails: continue
+        guests.append({**sp, "is_staff": True, "source": "staff"})
+    
     return guests
 
 
