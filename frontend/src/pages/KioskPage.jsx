@@ -249,6 +249,16 @@ export default function KioskPage() {
     setLoading(true);
     try {
       const res = await api.post('/auth/login', { identifier: email, password });
+      // Check if 2FA is required
+      if (res.data.requires_2fa) {
+        toast.info('2FA is enabled. Please enter your authenticator code.');
+        const code = prompt('Enter your 2FA code:');
+        if (!code) { setLoading(false); return; }
+        const res2 = await api.post('/auth/login', { identifier: email, password, totp_code: code });
+        if (!res2.data.token) { toast.error('Invalid 2FA code'); setLoading(false); return; }
+        res.data = res2.data;
+      }
+      if (!res.data.token) { toast.error('Login failed'); setLoading(false); return; }
       const t = res.data.token;
       setToken(t);
       api.defaults.headers.common['Authorization'] = `Bearer ${t}`;
@@ -257,14 +267,18 @@ export default function KioskPage() {
       setAuthenticated(true);
       setView('dashboard');
       toast.success(`Welcome, ${meRes.data.name}`);
-      // Load locations for access scanning
+      // Load locations
       try {
         const locsRes = await locationsApi.list();
+        setLocations(locsRes.data || []);
         const restricted = (locsRes.data || []).filter(l => l.is_restricted);
-        setLocations(restricted);
         if (restricted.length > 0) setSelectedLocation(restricted[0].id);
       } catch (e) { console.warn(e.message || e); }
-    } catch (err) { toast.error(err.response?.data?.detail || 'Login failed'); }
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Login failed';
+      if (detail.includes('pending')) toast.error('Account pending approval. Contact your administrator.');
+      else toast.error(detail);
+    }
     finally { setLoading(false); }
   };
 

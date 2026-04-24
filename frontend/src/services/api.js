@@ -27,7 +27,7 @@ export default api;
 
 // ---- AUTH ----
 export const authApi = {
-  login: (identifier, password) => api.post('/auth/login', { identifier, password }),
+  login: (identifier, password, totp_code) => api.post('/auth/login', { identifier, password, totp_code }),
   register: (data) => api.post('/auth/register', data),
   visitorRegister: (data) => api.post('/auth/visitor-register', data),
   me: () => api.get('/auth/me'),

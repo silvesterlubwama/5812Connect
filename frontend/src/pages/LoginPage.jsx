@@ -15,6 +15,8 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [needs2FA, setNeeds2FA] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
@@ -24,13 +26,14 @@ export default function LoginPage() {
     if (!identifier || !password) { toast.error('Please fill in all fields'); return; }
     setLoading(true);
     try {
-      await login(identifier, password);
+      const result = await login(identifier, password, totpCode || null);
+      if (result.requires_2fa) { setNeeds2FA(true); toast.info('Enter your authenticator code'); setLoading(false); return; }
       navigate('/dashboard');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Invalid credentials');
-    } finally {
-      setLoading(false);
-    }
+      const detail = err.response?.data?.detail || err.message || 'Invalid credentials';
+      if (detail.includes('pending')) toast.error('Account pending approval. Contact your administrator.');
+      else toast.error(detail);
+    } finally { setLoading(false); }
   };
 
   const handlePasskeyLogin = async () => {
@@ -125,6 +128,13 @@ export default function LoginPage() {
               <div className="text-right">
                 <Link to="/reset-password" className="text-sm text-primary hover:underline">Forgot password?</Link>
               </div>
+
+              {needs2FA && (
+                <div className="space-y-2">
+                  <Label htmlFor="totp">Authenticator Code</Label>
+                  <Input id="totp" type="text" inputMode="numeric" maxLength={6} placeholder="6-digit code" value={totpCode} onChange={e => setTotpCode(e.target.value)} autoFocus className="text-center text-lg tracking-widest" data-testid="totp-input" />
+                </div>
+              )}
 
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Signing in...' : 'Sign In'}

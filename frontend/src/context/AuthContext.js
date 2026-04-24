@@ -24,9 +24,15 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
-  const login = async (identifier, password) => {
-    const res = await authApi.login(identifier, password);
+  const login = async (identifier, password, totpCode = null) => {
+    const payload = { identifier, password };
+    if (totpCode) payload.totp_code = totpCode;
+    const res = await authApi.login(identifier, password, totpCode);
+    if (res.data.requires_2fa) {
+      return { requires_2fa: true };
+    }
     const { token, user: userData } = res.data;
+    if (!token) throw new Error('Login failed');
     secureStorage.setToken(token);
     secureStorage.setUser(userData);
     setUser(userData);
