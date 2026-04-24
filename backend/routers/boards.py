@@ -61,7 +61,19 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
     Restricted/private boards in restricted sub-locations: only tagged members.
     Otherwise: boards in user's location(s)."""
     if _is_admin(current_user):
-        boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+        # Admins see boards filtered by active campus if set, otherwise all
+        active = current_user.get("active_campus_id")
+        if active:
+            sub_locs = await db.locations.find({"parent_id": active}, {"_id": 0, "id": 1}).to_list(200)
+            all_locs = [active] + [s["id"] for s in sub_locs]
+            boards = await db.boards.find({"$or": [
+                {"location_id": {"$in": all_locs}},
+                {"is_global": True},
+                {"location_id": {"$exists": False}}, {"location_id": None}, {"location_id": ""},
+                {"tagged_members": current_user["id"]}, {"created_by": current_user["id"]},
+            ]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        else:
+            boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     else:
         user_locs_raw = current_user.get("location_ids") or []
         user_loc = current_user.get("location_id")

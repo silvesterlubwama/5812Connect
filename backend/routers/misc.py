@@ -94,7 +94,14 @@ class ResourceBookingCreate(BaseModel):
 async def list_resources(current_user: dict = Depends(get_current_user)):
     campus = await get_campus_filter(current_user)
     if campus:
-        query = campus
+        # Include resources from user's campus + unassigned (global) resources
+        query = {"$or": []}
+        if "$or" in campus:
+            query["$or"].extend(campus["$or"])
+        else:
+            query["$or"].append(campus)
+        # Also include resources with no location (global/unassigned)
+        query["$or"].extend([{"location_id": {"$exists": False}}, {"location_id": None}, {"location_id": ""}])
     else:
         query = {}
     return await db.resources.find(query, {"_id": 0}).sort("name", 1).to_list(200)
