@@ -264,9 +264,9 @@ export default function Layout() {
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
-    // Campus feature toggles
-    if (item.to === '/financial' && !campusFeatures.financial_enabled) return false;
-    if (item.to === '/sales' && !campusFeatures.marketplace_enabled) return false;
+    // Campus feature toggles — also hide on "All Locations" unless admin
+    if (item.to === '/financial' && (!campusFeatures.financial_enabled || (!activeCampus && !isAdmin))) return false;
+    if (item.to === '/sales' && (!campusFeatures.marketplace_enabled || (!activeCampus && !isAdmin))) return false;
     if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
     return true;
   };

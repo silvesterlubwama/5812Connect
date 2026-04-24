@@ -109,9 +109,13 @@ async def login(data: UserLogin):
         totp = pyotp.TOTP(user.get("totp_secret", ""))
         if not totp.verify(data.totp_code):
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
-    # Default active campus to user's primary location on every login
+    # Always default to user's primary campus on login
     user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
-    if user_loc and not user.get("active_campus_id"):
+    if not user_loc:
+        # No location assigned — find the first campus
+        first_campus = await db.locations.find_one({"type": {"$in": ["campus", "main"]}}, {"_id": 0, "id": 1})
+        if first_campus: user_loc = first_campus["id"]
+    if user_loc:
         await db.users.update_one({"id": user["id"]}, {"$set": {"active_campus_id": user_loc}})
         user["active_campus_id"] = user_loc
     token = create_token(user["id"])

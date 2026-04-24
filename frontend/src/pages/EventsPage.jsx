@@ -36,7 +36,7 @@ export default function EventsPage() {
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeColor, setNewTypeColor] = useState('#6366f1');
   const [editingEvent, setEditingEvent] = useState(null);
-  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: '', venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '' };
+  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '' };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
 

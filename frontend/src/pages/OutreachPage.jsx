@@ -11,12 +11,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { outreachApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
 const statusColors = { active: 'border-green-500 text-green-600', completed: 'border-slate-400 text-slate-500', paused: 'border-amber-500 text-amber-600' };
 
 export default function OutreachPage() {
+  const { user } = useAuth();
+  const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
   const [programs, setPrograms] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sessions, setSessions] = useState([]);
@@ -51,7 +54,7 @@ export default function OutreachPage() {
   const handleAddProgram = async (e) => {
     e.preventDefault(); setSaving(true);
     try {
-      const payload = { ...progForm, target: progForm.target ? parseInt(progForm.target) : null };
+      const payload = { ...progForm, target: progForm.target ? parseInt(progForm.target) : null, location_id: progForm.location_id || activeCampus };
       const res = editingProg ? await outreachApi.updateProgram(editingProg.id, payload) : await outreachApi.createProgram(payload);
       if (editingProg) {
         setPrograms(prev => prev.map(p => p.id === editingProg.id ? res.data : p));

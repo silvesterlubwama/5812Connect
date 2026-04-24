@@ -350,7 +350,7 @@ export default function CheckInsPage() {
       {/* Table */}
       <Card className="shadow-soft rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          {selectedIds.size > 0 && <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { const sel = checkins.filter(c => selectedIds.has(c.id)); exportToCSV(sel.length ? sel : checkins, 'checkins-export.csv'); }} onBulkDelete={() => { toast.info('Bulk delete not available for check-ins'); }} />}
+          {selectedIds.size > 0 && <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { const sel = checkins.filter(c => selectedIds.has(c.id)); exportToCSV(sel.length ? sel : checkins, 'checkins-export.csv'); }} />}
           <table className="w-full text-sm">
             <thead className="bg-secondary/50 border-b border-border">
               <tr>
