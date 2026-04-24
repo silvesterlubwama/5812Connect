@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { locationsApi, bookingsApi, resourcesApi } from '../services/api';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -30,6 +31,8 @@ const emptyForm = {
 };
 
 export default function ResourcesPage() {
+  const { user } = useAuth();
+  const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
   const [resources, setResources] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [locations, setLocations] = useState([]);
@@ -248,7 +251,7 @@ export default function ResourcesPage() {
                   <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="_none">Unassigned</SelectItem>
-                    {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    {locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

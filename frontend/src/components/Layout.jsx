@@ -143,7 +143,8 @@ export default function Layout() {
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
   const isGlobalAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
-  const canSwitchCampus = isGlobalAdmin; // Only system admin, ED, Adviser can switch
+  const hasMultipleCampuses = (user?.location_ids || []).length > 1;
+  const canSwitchCampus = isGlobalAdmin || hasMultipleCampuses;
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [campusFeatures, setCampusFeatures] = useState({ financial_enabled: true, marketplace_enabled: true, financial_apis_enabled: true });
@@ -288,19 +289,19 @@ export default function Layout() {
           <button className="lg:hidden ml-auto text-muted-foreground" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
 
-        {/* Campus Switcher for Admin/ED/Adviser */}
+        {/* Campus Switcher */}
         {canSwitchCampus && campuses.length > 0 && (
           <div className="px-3 py-2 border-b border-border">
             <Select value={activeCampus || '__all__'} onValueChange={handleCampusChange}>
               <SelectTrigger className="h-8 text-xs" data-testid="campus-switcher">
                 <div className="flex items-center gap-1.5">
                   <MapPin size={12} className="text-muted-foreground shrink-0" />
-                  <SelectValue placeholder="All Locations" />
+                  <SelectValue placeholder="My Campus" />
                 </div>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__all__">All Locations</SelectItem>
-                {campuses.filter(c => c.type !== 'sub-location').map(c => (
+                {isGlobalAdmin && <SelectItem value="__all__">All Locations</SelectItem>}
+                {(isGlobalAdmin ? campuses.filter(c => c.type !== 'sub-location') : campuses.filter(c => (user?.location_ids || []).includes(c.id))).map(c => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                 ))}
               </SelectContent>

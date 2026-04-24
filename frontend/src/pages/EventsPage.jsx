@@ -11,11 +11,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Switch } from '../components/ui/switch';
 import { eventsApi, checkinsApi, locationsApi, venuesApi, locationVenuesApi } from '../services/api';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
 const statusColors = { upcoming: 'bg-blue-100 text-blue-700 border-blue-200', completed: 'bg-green-100 text-green-700 border-green-200', cancelled: 'bg-red-100 text-red-700 border-red-200' };
 
 export default function EventsPage() {
+  const { user } = useAuth();
+  const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
+  const isGlobalView = !activeCampus;
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -266,7 +270,7 @@ export default function EventsPage() {
               <div className="space-y-2"><Label>Location</Label>
                 <Select value={newEvent.location_id || '_none'} onValueChange={v => { const lid = v === '_none' ? '' : v; const country = getLocationCountry(lid); setNewEvent({...newEvent, location_id: lid, venue_id: '', country}); loadVenues(lid); }}>
                   <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
-                  <SelectContent><SelectItem value="_none">-- Select --</SelectItem>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name} {l.country ? `(${l.country})` : ''}</SelectItem>)}</SelectContent>
+                  <SelectContent><SelectItem value="_none">-- Select --</SelectItem>{locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id}>{l.name} {l.country ? `(${l.country})` : ''}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-2"><Label>Venue / Sub-location</Label>

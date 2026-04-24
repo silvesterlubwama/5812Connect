@@ -20,6 +20,8 @@ import { TeamCalendar } from './kanban/TeamCalendar';
 
 export default function TasksPage() {
   const { user } = useAuth();
+  const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
+  const userLocs = user?.location_ids || (user?.location_id ? [user.location_id] : []);
   const { addListener, joinBoard, leaveBoard } = useWebSocket();
 
   const [boards, setBoards] = useState([]);
@@ -582,7 +584,7 @@ export default function TasksPage() {
                 <SelectTrigger className="bg-[#0f172a] border-white/15 text-slate-200"><SelectValue placeholder="Global" /></SelectTrigger>
                 <SelectContent className="bg-[#1e293b] border-white/15">
                   <SelectItem value="_global" className="text-slate-200">Global (all users)</SelectItem>
-                  {locations.map(l => <SelectItem key={l.id} value={l.id} className="text-slate-200">{l.name}</SelectItem>)}
+                  {locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id} className="text-slate-200">{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -615,7 +617,7 @@ export default function TasksPage() {
                 <SelectTrigger className="bg-[#0f172a] border-white/15 text-slate-200"><SelectValue placeholder="Global" /></SelectTrigger>
                 <SelectContent className="bg-[#1e293b] border-white/15">
                   <SelectItem value="_global" className="text-slate-200">Global</SelectItem>
-                  {locations.map(l => <SelectItem key={l.id} value={l.id} className="text-slate-200">{l.name}</SelectItem>)}
+                  {locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id} className="text-slate-200">{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -654,7 +656,7 @@ export default function TasksPage() {
                 <SelectTrigger><SelectValue placeholder="Global (all campuses)" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">Global (all campuses)</SelectItem>
-                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                  {locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
