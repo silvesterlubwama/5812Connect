@@ -168,7 +168,7 @@ async def get_board(board_id: str, current_user: dict = Depends(get_current_user
 
 @router.put("/boards/{board_id}")
 async def update_board(board_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    allowed = {"name", "description", "background", "location_id", "location_name", "is_global", "is_shared"}
+    allowed = {"name", "description", "background", "location_id", "location_name", "is_global", "is_shared", "tagged_members", "is_restricted", "is_private"}
     update = {k: v for k, v in data.items() if k in allowed}
     if data.get("is_shared") and not (await db.boards.find_one({"id": board_id})).get("share_token"):
         update["share_token"] = str(uuid.uuid4())[:12]
@@ -215,7 +215,7 @@ async def add_list(board_id: str, data: dict, current_user: dict = Depends(get_c
 
 @router.put("/boards/{board_id}/lists/{list_id}")
 async def update_list(board_id: str, list_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    allowed = {"name", "position", "color", "is_archived"}
+    allowed = {"name", "position", "color", "is_archived", "assigned_to"}
     update = {k: v for k, v in data.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields")
