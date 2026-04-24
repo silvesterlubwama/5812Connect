@@ -955,4 +955,61 @@ async def update_family_members(family_id: str, data: dict, current_user: dict =
     return {"message": "Family members updated", "children": len(child_ids), "parents": len(parent_ids), "guardians": len(guardian_ids)}
 
 
+# ========== NFC TAG MANAGEMENT ==========
+
+@router.get("/members/{member_id}/nfc-tags")
+async def get_member_nfc_tags(member_id: str, current_user: dict = Depends(get_current_user)) -> list:
+    """Get NFC tags associated with a member."""
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "nfc_tags": 1})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member.get("nfc_tags", [])
+
+
+@router.post("/members/{member_id}/nfc-tags")
+async def add_nfc_tag(member_id: str, data: dict, current_user: dict = Depends(require_staff)) -> dict:
+    """Add an NFC tag to a member profile. Body: { serial_number, label? }"""
+    serial = (data.get("serial_number") or "").strip()
+    if not serial:
+        raise HTTPException(status_code=400, detail="NFC serial_number is required")
+    # Check if tag is already assigned to another member
+    existing = await db.members.find_one(
+        {"nfc_tags.serial_number": serial, "id": {"$ne": member_id}},
+        {"_id": 0, "id": 1, "name": 1}
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail=f"This NFC tag is already assigned to {existing.get('name', 'another member')}")
+    tag = {
+        "id": f"nfc_{uuid.uuid4().hex[:8]}",
+        "serial_number": serial,
+        "label": data.get("label", ""),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        "added_by": current_user["id"],
+    }
+    await db.members.update_one({"id": member_id}, {"$push": {"nfc_tags": tag}})
+    # Also store on user record if linked
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "user_id": 1})
+    if member and member.get("user_id"):
+        await db.users.update_one({"id": member["user_id"]}, {"$push": {"nfc_tags": tag}})
+    await _audit(current_user["id"], "create", "nfc_tag", member_id, {"serial": serial})
+    return tag
+
+
+@router.delete("/members/{member_id}/nfc-tags/{tag_id}")
+async def remove_nfc_tag(member_id: str, tag_id: str, current_user: dict = Depends(require_staff)) -> dict:
+    """Remove an NFC tag from a member profile."""
+    result = await db.members.update_one(
+        {"id": member_id},
+        {"$pull": {"nfc_tags": {"id": tag_id}}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="NFC tag not found")
+    # Also remove from user record
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "user_id": 1})
+    if member and member.get("user_id"):
+        await db.users.update_one({"id": member["user_id"]}, {"$pull": {"nfc_tags": {"id": tag_id}}})
+    await _audit(current_user["id"], "delete", "nfc_tag", member_id, {"tag_id": tag_id})
+    return {"message": "NFC tag removed"}
+
+
 

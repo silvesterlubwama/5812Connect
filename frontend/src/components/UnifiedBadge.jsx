@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Download, Printer, Smartphone } from 'lucide-react';
+import { Download, Printer, Smartphone, Wifi } from 'lucide-react';
 import { Button } from './ui/button';
-import { Badge } from './ui/badge';
 import DOMPurify from 'dompurify';
 import { toast } from 'sonner';
+import { getCountryOutline } from './countryOutlines';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -19,6 +19,8 @@ const BADGE_COLORS = {
   member: { bg: '#1a1a2e', accent: '#e2e8f0', label: 'MEMBER' },
 };
 
+const STAFF_TYPES = new Set(['staff', 'director', 'volunteer']);
+
 function getBadgeType(person) {
   const role = (person.role || person.type || '').toLowerCase();
   if (['admin', 'system_admin', 'executive director', 'adviser'].includes(role)) return 'director';
@@ -30,7 +32,32 @@ function getBadgeType(person) {
   return 'member';
 }
 
-export function UnifiedBadge({ person, size = 'normal', showActions = true }) {
+function CountryWatermark({ country, width, height, color }) {
+  const outline = getCountryOutline(country);
+  return (
+    <svg
+      viewBox={outline.viewBox}
+      width={width}
+      height={height}
+      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
+    >
+      <path d={outline.path} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function NfcSymbol({ size = 14, color = '#fbbf24' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle' }}>
+      <path d="M6 8.32a7.43 7.43 0 0 1 0 7.36" />
+      <path d="M9.46 6.21a11.76 11.76 0 0 1 0 11.58" />
+      <path d="M12.91 4.1a15.91 15.91 0 0 1 .01 15.8" />
+      <path d="M16.37 2a20.16 20.16 0 0 1 0 20" />
+    </svg>
+  );
+}
+
+export function UnifiedBadge({ person, size = 'normal', showActions = true, kioskMode = false }) {
   const badgeRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
   const type = getBadgeType(person);
@@ -40,6 +67,21 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true }) {
   const title = person.title || person.role || type;
   const qrData = person.id || person.name || '';
   const badgeId = (person.id || '').slice(-8).toUpperCase();
+  const country = person.country || person.location_country || '';
+  const isStaffType = STAFF_TYPES.has(type);
+  const isSmall = size === 'small';
+
+  // Kiosk prints use white bg for ink saving
+  const bgColor = kioskMode ? '#ffffff' : colors.bg;
+  const textColor = kioskMode ? '#1a1a2e' : '#ffffff';
+  const subTextColor = kioskMode ? '#555' : '#ccc';
+  const footerBg = kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)';
+  const footerColor = kioskMode ? '#777' : '#666';
+  const watermarkColor = kioskMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.06)';
+  const qrFg = kioskMode ? '#1a1a2e' : '#ffffff';
+  const headerBg = kioskMode ? '#f0f0f5' : undefined; // kiosk uses light header
+  const headerBorder = kioskMode ? `2px solid ${colors.accent}` : `2px solid ${colors.accent}`;
+  const logoFilter = kioskMode ? 'none' : 'brightness(0) invert(1)';
 
   const printBadge = () => {
     const html = badgeRef.current?.innerHTML;
@@ -60,23 +102,19 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true }) {
     try {
       const el = badgeRef.current;
       if (!el) return;
-      // Use canvas to convert badge to PNG
       const canvas = document.createElement('canvas');
       const scale = 3;
       canvas.width = 340 * scale;
       canvas.height = 216 * scale;
       const ctx = canvas.getContext('2d');
       ctx.scale(scale, scale);
-      // Draw background
-      ctx.fillStyle = colors.bg;
+      ctx.fillStyle = bgColor;
       ctx.roundRect(0, 0, 340, 216, 12);
       ctx.fill();
-      // Draw header
       ctx.fillStyle = colors.accent;
       ctx.font = 'bold 10px Arial';
       ctx.fillText(colors.label, 16, 24);
-      // Draw name
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = textColor;
       ctx.font = 'bold 28px Arial';
       ctx.fillText(firstName, 16, 100);
       ctx.font = '16px Arial';
@@ -84,11 +122,11 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true }) {
       ctx.font = '12px Arial';
       ctx.fillStyle = colors.accent;
       ctx.fillText(title.toUpperCase(), 16, 145);
-      ctx.fillStyle = '#999';
+      ctx.fillStyle = footerColor;
       ctx.font = '10px Arial';
       ctx.fillText(`ID: ${badgeId}`, 16, 195);
-      ctx.fillText('58:12 Global Connect', 16, 208);
-      // Download
+      ctx.fillText('58:12 GLOBAL', 130, 208);
+      ctx.fillText('www.5812-Global.org', 110, 195);
       canvas.toBlob(blob => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -98,56 +136,74 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true }) {
         URL.revokeObjectURL(url);
         toast.success('Badge downloaded!');
       }, 'image/png');
-    } catch (e) { toast.error('Download failed'); }
+    } catch { toast.error('Download failed'); }
     finally { setDownloading(false); }
   };
 
   const addToWallet = () => {
-    // Generate a .pkpass-like deep link for Apple/Google Wallet
-    // For Apple Wallet: would need a server-side .pkpass generator
-    // For now: download as image that can be added manually
     toast.info('Download the badge image, then add to your Wallet app manually.');
     downloadBadge();
   };
 
-  const isSmall = size === 'small';
-
   return (
     <div className="space-y-3">
-      {/* Badge Visual */}
       <div ref={badgeRef}>
         <div style={{
           width: isSmall ? '240px' : '340px', height: isSmall ? '152px' : '216px',
           borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column',
-          background: colors.bg, color: '#fff', fontFamily: 'Arial, sans-serif',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.3)', margin: '0 auto',
+          background: bgColor, color: textColor, fontFamily: 'Arial, sans-serif',
+          boxShadow: kioskMode ? '0 1px 4px rgba(0,0,0,0.12)' : '0 4px 12px rgba(0,0,0,0.3)',
+          margin: '0 auto', position: 'relative',
+          border: kioskMode ? '1.5px solid #ddd' : 'none',
         }}>
-          {/* Header with logo + badge type */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: isSmall ? '6px 10px' : '8px 14px', borderBottom: `2px solid ${colors.accent}` }}>
-            <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ color: colors.accent, fontSize: isSmall ? '8px' : '10px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{colors.label}</span>
+          {/* Country watermark */}
+          <CountryWatermark
+            country={country}
+            width={isSmall ? 80 : 120}
+            height={isSmall ? 80 : 120}
+            color={watermarkColor}
+          />
+
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: isSmall ? '6px 10px' : '8px 14px',
+            borderBottom: headerBorder,
+            background: headerBg,
+          }}>
+            <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: logoFilter }} crossOrigin="anonymous" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isStaffType && <NfcSymbol size={isSmall ? 10 : 13} color={colors.accent} />}
+              <span style={{ color: colors.accent, fontSize: isSmall ? '8px' : '10px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{colors.label}</span>
+            </div>
           </div>
+
           {/* Body */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '12px 14px', gap: '10px' }}>
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '12px 14px', gap: '10px', position: 'relative', zIndex: 1 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: isSmall ? '18px' : '26px', fontWeight: 800, lineHeight: 1.1, color: '#fff' }}>{firstName}</div>
-              {lastName && <div style={{ fontSize: isSmall ? '11px' : '14px', fontWeight: 400, color: '#ccc', marginTop: '2px' }}>{lastName}</div>}
+              <div style={{ fontSize: isSmall ? '18px' : '26px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
+              {lastName && <div style={{ fontSize: isSmall ? '11px' : '14px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
               <div style={{ fontSize: isSmall ? '8px' : '10px', color: colors.accent, marginTop: isSmall ? '4px' : '8px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
-              {person.department && <div style={{ fontSize: '9px', color: '#888', marginTop: '2px' }}>{person.department}</div>}
+              {person.department && <div style={{ fontSize: '9px', color: kioskMode ? '#999' : '#888', marginTop: '2px' }}>{person.department}</div>}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <QRCodeSVG value={qrData} size={isSmall ? 50 : 72} bgColor="transparent" fgColor="#ffffff" level="M" />
+              <QRCodeSVG value={qrData} size={isSmall ? 50 : 72} bgColor="transparent" fgColor={qrFg} level="M" />
             </div>
           </div>
+
           {/* Footer */}
-          <div style={{ background: 'rgba(255,255,255,0.05)', padding: isSmall ? '3px 10px' : '4px 14px', display: 'flex', justifyContent: 'space-between', fontSize: isSmall ? '7px' : '8px', color: '#666' }}>
+          <div style={{
+            background: footerBg, padding: isSmall ? '3px 10px' : '4px 14px',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            fontSize: isSmall ? '7px' : '8px', color: footerColor,
+          }}>
             <span>ID: {badgeId}</span>
-            <span>58:12 Global Connect - {new Date().getFullYear()}</span>
+            <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>
+            <span>58:12 GLOBAL - {new Date().getFullYear()}</span>
           </div>
         </div>
       </div>
 
-      {/* Actions */}
       {showActions && (
         <div className="flex justify-center gap-2">
           <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={printBadge} data-testid="print-badge">

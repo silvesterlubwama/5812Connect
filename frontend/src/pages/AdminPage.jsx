@@ -314,7 +314,7 @@ export default function AdminPage() {
       <Dialog open={showBadge} onOpenChange={setShowBadge}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Print Badge - {selectedUser?.name}</DialogTitle></DialogHeader>
-          {selectedUser && <UnifiedBadge person={selectedUser} />}
+          {selectedUser && <UnifiedBadge person={{ ...selectedUser, country: locations.find(l => l.id === selectedUser.location_id)?.country }} />}
         </DialogContent>
       </Dialog>
     </div>

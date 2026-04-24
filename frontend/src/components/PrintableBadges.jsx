@@ -3,9 +3,9 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
 import DOMPurify from 'dompurify';
+import { getCountryOutline, countryWatermarkSvg, nfcIconSvg } from './countryOutlines';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
-const ORG = '58:12 Global Connect';
 
 function printElement(ref, title) {
   const html = ref.current?.innerHTML;
@@ -23,21 +23,54 @@ function printElement(ref, title) {
   setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
 }
 
-export function StaffBadge({ user, onPrint }) {
+function CountryWatermarkInline({ country, width = 90, height = 90, color = 'rgba(0,0,0,0.04)' }) {
+  const outline = getCountryOutline(country);
+  return (
+    <svg
+      viewBox={outline.viewBox}
+      width={width}
+      height={height}
+      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
+    >
+      <path d={outline.path} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function NfcIcon({ size = 12, color = '#fbbf24' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginLeft: '4px' }}>
+      <path d="M6 8.32a7.43 7.43 0 0 1 0 7.36" />
+      <path d="M9.46 6.21a11.76 11.76 0 0 1 0 11.58" />
+      <path d="M12.91 4.1a15.91 15.91 0 0 1 .01 15.8" />
+      <path d="M16.37 2a20.16 20.16 0 0 1 0 20" />
+    </svg>
+  );
+}
+
+export function StaffBadge({ user }) {
   const ref = useRef(null);
   const initials = (user.name || '').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const memberId = user.id?.slice(-8).toUpperCase() || 'N/A';
-  const locationName = user.location_name || user.campus_name || '';
+  const country = user.country || user.location_country || '';
 
   return (
     <div className="space-y-3">
       <div ref={ref}>
-        <div style={{ width: '324px', height: '204px', border: '2px solid #1a1a2e', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto' }}>
-          <div style={{ background: '#1a1a2e', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <img src={LOGO_URL} alt={ORG} style={{ height: '18px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ color: '#fbbf24', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>STAFF</span>
+        {/* White bg for print/kiosk ink saving */}
+        <div style={{ width: '324px', height: '204px', border: '1.5px solid #ddd', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto', position: 'relative' }}>
+          {/* Country watermark */}
+          <CountryWatermarkInline country={country} />
+          {/* Header */}
+          <div style={{ background: '#f0f0f5', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '2px solid #fbbf24' }}>
+            <img src={LOGO_URL} alt="58:12" style={{ height: '18px' }} crossOrigin="anonymous" />
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+              <NfcIcon size={12} color="#fbbf24" />
+              <span style={{ color: '#b45309', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: '4px' }}>STAFF</span>
+            </span>
           </div>
-          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Body */}
+          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
               <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#e8e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 700, color: '#1a1a2e', border: '2px solid #1a1a2e' }}>{initials}</div>
               <QRCodeSVG value={user.id || 'N/A'} size={48} level="L" />
@@ -49,8 +82,11 @@ export function StaffBadge({ user, onPrint }) {
               <div style={{ fontSize: '9px', color: '#aaa', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
           </div>
-          <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {locationName || ORG} · {new Date().getFullYear()}
+          {/* Footer */}
+          <div style={{ background: '#f5f5f5', padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #eee' }}>
+            <span>ID: {memberId}</span>
+            <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>
+            <span>58:12 GLOBAL - {new Date().getFullYear()}</span>
           </div>
         </div>
       </div>
@@ -63,18 +99,18 @@ export function StaffBadge({ user, onPrint }) {
 
 export function ParentBadge({ parent, children: childList }) {
   const ref = useRef(null);
-  const phone4 = (parent.phone || '').slice(-4);
-  const locationName = parent.location_name || parent.campus_name || '';
+  const country = parent.country || parent.location_country || '';
 
   return (
     <div className="space-y-3">
       <div ref={ref}>
-        <div style={{ width: '324px', height: '204px', border: '2px solid #1a1a2e', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto' }}>
-          <div style={{ background: '#1a1a2e', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <img src={LOGO_URL} alt={ORG} style={{ height: '18px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ color: '#34d399', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>PARENT</span>
+        <div style={{ width: '324px', height: '204px', border: '1.5px solid #ddd', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto', position: 'relative' }}>
+          <CountryWatermarkInline country={country} />
+          <div style={{ background: '#f0f0f5', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '2px solid #34d399' }}>
+            <img src={LOGO_URL} alt="58:12" style={{ height: '18px' }} crossOrigin="anonymous" />
+            <span style={{ color: '#059669', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>PARENT</span>
           </div>
-          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
             <QRCodeSVG value={parent.id || parent.phone || 'N/A'} size={72} level="L" />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: '#1a1a2e' }}>{parent.name}</div>
@@ -85,8 +121,10 @@ export function ParentBadge({ parent, children: childList }) {
               <div style={{ fontSize: '8px', color: '#aaa', marginTop: '3px' }}>Scan QR to check in children</div>
             </div>
           </div>
-          <div style={{ background: '#f0f0f0', padding: '4px 12px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {locationName || ORG} · {new Date().getFullYear()}
+          <div style={{ background: '#f5f5f5', padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #eee' }}>
+            <span>{parent.location_name || ''}</span>
+            <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>
+            <span>58:12 GLOBAL - {new Date().getFullYear()}</span>
           </div>
         </div>
       </div>
@@ -101,17 +139,18 @@ export function ChildTag({ child, parentPhone, eventName, locationName }) {
   const ref = useRef(null);
   const firstName = (child.name || '').split(' ')[0];
   const phone4 = (parentPhone || '').slice(-4);
-  const campusName = locationName || child.location_name || '';
+  const country = child.country || child.location_country || '';
 
   return (
     <div className="space-y-3">
       <div ref={ref}>
-        <div style={{ width: '280px', height: '160px', border: '2px solid #1a1a2e', borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto' }}>
-          <div style={{ background: '#1a1a2e', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <img src={LOGO_URL} alt={ORG} style={{ height: '14px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ color: '#a78bfa', fontSize: '7px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>CHILD TAG</span>
+        <div style={{ width: '280px', height: '160px', border: '1.5px solid #ddd', borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', margin: '0 auto', position: 'relative' }}>
+          <CountryWatermarkInline country={country} width={60} height={60} />
+          <div style={{ background: '#f0f0f5', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '6px', borderBottom: '2px solid #a78bfa' }}>
+            <img src={LOGO_URL} alt="58:12" style={{ height: '14px' }} crossOrigin="anonymous" />
+            <span style={{ color: '#6d28d9', fontSize: '7px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>CHILD TAG</span>
           </div>
-          <div style={{ flex: 1, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ flex: 1, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative', zIndex: 1 }}>
             <QRCodeSVG value={child.id || 'N/A'} size={56} level="L" />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '18px', fontWeight: 800, color: '#1a1a2e', lineHeight: 1.1 }}>{firstName}</div>
@@ -120,8 +159,10 @@ export function ChildTag({ child, parentPhone, eventName, locationName }) {
               {phone4 && <div style={{ fontSize: '9px', color: '#888', marginTop: '3px' }}>Parent: ****{phone4}</div>}
             </div>
           </div>
-          <div style={{ background: '#f0f0f0', padding: '3px 10px', textAlign: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #ddd' }}>
-            {campusName || ORG} · {new Date().toLocaleDateString()}
+          <div style={{ background: '#f5f5f5', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: '#777', borderTop: '1px solid #eee' }}>
+            <span>{locationName || ''}</span>
+            <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>
+            <span>58:12 GLOBAL - {new Date().toLocaleDateString()}</span>
           </div>
         </div>
       </div>

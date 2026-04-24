@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { X, Plus, Upload, Download, FileText, AlertCircle, Bluetooth, Wifi, Monitor } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -10,6 +10,7 @@ import { Textarea } from '../ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
 import { documentsApi } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
@@ -29,6 +30,65 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
   const [scannerStatus, setScannerStatus] = useState('idle');
   const [showDocRequest, setShowDocRequest] = useState(false);
   const [docRequestForm, setDocRequestForm] = useState({ doc_type: 'national_id', message: '' });
+
+  // NFC Tag management
+  const [nfcTags, setNfcTags] = useState([]);
+  const [nfcLoading, setNfcLoading] = useState(false);
+  const [nfcSerial, setNfcSerial] = useState('');
+  const [nfcLabel, setNfcLabel] = useState('');
+  const [nfcScanning, setNfcScanning] = useState(false);
+
+  useEffect(() => {
+    if (open && selectedUser?.member_id) {
+      api.get(`/members/${selectedUser.member_id}/nfc-tags`).then(res => setNfcTags(res.data || [])).catch(() => setNfcTags([]));
+    } else if (open && selectedUser?.id) {
+      api.get(`/members/${selectedUser.id}/nfc-tags`).then(res => setNfcTags(res.data || [])).catch(() => setNfcTags([]));
+    }
+  }, [open, selectedUser?.member_id, selectedUser?.id]);
+
+  const addNfcTag = async () => {
+    if (!nfcSerial.trim()) { toast.error('NFC serial number is required'); return; }
+    const memberId = selectedUser?.member_id || selectedUser?.id;
+    if (!memberId) return;
+    setNfcLoading(true);
+    try {
+      const res = await api.post(`/members/${memberId}/nfc-tags`, { serial_number: nfcSerial.trim(), label: nfcLabel.trim() });
+      setNfcTags(prev => [...prev, res.data]);
+      setNfcSerial(''); setNfcLabel('');
+      toast.success('NFC tag added');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to add NFC tag'); }
+    finally { setNfcLoading(false); }
+  };
+
+  const removeNfcTag = async (tagId) => {
+    const memberId = selectedUser?.member_id || selectedUser?.id;
+    if (!memberId) return;
+    try {
+      await api.delete(`/members/${memberId}/nfc-tags/${tagId}`);
+      setNfcTags(prev => prev.filter(t => t.id !== tagId));
+      toast.success('NFC tag removed');
+    } catch { toast.error('Failed to remove NFC tag'); }
+  };
+
+  const scanNfcDevice = async () => {
+    if (!('NDEFReader' in window)) { toast.error('NFC not supported on this device/browser. Enter the serial number manually.'); return; }
+    setNfcScanning(true);
+    try {
+      const ndef = new window.NDEFReader();
+      await ndef.scan();
+      toast.info('Hold NFC tag near device...');
+      ndef.addEventListener('reading', ({ serialNumber }) => {
+        setNfcSerial(serialNumber || '');
+        setNfcScanning(false);
+        toast.success(`NFC tag read: ${serialNumber}`);
+      });
+      ndef.addEventListener('readingerror', () => { setNfcScanning(false); toast.error('NFC read error'); });
+      setTimeout(() => setNfcScanning(false), 15000);
+    } catch (err) {
+      setNfcScanning(false);
+      toast.error('NFC scan failed: ' + (err.message || err));
+    }
+  };
 
   const handleDocUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -94,10 +154,11 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
           <DialogDescription>Full member profile, account settings, and documents</DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="profile" className="mt-2">
-          <TabsList className="w-full grid grid-cols-4">
+          <TabsList className="w-full grid grid-cols-5">
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="flags">Flags</TabsTrigger>
+            <TabsTrigger value="nfc">NFC Tags</TabsTrigger>
             <TabsTrigger value="documents">Documents</TabsTrigger>
           </TabsList>
 
@@ -206,6 +267,71 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <Button className="flex-1" onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save Flags'}</Button>
             </div>
           </TabsContent>
+
+          <TabsContent value="nfc" className="space-y-4 mt-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">NFC Tags</p>
+              <p className="text-xs text-muted-foreground">Assign NFC tags/cards to this user for contactless check-in and access control.</p>
+            </div>
+
+            {nfcTags.length > 0 ? (
+              <div className="space-y-2">
+                {nfcTags.map(tag => (
+                  <div key={tag.id} className="flex items-center gap-3 p-3 rounded-lg border border-border" data-testid={`nfc-tag-${tag.id}`}>
+                    <Wifi size={16} className="text-blue-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium font-mono">{tag.serial_number}</p>
+                      {tag.label && <p className="text-xs text-muted-foreground">{tag.label}</p>}
+                      <p className="text-[10px] text-muted-foreground">Added {new Date(tag.added_at).toLocaleDateString()}</p>
+                    </div>
+                    <Button size="sm" variant="ghost" className="text-destructive h-7 px-2" onClick={() => removeNfcTag(tag.id)} data-testid={`remove-nfc-${tag.id}`}>
+                      <X size={13} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-6 rounded-lg border border-dashed border-border">
+                <Wifi size={24} className="mx-auto mb-2 text-muted-foreground opacity-30" />
+                <p className="text-sm text-muted-foreground">No NFC tags assigned</p>
+              </div>
+            )}
+
+            <div className="p-3 rounded-lg border border-border space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase">Add NFC Tag</p>
+              <div className="flex gap-2">
+                <Input
+                  className="flex-1 font-mono"
+                  placeholder="Serial number (e.g. 04:A2:B3:C4:D5:E6:F7)"
+                  value={nfcSerial}
+                  onChange={e => setNfcSerial(e.target.value)}
+                  data-testid="nfc-serial-input"
+                />
+                <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={scanNfcDevice} disabled={nfcScanning} data-testid="scan-nfc-btn">
+                  <Wifi size={13} /> {nfcScanning ? 'Scanning...' : 'Scan'}
+                </Button>
+              </div>
+              <Input
+                placeholder="Label (optional, e.g. Blue Keycard)"
+                value={nfcLabel}
+                onChange={e => setNfcLabel(e.target.value)}
+                data-testid="nfc-label-input"
+              />
+              <Button className="w-full gap-1.5" onClick={addNfcTag} disabled={nfcLoading || !nfcSerial.trim()} data-testid="add-nfc-tag-btn">
+                <Plus size={13} /> {nfcLoading ? 'Adding...' : 'Add NFC Tag'}
+              </Button>
+            </div>
+
+            {nfcScanning && (
+              <div className="p-4 rounded-lg bg-blue-50 border border-blue-200 text-center">
+                <Wifi size={28} className="mx-auto mb-2 text-blue-500 animate-pulse" />
+                <p className="text-sm font-medium text-blue-800">Waiting for NFC tag...</p>
+                <p className="text-xs text-blue-600 mt-1">Hold the NFC card near your device</p>
+                <Button size="sm" variant="outline" className="mt-3" onClick={() => setNfcScanning(false)}>Cancel</Button>
+              </div>
+            )}
+          </TabsContent>
+
 
           <TabsContent value="documents" className="space-y-4 mt-4">
             <div className="flex items-center justify-between">
