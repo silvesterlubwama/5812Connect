@@ -71,6 +71,11 @@ export default function FinancialPage() {
   const [pendingExpenses, setPendingExpenses] = useState([]);
   const [balanceSheet, setBalanceSheet] = useState(null);
   const [bsLoading, setBsLoading] = useState(false);
+  const [editEntry, setEditEntry] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [showAssetForm, setShowAssetForm] = useState(false);
+  const [assets, setAssets] = useState([]);
+  const [assetForm, setAssetForm] = useState({ name: '', value: 0, category: 'equipment', purchase_date: '', depreciation_years: 5 });
   const [showApprovalComment, setShowApprovalComment] = useState(null);
   const [approvalComment, setApprovalComment] = useState('');
   const [showImportExport, setShowImportExport] = useState(false);
@@ -123,8 +128,12 @@ export default function FinancialPage() {
       if (locationFilter) params.location_id = locationFilter;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
-      const r = await financialApi.balanceSheet(params);
+      const [r, aRes] = await Promise.all([
+        financialApi.balanceSheet(params),
+        financialApi.listAssets(params),
+      ]);
       setBalanceSheet(r.data);
+      setAssets(aRes.data || []);
     } catch (e) { console.warn(e.message || e); }
     finally { setBsLoading(false); }
   };
@@ -326,6 +335,7 @@ export default function FinancialPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Amount</th>
                       <th className="pb-2 font-medium text-muted-foreground">Type</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Actions</th>
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {donations.map(d => (
@@ -335,6 +345,12 @@ export default function FinancialPage() {
                           <td className="py-3 text-green-600 font-semibold">{d.currency} {(d.amount||0).toLocaleString()}</td>
                           <td className="py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${typeColors[d.type] || 'bg-slate-100 text-slate-700'}`}>{d.type}</span></td>
                           <td className="py-3 text-muted-foreground">{d.date}</td>
+                          <td className="py-3">
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name, amount: d.amount, currency: d.currency, type: d.type, date: d.date, notes: d.notes || '' }); }}>Edit</Button>
+                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -367,6 +383,7 @@ export default function FinancialPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Category</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
                       <th className="pb-2 font-medium text-muted-foreground">Receipt</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Actions</th>
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {expenses.map(e => (
@@ -384,6 +401,12 @@ export default function FinancialPage() {
                                 if (url) attachReceipt(e.id, url);
                               }}>Attach</Button>
                             )}
+                          </td>
+                          <td className="py-3">
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>
+                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -423,6 +446,38 @@ export default function FinancialPage() {
                   {Object.keys(balanceSheet.expense_by_category || {}).length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expense data</p>}
                 </CardContent></Card>
               </div>
+              {/* Assets Tracking */}
+              <Card className="rounded-xl mt-4">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-sm">Assets & Property</h3>
+                    <Button size="sm" variant="outline" className="gap-1 text-xs h-7" onClick={() => setShowAssetForm(true)}>+ Add Asset</Button>
+                  </div>
+                  {assets.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4">No assets recorded. Track equipment, vehicles, property values here.</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Date</th></tr></thead>
+                      <tbody className="divide-y">
+                        {assets.map(a => {
+                          const age = a.purchase_date ? (new Date().getFullYear() - new Date(a.purchase_date).getFullYear()) : 0;
+                          const depRate = a.depreciation_years > 0 ? 1 / a.depreciation_years : 0;
+                          const currentVal = Math.max(0, (a.value || 0) * (1 - depRate * Math.min(age, a.depreciation_years || 5)));
+                          return (
+                            <tr key={a.id || a.name}>
+                              <td className="py-2 font-medium">{a.name}</td>
+                              <td className="py-2 text-muted-foreground capitalize">{a.category}</td>
+                              <td className="py-2">{fmt(a.value)}</td>
+                              <td className="py-2 text-blue-600">{fmt(currentVal)}</td>
+                              <td className="py-2 text-muted-foreground">{a.purchase_date || '-'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           ) : (
             <Card className="rounded-xl"><CardContent className="py-12 text-center"><p className="text-muted-foreground">Click the Balance Sheet tab to generate the report for the selected campus and date range.</p></CardContent></Card>
@@ -632,6 +687,86 @@ export default function FinancialPage() {
               <Button className="w-full gap-2" onClick={handleFinancialImport} disabled={importingData || !importData.trim()} data-testid="financial-import-btn">
                 <Upload size={14} /> {importingData ? 'Importing...' : 'Import Financial Data'}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Asset Dialog */}
+      <Dialog open={showAssetForm} onOpenChange={setShowAssetForm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Add Asset</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-2"><Label>Asset Name</Label><Input value={assetForm.name} onChange={e => setAssetForm({...assetForm, name: e.target.value})} placeholder="e.g. Toyota Land Cruiser" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Purchase Value</Label><Input type="number" value={assetForm.value} onChange={e => setAssetForm({...assetForm, value: parseFloat(e.target.value) || 0})} /></div>
+              <div className="space-y-2"><Label>Purchase Date</Label><Input type="date" value={assetForm.purchase_date} onChange={e => setAssetForm({...assetForm, purchase_date: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Category</Label>
+                <Select value={assetForm.category} onValueChange={v => setAssetForm({...assetForm, category: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="equipment">Equipment</SelectItem>
+                    <SelectItem value="vehicle">Vehicle</SelectItem>
+                    <SelectItem value="property">Property/Building</SelectItem>
+                    <SelectItem value="furniture">Furniture</SelectItem>
+                    <SelectItem value="technology">Technology</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Depreciation (years)</Label><Input type="number" min={1} max={50} value={assetForm.depreciation_years} onChange={e => setAssetForm({...assetForm, depreciation_years: parseInt(e.target.value) || 5})} /></div>
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setShowAssetForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                try { await financialApi.createAsset({ ...assetForm, location_id: locationFilter }); setShowAssetForm(false); setAssetForm({ name: '', value: 0, category: 'equipment', purchase_date: '', depreciation_years: 5 }); fetchBalanceSheet(); toast.success('Asset added'); }
+                catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Add Asset</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Entry Dialog */}
+      <Dialog open={!!editEntry} onOpenChange={v => { if (!v) setEditEntry(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit {editEntry?.type === 'donation' ? 'Donation' : 'Expense'}</DialogTitle></DialogHeader>
+          <div className="space-y-4 mt-2">
+            {editEntry?.type === 'donation' ? (
+              <>
+                <div className="space-y-2"><Label>Donor Name</Label><Input value={editForm.donor_name || ''} onChange={e => setEditForm({...editForm, donor_name: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2"><Label>Amount</Label><Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({...editForm, amount: parseFloat(e.target.value) || 0})} /></div>
+                  <div className="space-y-2"><Label>Date</Label><Input type="date" value={editForm.date || ''} onChange={e => setEditForm({...editForm, date: e.target.value})} /></div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2"><Label>Title</Label><Input value={editForm.title || ''} onChange={e => setEditForm({...editForm, title: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2"><Label>Amount</Label><Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({...editForm, amount: parseFloat(e.target.value) || 0})} /></div>
+                  <div className="space-y-2"><Label>Date</Label><Input type="date" value={editForm.date || ''} onChange={e => setEditForm({...editForm, date: e.target.value})} /></div>
+                </div>
+                <div className="space-y-2"><Label>Category</Label><Input value={editForm.category || ''} onChange={e => setEditForm({...editForm, category: e.target.value})} /></div>
+              </>
+            )}
+            <div className="space-y-2"><Label>Notes</Label><Input value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})} /></div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setEditEntry(null)}>Cancel</Button>
+              <Button className="flex-1" onClick={async () => {
+                try {
+                  if (editEntry.type === 'donation') {
+                    await financialApi.updateDonation(editEntry.id, editForm);
+                    setDonations(prev => prev.map(d => d.id === editEntry.id ? { ...d, ...editForm } : d));
+                  } else {
+                    await financialApi.approveExpense(editEntry.id, editForm);
+                    setExpenses(prev => prev.map(e => e.id === editEntry.id ? { ...e, ...editForm } : e));
+                  }
+                  toast.success('Updated'); setEditEntry(null);
+                } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+              }}>Save</Button>
             </div>
           </div>
         </DialogContent>

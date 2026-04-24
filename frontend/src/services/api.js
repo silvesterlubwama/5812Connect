@@ -144,6 +144,14 @@ export const financialApi = {
   rejectExpense: (id, comment) => api.put(`/financial/expenses/${id}/reject`, { comment }),
   balanceSheet: (params) => api.get('/financial/balance-sheet', { params }),
   setReceiptUrl: (expenseId, data) => api.put(`/financial/expenses/${expenseId}/receipt-url`, data),
+  deleteDonation: (id) => api.delete(`/financial/donations/${id}`),
+  deleteExpense: (id) => api.delete(`/financial/expenses/${id}`),
+  updateDonation: (id, data) => api.put(`/financial/donations/${id}`, data),
+  // Assets
+  listAssets: (params) => api.get('/financial/assets', { params }),
+  createAsset: (data) => api.post('/financial/assets', data),
+  updateAsset: (id, data) => api.put(`/financial/assets/${id}`, data),
+  deleteAsset: (id) => api.delete(`/financial/assets/${id}`),
   importExport: (data) => api.post('/financial/import', data),
   // Sponsorship
   listSponsors: (params) => api.get('/financial/sponsors', { params }),

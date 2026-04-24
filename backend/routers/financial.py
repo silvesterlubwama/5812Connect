@@ -548,6 +548,53 @@ async def get_balance_sheet(location_id: Optional[str] = None, date_from: Option
     }
 
 
+
+# ========== ASSETS ==========
+
+@router.get("/financial/assets")
+async def list_assets(location_id: Optional[str] = None, current_user: dict = Depends(require_staff)):
+    campus = await _financial_campus_filter(current_user)
+    query = {**campus} if campus else {}
+    if location_id: query["location_id"] = location_id
+    return await db.assets.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/financial/assets")
+async def create_asset(data: dict, current_user: dict = Depends(require_manager)):
+    doc = {
+        "id": f"ast_{str(uuid.uuid4())[:8]}",
+        "name": data.get("name", ""),
+        "value": float(data.get("value", 0)),
+        "category": data.get("category", "equipment"),
+        "purchase_date": data.get("purchase_date", ""),
+        "depreciation_years": int(data.get("depreciation_years", 5)),
+        "serial_number": data.get("serial_number", ""),
+        "condition": data.get("condition", "good"),
+        "location_id": data.get("location_id", current_user.get("location_id", "")),
+        "notes": data.get("notes", ""),
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.assets.insert_one(doc); doc.pop("_id", None)
+    return doc
+
+
+@router.put("/financial/assets/{asset_id}")
+async def update_asset(asset_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    allowed = {"name", "value", "category", "purchase_date", "depreciation_years", "serial_number", "condition", "location_id", "notes"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.assets.update_one({"id": asset_id}, {"$set": update})
+    return await db.assets.find_one({"id": asset_id}, {"_id": 0})
+
+
+@router.delete("/financial/assets/{asset_id}")
+async def delete_asset(asset_id: str, current_user: dict = Depends(require_admin)):
+    await db.assets.delete_one({"id": asset_id})
+    return {"message": "Asset deleted"}
+
+
+
 # ========== RECEIPT SCANNING ==========
 
 @router.post("/financial/expenses/{expense_id}/receipt")
