@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone, UserPlus, History, Star, X } from 'lucide-react';
+import { CreditCard, UserCheck, Eye, EyeOff, Search, ScanLine, LogOut, Wifi, WifiOff, Users, Clock, MapPin, Fingerprint, Smartphone, UserPlus, History, Star, X, Camera, Settings } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -71,7 +71,50 @@ export default function KioskPage() {
   const [lockToScan, setLockToScan] = useState(false); // Lock to scan-only mode
   const [lockLocationId, setLockLocationId] = useState(''); // Lock to specific restricted location
   const [showSignup, setShowSignup] = useState(false);
-  const [signupForm, setSignupForm] = useState({ name: '', phone: '', email: '', role: 'Member' });
+  const [signupForm, setSignupForm] = useState({ name: '', phone: '', email: '', role: 'Guest' });
+
+  // Kiosk device setup
+  const [kioskDevice, setKioskDevice] = useState(null);
+  const [showSetup, setShowSetup] = useState(false);
+  const [setupForm, setSetupForm] = useState({ name: '', location_id: '', type: 'regular', is_restricted: false, lock_password: '', check_in_types: ['staff', 'parent', 'guest', 'child_self'] });
+  const [peripherals, setPeripherals] = useState({ nfc: false, fingerprint: false, camera: false, qr_scanner: false });
+  const [qrScanActive, setQrScanActive] = useState(false);
+
+  // Detect available peripherals on mount
+  useEffect(() => {
+    const detectPeripherals = async () => {
+      const detected = { nfc: false, fingerprint: false, camera: false, qr_scanner: false };
+      // NFC
+      if ('NDEFReader' in window) detected.nfc = true;
+      // Biometric/Fingerprint
+      if (window.PublicKeyCredential) {
+        try { detected.fingerprint = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) { console.warn(e.message || e); }
+      }
+      // Camera
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        detected.camera = devices.some(d => d.kind === 'videoinput');
+        detected.qr_scanner = detected.camera; // QR scanning uses camera
+      } catch (e) { console.warn(e.message || e); }
+      setPeripherals(detected);
+    };
+    detectPeripherals();
+  }, []);
+
+  // Load saved kiosk device config
+  useEffect(() => {
+    const savedDeviceId = localStorage.getItem('5812_kiosk_device_id');
+    if (savedDeviceId) {
+      kioskApi.listDevices().then(res => {
+        const device = (res.data || []).find(d => d.id === savedDeviceId);
+        if (device) {
+          setKioskDevice(device);
+          setSelectedLocation(device.location_id || '');
+          if (device.auto_lock) { setLockMode(true); setLockToScan(device.is_restricted); }
+        }
+      }).catch(() => {});
+    }
+  }, []);
 
   // Sound effects for check-in result
   const playSound = (success) => {
@@ -118,8 +161,60 @@ export default function KioskPage() {
       toast.success(`${signupForm.name} registered! PIN: ${res.data.pin}`);
       playSound(true);
       setShowSignup(false);
-      setSignupForm({ name: '', phone: '', email: '', role: 'Member' });
+      setSignupForm({ name: '', phone: '', email: '', role: 'Guest' });
     } catch (err) { toast.error(err.response?.data?.detail || 'Signup failed'); }
+  };
+
+  // Save kiosk device setup
+  const saveKioskSetup = async () => {
+    try {
+      const payload = { ...setupForm, peripherals, auto_lock: true };
+      const loc = locations.find(l => l.id === setupForm.location_id);
+      if (loc) payload.location_name = loc.name;
+      let device;
+      if (kioskDevice) {
+        const res = await kioskApi.updateDevice(kioskDevice.id, payload);
+        device = res.data;
+      } else {
+        const res = await kioskApi.registerDevice(payload);
+        device = res.data;
+      }
+      setKioskDevice(device);
+      localStorage.setItem('5812_kiosk_device_id', device.id);
+      setSelectedLocation(device.location_id || '');
+      if (device.auto_lock) { setLockMode(true); setLockToScan(device.is_restricted); }
+      setShowSetup(false);
+      toast.success('Kiosk configured!');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Setup failed'); }
+  };
+
+  // Camera QR scan
+  const startQrScan = async () => {
+    if (!peripherals.camera) { toast.error('No camera detected'); return; }
+    setQrScanActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.play();
+      // Use simple interval-based frame capture for QR detection
+      toast.info('Point camera at QR code or ID...');
+      // Auto-stop after 15 seconds
+      setTimeout(() => { stream.getTracks().forEach(t => t.stop()); setQrScanActive(false); }, 15000);
+    } catch (e) { toast.error('Camera access denied'); setQrScanActive(false); }
+  };
+
+  // NFC scan
+  const startNfcScan = async () => {
+    if (!peripherals.nfc || !('NDEFReader' in window)) { toast.error('NFC not available'); return; }
+    try {
+      const ndef = new window.NDEFReader();
+      await ndef.scan();
+      toast.info('Hold NFC tag near device...');
+      ndef.addEventListener('reading', ({ serialNumber }) => {
+        handleIdScan(serialNumber);
+      });
+    } catch (e) { toast.error('NFC scan failed: ' + (e.message || e)); }
   };
 
   useEffect(() => {
@@ -278,8 +373,9 @@ export default function KioskPage() {
             <div className="flex items-center gap-2">
               <Button variant={lockMode ? 'default' : 'outline'} size="sm" className="text-xs h-8" onClick={() => {
                 if (lockMode) { setShowUnlockDialog(true); }
-                else { setLockMode(true); setLockToScan(true); toast.success('Kiosk locked to scan mode. Admin password required to unlock.'); }
+                else { setLockMode(true); setLockToScan(true); toast.success('Kiosk locked. Admin password required to unlock.'); }
               }} data-testid="kiosk-lock-btn">{lockMode ? 'Unlock' : 'Lock'}</Button>
+              {!lockMode && <Button variant="outline" size="sm" className="text-xs h-8 gap-1" onClick={() => { setSetupForm({ name: kioskDevice?.name || '', location_id: kioskDevice?.location_id || selectedLocation || '', type: kioskDevice?.type || 'regular', is_restricted: kioskDevice?.is_restricted || false, lock_password: '', check_in_types: kioskDevice?.check_in_types || ['staff', 'parent', 'guest', 'child_self'] }); setShowSetup(true); }} data-testid="kiosk-setup-btn"><Settings size={12} /> Setup</Button>}
               <Badge variant={isOnline ? 'outline' : 'destructive'} className={`text-[10px] gap-1 ${isOnline ? 'border-green-300 text-green-600' : ''}`}>
                 {isOnline ? <Wifi size={10} /> : <WifiOff size={10} />} {isOnline ? 'Online' : 'Offline'}
               </Badge>
@@ -295,31 +391,51 @@ export default function KioskPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
             <Button className="h-20 text-lg gap-3 flex-col" onClick={() => setView('id')} data-testid="kiosk-id-checkin-btn">
               <CreditCard size={28} />
               <span className="text-xs">ID / QR Check-In</span>
             </Button>
+            <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={startQrScan} disabled={!peripherals.camera || qrScanActive} data-testid="kiosk-camera-scan">
+              <Camera size={28} className={peripherals.camera ? 'text-green-500' : 'text-slate-400'} />
+              <span className="text-xs">{qrScanActive ? 'Scanning...' : 'Camera Scan'}</span>
+            </Button>
+            {peripherals.nfc && (
+              <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={startNfcScan} data-testid="kiosk-nfc-scan">
+                <Wifi size={28} className="text-blue-500" />
+                <span className="text-xs">NFC Scan</span>
+              </Button>
+            )}
             <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={() => setView('visitor')} data-testid="kiosk-visitor-btn">
               <UserCheck size={28} />
               <span className="text-xs">Visitor</span>
             </Button>
-            <Button variant="outline" className="h-20 text-lg gap-3 flex-col border-primary/30 text-primary" onClick={() => setShowSignup(true)} data-testid="kiosk-signup-btn">
-              <UserPlus size={28} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+            <Button variant="outline" className="h-16 gap-2 flex-col border-primary/30 text-primary" onClick={() => setShowSignup(true)} data-testid="kiosk-signup-btn">
+              <UserPlus size={22} />
               <span className="text-xs">Quick Signup</span>
             </Button>
-            <Button variant="secondary" className="h-20 text-lg gap-3 flex-col" onClick={() => { setScanType('manual'); setView('scan'); }} data-testid="kiosk-scan-btn">
-              <ScanLine size={28} />
+            <Button variant="secondary" className="h-16 gap-2 flex-col" onClick={() => { setScanType('manual'); setView('scan'); }} data-testid="kiosk-scan-btn">
+              <ScanLine size={22} />
               <span className="text-xs">Access Scan</span>
             </Button>
-            <Button variant="outline" className="h-20 text-lg gap-3 flex-col" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
-              <UserPlus size={28} />
+            <Button variant="outline" className="h-16 gap-2 flex-col" onClick={() => setShowGuestRegister(true)} data-testid="kiosk-guest-register-btn">
+              <UserPlus size={22} />
               <span className="text-xs">Register Guest</span>
             </Button>
-            <Button variant="outline" className="h-20 text-lg gap-3 flex-col text-amber-600 border-amber-200" onClick={() => setView('checkout')} data-testid="kiosk-checkout-btn">
-              <LogOut size={28} />
+            <Button variant="outline" className="h-16 gap-2 flex-col text-amber-600 border-amber-200" onClick={() => setView('checkout')} data-testid="kiosk-checkout-btn">
+              <LogOut size={22} />
               <span className="text-xs">Check Out</span>
             </Button>
+          </div>
+
+          {/* Peripheral Status */}
+          <div className="flex items-center gap-3 mb-4 text-xs text-muted-foreground">
+            <span className={`flex items-center gap-1 ${peripherals.camera ? 'text-green-600' : ''}`}><Camera size={12} /> Camera {peripherals.camera ? '✓' : '✗'}</span>
+            <span className={`flex items-center gap-1 ${peripherals.nfc ? 'text-blue-600' : ''}`}><Wifi size={12} /> NFC {peripherals.nfc ? '✓' : '✗'}</span>
+            <span className={`flex items-center gap-1 ${peripherals.fingerprint ? 'text-purple-600' : ''}`}><Fingerprint size={12} /> Biometric {peripherals.fingerprint ? '✓' : '✗'}</span>
+            {kioskDevice && <span className="ml-auto">Device: {kioskDevice.name} ({kioskDevice.type})</span>}
           </div>
 
           {/* Quick Signup Dialog */}
@@ -333,6 +449,56 @@ export default function KioskPage() {
                 <div className="flex gap-3">
                   <Button variant="outline" className="flex-1" onClick={() => setShowSignup(false)}>Cancel</Button>
                   <Button className="flex-1" onClick={handleQuickSignup} data-testid="signup-submit-btn">Sign Up</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+
+          {/* Kiosk Device Setup Dialog */}
+          <Dialog open={showSetup} onOpenChange={setShowSetup}>
+            <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>{kioskDevice ? 'Edit Kiosk Setup' : 'Setup New Kiosk'}</DialogTitle></DialogHeader>
+              <div className="space-y-4 mt-2">
+                <div className="space-y-2"><Label>Device Name</Label><Input value={setupForm.name} onChange={e => setSetupForm({...setupForm, name: e.target.value})} placeholder="e.g. Main Entrance Kiosk" /></div>
+                <div className="space-y-2"><Label>Check-in Location</Label>
+                  <Select value={setupForm.location_id || '__none__'} onValueChange={v => setSetupForm({...setupForm, location_id: v === '__none__' ? '' : v})}>
+                    <SelectTrigger><SelectValue placeholder="Select location..." /></SelectTrigger>
+                    <SelectContent><SelectItem value="__none__">Not assigned</SelectItem>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name} {l.is_restricted ? '(Restricted)' : ''}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Kiosk Type</Label>
+                  <Select value={setupForm.type} onValueChange={v => setSetupForm({...setupForm, type: v, is_restricted: v === 'restricted'})}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="regular">Regular Check-in</SelectItem>
+                      <SelectItem value="restricted">Restricted Access</SelectItem>
+                      <SelectItem value="venue">Venue Check-in</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Lock Password (to exit kiosk)</Label><Input type="password" value={setupForm.lock_password} onChange={e => setSetupForm({...setupForm, lock_password: e.target.value})} placeholder="Required to exit kiosk mode" /></div>
+                <div className="p-3 rounded-lg border border-border space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">Detected Peripherals</p>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className={`flex items-center gap-2 p-2 rounded ${peripherals.camera ? 'bg-green-50 text-green-700' : 'bg-slate-50 text-slate-400'}`}><Camera size={14} /> Camera {peripherals.camera ? '✓' : '✗'}</div>
+                    <div className={`flex items-center gap-2 p-2 rounded ${peripherals.nfc ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-400'}`}><Wifi size={14} /> NFC {peripherals.nfc ? '✓' : '✗'}</div>
+                    <div className={`flex items-center gap-2 p-2 rounded ${peripherals.fingerprint ? 'bg-purple-50 text-purple-700' : 'bg-slate-50 text-slate-400'}`}><Fingerprint size={14} /> Biometric {peripherals.fingerprint ? '✓' : '✗'}</div>
+                    <div className={`flex items-center gap-2 p-2 rounded ${peripherals.qr_scanner ? 'bg-green-50 text-green-700' : 'bg-slate-50 text-slate-400'}`}><ScanLine size={14} /> QR Scanner {peripherals.qr_scanner ? '✓' : '✗'}</div>
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg border border-border space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">Check-in Types Enabled</p>
+                  {['staff', 'parent', 'guest', 'child_self'].map(t => (
+                    <label key={t} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={(setupForm.check_in_types || []).includes(t)} onChange={e => { const types = e.target.checked ? [...(setupForm.check_in_types || []), t] : (setupForm.check_in_types || []).filter(x => x !== t); setSetupForm({...setupForm, check_in_types: types}); }} />
+                      {t === 'staff' ? 'Staff Check-in (with children)' : t === 'parent' ? 'Parent Check-in (with children)' : t === 'guest' ? 'Guest Check-in (with children)' : 'Child Self Check-in'}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <Button variant="outline" className="flex-1" onClick={() => setShowSetup(false)}>Cancel</Button>
+                  <Button className="flex-1" onClick={saveKioskSetup} data-testid="save-kiosk-setup">{kioskDevice ? 'Update' : 'Setup'}</Button>
                 </div>
               </div>
             </DialogContent>

@@ -123,6 +123,12 @@ export const kioskApi = {
   checkin: (data) => api.post('/kiosk/checkin', data),
   lookup: (identifier) => api.get('/kiosk/lookup', { params: { identifier } }),
   pinCheckin: (data) => api.post('/kiosk/pin-checkin', data),
+  // Device management
+  listDevices: () => api.get('/kiosk/devices'),
+  registerDevice: (data) => api.post('/kiosk/devices', data),
+  updateDevice: (id, data) => api.put(`/kiosk/devices/${id}`, data),
+  deleteDevice: (id) => api.delete(`/kiosk/devices/${id}`),
+  unlockDevice: (id, password) => api.post(`/kiosk/devices/${id}/unlock`, { password }),
 };
 
 // ---- FINANCIAL ----

@@ -696,6 +696,71 @@ async def get_checkin_stats(current_user: dict = Depends(get_current_user)):
     }
 
 
+
+# ========== KIOSK DEVICE MANAGEMENT ==========
+
+@router.post("/kiosk/devices")
+async def register_kiosk_device(data: dict, current_user: dict = Depends(require_admin)):
+    """Admin registers a new kiosk device with location, type, and peripheral config"""
+    device_id = f"kiosk_{str(uuid.uuid4())[:8]}"
+    doc = {
+        "id": device_id,
+        "name": data.get("name", "Kiosk"),
+        "location_id": data.get("location_id", ""),
+        "location_name": data.get("location_name", ""),
+        "type": data.get("type", "regular"),  # regular, restricted, venue
+        "venue_id": data.get("venue_id"),
+        "is_restricted": data.get("is_restricted", False),
+        "peripherals": data.get("peripherals", {}),  # {nfc: true, fingerprint: true, camera: true, qr_scanner: true}
+        "auto_lock": data.get("auto_lock", True),
+        "lock_password": data.get("lock_password", ""),
+        "check_in_types": data.get("check_in_types", ["staff", "parent", "guest", "child_self"]),
+        "active": True,
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.kiosk_devices.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.get("/kiosk/devices")
+async def list_kiosk_devices(current_user: dict = Depends(require_staff)):
+    return await db.kiosk_devices.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+@router.put("/kiosk/devices/{device_id}")
+async def update_kiosk_device(device_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "location_id", "location_name", "type", "venue_id", "is_restricted", "peripherals", "auto_lock", "lock_password", "check_in_types", "active"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.kiosk_devices.update_one({"id": device_id}, {"$set": update})
+    return await db.kiosk_devices.find_one({"id": device_id}, {"_id": 0})
+
+
+@router.delete("/kiosk/devices/{device_id}")
+async def delete_kiosk_device(device_id: str, current_user: dict = Depends(require_admin)):
+    await db.kiosk_devices.delete_one({"id": device_id})
+    return {"message": "Device removed"}
+
+
+@router.post("/kiosk/devices/{device_id}/unlock")
+async def unlock_kiosk(device_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Manager+ unlocks a kiosk with password"""
+    device = await db.kiosk_devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    stored_pw = device.get("lock_password", "")
+    if stored_pw and data.get("password") != stored_pw:
+        # Also try user's actual password
+        user = await db.users.find_one({"id": current_user["id"]})
+        from deps import verify_password
+        if not verify_password(data.get("password", ""), user.get("password_hash", "")):
+            raise HTTPException(status_code=403, detail="Invalid password")
+    return {"unlocked": True}
+
+
+
 # ========== KIOSK ==========
 
 @router.post("/kiosk/checkin")
