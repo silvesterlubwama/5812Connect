@@ -3,32 +3,31 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 58 - Feb 2026)
-- [x] Wallet badge: POST /api/members/{id}/wallet-badge generates shareable token, GET /api/wallet-badge/{token} public page
-- [x] WalletBadgePage at /badge/:token — mobile-optimized dark badge with QR, country outline, save-to-home instructions
-- [x] UnifiedBadge "Wallet" button now generates and opens shareable badge URL
-- [x] Cascade deletion cleanup on all delete endpoints:
-  - Member: removes from tasks assignees, boards tagged_members, unlinks user
-  - Family: unlinks children and guests family_id
-  - Guest: removes from children parent_ids
-  - Child: removes from location resident_ids
-  - User: cascades to tasks, boards, members, guests
-- [x] Frontend dataEvents.js event bus for cross-component data refresh after mutations
-- [x] AdminPage + TasksPage subscribe to data-changed events for auto-refresh
+## Latest Changes (Iteration 59 - Feb 2026)
+- [x] Error Boundary: wraps entire App + AppRoutes, prevents white screens, shows retry + dashboard buttons
+- [x] Bulk Delete Safeguard: BulkDeleteConfirm dialog requires typing 'DELETE' before bulk operations proceed
+- [x] Delete confirmations: added window.confirm to all previously unprotected delete operations
+- [x] Unsaved Form Warning: useUnsavedWarning hook in UserEditDialog, warns on page navigation with dirty form
+
+## Changes (Iteration 58)
+- [x] Wallet badge shareable URL system (POST create, GET public, mobile page at /badge/:token)
+- [x] Cascade deletion cleanup on all delete endpoints (members, families, guests, children, users)
+- [x] Frontend dataEvents.js event bus for cross-component data refresh
 
 ## Previous (Iterations 49-57)
-- Venue CRUD, group types, import fixes, badge fixes, country outlines, timezone expansion
-- User directory, outreach location/venue, recurrence options, portal fix, guest delete, kiosk lock
-- QR camera, hooks, type hints, badges (NFC/country/footer), templates, photos, parent search
+- All badge improvements, import fixes, photo upload, country outlines, venue CRUD, group types
+- User directory, outreach features, recurrence, portal fix, kiosk lock, staff-guest linking
 
 ## Architecture
-- **Wallet Badges**: wallet_badges collection, public GET at /api/wallet-badge/{token}
-- **Cascade Deletion**: Inline cleanup in each delete endpoint (no background tasks)
-- **Data Events**: services/dataEvents.js — emit('data-changed', {collection, id, action}) / on()
-- **User Directory**: /api/admin/users/directory bypasses campus
-- **Route Ordering**: Static before dynamic
+- **Error Boundary**: components/ErrorBoundary.jsx (class component)
+- **Bulk Delete**: components/BulkDeleteConfirm.jsx (type-to-confirm dialog)
+- **Unsaved Warning**: hooks/useUnsavedWarning.js (beforeunload + form dirty tracking)
+- **Data Events**: services/dataEvents.js (cross-page refresh)
+- **Wallet Badges**: wallet_badges collection, /badge/:token public route
 
-## Test Reports: Iterations 49-58 all 100%
+## Test Reports: Iterations 49-59 all 100%
 
 ## Pending
-- Future: Wave H5 SDK upgrade, server.py modularization
+- Action-driving dashboard widgets (overdue tasks, pending approvals, expiring passes)
+- Email notifications for task assignments and check-ins
+- Future: Wave H5 SDK, server.py modularization
