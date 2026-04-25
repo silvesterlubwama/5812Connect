@@ -3,31 +3,32 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 57 - Feb 2026)
-- [x] Children import: parent_cache skips repeated parents in batch, admin campus fallback for location_id
-- [x] Badge bg restored to dark (color) by default; white only for kiosk non-badge-holder check-ins
-- [x] Country outlines: ESM/CJS compatibility fix (rawCountriesData?.default fallback)
-- [x] Timezones expanded: 50+ options (Asia/Bangkok, America/Port-au-Prince, etc.)
-- [x] Venue CRUD in Campus Settings: add/delete venues with is_external flag, external venues in selection
-- [x] Admin-configurable group types: CRUD at /api/group-types, defaults created on first load
-- [x] VenueCreate/VenueUpdate models updated with is_external field
+## Latest Changes (Iteration 58 - Feb 2026)
+- [x] Wallet badge: POST /api/members/{id}/wallet-badge generates shareable token, GET /api/wallet-badge/{token} public page
+- [x] WalletBadgePage at /badge/:token — mobile-optimized dark badge with QR, country outline, save-to-home instructions
+- [x] UnifiedBadge "Wallet" button now generates and opens shareable badge URL
+- [x] Cascade deletion cleanup on all delete endpoints:
+  - Member: removes from tasks assignees, boards tagged_members, unlinks user
+  - Family: unlinks children and guests family_id
+  - Guest: removes from children parent_ids
+  - Child: removes from location resident_ids
+  - User: cascades to tasks, boards, members, guests
+- [x] Frontend dataEvents.js event bus for cross-component data refresh after mutations
+- [x] AdminPage + TasksPage subscribe to data-changed events for auto-refresh
 
-## Previous Changes (Iterations 49-56)
-- User directory endpoint, outreach location/venue, bi-monthly/quarterly recurrence
-- Staff-guest linking, portal fix, country code, guest delete, ID Number rename
-- Badges (country/NFC/footer), templates, import, photos, parent search, tracked children
-- QR camera, backend decomposition, hooks, type hints
+## Previous (Iterations 49-57)
+- Venue CRUD, group types, import fixes, badge fixes, country outlines, timezone expansion
+- User directory, outreach location/venue, recurrence options, portal fix, guest delete, kiosk lock
+- QR camera, hooks, type hints, badges (NFC/country/footer), templates, photos, parent search
 
-## Architecture Notes
+## Architecture
+- **Wallet Badges**: wallet_badges collection, public GET at /api/wallet-badge/{token}
+- **Cascade Deletion**: Inline cleanup in each delete endpoint (no background tasks)
+- **Data Events**: services/dataEvents.js — emit('data-changed', {collection, id, action}) / on()
 - **User Directory**: /api/admin/users/directory bypasses campus
-- **Group Types**: /api/group-types — admin CRUD, defaults on first load
-- **Venues**: is_external flag, external venues included in location venue lists
-- **Badge Bg**: Dark default, white only via kioskMode=true prop
-- **Import**: parent_cache dedup, admin campus fallback
+- **Route Ordering**: Static before dynamic
 
-## Test Reports: Iterations 49-57 all 100%
+## Test Reports: Iterations 49-58 all 100%
 
 ## Pending
-- Wallet pass improvement (Apple/Google Wallet)
-- Stale data after deletion (cascade refresh)
-- Future: Wave H5 SDK, server.py modularization
+- Future: Wave H5 SDK upgrade, server.py modularization
