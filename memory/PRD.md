@@ -1,40 +1,33 @@
 # 58:12 Connect - Product Requirements
 
 ## Overview
-Multi-tenant CRM for 58:12 Global with internal WebRTC calling, unified communications, NFC badge management, and optional PBX integration.
+Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 53 - Feb 2026)
-- [x] Badge bg: dark by default, white ONLY for kiosk check-in prints (ink saving)
-- [x] Real country map outlines using `world-map-country-shapes` NPM package (ISO codes: UG, KE, HT, TH, US)
-- [x] `country_code` (ISO) field added to Location models
-- [x] CSV template downloads: GET /api/import/template/{children|staff|guests} with all fields including campus
-- [x] Children import enhanced: auto-creates parents even without email, resolves campus names, creates both father/mother, merges existing data
-- [x] Profile photo upload: POST /api/members/{id}/photo and /api/children/{id}/photo with object storage + local fallback
-- [x] Photos served at GET /api/uploads/photos/{filename}
-- [x] Badge components show profile photos when available
+## Latest Changes (Iteration 54 - Feb 2026)
+- [x] Profile photo upload UI: circular avatar with hover overlay on UserEditDialog + child edit dialog
+- [x] Members/children list avatars show photo_url when available
+- [x] Child edit: typed parent search (Input filters by name/phone, selected parents shown as removable badges)
+- [x] Children at restricted locations show "Tracked" badge + Print Badge button for tracking
+- [x] Staff auto-guest: creating staff users auto-creates guest record for their campus (is_staff_guest=true)
 
-## Previous Changes (Iterations 49-52)
-- [x] Kiosk QR Camera fix, backend function decomposition, frontend component splitting
-- [x] CallContext hooks refactor, backend type hints, nested ternary cleanup
-- [x] Badge country watermark, NFC symbol, footer redesign, NFC tag CRUD
-- [x] NFC tag writing (director+ only) with audit logging
+## Changes (Iteration 53)
+- [x] Badge bg: dark default, white ONLY for kiosk. Real country outlines (world-map-country-shapes). CSV templates. Children import enhanced. Profile photo upload API.
+
+## Changes (Iterations 49-52)
+- [x] Kiosk QR fix, backend decomposition, component splitting, CallContext hooks, type hints, ternary cleanup
+- [x] Badge watermark, NFC symbol/CRUD/writing (director+), footer redesign
 
 ## Architecture Notes
 - **Route Ordering**: Static routes BEFORE dynamic routes
-- **Auth Storage**: Tokens via `secureStorage.js`
-- **Campus Isolation**: "All Locations" reserved for System Admin, Admin, ED, Adviser
-- **NFC Tags**: Stored on member/user records. Write requires director+. Audit in nfc_write_log.
-- **Photos**: Object storage primary, local /app/backend/uploads/photos/ fallback
-- **Country Outlines**: world-map-country-shapes package, mapped via COUNTRY_TO_CODE in countryOutlines.js
+- **Auth Storage**: `secureStorage.js`
+- **Campus Isolation**: "All Locations" for System Admin/Admin/ED/Adviser only
+- **Photos**: Object storage primary, /app/backend/uploads/photos/ fallback
+- **NFC**: Stored on member/user records. Write=director+. Audit in nfc_write_log
+- **Country Outlines**: world-map-country-shapes, mapped via COUNTRY_TO_CODE in countryOutlines.js
 
 ## Test Reports
-- Iteration 49-52: All 100%
-- Iteration 53: 100% (10/11 backend + all frontend)
+- Iterations 49-54: All 100%
 
-## Pending / In Progress
-- Profile photo UI on member/child edit forms (backend ready, frontend wiring needed)
-- Child edit: typed parent search  
-- Children at restricted locations: auto-issue badges for tracking
-- Staff auto-marked as guests for their campus on creation
-- Wallet integration improvement (currently downloads PNG)
-- Future: Upgrade to native Wave H5 SDK
+## Pending
+- Wallet pass improvement (currently downloads PNG)
+- Future: Wave H5 SDK upgrade, server.py modularization
