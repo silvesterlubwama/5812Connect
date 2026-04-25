@@ -83,7 +83,7 @@ export default function FinancialPage() {
   const [importingData, setImportingData] = useState(false);
   const today = new Date().toISOString().split('T')[0];
 
-  const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
+  const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
 
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
@@ -457,7 +457,7 @@ export default function FinancialPage() {
                     <p className="text-xs text-muted-foreground text-center py-4">No assets recorded. Track equipment, vehicles, property values here.</p>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Date</th></tr></thead>
+                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Date</th>{isFinanceAdmin && <th className="pb-2 w-8"></th>}</tr></thead>
                       <tbody className="divide-y">
                         {assets.map(a => {
                           const age = a.purchase_date ? (new Date().getFullYear() - new Date(a.purchase_date).getFullYear()) : 0;
@@ -470,6 +470,7 @@ export default function FinancialPage() {
                               <td className="py-2">{fmt(a.value)}</td>
                               <td className="py-2 text-blue-600">{fmt(currentVal)}</td>
                               <td className="py-2 text-muted-foreground">{a.purchase_date || '-'}</td>
+                              {isFinanceAdmin && <td className="py-2"><Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm(`Delete asset "${a.name}"?`)) return; try { await financialApi.deleteAsset(a.id); setAssets(prev => prev.filter(x => x.id !== a.id)); toast.success('Asset deleted'); } catch { toast.error('Failed'); } }} data-testid={`delete-asset-${a.id}`}>Del</Button></td>}
                             </tr>
                           );
                         })}

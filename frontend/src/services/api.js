@@ -178,6 +178,7 @@ export const productsApi = {
 export const salesApi = {
   list: (params) => api.get('/sales', { params }),
   create: (data) => api.post('/sales', data),
+  delete: (id) => api.delete(`/sales/${id}`),
   export: (params) => api.get('/sales/export', { params }),
   import: (data) => api.post('/sales/import', data),
 };

@@ -389,6 +389,7 @@ export default function ProductsPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Location</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
                       <th className="pb-2 font-medium text-muted-foreground">Cashier</th>
+                      {isAdmin && <th className="pb-2 w-8"></th>}
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {sales.map(sale => (
@@ -401,6 +402,7 @@ export default function ProductsPage() {
                           <td className="py-3 text-xs text-muted-foreground">{sale.location_id ? locName(sale.location_id) : '--'}</td>
                           <td className="py-3 text-muted-foreground text-xs">{sale.created_at?.slice(0, 16).replace('T', ' ')}</td>
                           <td className="py-3 text-muted-foreground">{sale.cashier || '--'}</td>
+                          {isAdmin && <td className="py-3"><Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this sale?')) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button></td>}
                         </tr>
                       ))}
                     </tbody>
