@@ -1,5 +1,5 @@
 """Members, Families, Children, Guests, Badges, Approvals routes"""
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from deps import (
     db, get_current_user, _audit, require_staff, require_manager, require_coordinator, require_admin, require_director,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter
@@ -831,14 +831,18 @@ async def bulk_import_members(file: str = None, members_data: list = None, curre
 async def bulk_import_children(request_data: dict, current_user: dict = Depends(get_current_user)):
     """Import children with auto-creation of parents and families. 
     Prevents duplicates; updates existing records with new info.
-    Body: {"children": [{name, age, gender, family_name, parent_name, parent_phone, parent_email, location_id}]}"""
+    Parents are created even without email addresses.
+    Campus/location_id is auto-resolved from campus name if provided.
+    Body: {"children": [{name, age, gender, family_name, parent_name, parent_phone, parent_email, campus, location_id}]}"""
     data = request_data.get("children", request_data.get("data", []))
     if not data:
-        return {"imported": 0, "updated": 0, "errors": ["No children data provided"], "total": 0}
+        return {"imported": 0, "updated": 0, "parents_created": 0, "errors": ["No children data provided"], "total": 0}
     imported = 0
     updated = 0
+    parents_created = 0
     errors = []
     family_cache = {}
+    campus_cache = {}
 
     for i, row in enumerate(data):
         try:
@@ -847,10 +851,20 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                 errors.append(f"Row {i+1}: Name required"); continue
             
             family_name = (row.get("family_name") or "").strip()
-            parent_name = (row.get("parent_name") or "").strip()
-            parent_phone = (row.get("parent_phone") or "").strip()
-            parent_email = (row.get("parent_email") or "").strip().lower()
+            parent_name = (row.get("parent_name") or row.get("father_name") or row.get("mother_name") or "").strip()
+            parent_phone = (row.get("parent_phone") or row.get("father_phone") or row.get("mother_phone") or "").strip()
+            parent_email = (row.get("parent_email") or row.get("father_email") or row.get("mother_email") or "").strip().lower()
+            campus_name = (row.get("campus") or "").strip()
             location_id = row.get("location_id", "")
+
+            # Auto-resolve campus name to location_id
+            if campus_name and not location_id:
+                if campus_name in campus_cache:
+                    location_id = campus_cache[campus_name]
+                else:
+                    loc = await db.locations.find_one({"name": {"$regex": f"^{campus_name}$", "$options": "i"}}, {"_id": 0, "id": 1})
+                    location_id = loc["id"] if loc else ""
+                    campus_cache[campus_name] = location_id
 
             # 1. Find or create family
             family_id = None
@@ -861,9 +875,15 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                     existing_fam = await db.families.find_one({"family_name": {"$regex": f"^{family_name}$", "$options": "i"}})
                     if existing_fam:
                         family_id = existing_fam["id"]
-                        # Update location if provided
+                        merge_fields = {}
                         if location_id and not existing_fam.get("location_id"):
-                            await db.families.update_one({"id": family_id}, {"$set": {"location_id": location_id}})
+                            merge_fields["location_id"] = location_id
+                        if parent_phone and not existing_fam.get("primary_contact_phone"):
+                            merge_fields["primary_contact_phone"] = parent_phone
+                        if parent_name and not existing_fam.get("primary_contact_name"):
+                            merge_fields["primary_contact_name"] = parent_name
+                        if merge_fields:
+                            await db.families.update_one({"id": family_id}, {"$set": merge_fields})
                     else:
                         family_id = f"fam_{str(uuid.uuid4())[:8]}"
                         await db.families.insert_one({
@@ -874,13 +894,13 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                         })
                     family_cache[family_name] = family_id
 
-            # 2. Find or create parent
+            # 2. Find or create parent (even without email)
             if parent_name:
-                parent_q = {"name": {"$regex": f"^{parent_name}$", "$options": "i"}}
-                if parent_email: parent_q["email"] = parent_email
-                existing_parent = await db.guests.find_one({**parent_q, "is_parent": True})
+                parent_q_conditions = [{"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True}]
+                if parent_phone:
+                    parent_q_conditions.append({"phone": parent_phone, "is_parent": True})
+                existing_parent = await db.guests.find_one({"$or": parent_q_conditions})
                 if not existing_parent:
-                    # Check if parent is a staff member marked as parent
                     staff_parent = await db.users.find_one({"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True})
                     if not staff_parent:
                         await db.guests.insert_one({
@@ -889,21 +909,52 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                             "is_parent": True, "family_id": family_id, "location_id": location_id,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         })
-                elif family_id and not existing_parent.get("family_id"):
-                    await db.guests.update_one({"id": existing_parent["id"]}, {"$set": {"family_id": family_id}})
+                        parents_created += 1
+                else:
+                    merge = {}
+                    if family_id and not existing_parent.get("family_id"):
+                        merge["family_id"] = family_id
+                    if parent_phone and not existing_parent.get("phone"):
+                        merge["phone"] = parent_phone
+                    if location_id and not existing_parent.get("location_id"):
+                        merge["location_id"] = location_id
+                    if merge:
+                        await db.guests.update_one({"id": existing_parent["id"]}, {"$set": merge})
+
+            # Also handle second parent (father/mother) if both provided
+            father_name = (row.get("father_name") or "").strip()
+            mother_name = (row.get("mother_name") or "").strip()
+            for pname, pphone, pemail in [
+                (father_name, (row.get("father_phone") or "").strip(), (row.get("father_email") or "").strip().lower()),
+                (mother_name, (row.get("mother_phone") or "").strip(), (row.get("mother_email") or "").strip().lower()),
+            ]:
+                if pname and pname != parent_name:
+                    p_conditions = [{"name": {"$regex": f"^{pname}$", "$options": "i"}, "is_parent": True}]
+                    if pphone:
+                        p_conditions.append({"phone": pphone, "is_parent": True})
+                    existing_p = await db.guests.find_one({"$or": p_conditions})
+                    if not existing_p:
+                        await db.guests.insert_one({
+                            "id": f"gst_{str(uuid.uuid4())[:8]}", "name": pname,
+                            "email": pemail, "phone": pphone,
+                            "is_parent": True, "family_id": family_id, "location_id": location_id,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        parents_created += 1
 
             # 3. Find or create/update child
             child_q = {"name": {"$regex": f"^{child_name}$", "$options": "i"}}
             if family_id: child_q["family_id"] = family_id
             existing_child = await db.children.find_one(child_q)
             if existing_child:
-                # Update with new info (don't duplicate)
                 update_fields = {}
-                for k in ("age", "gender", "date_of_birth", "medical_info", "allergies", "grade"):
+                for k in ("age", "gender", "date_of_birth", "medical_info", "allergies", "grade", "class_group"):
                     if row.get(k) and row[k] != existing_child.get(k):
                         update_fields[k] = row[k]
                 if location_id and location_id != existing_child.get("location_id"):
                     update_fields["location_id"] = location_id
+                if family_id and not existing_child.get("family_id"):
+                    update_fields["family_id"] = family_id
                 if update_fields:
                     update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
                     await db.children.update_one({"id": existing_child["id"]}, {"$set": update_fields})
@@ -915,14 +966,14 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                     "date_of_birth": row.get("date_of_birth", ""),
                     "family_id": family_id, "location_id": location_id,
                     "medical_info": row.get("medical_info", ""), "allergies": row.get("allergies", ""),
-                    "grade": row.get("grade", ""),
+                    "grade": row.get("grade", ""), "class_group": row.get("class_group", ""),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
                 imported += 1
         except Exception as e:
             errors.append(f"Row {i+1}: {str(e)}")
 
-    return {"imported": imported, "updated": updated, "errors": errors, "total": len(data)}
+    return {"imported": imported, "updated": updated, "parents_created": parents_created, "errors": errors, "total": len(data)}
 
 
 # ========== FAMILY EDITING (children + parents) ==========
@@ -1065,5 +1116,63 @@ async def write_nfc_tag(member_id: str, data: dict, current_user: dict = Depends
     })
     await _audit(current_user["id"], "create", "nfc_write", member_id, {"serial": serial})
     return {"message": "NFC tag written and linked", "tag": tag, "member_id": member_id, "member_name": member.get("name", "")}
+
+
+# ========== PROFILE PHOTOS ==========
+
+@router.post("/members/{member_id}/photo")
+async def upload_member_photo(member_id: str, file: UploadFile = File(...), current_user: dict = Depends(require_staff)) -> dict:
+    """Upload a profile photo for a member. Stores in object storage."""
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be under 5MB")
+    ext = file.filename.rsplit('.', 1)[-1] if '.' in (file.filename or '') else 'jpg'
+    path = f"profile-photos/{member_id}.{ext}"
+    try:
+        from storage import put_object
+        result = put_object(path, data, file.content_type)
+        photo_url = result.get("url", f"/api/storage/{path}")
+    except Exception as e:
+        logger.warning(f"Storage upload failed, saving locally: {e}")
+        import os
+        os.makedirs("/app/backend/uploads/photos", exist_ok=True)
+        local_path = f"/app/backend/uploads/photos/{member_id}.{ext}"
+        with open(local_path, "wb") as f:
+            f.write(data)
+        photo_url = f"/api/uploads/photos/{member_id}.{ext}"
+    await db.members.update_one({"id": member_id}, {"$set": {"photo_url": photo_url}})
+    # Also update user record if linked
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "user_id": 1})
+    if member and member.get("user_id"):
+        await db.users.update_one({"id": member["user_id"]}, {"$set": {"photo_url": photo_url}})
+    return {"photo_url": photo_url}
+
+
+@router.post("/children/{child_id}/photo")
+async def upload_child_photo(child_id: str, file: UploadFile = File(...), current_user: dict = Depends(require_staff)) -> dict:
+    """Upload a profile photo for a child."""
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be under 5MB")
+    ext = file.filename.rsplit('.', 1)[-1] if '.' in (file.filename or '') else 'jpg'
+    path = f"profile-photos/child-{child_id}.{ext}"
+    try:
+        from storage import put_object
+        result = put_object(path, data, file.content_type)
+        photo_url = result.get("url", f"/api/storage/{path}")
+    except Exception as e:
+        logger.warning(f"Storage upload failed, saving locally: {e}")
+        import os
+        os.makedirs("/app/backend/uploads/photos", exist_ok=True)
+        local_path = f"/app/backend/uploads/photos/child-{child_id}.{ext}"
+        with open(local_path, "wb") as f:
+            f.write(data)
+        photo_url = f"/api/uploads/photos/child-{child_id}.{ext}"
+    await db.children.update_one({"id": child_id}, {"$set": {"photo_url": photo_url}})
+    return {"photo_url": photo_url}
 
 

@@ -246,3 +246,57 @@ async def import_csv_staff_file(file: UploadFile = File(...), current_user: dict
     rows = list(reader)
     result = await import_staff({"rows": rows}, current_user)
     return result
+
+
+# ========== TEMPLATE DOWNLOADS ==========
+
+from fastapi.responses import StreamingResponse
+
+@router.get("/import/template/children")
+async def download_children_template(current_user: dict = Depends(get_current_user)):
+    """Download CSV template for children import with all fields including campus"""
+    headers = ["name", "date_of_birth", "gender", "grade", "class_group", "family_name",
+               "father_name", "father_phone", "father_email", "mother_name", "mother_phone", "mother_email",
+               "campus", "location_id", "allergies", "medical_notes", "special_needs", "emergency_contact", "notes"]
+    example = ["John Doe", "2018-03-15", "male", "P3", "Blue Group", "Doe",
+               "James Doe", "+256700111222", "james@example.com", "Jane Doe", "+256700333444", "jane@example.com",
+               "58:12 Uganda", "", "None", "", "", "+256700111222", ""]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    writer.writerow(example)
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=children_import_template.csv"})
+
+
+@router.get("/import/template/staff")
+async def download_staff_template(current_user: dict = Depends(get_current_user)):
+    """Download CSV template for staff import"""
+    headers = ["name", "email", "phone", "national_id", "role", "department", "campus", "location_id",
+               "gender", "date_of_birth", "address", "emergency_contact", "notes"]
+    example = ["Jane Smith", "jane@5812.org", "+256700555666", "CM12345", "Staff", "Programs",
+               "58:12 Uganda", "", "female", "1990-01-01", "Kampala", "+256700777888", ""]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    writer.writerow(example)
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=staff_import_template.csv"})
+
+
+@router.get("/import/template/guests")
+async def download_guests_template(current_user: dict = Depends(get_current_user)):
+    """Download CSV template for guests import"""
+    headers = ["name", "phone", "email", "is_parent", "campus", "location_id",
+               "purpose", "visit_date", "notes"]
+    example = ["Tom Visitor", "+256700999000", "tom@example.com", "false", "58:12 Uganda", "",
+               "Church Visit", "2026-02-20", ""]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    writer.writerow(example)
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=guests_import_template.csv"})

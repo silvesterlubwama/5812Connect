@@ -16,6 +16,7 @@ class LocationCreate(BaseModel):
     parent_id: Optional[str] = None
     address: Optional[str] = None
     country: Optional[str] = None
+    country_code: Optional[str] = None
     currency: str = "USD"
     timezone: Optional[str] = "Africa/Kampala"
     contact_name: Optional[str] = None
@@ -36,6 +37,7 @@ class LocationUpdate(BaseModel):
     parent_id: Optional[str] = None
     address: Optional[str] = None
     country: Optional[str] = None
+    country_code: Optional[str] = None
     currency: Optional[str] = None
     timezone: Optional[str] = None
     contact_name: Optional[str] = None

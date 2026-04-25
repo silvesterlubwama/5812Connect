@@ -32,8 +32,9 @@ function getBadgeType(person) {
   return 'member';
 }
 
-function CountryWatermark({ country, width, height, color }) {
-  const outline = getCountryOutline(country);
+function CountryWatermark({ country, countryCode, width, height, color }) {
+  const outline = getCountryOutline(countryCode || country);
+  if (!outline) return null;
   return (
     <svg
       viewBox={outline.viewBox}
@@ -41,7 +42,7 @@ function CountryWatermark({ country, width, height, color }) {
       height={height}
       style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
     >
-      <path d={outline.path} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+      <path d={outline.path} fill="none" stroke={color} strokeWidth="4" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -69,6 +70,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const qrData = person.id || person.name || '';
   const badgeId = (person.id || '').slice(-8).toUpperCase();
   const country = person.country || person.location_country || '';
+  const countryCode = person.country_code || person.location_country_code || '';
   const isStaffType = STAFF_TYPES.has(type);
   const isSmall = size === 'small';
 
@@ -198,6 +200,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
           {/* Country watermark */}
           <CountryWatermark
             country={country}
+            countryCode={countryCode}
             width={isSmall ? 80 : 120}
             height={isSmall ? 80 : 120}
             color={watermarkColor}

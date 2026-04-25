@@ -338,3 +338,19 @@ async def export_ical(current_user: dict = Depends(get_current_user)):
         lines += ["BEGIN:VEVENT", f"UID:{e['id']}@5812global.org", f"SUMMARY:{summary}", f"DTSTART:{dtstart}", f"DTEND:{dtend}", f"DESCRIPTION:{desc}", f"LOCATION:{location}", f"STATUS:{'CONFIRMED' if e.get('status') == 'upcoming' else 'COMPLETED'}", "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return StreamingResponse(iter(["\r\n".join(lines)]), media_type="text/calendar", headers={"Content-Disposition": "attachment; filename=5812global-events.ics"})
+
+
+# ========== UPLOADED FILES SERVING ==========
+
+from fastapi.responses import FileResponse
+import os
+
+@router.get("/uploads/photos/{filename}")
+async def serve_uploaded_photo(filename: str):
+    """Serve locally stored profile photos."""
+    filepath = f"/app/backend/uploads/photos/{filename}"
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'jpg'
+    ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}.get(ext, 'image/jpeg')
+    return FileResponse(filepath, media_type=ct)
