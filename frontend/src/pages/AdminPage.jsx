@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
 import { UnifiedBadge } from '../components/UnifiedBadge';
+import { dataEvents, emitDataChanged } from '../services/dataEvents';
 import { UserCreateDialog } from '../components/admin/UserCreateDialog';
 import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
@@ -63,6 +64,14 @@ export default function AdminPage() {
   }, [search, roleFilter]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  // Refresh when data changes in other pages
+  useEffect(() => {
+    const unsub = dataEvents.on('data-changed', (e) => {
+      if (['users', 'members', 'guests'].includes(e?.collection)) fetchUsers();
+    });
+    return unsub;
+  }, [fetchUsers]);
 
   const handleCreateUser = async () => {
     if (!createForm.name.trim() || !createForm.email.trim()) { toast.error('Name and email are required'); return; }
@@ -178,7 +187,7 @@ export default function AdminPage() {
 
   const deleteUser = async (user) => {
     if (!window.confirm(`Delete "${user.name}"?`)) return;
-    try { await adminApi.deleteUser(user.id); setUsers(prev => prev.filter(u => u.id !== user.id)); toast.success('User deleted'); }
+    try { await adminApi.deleteUser(user.id); setUsers(prev => prev.filter(u => u.id !== user.id)); emitDataChanged('users', user.id); toast.success('User deleted'); }
     catch (err) { toast.error(err.response?.data?.detail || 'Delete failed'); }
   };
 

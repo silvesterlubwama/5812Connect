@@ -13,6 +13,7 @@ import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkAc
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { toast } from 'sonner';
+import { dataEvents } from '../services/dataEvents';
 import { KanbanList } from './kanban/KanbanList';
 import { ArchivePanel } from './kanban/ArchivePanel';
 import { CardDetailDialog } from './kanban/CardDetailDialog';
@@ -79,6 +80,16 @@ export default function TasksPage() {
   }, [activeBoardId]);
 
   useEffect(() => { fetchBoards(); }, []);
+
+  // Refresh user directory when data changes
+  useEffect(() => {
+    const unsub = dataEvents.on('data-changed', (e) => {
+      if (['users', 'members'].includes(e?.collection)) {
+        adminApi.userDirectory().then(r => setStaffUsers(r.data || [])).catch(() => {});
+      }
+    });
+    return unsub;
+  }, []);
 
   // Fetch all tasks for Team Calendar view
   useEffect(() => {

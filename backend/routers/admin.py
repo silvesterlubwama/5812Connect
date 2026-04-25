@@ -300,6 +300,11 @@ async def admin_delete_user(user_id: str, current_user: dict = Depends(require_a
     user["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(user)
     await db.users.delete_one({"id": user_id})
+    # Cascade: clean up references
+    await db.tasks.update_many({"assignees": user_id}, {"$pull": {"assignees": user_id}})
+    await db.boards.update_many({"tagged_members": user_id}, {"$pull": {"tagged_members": user_id}})
+    await db.members.update_many({"user_id": user_id}, {"$unset": {"user_id": ""}})
+    await db.guests.update_many({"user_id": user_id}, {"$unset": {"user_id": ""}})
     await _audit(current_user["id"], "delete", "user", user_id, {"name": user.get("name")})
     return {"message": "User deleted"}
 

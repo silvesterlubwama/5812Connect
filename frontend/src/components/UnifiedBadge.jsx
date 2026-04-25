@@ -143,9 +143,19 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     finally { setDownloading(false); }
   };
 
-  const addToWallet = () => {
-    toast.info('Download the badge image, then add to your Wallet app manually.');
-    downloadBadge();
+  const addToWallet = async () => {
+    const memberId = person.member_id || person.id;
+    if (!memberId) { toast.error('No member ID'); return; }
+    try {
+      const { default: api } = await import('../services/api');
+      const res = await api.post(`/members/${memberId}/wallet-badge`);
+      const badgeUrl = `${window.location.origin}/badge/${res.data.token}`;
+      window.open(badgeUrl, '_blank');
+      toast.success('Badge page opened — save to Home Screen for wallet access');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create wallet badge');
+      downloadBadge();
+    }
   };
 
   const writeToNfc = async () => {

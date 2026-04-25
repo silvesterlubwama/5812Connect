@@ -20,6 +20,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
+import { emitDataChanged } from '../services/dataEvents';
 
 const initials = (name) => (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
@@ -525,7 +526,7 @@ export default function UnifiedPeoplePage() {
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
                         {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser(m); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={e => { e.stopPropagation(); setBadgePerson(m); setShowBadge(true); }} title="Badge"><Printer size={13} /></Button>
-                        <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); fetchMembers(); }); }}><Trash2 size={13} /></Button>
+                        <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); emitDataChanged('members', m.id); fetchMembers(); }); }}><Trash2 size={13} /></Button>
                       </div>
                     )}
                   </CardContent>
@@ -567,7 +568,7 @@ export default function UnifiedPeoplePage() {
                         {isCoordinator && (
                           <div className="flex gap-1">
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-family-${f.id}`} onClick={() => openEditFamily(f)} title="Edit"><Eye size={13} /></Button>
-                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-family-${f.id}`} onClick={() => familiesApi.delete(f.id).then(() => { toast.success('Family deleted'); fetchPeople(); }).catch(err => toast.error(err.response?.data?.detail || 'Failed'))}><Trash2 size={13} /></Button>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-family-${f.id}`} onClick={() => familiesApi.delete(f.id).then(() => { toast.success('Family deleted'); emitDataChanged('families', f.id); fetchPeople(); }).catch(err => toast.error(err.response?.data?.detail || 'Failed'))}><Trash2 size={13} /></Button>
                           </div>
                         )}
                       </div>
@@ -635,7 +636,7 @@ export default function UnifiedPeoplePage() {
                         <div className="flex gap-1">
                           {isRestricted && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => { setBadgePerson({ ...c, role: 'child', country: allLocations.find(l => l.id === c.location_id)?.country }); setShowBadge(true); }} title="Print Badge" data-testid={`badge-child-${c.id}`}><Printer size={13} /></Button>}
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-child-${c.id}`} onClick={() => openEditChild(c)} title="Edit"><Eye size={13} /></Button>
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => childrenApi.delete(c.id).then(() => { toast.success('Deleted'); fetchPeople(); })}><Trash2 size={13} /></Button>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => childrenApi.delete(c.id).then(() => { toast.success('Deleted'); emitDataChanged('children', c.id); fetchPeople(); })}><Trash2 size={13} /></Button>
                         </div>
                       )}
                     </div>
@@ -679,7 +680,7 @@ export default function UnifiedPeoplePage() {
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-guest-${g.id}`} onClick={async (e) => {
                         e.stopPropagation();
                         if (!window.confirm(`Delete guest "${g.name}"?`)) return;
-                        try { await guestsApi.delete(g.id); toast.success('Guest deleted'); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Delete failed'); }
+                        try { await guestsApi.delete(g.id); toast.success('Guest deleted'); emitDataChanged('guests', g.id); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Delete failed'); }
                       }}><Trash2 size={13} /></Button>
                     </div>
                   </CardContent>

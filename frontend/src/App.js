@@ -62,6 +62,7 @@ import PbxSettingsPage from './pages/PbxSettingsPage';
 import { CallProvider } from './context/CallContext';
 import CallInterface from './components/CallInterface';
 import IncomingCallModal from './components/IncomingCallModal';
+import WalletBadgePage from './pages/WalletBadgePage';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -89,6 +90,7 @@ function AppRoutes() {
       <Route path="/public-bookings" element={<PublicBookingsPage />} />
       <Route path="/marketplace" element={<PublicBookingsPage />} />
       <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
+      <Route path="/badge/:token" element={<WalletBadgePage />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />

@@ -149,12 +149,17 @@ async def delete_member(member_id: str, current_user: dict = Depends(require_coo
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
-    # Soft-delete: move to deleted_items collection
     member["_deleted_from"] = "members"
     member["deleted_at"] = datetime.now(timezone.utc).isoformat()
     member["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(member)
     await db.members.delete_one({"id": member_id})
+    # Cascade: remove from task assignees, board tagged_members
+    await db.tasks.update_many({"assignees": member_id}, {"$pull": {"assignees": member_id}})
+    await db.boards.update_many({"tagged_members": member_id}, {"$pull": {"tagged_members": member_id}})
+    # Cascade: unlink from linked user
+    if member.get("user_id"):
+        await db.users.update_one({"id": member["user_id"]}, {"$unset": {"member_id": ""}})
     await _audit(current_user["id"], "delete", "member", member_id, {"name": member.get("name")})
     return {"message": "Member deleted"}
 
@@ -248,6 +253,9 @@ async def delete_family(family_id: str, current_user: dict = Depends(get_current
     family["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(family)
     await db.families.delete_one({"id": family_id})
+    # Cascade: unlink children and guests from this family
+    await db.children.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
+    await db.guests.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
     await _audit(current_user["id"], "delete", "family", family_id, {"name": family.get("family_name")})
     return {"message": "Family deleted"}
 
@@ -544,6 +552,9 @@ async def delete_child(child_id: str, current_user: dict = Depends(get_current_u
     child["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(child)
     await db.children.delete_one({"id": child_id})
+    # Cascade: remove from resident lists
+    if child.get("resident_location_id"):
+        await db.locations.update_one({"id": child["resident_location_id"]}, {"$pull": {"resident_ids": child_id}})
     await _audit(current_user["id"], "delete", "child", child_id, {"name": child.get("name")})
     return {"message": "Child deleted"}
 
@@ -712,6 +723,8 @@ async def delete_guest(guest_id: str, current_user: dict = Depends(get_current_u
     guest["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(guest)
     await db.guests.delete_one({"id": guest_id})
+    # Cascade: remove from children's parent_ids
+    await db.children.update_many({"parent_ids": guest_id}, {"$pull": {"parent_ids": guest_id}})
     await _audit(current_user["id"], "delete", "guest", guest_id, {"name": guest.get("name")})
     return {"message": "Guest deleted"}
 
@@ -757,6 +770,45 @@ async def get_member_badges(member_id: str, current_user: dict = Depends(get_cur
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     return member.get("badges", [])
+
+
+@router.post("/members/{member_id}/wallet-badge")
+async def create_wallet_badge(member_id: str, current_user: dict = Depends(require_staff)) -> dict:
+    """Generate a shareable badge URL with a unique token for mobile wallet/home screen."""
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "password_hash": 0})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    token = uuid.uuid4().hex[:16]
+    # Resolve location country
+    loc = await db.locations.find_one({"id": member.get("location_id", "")}, {"_id": 0, "name": 1, "country": 1, "country_code": 1}) if member.get("location_id") else None
+    badge_data = {
+        "id": f"wbadge_{token}",
+        "token": token,
+        "member_id": member_id,
+        "name": member.get("name", ""),
+        "role": member.get("role", member.get("membership_type", "")),
+        "title": member.get("title", ""),
+        "department": member.get("department", ""),
+        "photo_url": member.get("photo_url", ""),
+        "location_name": loc.get("name") if loc else "",
+        "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+        "qr_data": member_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.wallet_badges.update_one({"member_id": member_id}, {"$set": badge_data}, upsert=True)
+    return badge_data
+
+
+@router.get("/wallet-badge/{token}")
+async def get_wallet_badge(token: str):
+    """Public endpoint to view a wallet badge (no auth required)."""
+    badge = await db.wallet_badges.find_one({"token": token}, {"_id": 0})
+    if not badge:
+        raise HTTPException(status_code=404, detail="Badge not found")
+    return badge
+
 
 
 # ========== MEMBER APPROVALS ==========
