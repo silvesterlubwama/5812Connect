@@ -3,31 +3,30 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 59 - Feb 2026)
-- [x] Error Boundary: wraps entire App + AppRoutes, prevents white screens, shows retry + dashboard buttons
-- [x] Bulk Delete Safeguard: BulkDeleteConfirm dialog requires typing 'DELETE' before bulk operations proceed
-- [x] Delete confirmations: added window.confirm to all previously unprotected delete operations
-- [x] Unsaved Form Warning: useUnsavedWarning hook in UserEditDialog, warns on page navigation with dirty form
+## Latest Changes (Iteration 60 - Feb 2026)
+- [x] Template download buttons in Import dropdown (Children, Staff, Guests templates)
+- [x] Template download links inside each import dialog (Members, Children & Parents, Staff)
+- [x] Templates include all fields: campus, parent names/phones, location_id, etc.
 
-## Changes (Iteration 58)
-- [x] Wallet badge shareable URL system (POST create, GET public, mobile page at /badge/:token)
-- [x] Cascade deletion cleanup on all delete endpoints (members, families, guests, children, users)
-- [x] Frontend dataEvents.js event bus for cross-component data refresh
+## Previous (Iteration 59)
+- Error Boundary, BulkDeleteConfirm, delete confirmations, unsaved form warnings
+
+## Previous (Iteration 58)
+- Wallet badge system, cascade deletion, frontend data events
 
 ## Previous (Iterations 49-57)
-- All badge improvements, import fixes, photo upload, country outlines, venue CRUD, group types
-- User directory, outreach features, recurrence, portal fix, kiosk lock, staff-guest linking
+- Venue CRUD, group types, import fixes, badges, photos, parent search, country outlines, user directory, recurrence, portal, kiosk lock, safety features
 
 ## Architecture
-- **Error Boundary**: components/ErrorBoundary.jsx (class component)
-- **Bulk Delete**: components/BulkDeleteConfirm.jsx (type-to-confirm dialog)
-- **Unsaved Warning**: hooks/useUnsavedWarning.js (beforeunload + form dirty tracking)
-- **Data Events**: services/dataEvents.js (cross-page refresh)
+- **Templates**: GET /api/import/template/{children|staff|guests} — CSV StreamingResponse
+- **Error Boundary**: components/ErrorBoundary.jsx (wraps App + AppRoutes)
+- **Bulk Delete**: components/BulkDeleteConfirm.jsx (type-to-confirm)
 - **Wallet Badges**: wallet_badges collection, /badge/:token public route
+- **Data Events**: services/dataEvents.js (cross-page refresh)
 
-## Test Reports: Iterations 49-59 all 100%
+## Test Reports: Iterations 49-60 all 100%
 
 ## Pending
-- Action-driving dashboard widgets (overdue tasks, pending approvals, expiring passes)
-- Email notifications for task assignments and check-ins
+- Action-driving dashboard widgets
+- Email notifications for assignments/check-ins
 - Future: Wave H5 SDK, server.py modularization
