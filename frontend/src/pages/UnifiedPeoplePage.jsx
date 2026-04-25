@@ -447,6 +447,16 @@ export default function UnifiedPeoplePage() {
                 <DropdownMenuItem onClick={() => setShowChildImport(true)}>Children & Parents</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setShowStaffImport(true)}>Staff</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="text-xs text-muted-foreground" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/children`; a.download = 'children_template.csv'; a.click(); }}>
+                  <Download size={12} className="mr-1.5" /> Children Template
+                </DropdownMenuItem>
+                <DropdownMenuItem className="text-xs text-muted-foreground" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/staff`; a.download = 'staff_template.csv'; a.click(); }}>
+                  <Download size={12} className="mr-1.5" /> Staff Template
+                </DropdownMenuItem>
+                <DropdownMenuItem className="text-xs text-muted-foreground" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/guests`; a.download = 'guests_template.csv'; a.click(); }}>
+                  <Download size={12} className="mr-1.5" /> Guests Template
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -1041,21 +1051,27 @@ export default function UnifiedPeoplePage() {
       {/* IMPORT DIALOGS */}
       <Dialog open={showBulkImport} onOpenChange={setShowBulkImport}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Import Members</DialogTitle><DialogDescription>Upload CSV or paste data (name, email, phone, group per line)</DialogDescription></DialogHeader>
-          <div className="space-y-4"><div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} data-testid="bulk-csv-file-input" /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="John Doe, john@email.com, +256..." value={bulkData} onChange={e => setBulkData(e.target.value)} /></div>
+          <div className="space-y-4">
+            <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/staff`; a.download = 'members_template.csv'; a.click(); }} data-testid="download-members-template"><Download size={12} /> Download CSV Template</button>
+            <div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setCsvFile(e.target.files?.[0] || null)} data-testid="bulk-csv-file-input" /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="John Doe, john@email.com, +256..." value={bulkData} onChange={e => setBulkData(e.target.value)} /></div>
           <div className="flex gap-3 pt-2"><Button variant="outline" className="flex-1" onClick={() => setShowBulkImport(false)}>Cancel</Button><Button className="flex-1" disabled={importLoading || (!bulkData.trim() && !csvFile)} onClick={handleBulkImport}>{importLoading ? 'Importing...' : 'Import'}</Button></div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={showChildImport} onOpenChange={setShowChildImport}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Import Children & Parents</DialogTitle></DialogHeader>
-          <div className="space-y-4"><div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setChildCsvFile(e.target.files?.[0] || null)} /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="first_name,last_name,..." value={childCsvData} onChange={e => setChildCsvData(e.target.value)} /></div>
+          <div className="space-y-4">
+            <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/children`; a.download = 'children_template.csv'; a.click(); }} data-testid="download-children-template"><Download size={12} /> Download CSV Template (includes parent & campus fields)</button>
+            <div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setChildCsvFile(e.target.files?.[0] || null)} /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="first_name,last_name,..." value={childCsvData} onChange={e => setChildCsvData(e.target.value)} /></div>
           <div className="flex gap-3 pt-2"><Button variant="outline" className="flex-1" onClick={() => setShowChildImport(false)}>Cancel</Button><Button className="flex-1" disabled={importLoading || (!childCsvData.trim() && !childCsvFile)} onClick={handleChildImport}>{importLoading ? 'Importing...' : 'Import'}</Button></div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={showStaffImport} onOpenChange={setShowStaffImport}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Import Staff</DialogTitle></DialogHeader>
-          <div className="space-y-4"><div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="name,email,phone,..." value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} /></div>
+          <div className="space-y-4">
+            <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => { const a = document.createElement('a'); a.href = `${process.env.REACT_APP_BACKEND_URL}/api/import/template/staff`; a.download = 'staff_template.csv'; a.click(); }} data-testid="download-staff-template"><Download size={12} /> Download CSV Template</button>
+            <div className="space-y-2"><Label>CSV File</Label><Input type="file" accept=".csv" onChange={e => setStaffCsvFile(e.target.files?.[0] || null)} /></div><div className="text-xs text-muted-foreground text-center">— or paste —</div><Textarea rows={5} placeholder="name,email,phone,..." value={staffCsvData} onChange={e => setStaffCsvData(e.target.value)} /></div>
           <div className="flex gap-3 pt-2"><Button variant="outline" className="flex-1" onClick={() => setShowStaffImport(false)}>Cancel</Button><Button className="flex-1" disabled={importLoading || (!staffCsvData.trim() && !staffCsvFile)} onClick={handleStaffImport}>{importLoading ? 'Importing...' : 'Import'}</Button></div>
         </DialogContent>
       </Dialog>
