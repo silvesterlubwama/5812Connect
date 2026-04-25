@@ -111,6 +111,7 @@ export const groupTypesApi = {
 // ---- DASHBOARD ----
 export const dashboardApi = {
   stats: (params) => api.get('/dashboard/stats', { params }),
+  actionItems: (params) => api.get('/dashboard/action-items', { params }),
 };
 
 // ---- PUBLIC ----

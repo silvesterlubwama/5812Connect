@@ -143,6 +143,27 @@ async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depen
         "task_id": task_id,
         "task": task,
     }, exclude_user=current_user["id"])
+
+    # Email notifications for newly assigned users
+    new_assignees = update_data.get("assignees")
+    if new_assignees:
+        try:
+            old_task = await db.tasks.find_one({"id": task_id}, {"_id": 0, "assignees": 1})
+            old_assignees = set(old_task.get("assignees", [])) if old_task else set()
+            newly_added = set(new_assignees) - old_assignees
+            if newly_added:
+                from email_helpers import notify_task_assigned
+                board = await db.boards.find_one({"id": task.get("board_id")}, {"_id": 0, "name": 1})
+                for uid in newly_added:
+                    assignee = await db.users.find_one({"id": uid}, {"_id": 0, "email": 1, "name": 1})
+                    if assignee and assignee.get("email"):
+                        await notify_task_assigned(
+                            assignee["email"], assignee.get("name", ""), task.get("title", ""),
+                            current_user.get("name", ""), board.get("name", "") if board else ""
+                        )
+        except Exception as e:
+            logger.warning(f"Task assignment email failed: {e}")
+
     return task
 
 

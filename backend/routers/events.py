@@ -611,6 +611,22 @@ async def qr_code_checkin(data: dict, current_user: dict = Depends(get_current_u
     return {"message": "Checked in via QR", "member": member, "checkin": checkin}
 
 
+async def _notify_parent_checkin(parent, checked_in, event_name=""):
+    """Send email to parent when their children are checked in."""
+    email = parent.get("email", "")
+    if not email or not checked_in:
+        return False
+    try:
+        from email_helpers import notify_checkin
+        names = ", ".join(c.get("member_name", "") for c in checked_in)
+        await notify_checkin(email, parent.get("name", ""), names, event_name)
+        return True
+    except Exception as e:
+        logger.warning(f"Parent checkin notification failed: {e}")
+        return False
+
+
+
 @router.post("/checkins/parent-lookup")
 async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_current_user)):
     """Look up children by parent phone, ID, email, or QR code and optionally check them in.
@@ -680,7 +696,8 @@ async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_cur
         checkin.pop("_id", None)
         checked_in.append(checkin)
 
-    return {"parent": parent, "children": children, "checked_in": checked_in}
+    return {"parent": parent, "children": children, "checked_in": checked_in,
+            "email_sent": await _notify_parent_checkin(parent, checked_in, event_name)}
 
 
 @router.get("/checkins/stats")

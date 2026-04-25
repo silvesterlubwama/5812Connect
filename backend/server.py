@@ -274,6 +274,60 @@ async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dic
     }
 
 
+
+@api_router.get("/dashboard/action-items")
+async def get_action_items(campus_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Return counts of items needing attention for dashboard widgets."""
+    now = datetime.now(timezone.utc)
+    now_str = now.isoformat()[:10]
+    if campus_id and is_system_admin(current_user):
+        campus = {"location_id": campus_id}
+    else:
+        campus = await get_campus_filter(current_user)
+
+    # Overdue tasks (past due_date, not done)
+    overdue_tasks = await db.tasks.count_documents({
+        "status": {"$nin": ["done"]},
+        "due_date": {"$lt": now_str, "$ne": "", "$exists": True},
+        "is_archived": {"$ne": True},
+    })
+
+    # Pending member approvals
+    pending_approvals = await db.users.count_documents({"status": "pending", **campus})
+
+    # Expiring guest passes (within next 7 days)
+    from datetime import timedelta
+    week_from_now = (now + timedelta(days=7)).isoformat()[:10]
+    expiring_passes = await db.wallet_badges.count_documents({}) if False else 0  # Placeholder
+    try:
+        expiring_passes = await db.guests.count_documents({
+            "expires_at": {"$lte": week_from_now, "$gte": now_str, "$exists": True, "$ne": ""},
+            **campus,
+        })
+        # Also check access guest passes
+        expiring_access = await db.access_guest_passes.count_documents({
+            "valid_until": {"$lte": week_from_now, "$gte": now_str},
+            "status": "active",
+        })
+        expiring_passes += expiring_access
+    except Exception:
+        pass
+
+    # Unassigned tasks (no assignees)
+    unassigned_tasks = await db.tasks.count_documents({
+        "status": {"$nin": ["done"]},
+        "is_archived": {"$ne": True},
+        "$or": [{"assignees": {"$size": 0}}, {"assignees": {"$exists": False}}],
+    })
+
+    return {
+        "overdue_tasks": overdue_tasks,
+        "pending_approvals": pending_approvals,
+        "expiring_passes": expiring_passes,
+        "unassigned_tasks": unassigned_tasks,
+    }
+
+
 @api_router.get("/people/stats")
 async def people_stats(current_user: dict = Depends(get_current_user)):
     campus = await get_campus_filter(current_user)
