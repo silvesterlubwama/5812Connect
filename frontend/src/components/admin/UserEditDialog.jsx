@@ -24,8 +24,10 @@ const ID_TYPE_LABELS = {
 
 export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, setEditForm, locations, saving, onSave, memberDocs, setMemberDocs, docRequests, setDocRequests, docsLoading, currentUserRole }) {
   const fileInputRef = useRef(null);
+  const photoInputRef = useRef(null);
   const [uploadDocType, setUploadDocType] = useState('other');
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scannerStatus, setScannerStatus] = useState('idle');
   const [showDocRequest, setShowDocRequest] = useState(false);
@@ -151,6 +153,21 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     finally { setUploadingDoc(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   };
 
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedUser) return;
+    setUploadingPhoto(true);
+    try {
+      const memberId = selectedUser.member_id || selectedUser.id;
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.post(`/members/${memberId}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setEditForm(prev => ({ ...prev, photo_url: res.data.photo_url }));
+      toast.success('Photo uploaded');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Photo upload failed'); }
+    finally { setUploadingPhoto(false); if (photoInputRef.current) photoInputRef.current.value = ''; }
+  };
+
   const deleteDoc = async (docId) => {
     if (!window.confirm('Delete this document?')) return;
     try { await documentsApi.delete(docId); setMemberDocs(prev => prev.filter(d => d.id !== docId)); toast.success('Document deleted'); } catch { toast.error('Delete failed'); }
@@ -209,6 +226,28 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
           </TabsList>
 
           <TabsContent value="profile" className="space-y-4 mt-4">
+            {/* Profile Photo */}
+            <div className="flex items-center gap-4">
+              <div className="relative group cursor-pointer" onClick={() => photoInputRef.current?.click()}>
+                {editForm.photo_url || selectedUser?.photo_url ? (
+                  <img src={editForm.photo_url || selectedUser?.photo_url} alt="" className="w-16 h-16 rounded-full object-cover border-2 border-border" data-testid="profile-photo" />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg border-2 border-border" data-testid="profile-photo-placeholder">
+                    {(selectedUser?.name || '').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Upload size={16} className="text-white" />
+                </div>
+                <input ref={photoInputRef} type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
+              </div>
+              <div>
+                <p className="text-sm font-medium">{selectedUser?.name}</p>
+                <button className="text-xs text-primary hover:underline" onClick={() => photoInputRef.current?.click()} disabled={uploadingPhoto} data-testid="upload-photo-btn">
+                  {uploadingPhoto ? 'Uploading...' : 'Change photo'}
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Full Name *</Label><Input data-testid="edit-name" value={editForm.name || ''} onChange={e => setEditForm({...editForm, name: e.target.value})} /></div>
               <div className="space-y-2"><Label>Email</Label><Input data-testid="edit-email" type="email" value={editForm.email || ''} onChange={e => setEditForm({...editForm, email: e.target.value})} /></div>

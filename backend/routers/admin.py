@@ -87,6 +87,20 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         })
         user_out["member_id"] = member_id
         user_out["has_member_profile"] = True
+
+    # Auto-mark staff as guest for their campus
+    staff_roles = {"Executive Director", "Adviser", "Director", "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"}
+    if user.get("role") in staff_roles and user.get("location_id"):
+        existing_guest = await db.guests.find_one({"email": email, "is_parent": False})
+        if not existing_guest:
+            await db.guests.insert_one({
+                "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email,
+                "phone": data.get("phone", ""), "is_parent": False, "is_staff_guest": True,
+                "location_id": user["location_id"],
+                "notes": f"Auto-created as guest for {user['role']}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
     await _audit(current_user["id"], "create", "user", user_id, {"name": name, "role": user["role"]})
     return user_out
 

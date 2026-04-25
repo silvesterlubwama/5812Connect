@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -151,6 +151,8 @@ export default function UnifiedPeoplePage() {
   const [editChild, setEditChild] = useState(null);
   const [editChildForm, setEditChildForm] = useState({});
   const [savingChild, setSavingChild] = useState(false);
+  const [parentSearch, setParentSearch] = useState('');
+  const [uploadingChildPhoto, setUploadingChildPhoto] = useState(false);
 
   // Documents
   const [memberDocuments, setMemberDocuments] = useState([]);
@@ -505,7 +507,9 @@ export default function UnifiedPeoplePage() {
                 <Card key={m.id} className={`shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors ${selectedMemberIds.has(m.id) ? 'ring-2 ring-primary/30' : ''}`} onClick={() => { setDefaultMemberTab('info'); handleViewMember(m); }} data-testid={`member-card-${m.id}`}>
                   <CardContent className="p-3 flex items-center gap-3">
                     <Checkbox checked={selectedMemberIds.has(m.id)} onCheckedChange={() => toggleMemberSelect(m.id)} onClick={e => e.stopPropagation()} data-testid={`select-member-${m.id}`} />
-                    <Avatar className="h-10 w-10"><AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(m.name)}</AvatarFallback></Avatar>
+                    <Avatar className="h-10 w-10">
+                      {m.photo_url ? <img src={m.photo_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(m.name)}</AvatarFallback>}
+                    </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{m.name}</p>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -601,12 +605,17 @@ export default function UnifiedPeoplePage() {
               onBulkDelete={async () => { if (!window.confirm(`Delete ${selChildren.size} children?`)) return; try { await childrenApi.bulkDelete([...selChildren]); setSelChildren(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
             /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {children.map(c => (
+              {children.map(c => {
+                const isRestricted = c.is_resident || allLocations.find(l => l.id === c.location_id)?.is_restricted;
+                return (
                 <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-start gap-2 flex-1">
                         <input type="checkbox" className="accent-primary mt-1" checked={selChildren.has(c.id)} onChange={() => setSelChildren(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} />
+                        <div className="w-9 h-9 rounded-full shrink-0 mt-0.5 overflow-hidden border border-border">
+                          {c.photo_url ? <img src={c.photo_url} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-600 text-xs font-bold">{(c.name || '?')[0]}</div>}
+                        </div>
                         <div className="flex-1">
                           <p className="font-medium text-sm">{c.name}</p>
                           <p className="text-xs text-muted-foreground mt-0.5">
@@ -617,12 +626,14 @@ export default function UnifiedPeoplePage() {
                             {c.allergies && <Badge variant="destructive" className="text-[10px]">{c.allergies}</Badge>}
                             {c.is_sponsored && <Badge className="text-[10px] bg-purple-100 text-purple-700">Sponsored{c.sponsor_first_name ? ` by ${c.sponsor_first_name}` : ''}</Badge>}
                             {c.is_resident && <Badge className="text-[10px] bg-blue-100 text-blue-700">Resident</Badge>}
+                            {isRestricted && <Badge className="text-[10px] bg-amber-100 text-amber-700">Tracked</Badge>}
                           </div>
                           {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.length}</p>}
                         </div>
                       </div>
                       {isCoordinator && (
                         <div className="flex gap-1">
+                          {isRestricted && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => { setBadgePerson({ ...c, role: 'child', country: allLocations.find(l => l.id === c.location_id)?.country }); setShowBadge(true); }} title="Print Badge" data-testid={`badge-child-${c.id}`}><Printer size={13} /></Button>}
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-child-${c.id}`} onClick={() => openEditChild(c)} title="Edit"><Eye size={13} /></Button>
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => childrenApi.delete(c.id).then(() => { toast.success('Deleted'); fetchPeople(); })}><Trash2 size={13} /></Button>
                         </div>
@@ -630,7 +641,8 @@ export default function UnifiedPeoplePage() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
             </div>
           )}
@@ -863,10 +875,43 @@ export default function UnifiedPeoplePage() {
       </Dialog>
 
       {/* EDIT CHILD DIALOG */}
-      <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) setEditChild(null); }}>
+      <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) { setEditChild(null); setParentSearch(''); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Child: {editChild?.name}</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
+            {/* Child Photo */}
+            <div className="flex items-center gap-3">
+              <div className="relative group cursor-pointer" onClick={() => document.getElementById('child-photo-input')?.click()}>
+                {editChildForm.photo_url ? (
+                  <img src={editChildForm.photo_url} alt="" className="w-14 h-14 rounded-full object-cover border-2 border-border" />
+                ) : (
+                  <div className="w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600 font-bold text-base border-2 border-border">
+                    {(editChild?.name || '').split(' ')[0]?.[0] || '?'}
+                  </div>
+                )}
+                <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Upload size={14} className="text-white" />
+                </div>
+                <input id="child-photo-input" type="file" className="hidden" accept="image/*" onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file || !editChild) return;
+                  setUploadingChildPhoto(true);
+                  try {
+                    const fd = new FormData(); fd.append('file', file);
+                    const res = await api.post(`/children/${editChild.id}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                    setEditChildForm(prev => ({ ...prev, photo_url: res.data.photo_url }));
+                    toast.success('Photo uploaded');
+                  } catch { toast.error('Photo upload failed'); }
+                  finally { setUploadingChildPhoto(false); e.target.value = ''; }
+                }} />
+              </div>
+              <div>
+                <p className="text-sm font-medium">{editChild?.name}</p>
+                <button className="text-xs text-primary hover:underline" onClick={() => document.getElementById('child-photo-input')?.click()} disabled={uploadingChildPhoto}>
+                  {uploadingChildPhoto ? 'Uploading...' : 'Change photo'}
+                </button>
+              </div>
+            </div>
             <div className="space-y-1.5"><Label>Name *</Label><Input data-testid="edit-child-name" value={editChildForm.name || ''} onChange={e => setEditChildForm({ ...editChildForm, name: e.target.value })} required /></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Date of Birth</Label><Input type="date" value={editChildForm.date_of_birth || ''} onChange={e => setEditChildForm({ ...editChildForm, date_of_birth: e.target.value })} /></div>
@@ -913,25 +958,46 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5">
               <Label>Linked Parents</Label>
-              <p className="text-xs text-muted-foreground">Select parents (from guests) who can check in this child</p>
+              <Input
+                placeholder="Search parents by name or phone..."
+                value={parentSearch}
+                onChange={e => setParentSearch(e.target.value)}
+                className="h-8 text-xs"
+                data-testid="parent-search-input"
+              />
               <div className="max-h-32 overflow-y-auto border rounded-lg p-2 space-y-1">
-                {guests.filter(g => g.is_parent || g.family_id).length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-2">No parents found in guests</p>
-                ) : guests.filter(g => g.is_parent || g.family_id).map(g => (
-                  <label key={g.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-accent/30 cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={(editChildForm.parent_ids || []).includes(g.id)}
-                      onChange={(e) => {
-                        const ids = editChildForm.parent_ids || [];
-                        setEditChildForm({ ...editChildForm, parent_ids: e.target.checked ? [...ids, g.id] : ids.filter(id => id !== g.id) });
-                      }}
-                      className="rounded"
-                    />
-                    {g.name} {g.phone ? `(${g.phone})` : ''}
-                  </label>
-                ))}
+                {(() => {
+                  const parentGuests = guests.filter(g => g.is_parent || g.family_id);
+                  const filtered = parentSearch.trim()
+                    ? parentGuests.filter(g => (g.name || '').toLowerCase().includes(parentSearch.toLowerCase()) || (g.phone || '').includes(parentSearch))
+                    : parentGuests;
+                  if (filtered.length === 0) return (
+                    <p className="text-xs text-muted-foreground text-center py-2">{parentSearch ? 'No parents match search' : 'No parents found in guests'}</p>
+                  );
+                  return filtered.map(g => (
+                    <label key={g.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-accent/30 cursor-pointer text-sm">
+                      <input
+                        type="checkbox"
+                        checked={(editChildForm.parent_ids || []).includes(g.id)}
+                        onChange={(e) => {
+                          const ids = editChildForm.parent_ids || [];
+                          setEditChildForm({ ...editChildForm, parent_ids: e.target.checked ? [...ids, g.id] : ids.filter(id => id !== g.id) });
+                        }}
+                        className="rounded"
+                      />
+                      {g.name} {g.phone ? `(${g.phone})` : ''}
+                    </label>
+                  ));
+                })()}
               </div>
+              {(editChildForm.parent_ids || []).length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {(editChildForm.parent_ids || []).map(pid => {
+                    const p = guests.find(g => g.id === pid);
+                    return p ? <Badge key={pid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => setEditChildForm({ ...editChildForm, parent_ids: (editChildForm.parent_ids || []).filter(id => id !== pid) })}>{p.name} <X size={10} /></Badge> : null;
+                  })}
+                </div>
+              )}
             </div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
