@@ -51,20 +51,23 @@ class SaleCreate(BaseModel):
 async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).isoformat()[:7]
-    # Enforce campus filter for non-system-admins
+    # Build location filter from campus context
     campus = await get_campus_filter(current_user)
-    if campus and not location_id:
-        location_id = current_user.get("location_id")
-    loc_match = {"location_id": location_id} if location_id else {}
+    if location_id:
+        loc_match = {"location_id": location_id}
+    elif campus:
+        loc_match = campus
+    else:
+        loc_match = {}
     donations_result = await db.donations.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     expenses_result = await db.expenses.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     sales_result = await db.sales.aggregate([{"$match": {**loc_match, "created_at": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     monthly_donations = donations_result[0]["total"] if donations_result else 0
     monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
     monthly_sales = sales_result[0]["total"] if sales_result else 0
-    all_donations = await db.donations.aggregate([{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    all_expenses = await db.expenses.aggregate([{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    all_sales = await db.sales.aggregate([{"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
+    all_donations = await db.donations.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    all_expenses = await db.expenses.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    all_sales = await db.sales.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     total_in = (all_donations[0]["total"] if all_donations else 0) + (all_sales[0]["total"] if all_sales else 0)
     total_out = all_expenses[0]["total"] if all_expenses else 0
     return {"monthly_donations": monthly_donations, "monthly_expenses": monthly_expenses, "monthly_sales": monthly_sales, "cashflow_in": total_in, "cashflow_out": total_out, "net_balance": total_in - total_out}
@@ -102,6 +105,8 @@ async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[
 @router.post("/financial/donations")
 async def create_donation(data: DonationCreate, current_user: dict = Depends(require_staff)):
     doc = {"id": f"don_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    if not doc.get("location_id"):
+        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.donations.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "donation", doc["id"])
     return doc
@@ -124,6 +129,8 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
 @router.post("/financial/expenses")
 async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_staff)):
     doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    if not doc.get("location_id"):
+        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.expenses.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "expense", doc["id"])
     return doc
@@ -209,6 +216,8 @@ async def list_products(current_user: dict = Depends(get_current_user)):
 @router.post("/products")
 async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
     doc = {"id": f"prod_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    if not doc.get("location_id"):
+        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.products.insert_one(doc); doc.pop("_id", None); return doc
 
 @router.put("/products/{product_id}")
@@ -233,6 +242,8 @@ async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depen
 async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):
     sale_id = f"inv_{str(uuid.uuid4())[:8].upper()}"
     doc = {"id": sale_id, **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown")}
+    if not doc.get("location_id"):
+        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.sales.insert_one(doc)
     for item in data.items:
         if item.get("product_id"):
@@ -247,14 +258,20 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
 @router.get("/financial/cashflow")
 async def financial_cashflow(months: int = 6, current_user: dict = Depends(get_current_user)):
     from datetime import timedelta
+    campus = await get_campus_filter(current_user)
     now = datetime.now(timezone.utc); monthly = []
     for i in range(months - 1, -1, -1):
         month_dt = now.replace(day=1) - timedelta(days=i * 28)
         month_start = month_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
         month_end = (month_dt.replace(year=month_dt.year + 1, month=1, day=1) if month_dt.month == 12 else month_dt.replace(month=month_dt.month + 1, day=1)).isoformat()
-        donations = await db.donations.find({"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}, {"_id": 0, "amount": 1}).to_list(5000)
-        expenses_list = await db.expenses.find({"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}, {"_id": 0, "amount": 1}).to_list(5000)
-        sales = await db.sales.find({"created_at": {"$gte": month_start, "$lt": month_end}}, {"_id": 0, "total": 1}).to_list(5000)
+        don_q = {"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}
+        exp_q = {"date": {"$gte": month_start[:7], "$lte": month_end[:7]}}
+        sale_q = {"created_at": {"$gte": month_start, "$lt": month_end}}
+        if campus:
+            don_q.update(campus); exp_q.update(campus); sale_q.update(campus)
+        donations = await db.donations.find(don_q, {"_id": 0, "amount": 1}).to_list(5000)
+        expenses_list = await db.expenses.find(exp_q, {"_id": 0, "amount": 1}).to_list(5000)
+        sales = await db.sales.find(sale_q, {"_id": 0, "total": 1}).to_list(5000)
         inflow = sum(d.get("amount", 0) for d in donations) + sum(s.get("total", 0) for s in sales)
         outflow = sum(e.get("amount", 0) for e in expenses_list)
         monthly.append({"month": month_dt.strftime("%b"), "inflow": inflow, "outflow": outflow, "net": inflow - outflow})
