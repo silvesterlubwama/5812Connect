@@ -380,18 +380,45 @@ export default function UnifiedPeoplePage() {
     setImportLoading(true);
     try {
       if (childCsvFile) {
-        const fd = new FormData(); fd.append('file', childCsvFile);
-        const res = await csvUploadApi.uploadChildrenParents(fd);
-        toast.success(`Imported ${res.data.imported_children} children`);
+        // Parse CSV client-side and send to the improved bulk-import endpoint
+        const text = await childCsvFile.text();
+        const lines = text.trim().split('\n');
+        const header = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[\ufeff"]/g, ''));
+        const rows = lines.slice(1).filter(l => l.trim()).map(line => {
+          const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+          const row = {};
+          header.forEach((h, i) => { row[h] = vals[i] || ''; });
+          // Map common alternate field names
+          if (!row.name && (row.first_name || row.last_name)) row.name = `${row.first_name || ''} ${row.last_name || ''}`.trim();
+          if (!row.father_name && row.fathers_names) row.father_name = row.fathers_names;
+          if (!row.mother_name && row.mothers_names) row.mother_name = row.mothers_names;
+          if (!row.father_phone && row.fathers_phone) row.father_phone = row.fathers_phone;
+          if (!row.mother_phone && row.mothers_phone) row.mother_phone = row.mothers_phone;
+          if (!row.father_email && row.fathers_email) row.father_email = row.fathers_email;
+          if (!row.mother_email && row.mothers_email) row.mother_email = row.mothers_email;
+          return row;
+        });
+        const res = await api.post('/children/bulk-import', { children: rows });
+        toast.success(`Imported ${res.data.imported} children, ${res.data.parents_created || 0} parents created`);
       } else if (childCsvData.trim()) {
         const lines = childCsvData.trim().split('\n');
         const header = lines[0].toLowerCase().split(',').map(h => h.trim());
-        const rows = lines.slice(1).map(line => { const vals = line.split(',').map(v => v.trim()); const row = {}; header.forEach((h, i) => { row[h] = vals[i] || ''; }); return row; }).filter(r => r.first_name);
-        await importApi.childrenParents(rows);
-        toast.success('Children imported!');
+        const rows = lines.slice(1).map(line => {
+          const vals = line.split(',').map(v => v.trim());
+          const row = {};
+          header.forEach((h, i) => { row[h] = vals[i] || ''; });
+          if (!row.name && (row.first_name || row.last_name)) row.name = `${row.first_name || ''} ${row.last_name || ''}`.trim();
+          if (!row.father_name && row.fathers_names) row.father_name = row.fathers_names;
+          if (!row.mother_name && row.mothers_names) row.mother_name = row.mothers_names;
+          if (!row.father_phone && row.fathers_phone) row.father_phone = row.fathers_phone;
+          if (!row.mother_phone && row.mothers_phone) row.mother_phone = row.mothers_phone;
+          return row;
+        }).filter(r => r.name);
+        const res = await api.post('/children/bulk-import', { children: rows });
+        toast.success(`Imported ${res.data.imported} children, ${res.data.parents_created || 0} parents`);
       }
       setShowChildImport(false); setChildCsvData(''); setChildCsvFile(null); fetchPeople();
-    } catch { toast.error('Import failed'); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Import failed'); }
     finally { setImportLoading(false); }
   };
 
