@@ -308,6 +308,8 @@ export default function EventsPage() {
                       <SelectItem value="weekly">Weekly (specific day)</SelectItem>
                       <SelectItem value="biweekly">Bi-weekly</SelectItem>
                       <SelectItem value="monthly">Monthly (same date)</SelectItem>
+                      <SelectItem value="bimonthly">Bi-monthly (every 2 months)</SelectItem>
+                      <SelectItem value="quarterly">Quarterly (every 3 months)</SelectItem>
                       <SelectItem value="nth_weekday">Monthly (nth weekday)</SelectItem>
                       <SelectItem value="yearly">Yearly (same date)</SelectItem>
                     </SelectContent>
@@ -329,8 +331,8 @@ export default function EventsPage() {
                     )}
                   </div>
                 )}
-                {['daily', 'weekly', 'monthly', 'yearly'].includes(newEvent.recurrence_type) && (
-                  <div className="space-y-2"><Label>Repeat every N {{ daily: 'days', weekly: 'weeks', yearly: 'years', monthly: 'months' }[newEvent.recurrence_type] || 'units'}</Label>
+                {['daily', 'weekly', 'monthly', 'bimonthly', 'quarterly', 'yearly'].includes(newEvent.recurrence_type) && (
+                  <div className="space-y-2"><Label>Repeat every N {{ daily: 'days', weekly: 'weeks', yearly: 'years', monthly: 'months', bimonthly: 'intervals (2 months each)', quarterly: 'intervals (3 months each)' }[newEvent.recurrence_type] || 'units'}</Label>
                     <Input type="number" min={1} max={12} value={newEvent.recurrence_interval || 1} onChange={e => setNewEvent({...newEvent, recurrence_interval: parseInt(e.target.value) || 1})} />
                   </div>
                 )}

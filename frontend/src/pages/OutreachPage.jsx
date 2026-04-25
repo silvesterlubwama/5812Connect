@@ -10,7 +10,7 @@ import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { outreachApi } from '../services/api';
+import { outreachApi, locationsApi, locationVenuesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -24,6 +24,8 @@ export default function OutreachPage() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sessions, setSessions] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [locationVenues, setLocationVenues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProgram, setShowProgram] = useState(false);
   const [showSession, setShowSession] = useState(false);
@@ -33,16 +35,28 @@ export default function OutreachPage() {
   const [saving, setSaving] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState('#10b981');
-  const emptyProg = { name: '', description: '', category: 'community', status: 'active', location: '', start_date: new Date().toISOString().split('T')[0], target: '', is_recurring: false, recurrence_pattern: 'saturday', recurrence_day: 1, recurrence_time: '09:00', recurrence_end_time: '12:00' };
+  const emptyProg = { name: '', description: '', category: 'community', status: 'active', location: '', location_id: activeCampus, venue_id: '', start_date: new Date().toISOString().split('T')[0], target: '', is_recurring: false, recurrence_pattern: 'saturday', recurrence_day: 1, recurrence_time: '09:00', recurrence_end_time: '12:00' };
   const [progForm, setProgForm] = useState({ ...emptyProg });
   const [sessionForm, setSessionForm] = useState({ program_id: '', date: new Date().toISOString().split('T')[0], time: '', location: '', attendees: '', notes: '', led_by: '' });
   const [recurForm, setRecurForm] = useState({ pattern: 'weekly', occurrences: 12, interval: 1, day_of_week: 5, nth_week: 2, day_of_month: 1, time: '09:00', end_time: '12:00', start_date: new Date().toISOString().split('T')[0], end_date: '' });
 
+  const loadVenues = async (locId) => {
+    if (!locId) { setLocationVenues([]); return; }
+    try {
+      const r = await locationVenuesApi.get(locId);
+      setLocationVenues([...(r.data.venues || []), ...(r.data.sublocations || []).map(s => ({ id: s.id, name: s.name, type: 'sublocation' }))]);
+    } catch { setLocationVenues([]); }
+  };
+
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [progRes, sessRes, catRes] = await Promise.all([outreachApi.programs(), outreachApi.sessions(), outreachApi.categories()]);
+      const [progRes, sessRes, catRes, locsRes] = await Promise.all([
+        outreachApi.programs(), outreachApi.sessions(), outreachApi.categories(),
+        locationsApi.list().catch(() => ({ data: [] })),
+      ]);
       setPrograms(progRes.data); setSessions(sessRes.data); setCategories(catRes.data);
+      setLocations(locsRes.data || []);
     } catch { toast.error('Failed to load outreach data'); }
     finally { setLoading(false); }
   };
@@ -84,7 +98,8 @@ export default function OutreachPage() {
 
   const editProgram = (p) => {
     setEditingProg(p);
-    setProgForm({ name: p.name, description: p.description || '', category: p.category || 'community', status: p.status || 'active', location: p.location || '', start_date: p.start_date || '', target: p.target || '', is_recurring: p.is_recurring || false, recurrence_pattern: p.recurrence_pattern || 'saturday', recurrence_day: p.recurrence_day || 1, recurrence_time: p.recurrence_time || '09:00', recurrence_end_time: p.recurrence_end_time || '12:00' });
+    setProgForm({ name: p.name, description: p.description || '', category: p.category || 'community', status: p.status || 'active', location: p.location || '', location_id: p.location_id || activeCampus, venue_id: p.venue_id || '', start_date: p.start_date || '', target: p.target || '', is_recurring: p.is_recurring || false, recurrence_pattern: p.recurrence_pattern || 'saturday', recurrence_day: p.recurrence_day || 1, recurrence_time: p.recurrence_time || '09:00', recurrence_end_time: p.recurrence_end_time || '12:00' });
+    if (p.location_id) loadVenues(p.location_id);
     setShowProgram(true);
   };
 
@@ -222,7 +237,21 @@ export default function OutreachPage() {
               <div className="space-y-2"><Label>Target</Label><Input type="number" placeholder="500" value={progForm.target} onChange={e => setProgForm({...progForm, target: e.target.value})} /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Location</Label><Input value={progForm.location} onChange={e => setProgForm({...progForm, location: e.target.value})} /></div>
+              <div className="space-y-2"><Label>Campus / Location</Label>
+                <Select value={progForm.location_id || '_none'} onValueChange={v => { const lid = v === '_none' ? '' : v; setProgForm({...progForm, location_id: lid, venue_id: ''}); loadVenues(lid); }}>
+                  <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                  <SelectContent><SelectItem value="_none">-- Select --</SelectItem>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label>Venue</Label>
+                <Select value={progForm.venue_id || '_none'} onValueChange={v => { const vid = v === '_none' ? '' : v; const vn = locationVenues.find(lv => lv.id === vid); setProgForm({...progForm, venue_id: vid, location: vn ? vn.name : progForm.location}); }}>
+                  <SelectTrigger><SelectValue placeholder="Select venue" /></SelectTrigger>
+                  <SelectContent><SelectItem value="_none">-- None --</SelectItem>{locationVenues.map(v => <SelectItem key={v.id} value={v.id}>{v.name} {v.is_external ? '(External)' : ''}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Or type location</Label><Input placeholder="Custom location" value={progForm.location} onChange={e => setProgForm({...progForm, location: e.target.value})} /></div>
               <div className="space-y-2"><Label>Start Date</Label><Input type="date" value={progForm.start_date} onChange={e => setProgForm({...progForm, start_date: e.target.value})} /></div>
             </div>
             <div className="flex items-center justify-between p-3 rounded-lg border border-border">
@@ -289,6 +318,8 @@ export default function OutreachPage() {
                     <SelectItem value="weekly">Weekly</SelectItem>
                     <SelectItem value="biweekly">Bi-weekly</SelectItem>
                     <SelectItem value="monthly">Monthly (same date)</SelectItem>
+                    <SelectItem value="bimonthly">Bi-monthly (every 2 months)</SelectItem>
+                    <SelectItem value="quarterly">Quarterly (every 3 months)</SelectItem>
                     <SelectItem value="yearly">Yearly</SelectItem>
                     <SelectItem value="nth_week">Nth Weekday of Month</SelectItem>
                     <SelectItem value="nth_month">Nth Day of Month</SelectItem>
@@ -297,8 +328,8 @@ export default function OutreachPage() {
               </div>
               <div className="space-y-2"><Label>Occurrences</Label><Input type="number" min={1} max={52} value={recurForm.occurrences} onChange={e => setRecurForm({...recurForm, occurrences: parseInt(e.target.value) || 1})} data-testid="outreach-occurrences" /></div>
             </div>
-            {['daily', 'weekly', 'monthly', 'yearly'].includes(recurForm.pattern) && (
-              <div className="space-y-2"><Label>Every N {recurForm.pattern === 'weekly' ? 'weeks' : recurForm.pattern === 'daily' ? 'days' : recurForm.pattern === 'yearly' ? 'years' : 'months'}</Label>
+            {['daily', 'weekly', 'monthly', 'bimonthly', 'quarterly', 'yearly'].includes(recurForm.pattern) && (
+              <div className="space-y-2"><Label>Every N {{ weekly: 'weeks', daily: 'days', yearly: 'years', monthly: 'months', bimonthly: 'intervals (2mo)', quarterly: 'intervals (3mo)' }[recurForm.pattern] || 'units'}</Label>
                 <Input type="number" min={1} max={12} value={recurForm.interval} onChange={e => setRecurForm({...recurForm, interval: parseInt(e.target.value) || 1})} />
               </div>
             )}

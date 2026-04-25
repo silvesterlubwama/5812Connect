@@ -68,7 +68,7 @@ export default function TasksPage() {
       const [bRes, lRes, uRes] = await Promise.all([
         boardsApi.list(),
         locationsApi.list().catch(() => ({ data: [] })),
-        adminApi.users({ limit: 300 }).catch(() => ({ data: [] })),
+        adminApi.userDirectory().catch(() => ({ data: [] })),
       ]);
       setBoards(bRes.data || []);
       setLocations(lRes.data || []);

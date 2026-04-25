@@ -49,7 +49,7 @@ export default function ExtensionsPage() {
     try {
       const [extRes, usersRes] = await Promise.all([
         callingApi.listExtensions(),
-        adminApi.users({ limit: 500 }),
+        adminApi.userDirectory(),
       ]);
       setExtensions(extRes.data || []);
       setUsers(usersRes.data || []);

@@ -11,6 +11,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 # ========== USER MANAGEMENT ==========
 
+@router.get("/users/directory")
+async def user_directory(current_user: dict = Depends(get_current_user)) -> list:
+    """Lightweight user list for cross-referencing in boards, tasks, etc.
+    Returns ALL users regardless of campus (id, name, role, photo_url, location_id only)."""
+    users = await db.users.find(
+        {"status": {"$ne": "deleted"}},
+        {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1, "location_id": 1, "email": 1}
+    ).sort("name", 1).to_list(1000)
+    return users
+
+
 @router.get("/users")
 async def list_all_users(search: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_admin)) -> list:
     campus = await get_campus_filter(current_user)

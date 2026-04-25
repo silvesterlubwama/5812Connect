@@ -116,7 +116,14 @@ async def delete_location(loc_id: str, current_user: dict = Depends(require_admi
 
 @router.get("/locations/{loc_id}/venues")
 async def get_location_venues(loc_id: str, current_user: dict = Depends(get_current_user)):
-    """Get venues/sublocations within a location for event location picker"""
+    """Get venues/sublocations within a location + external venues for event location picker"""
     venues = await db.venues.find({"location_id": loc_id}, {"_id": 0}).to_list(100)
     sublocations = await db.locations.find({"parent_id": loc_id, "is_venue": True}, {"_id": 0}).to_list(100)
+    # Also include external venues (not tied to any specific location)
+    external = await db.venues.find({"$or": [{"is_external": True}, {"location_id": {"$in": [None, ""]}}]}, {"_id": 0}).to_list(100)
+    # Deduplicate
+    venue_ids = {v["id"] for v in venues}
+    for ev in external:
+        if ev["id"] not in venue_ids:
+            venues.append(ev)
     return {"venues": venues, "sublocations": sublocations}

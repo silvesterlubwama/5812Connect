@@ -501,6 +501,7 @@ export const portalApi = {
 // ---- ADMIN ----
 export const adminApi = {
   users: (params) => api.get('/admin/users', { params }),
+  userDirectory: () => api.get('/admin/users/directory'),
   getUser: (id) => api.get(`/admin/users/${id}`),
   getUserFullProfile: (id) => api.get(`/admin/users/${id}/profile`),
   createUser: (data) => api.post('/admin/users', data),

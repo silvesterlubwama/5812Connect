@@ -54,7 +54,7 @@ export default function PbxSettingsPage() {
       const [pbxRes, extRes, usersRes, qRes, aaRes, rulesRes] = await Promise.all([
         callingApi.listPbxConfigs(),
         callingApi.listExtensions(),
-        adminApi.users({ limit: 500 }).catch(() => ({ data: [] })),
+        adminApi.userDirectory().catch(() => ({ data: [] })),
         callingApi.listQueues().catch(() => ({ data: [] })),
         callingApi.getAutoAttendant().catch(() => ({ data: null })),
         callingApi.listOutgoingRules().catch(() => ({ data: [] })),
