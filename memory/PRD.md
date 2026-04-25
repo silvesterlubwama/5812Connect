@@ -3,27 +3,21 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 61 - Feb 2026)
-- [x] Dashboard action-driving widgets: Overdue Tasks (red), Pending Approvals (amber), Expiring Passes (orange), Unassigned Tasks (blue)
-- [x] GET /api/dashboard/action-items endpoint with campus filter support
-- [x] Email notifications: notify_task_assigned (on task assignee change), notify_checkin (parent notified on child check-in), notify_task_overdue
-- [x] email_helpers.py shared module using Resend API (graceful degradation if key not set)
-- [x] Task update triggers email to newly assigned users
-- [x] Parent check-in triggers email to parent with child names and event
+## Latest Changes (Iteration 62 - Feb 2026)
+- [x] Financial nav always visible for admins (even on "All Locations")
+- [x] Financial summary, cashflow, donations, expenses, products, sales all respect campus filter
+- [x] New financial records auto-set location_id from user's active campus
+- [x] Cashflow chart filters by campus
+
+## Previous (Iteration 61)
+- Dashboard action widgets (overdue, pending, expiring, unassigned), email notifications
 
 ## Previous (Iterations 49-60)
-- Template downloads, safety features (ErrorBoundary, BulkDeleteConfirm, unsaved warnings)
-- Wallet badges, cascade deletion, data events, venue/group CRUD
-- Import fixes, badge improvements, photos, country outlines, user directory
+- Safety features, wallet badges, cascade deletion, data events, templates, imports, badges, photos
 
 ## Architecture
-- **Action Items**: /api/dashboard/action-items — overdue tasks, pending approvals, expiring passes, unassigned tasks
-- **Email**: email_helpers.py — fire-and-forget via Resend (RESEND_API_KEY env var)
-- **Error Boundary**: components/ErrorBoundary.jsx
-- **Data Events**: services/dataEvents.js
-- **Wallet Badges**: /badge/:token public route
+- **Financial Campus Filter**: get_campus_filter() applied to all financial queries
+- **Auto location_id**: Donations/expenses/products/sales auto-set from active_campus_id on creation
+- **Nav Visibility**: Financial/Marketplace hide only when specific campus has feature disabled
 
-## Test Reports: Iterations 49-61 all 100%
-
-## Completed Feature Set
-The application now includes: multi-campus RBAC, WebRTC calling, unified comms, NFC badges, kiosk check-in, financial management, programme/outreach tracking, import/export, profile photos, cascade deletions, action-driving dashboard, and email notifications.
+## Test Reports: Iterations 49-62 all 100%
