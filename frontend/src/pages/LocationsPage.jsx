@@ -9,19 +9,25 @@ import { Switch } from '../components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { locationsApi, membersApi } from '../services/api';
+import { locationsApi, membersApi, venuesApi, groupTypesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
-const CURRENCIES = ['USD','UGX','KES','TZS','RWF','GBP','EUR','ZAR','NGN','GHS','ETB','HTG'];
+const CURRENCIES = ['USD','UGX','KES','TZS','RWF','GBP','EUR','ZAR','NGN','GHS','ETB','HTG','THB','CAD','AUD','INR','BRL','MXN'];
 const TIMEZONES = [
   'Africa/Kampala', 'Africa/Nairobi', 'Africa/Dar_es_Salaam', 'Africa/Kigali', 'Africa/Bujumbura',
   'Africa/Lagos', 'Africa/Accra', 'Africa/Abidjan', 'Africa/Johannesburg', 'Africa/Cairo',
-  'Africa/Addis_Ababa', 'Africa/Lusaka', 'Africa/Harare',
-  'UTC', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'Africa/Addis_Ababa', 'Africa/Lusaka', 'Africa/Harare', 'Africa/Maputo', 'Africa/Kinshasa',
+  'Africa/Douala', 'Africa/Dakar', 'Africa/Casablanca', 'Africa/Tunis', 'Africa/Algiers',
+  'UTC', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+  'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Zurich', 'Europe/Stockholm', 'Europe/Oslo',
   'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Toronto',
-  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo',
-  'Australia/Sydney', 'Pacific/Auckland',
+  'America/Vancouver', 'America/Mexico_City', 'America/Bogota', 'America/Lima', 'America/Sao_Paulo',
+  'America/Buenos_Aires', 'America/Port-au-Prince', 'America/Havana', 'America/Jamaica',
+  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Shanghai',
+  'Asia/Bangkok', 'Asia/Jakarta', 'Asia/Manila', 'Asia/Karachi', 'Asia/Dhaka',
+  'Asia/Kuala_Lumpur', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Riyadh', 'Asia/Tehran',
+  'Australia/Sydney', 'Australia/Melbourne', 'Australia/Perth', 'Pacific/Auckland', 'Pacific/Fiji',
 ];
 
 const typeLabels = { main: 'Main', campus: 'Campus', compass: 'Campus', 'sub-location': 'Sub-Location' };
@@ -49,16 +55,26 @@ export default function LocationsPage() {
   const [form, setForm] = useState(emptyForm);
   const [deptInput, setDeptInput] = useState('');
   const [expanded, setExpanded] = useState({});
+  const [venues, setVenues] = useState([]);
+  const [groupTypes, setGroupTypes] = useState([]);
+  const [showVenueForm, setShowVenueForm] = useState(false);
+  const [venueForm, setVenueForm] = useState({ name: '', location_id: '', address: '', capacity: '', is_external: false });
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupColor, setNewGroupColor] = useState('#6b7280');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [locRes, staffRes] = await Promise.all([
+      const [locRes, staffRes, venueRes, groupRes] = await Promise.all([
         locationsApi.list(),
         membersApi.list({ limit: 200 }),
+        venuesApi.list().catch(() => ({ data: [] })),
+        groupTypesApi.list().catch(() => ({ data: [] })),
       ]);
       setLocations(locRes.data);
       setAllStaff(staffRes.data?.members || staffRes.data || []);
+      setVenues(venueRes.data || []);
+      setGroupTypes(groupRes.data || []);
     } catch { toast.error('Failed to load locations'); }
     finally { setLoading(false); }
   }, []);
@@ -198,6 +214,93 @@ export default function LocationsPage() {
           {roots.map(root => renderLocationTree(root))}
         </div>
       )}
+
+      {/* ===== VENUE MANAGEMENT ===== */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Venues</h2>
+            <p className="text-xs text-muted-foreground">{venues.length} venues ({venues.filter(v => v.is_external).length} external)</p>
+          </div>
+          <Button size="sm" className="gap-1.5" onClick={() => { setVenueForm({ name: '', location_id: '', address: '', capacity: '', is_external: false }); setShowVenueForm(true); }} data-testid="add-venue-btn"><Plus size={13} /> Add Venue</Button>
+        </div>
+        {venues.length > 0 && (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {venues.map(v => (
+              <Card key={v.id} className="shadow-soft rounded-xl" data-testid={`venue-card-${v.id}`}>
+                <CardContent className="p-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">{v.name}</p>
+                    <p className="text-xs text-muted-foreground">{v.address || locations.find(l => l.id === v.location_id)?.name || 'No location'}</p>
+                    <div className="flex gap-1 mt-1">
+                      {v.is_external && <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-600">External</Badge>}
+                      {v.capacity && <Badge variant="secondary" className="text-[10px]">Cap: {v.capacity}</Badge>}
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={async () => { if (!window.confirm(`Delete venue "${v.name}"?`)) return; await venuesApi.delete(v.id); setVenues(prev => prev.filter(x => x.id !== v.id)); toast.success('Venue deleted'); }} data-testid={`delete-venue-${v.id}`}><Trash2 size={13} /></Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ===== GROUP TYPES ===== */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Group Types</h2>
+        <div className="flex flex-wrap gap-2">
+          {groupTypes.map(g => (
+            <Badge key={g.id} variant="outline" className="gap-1.5 text-xs cursor-pointer hover:bg-destructive/10" style={{ borderColor: g.color, color: g.color }} onClick={async () => { if (!window.confirm(`Delete group "${g.name}"?`)) return; await groupTypesApi.delete(g.id); setGroupTypes(prev => prev.filter(x => x.id !== g.id)); toast.success('Group deleted'); }} data-testid={`group-type-${g.id}`}>
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: g.color }} /> {g.name} <XCircle size={10} />
+            </Badge>
+          ))}
+        </div>
+        <div className="flex gap-2 items-end">
+          <div className="flex-1 space-y-1">
+            <Label className="text-xs">New Group</Label>
+            <Input placeholder="e.g. Elders" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} className="h-8 text-sm" data-testid="new-group-name" />
+          </div>
+          <Input type="color" value={newGroupColor} onChange={e => setNewGroupColor(e.target.value)} className="w-10 h-8 p-0.5" />
+          <Button size="sm" className="h-8" disabled={!newGroupName.trim()} onClick={async () => {
+            try { const res = await groupTypesApi.create({ name: newGroupName.trim(), color: newGroupColor }); setGroupTypes(prev => [...prev, res.data]); setNewGroupName(''); toast.success('Group type added'); }
+            catch { toast.error('Failed'); }
+          }} data-testid="add-group-type-btn">Add</Button>
+        </div>
+      </div>
+
+      {/* Venue Form Dialog */}
+      <Dialog open={showVenueForm} onOpenChange={setShowVenueForm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Add Venue</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label className="text-xs">Venue Name *</Label><Input value={venueForm.name} onChange={e => setVenueForm({...venueForm, name: e.target.value})} data-testid="venue-name-input" /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Campus</Label>
+              <Select value={venueForm.location_id || '_none'} onValueChange={v => setVenueForm({...venueForm, location_id: v === '_none' ? '' : v})}>
+                <SelectTrigger><SelectValue placeholder="Select campus" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">External (no campus)</SelectItem>{locations.filter(l => l.type !== 'sub-location').map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Address</Label><Input value={venueForm.address} onChange={e => setVenueForm({...venueForm, address: e.target.value})} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Capacity</Label><Input type="number" value={venueForm.capacity} onChange={e => setVenueForm({...venueForm, capacity: e.target.value})} /></div>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" className="accent-primary" checked={venueForm.is_external} onChange={e => setVenueForm({...venueForm, is_external: e.target.checked, location_id: e.target.checked ? '' : venueForm.location_id})} /> External venue (not part of any campus)</label>
+            <div className="flex gap-3 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setShowVenueForm(false)}>Cancel</Button>
+              <Button className="flex-1" disabled={!venueForm.name.trim()} onClick={async () => {
+                try {
+                  const payload = { ...venueForm, capacity: venueForm.capacity ? parseInt(venueForm.capacity) : null };
+                  const res = await venuesApi.create(payload);
+                  setVenues(prev => [...prev, res.data]);
+                  setShowVenueForm(false);
+                  toast.success('Venue created');
+                } catch { toast.error('Failed to create venue'); }
+              }} data-testid="save-venue-btn">Create</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
 
       {/* Add/Edit Dialog */}
       <Dialog open={showModal} onOpenChange={setShowModal}>

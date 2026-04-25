@@ -216,7 +216,7 @@ class CheckInCreate(BaseModel):
 
 class VenueCreate(BaseModel):
     name: str
-    capacity: int
+    capacity: Optional[int] = None
     type: str = "hall"
     description: Optional[str] = None
     hourly_rate: Optional[float] = None
@@ -224,6 +224,7 @@ class VenueCreate(BaseModel):
     location_id: Optional[str] = None
     is_offsite: bool = False
     is_bookable: bool = True
+    is_external: bool = False
     country: Optional[str] = None
     address: Optional[str] = None
 
@@ -237,6 +238,7 @@ class VenueUpdate(BaseModel):
     location_id: Optional[str] = None
     is_offsite: Optional[bool] = None
     is_bookable: Optional[bool] = None
+    is_external: Optional[bool] = None
     country: Optional[str] = None
     address: Optional[str] = None
 

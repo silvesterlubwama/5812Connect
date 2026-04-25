@@ -2,14 +2,21 @@
  * Real country outline SVG paths for badge watermarks using world-map-country-shapes.
  * Uses ISO 3166-1 alpha-2 country codes.
  */
-import countriesData from 'world-map-country-shapes';
+import rawCountriesData from 'world-map-country-shapes';
+
+// Handle both ESM default export and CJS module formats
+const countriesData = rawCountriesData?.default || rawCountriesData;
 
 // Build lookup by ISO code
 const _byCode = {};
 if (Array.isArray(countriesData)) {
   countriesData.forEach(c => { if (c && c.id) _byCode[c.id] = c.shape; });
 } else if (countriesData && typeof countriesData === 'object') {
-  Object.values(countriesData).forEach(c => { if (c && c.id) _byCode[c.id] = c.shape; });
+  Object.keys(countriesData).forEach(k => {
+    const c = countriesData[k];
+    if (c && c.id) _byCode[c.id] = c.shape;
+    else if (c && typeof c === 'string' && k.length === 2) _byCode[k] = c;
+  });
 }
 
 // Country name -> ISO code mapping for common 58:12 Global locations

@@ -109,7 +109,7 @@ export function StaffBadge({ user, kioskMode = false }) {
   );
 }
 
-export function ParentBadge({ parent, children: childList, kioskMode = true }) {
+export function ParentBadge({ parent, children: childList, kioskMode = false }) {
   const ref = useRef(null);
   const country = parent.country || parent.location_country || '';
   const countryCode = parent.country_code || parent.location_country_code || '';
@@ -152,7 +152,7 @@ export function ParentBadge({ parent, children: childList, kioskMode = true }) {
   );
 }
 
-export function ChildTag({ child, parentPhone, eventName, locationName, kioskMode = true }) {
+export function ChildTag({ child, parentPhone, eventName, locationName, kioskMode = false }) {
   const ref = useRef(null);
   const firstName = (child.name || '').split(' ')[0];
   const phone4 = (parentPhone || '').slice(-4);

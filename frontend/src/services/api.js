@@ -102,6 +102,12 @@ export const venuesApi = {
   delete: (id) => api.delete(`/venues/${id}`),
 };
 
+export const groupTypesApi = {
+  list: () => api.get('/group-types'),
+  create: (data) => api.post('/group-types', data),
+  delete: (id) => api.delete(`/group-types/${id}`),
+};
+
 // ---- DASHBOARD ----
 export const dashboardApi = {
   stats: (params) => api.get('/dashboard/stats', { params }),

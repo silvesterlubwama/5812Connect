@@ -843,6 +843,7 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
     errors = []
     family_cache = {}
     campus_cache = {}
+    parent_cache = {}  # Track created parents by name+phone to skip repeated info
 
     for i, row in enumerate(data):
         try:
@@ -857,7 +858,7 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
             campus_name = (row.get("campus") or "").strip()
             location_id = row.get("location_id", "")
 
-            # Auto-resolve campus name to location_id
+            # Auto-resolve campus name to location_id; fall back to admin's active campus
             if campus_name and not location_id:
                 if campus_name in campus_cache:
                     location_id = campus_cache[campus_name]
@@ -865,6 +866,8 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                     loc = await db.locations.find_one({"name": {"$regex": f"^{campus_name}$", "$options": "i"}}, {"_id": 0, "id": 1})
                     location_id = loc["id"] if loc else ""
                     campus_cache[campus_name] = location_id
+            if not location_id:
+                location_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
 
             # 1. Find or create family
             family_id = None
@@ -894,34 +897,37 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                         })
                     family_cache[family_name] = family_id
 
-            # 2. Find or create parent (even without email)
+            # 2. Find or create parent (even without email) — skip if already handled in this batch
             if parent_name:
-                parent_q_conditions = [{"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True}]
-                if parent_phone:
-                    parent_q_conditions.append({"phone": parent_phone, "is_parent": True})
-                existing_parent = await db.guests.find_one({"$or": parent_q_conditions})
-                if not existing_parent:
-                    staff_parent = await db.users.find_one({"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True})
-                    if not staff_parent:
-                        await db.guests.insert_one({
-                            "id": f"gst_{str(uuid.uuid4())[:8]}", "name": parent_name,
-                            "email": parent_email, "phone": parent_phone,
-                            "is_parent": True, "family_id": family_id, "location_id": location_id,
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        })
-                        parents_created += 1
-                else:
-                    merge = {}
-                    if family_id and not existing_parent.get("family_id"):
-                        merge["family_id"] = family_id
-                    if parent_phone and not existing_parent.get("phone"):
-                        merge["phone"] = parent_phone
-                    if location_id and not existing_parent.get("location_id"):
-                        merge["location_id"] = location_id
-                    if merge:
-                        await db.guests.update_one({"id": existing_parent["id"]}, {"$set": merge})
+                parent_key = f"{parent_name.lower()}|{parent_phone}"
+                if parent_key not in parent_cache:
+                    parent_q_conditions = [{"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True}]
+                    if parent_phone:
+                        parent_q_conditions.append({"phone": parent_phone, "is_parent": True})
+                    existing_parent = await db.guests.find_one({"$or": parent_q_conditions})
+                    if not existing_parent:
+                        staff_parent = await db.users.find_one({"name": {"$regex": f"^{parent_name}$", "$options": "i"}, "is_parent": True})
+                        if not staff_parent:
+                            await db.guests.insert_one({
+                                "id": f"gst_{str(uuid.uuid4())[:8]}", "name": parent_name,
+                                "email": parent_email, "phone": parent_phone,
+                                "is_parent": True, "family_id": family_id, "location_id": location_id,
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                            parents_created += 1
+                    else:
+                        merge = {}
+                        if family_id and not existing_parent.get("family_id"):
+                            merge["family_id"] = family_id
+                        if parent_phone and not existing_parent.get("phone"):
+                            merge["phone"] = parent_phone
+                        if location_id and not existing_parent.get("location_id"):
+                            merge["location_id"] = location_id
+                        if merge:
+                            await db.guests.update_one({"id": existing_parent["id"]}, {"$set": merge})
+                    parent_cache[parent_key] = True
 
-            # Also handle second parent (father/mother) if both provided
+            # Also handle second parent (father/mother) if both provided — skip if already in cache
             father_name = (row.get("father_name") or "").strip()
             mother_name = (row.get("mother_name") or "").strip()
             for pname, pphone, pemail in [
@@ -929,6 +935,9 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                 (mother_name, (row.get("mother_phone") or "").strip(), (row.get("mother_email") or "").strip().lower()),
             ]:
                 if pname and pname != parent_name:
+                    p_key = f"{pname.lower()}|{pphone}"
+                    if p_key in parent_cache:
+                        continue
                     p_conditions = [{"name": {"$regex": f"^{pname}$", "$options": "i"}, "is_parent": True}]
                     if pphone:
                         p_conditions.append({"phone": pphone, "is_parent": True})
@@ -941,6 +950,7 @@ async def bulk_import_children(request_data: dict, current_user: dict = Depends(
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         })
                         parents_created += 1
+                    parent_cache[p_key] = True
 
             # 3. Find or create/update child
             child_q = {"name": {"$regex": f"^{child_name}$", "$options": "i"}}

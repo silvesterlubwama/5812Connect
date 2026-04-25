@@ -372,3 +372,49 @@ async def approve_enrollment(enrollment_id: str, current_user: dict = Depends(re
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
     return {"message": "Enrollment approved, profiles created"}
+
+
+# ========== GROUP TYPES (Admin-configurable) ==========
+
+@router.get("/group-types")
+async def list_group_types(current_user: dict = Depends(get_current_user)):
+    """List all group types. Creates defaults if none exist."""
+    types = await db.group_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    if not types:
+        defaults = [
+            {"id": "grp_general", "name": "General", "color": "#6b7280"},
+            {"id": "grp_staff", "name": "Staff", "color": "#3b82f6"},
+            {"id": "grp_volunteers", "name": "Volunteers", "color": "#10b981"},
+            {"id": "grp_youth", "name": "Youth", "color": "#8b5cf6"},
+            {"id": "grp_women", "name": "Women", "color": "#ec4899"},
+            {"id": "grp_men", "name": "Men", "color": "#6366f1"},
+            {"id": "grp_children", "name": "Children", "color": "#14b8a6"},
+            {"id": "grp_leadership", "name": "Leadership", "color": "#f59e0b"},
+        ]
+        await db.group_types.insert_many(defaults)
+        for d in defaults:
+            d.pop("_id", None)
+        return defaults
+    return types
+
+
+@router.post("/group-types")
+async def create_group_type(data: dict, current_user: dict = Depends(require_admin)):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    doc = {
+        "id": f"grp_{uuid.uuid4().hex[:8]}",
+        "name": name,
+        "color": data.get("color", "#6b7280"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.group_types.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/group-types/{type_id}")
+async def delete_group_type(type_id: str, current_user: dict = Depends(require_admin)):
+    await db.group_types.delete_one({"id": type_id})
+    return {"message": "Group type deleted"}
