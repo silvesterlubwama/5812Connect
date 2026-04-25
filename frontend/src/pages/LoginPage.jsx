@@ -180,7 +180,7 @@ export default function LoginPage() {
               <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Quick Access</span></div>
             </div>
 
-            <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button">
+            <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button" onClick={() => window.location.href = '/portal'}>
               <Users size={16} /> Guest & Parent Portal
             </Button>
 

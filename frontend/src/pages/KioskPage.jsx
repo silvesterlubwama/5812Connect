@@ -705,9 +705,11 @@ export default function KioskPage() {
             </Card>
           )}
 
-          <div className="mt-6 text-center">
-            <Link to="/login" className="text-sm text-muted-foreground hover:text-primary">Exit to main login</Link>
-          </div>
+          {!lockMode && (
+            <div className="mt-6 text-center">
+              <Link to="/login" className="text-sm text-muted-foreground hover:text-primary">Exit to main login</Link>
+            </div>
+          )}
         </div>
 
         {/* Guest Registration Dialog */}

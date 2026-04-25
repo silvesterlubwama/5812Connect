@@ -44,7 +44,7 @@ function MemberForm({ data, onChange, locations, showDepartment }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={data.phone} onChange={e => onChange({ ...data, phone: e.target.value })} data-testid="member-phone-input" /></div>
-        <div className="space-y-1.5"><Label className="text-xs">National ID</Label><Input value={data.national_id} onChange={e => onChange({ ...data, national_id: e.target.value })} /></div>
+        <div className="space-y-1.5"><Label className="text-xs">ID Number</Label><Input value={data.national_id} onChange={e => onChange({ ...data, national_id: e.target.value })} /></div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5"><Label className="text-xs">Gender *</Label>
@@ -673,7 +673,15 @@ export default function UnifiedPeoplePage() {
                       <input type="checkbox" className="accent-primary" checked={selGuests.has(g.id)} onChange={() => setSelGuests(prev => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })} />
                       <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-muted-foreground">{g.visit_date} &middot; {g.phone || g.email || ''}</p></div>
                     </div>
-                    {g.referred_by && <Badge variant="secondary" className="text-[10px]">Ref: {g.referred_by}</Badge>}
+                    <div className="flex items-center gap-2">
+                      {g.is_parent && <Badge variant="outline" className="text-[10px] border-green-300 text-green-600">Parent</Badge>}
+                      {g.referred_by && <Badge variant="secondary" className="text-[10px]">Ref: {g.referred_by}</Badge>}
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-guest-${g.id}`} onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!window.confirm(`Delete guest "${g.name}"?`)) return;
+                        try { await guestsApi.delete(g.id); toast.success('Guest deleted'); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Delete failed'); }
+                      }}><Trash2 size={13} /></Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -1114,7 +1122,7 @@ export default function UnifiedPeoplePage() {
       <Dialog open={showBadge} onOpenChange={setShowBadge}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Badge — {badgePerson?.name}</DialogTitle></DialogHeader>
-          {badgePerson && <div className="mt-2"><UnifiedBadge person={{ ...badgePerson, country: allLocations.find(l => l.id === badgePerson.location_id)?.country }} canWriteNfc={isDirector} /></div>}
+          {badgePerson && <div className="mt-2"><UnifiedBadge person={{ ...badgePerson, country: allLocations.find(l => l.id === badgePerson.location_id)?.country, country_code: allLocations.find(l => l.id === badgePerson.location_id)?.country_code }} canWriteNfc={isDirector} /></div>}
         </DialogContent>
       </Dialog>
 

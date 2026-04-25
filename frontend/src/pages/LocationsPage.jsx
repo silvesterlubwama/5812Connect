@@ -33,7 +33,7 @@ const typeColors = {
 };
 
 const emptyForm = {
-  name: '', code: '', type: 'campus', parent_id: '', address: '', country: '',
+  name: '', code: '', type: 'campus', parent_id: '', address: '', country: '', country_code: '',
   currency: 'USD', timezone: 'Africa/Kampala', contact_name: '', contact_phone: '', director_id: '',
   is_venue: false, is_bookable: false, is_restricted: false, departments: [],
 };
@@ -78,7 +78,7 @@ export default function LocationsPage() {
     setEditing(loc);
     setForm({
       name: loc.name || '', code: loc.code || '', type: loc.type || 'campus',
-      parent_id: loc.parent_id || '', address: loc.address || '', country: loc.country || '',
+      parent_id: loc.parent_id || '', address: loc.address || '', country: loc.country || '', country_code: loc.country_code || '',
       currency: loc.currency || 'USD', timezone: loc.timezone || 'Africa/Kampala', contact_name: loc.contact_name || '',
       contact_phone: loc.contact_phone || '', director_id: loc.director_id || '',
       is_venue: loc.is_venue || false, is_bookable: loc.is_bookable || false,
@@ -242,9 +242,12 @@ export default function LocationsPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-2"><Label>Country</Label>
                 <Input placeholder="e.g. Uganda" value={form.country} onChange={e => setForm({...form, country: e.target.value})} />
+              </div>
+              <div className="space-y-2"><Label>Country Code (ISO)</Label>
+                <Input placeholder="e.g. UG" maxLength={2} value={form.country_code} onChange={e => setForm({...form, country_code: e.target.value.toUpperCase()})} data-testid="country-code-input" />
               </div>
               <div className="space-y-2"><Label>Currency</Label>
                 <Select value={form.currency} onValueChange={v => setForm({...form, currency: v})}>
