@@ -3,31 +3,31 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
 
-## Latest Changes (Iteration 54 - Feb 2026)
-- [x] Profile photo upload UI: circular avatar with hover overlay on UserEditDialog + child edit dialog
-- [x] Members/children list avatars show photo_url when available
-- [x] Child edit: typed parent search (Input filters by name/phone, selected parents shown as removable badges)
-- [x] Children at restricted locations show "Tracked" badge + Print Badge button for tracking
-- [x] Staff auto-guest: creating staff users auto-creates guest record for their campus (is_staff_guest=true)
+## Latest Changes (Iteration 55 - Feb 2026)
+- [x] Staff-guest profile linking: staff creation auto-creates linked guest record with user_id
+- [x] Guest/Parent Portal button now navigates to /portal (was non-functional)
+- [x] Country Code (ISO) field added to location forms for accurate badge map outlines
+- [x] Individual guest delete button on each guest card (was bulk-only)
+- [x] "National ID" renamed to "ID Number" across the app
+- [x] Group field removed from staff profiles (kept in guest/member add forms)
+- [x] Donor tag removed from user flags
+- [x] Kiosk locked mode: all exit options hidden (Exit link, Setup, Logout) — only Unlock visible
 
-## Changes (Iteration 53)
-- [x] Badge bg: dark default, white ONLY for kiosk. Real country outlines (world-map-country-shapes). CSV templates. Children import enhanced. Profile photo upload API.
-
-## Changes (Iterations 49-52)
-- [x] Kiosk QR fix, backend decomposition, component splitting, CallContext hooks, type hints, ternary cleanup
-- [x] Badge watermark, NFC symbol/CRUD/writing (director+), footer redesign
+## Previous Changes
+- Iterations 49-54: QR camera, backend decomposition, CallContext hooks, type hints, badge improvements (country watermark, NFC, footer), CSV templates, children import, photo upload, parent search, tracked children, staff auto-guest
 
 ## Architecture Notes
-- **Route Ordering**: Static routes BEFORE dynamic routes
-- **Auth Storage**: `secureStorage.js`
-- **Campus Isolation**: "All Locations" for System Admin/Admin/ED/Adviser only
-- **Photos**: Object storage primary, /app/backend/uploads/photos/ fallback
-- **NFC**: Stored on member/user records. Write=director+. Audit in nfc_write_log
-- **Country Outlines**: world-map-country-shapes, mapped via COUNTRY_TO_CODE in countryOutlines.js
+- **Route Ordering**: Static before dynamic
+- **Auth**: secureStorage.js
+- **Campus Isolation**: "All Locations" for admin/ED/adviser only
+- **NFC**: Member/user records, write=director+, audit in nfc_write_log
+- **Photos**: Object storage primary, local fallback
+- **Country Outlines**: world-map-country-shapes (ISO codes via country_code on locations)
+- **Staff-Guest Linking**: Guest records carry user_id for bidirectional link
 
-## Test Reports
-- Iterations 49-54: All 100%
+## Test Reports: Iterations 49-55 all 100%
 
 ## Pending
-- Wallet pass improvement (currently downloads PNG)
-- Future: Wave H5 SDK upgrade, server.py modularization
+- Wallet pass improvement
+- Admin-configurable group types (currently hardcoded MOCK_GROUPS)
+- Future: Wave H5 SDK, server.py modularization
