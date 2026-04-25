@@ -494,7 +494,7 @@ export default function AccessPage() {
                           </div>
                           <Badge variant={link.requires_approval ? 'secondary' : 'default'} className="text-[10px]">{link.requires_approval ? 'Needs Approval' : 'Auto-Approve'}</Badge>
                           <Button size="sm" variant="outline" className="text-xs" onClick={() => { const url = `${window.location.origin}/public-access/${link.token}`; navigator.clipboard.writeText(url); toast.success('Link copied!'); }} data-testid="copy-guest-link">Copy Link</Button>
-                          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => { await accessApi.deleteGuestLink(link.id); setGuestLinks(prev => prev.filter(l => l.id !== link.id)); toast.success('Deleted'); }}><XCircle size={13} /></Button>
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => { if (!window.confirm('Delete this guest link?')) return; await accessApi.deleteGuestLink(link.id); setGuestLinks(prev => prev.filter(l => l.id !== link.id)); toast.success('Deleted'); }}><XCircle size={13} /></Button>
                         </div>
                       </CardContent>
                     </Card>

@@ -21,6 +21,7 @@ import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
 import { toast } from 'sonner';
 import { emitDataChanged } from '../services/dataEvents';
+import { BulkDeleteConfirm } from '../components/BulkDeleteConfirm';
 
 const initials = (name) => (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
@@ -195,6 +196,7 @@ export default function UnifiedPeoplePage() {
   const [filterLocation, setFilterLocation] = useState('all');
   const [activeTab, setActiveTab] = useState('members');
   const [saving, setSaving] = useState(false);
+  const [bulkDeleteTarget, setBulkDeleteTarget] = useState(null); // { type, ids, label }
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -236,13 +238,13 @@ export default function UnifiedPeoplePage() {
   const executeBulk = async () => {
     const ids = [...selectedMemberIds];
     if (!ids.length) return;
+    if (bulkActionType === 'delete') {
+      setBulkDeleteTarget({ type: 'members', ids, label: 'members' });
+      return;
+    }
     setSaving(true);
     try {
-      if (bulkActionType === 'delete') {
-        await adminApi.bulkDeleteMembers(ids);
-        toast.success(`Deleted ${ids.length} members`);
-        fetchMembers();
-      } else if (bulkActionType === 'role' && bulkRole) {
+      if (bulkActionType === 'role' && bulkRole) {
         await adminApi.bulkUpdateMembers(ids, { role: bulkRole });
         toast.success(`Role updated for ${ids.length} members`);
         fetchMembers();
@@ -552,7 +554,7 @@ export default function UnifiedPeoplePage() {
             {selFamilies.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selFamilies} onClear={() => setSelFamilies(new Set())}
               onBulkEdit={() => setShowBulkFamilyEdit(true)}
               onBulkExport={() => exportToCSV(families.filter(f => selFamilies.has(f.id)), 'families-export.csv')}
-              onBulkDelete={async () => { if (!window.confirm(`Delete ${selFamilies.size} families?`)) return; try { await familiesApi.bulkDelete([...selFamilies]); setSelFamilies(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+              onBulkDelete={async () => { setBulkDeleteTarget({ type: 'families', ids: [...selFamilies], label: 'families' }); }}
             /></div>}
             <div className="space-y-3">
               {families.map(f => (
@@ -603,7 +605,7 @@ export default function UnifiedPeoplePage() {
             {selChildren.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selChildren} onClear={() => setSelChildren(new Set())}
               onBulkEdit={() => setShowBulkChildEdit(true)}
               onBulkExport={() => exportToCSV(children.filter(c => selChildren.has(c.id)), 'children-export.csv')}
-              onBulkDelete={async () => { if (!window.confirm(`Delete ${selChildren.size} children?`)) return; try { await childrenApi.bulkDelete([...selChildren]); setSelChildren(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+              onBulkDelete={async () => { setBulkDeleteTarget({ type: 'children', ids: [...selChildren], label: 'children' }); }}
             /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {children.map(c => {
@@ -664,7 +666,7 @@ export default function UnifiedPeoplePage() {
             </div>
             {selGuests.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selGuests} onClear={() => setSelGuests(new Set())}
               onBulkExport={() => exportToCSV(guests.filter(g => selGuests.has(g.id)), 'guests-export.csv')}
-              onBulkDelete={async () => { if (!window.confirm(`Delete ${selGuests.size} guests?`)) return; try { await guestsApi.bulkDelete([...selGuests]); setSelGuests(new Set()); fetchPeople(); toast.success('Deleted'); } catch (e) { toast.error(e.message || 'Failed'); } }}
+              onBulkDelete={async () => { setBulkDeleteTarget({ type: 'guests', ids: [...selGuests], label: 'guests' }); }}
             /></div>}
             <div className="space-y-2">
               {guests.map(g => (
@@ -1152,6 +1154,27 @@ export default function UnifiedPeoplePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Bulk Delete Confirmation */}
+      <BulkDeleteConfirm
+        open={!!bulkDeleteTarget}
+        onOpenChange={(o) => { if (!o) setBulkDeleteTarget(null); }}
+        count={bulkDeleteTarget?.ids?.length || 0}
+        itemType={bulkDeleteTarget?.label || 'items'}
+        onConfirm={async () => {
+          if (!bulkDeleteTarget) return;
+          const { type, ids } = bulkDeleteTarget;
+          try {
+            if (type === 'members') { await adminApi.bulkDeleteMembers(ids); emitDataChanged('members'); fetchMembers(); }
+            else if (type === 'children') { await childrenApi.bulkDelete(ids); emitDataChanged('children'); fetchPeople(); }
+            else if (type === 'families') { await familiesApi.bulkDelete(ids); emitDataChanged('families'); fetchPeople(); }
+            else if (type === 'guests') { await guestsApi.bulkDelete(ids); emitDataChanged('guests'); fetchPeople(); }
+            toast.success(`Deleted ${ids.length} ${bulkDeleteTarget.label}`);
+            setSelectedMemberIds(new Set()); setSelChildren(new Set()); setSelFamilies(new Set()); setSelGuests(new Set());
+          } catch (e) { toast.error(e.message || 'Delete failed'); }
+          setBulkDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }

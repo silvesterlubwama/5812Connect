@@ -98,6 +98,7 @@ export default function PeoplePage() {
   };
 
   const deleteGuest = async (id) => {
+    if (!window.confirm('Delete this guest?')) return;
     await guestsApi.delete(id);
     setGuests(prev => prev.filter(g => g.id !== id));
     toast.success('Guest removed');

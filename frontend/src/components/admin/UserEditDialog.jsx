@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { documentsApi } from '../../services/api';
 import api from '../../services/api';
 import { toast } from 'sonner';
+import { useUnsavedWarning, useFormDirty } from '../../hooks/useUnsavedWarning';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 const GROUPS = ['General', 'Staff', 'Volunteers', 'Youth', 'Women', 'Men', 'Children', 'Leadership'];
@@ -94,6 +95,8 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
 
   const isDirectorPlus = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(currentUserRole);
   const [nfcWriteStatus, setNfcWriteStatus] = useState('idle');
+  const formDirty = useFormDirty(editForm, { name: selectedUser?.name || '', email: selectedUser?.email || '' });
+  useUnsavedWarning(open && formDirty);
 
   const writeNfcTag = async () => {
     if (!('NDEFReader' in window)) { toast.error('NFC not supported. Use Chrome on Android.'); return; }

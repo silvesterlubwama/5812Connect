@@ -63,6 +63,7 @@ import { CallProvider } from './context/CallContext';
 import CallInterface from './components/CallInterface';
 import IncomingCallModal from './components/IncomingCallModal';
 import WalletBadgePage from './pages/WalletBadgePage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -146,20 +147,24 @@ function AppRoutes() {
 
 function App() {
   return (
-    <I18nProvider>
-      <AuthProvider>
-        <WebSocketProvider>
-          <CallProvider>
-            <BrowserRouter>
-              <AppRoutes />
-              <CallInterface />
-              <IncomingCallModal />
-              <Toaster />
-            </BrowserRouter>
-          </CallProvider>
-        </WebSocketProvider>
-      </AuthProvider>
-    </I18nProvider>
+    <ErrorBoundary>
+      <I18nProvider>
+        <AuthProvider>
+          <WebSocketProvider>
+            <CallProvider>
+              <BrowserRouter>
+                <ErrorBoundary>
+                  <AppRoutes />
+                </ErrorBoundary>
+                <CallInterface />
+                <IncomingCallModal />
+                <Toaster />
+              </BrowserRouter>
+            </CallProvider>
+          </WebSocketProvider>
+        </AuthProvider>
+      </I18nProvider>
+    </ErrorBoundary>
   );
 }
 
