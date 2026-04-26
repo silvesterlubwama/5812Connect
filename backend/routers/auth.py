@@ -138,6 +138,27 @@ async def logout() -> dict:
     return {"message": "Logged out successfully"}
 
 
+
+@router.post("/auth/sales-portal-login")
+async def sales_portal_login(data: dict) -> dict:
+    """Login for sales portal devices — uses last name + PIN."""
+    last_name = (data.get("last_name") or "").strip()
+    pin = (data.get("pin") or "").strip()
+    if not last_name or not pin:
+        raise HTTPException(status_code=400, detail="Last name and PIN required")
+    # Find user by last name (case-insensitive) and PIN
+    user = await db.users.find_one({
+        "name": {"$regex": f"\\b{last_name}$", "$options": "i"},
+        "pin": pin,
+        "status": "active",
+    }, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid last name or PIN")
+    token = create_token(user["id"])
+    return {"token": token, "name": user.get("name", ""), "id": user["id"], "role": user.get("role", "")}
+
+
+
 @router.post("/auth/google-session")
 async def google_auth_session(data: dict) -> dict:
     import httpx
@@ -162,6 +183,8 @@ async def google_auth_session(data: dict) -> dict:
         existing = await db.users.find_one({"email": email}, {"_id": 0})
         if existing:
             user_id = existing["id"]
+            if existing.get("status") == "suspended":
+                raise HTTPException(status_code=403, detail="Account suspended. Contact an administrator.")
             if picture and not existing.get("picture"):
                 await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
         else:
@@ -171,11 +194,22 @@ async def google_auth_session(data: dict) -> dict:
                 "phone": None, "national_id": None,
                 "password_hash": hash_password(str(uuid.uuid4())),
                 "role": "Guest", "status": "pending", "picture": picture,
+                "is_guest": True, "is_parent": False,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.users.insert_one(new_user)
-        token = create_token(user_id)
+            # Also create a guest record
+            await db.guests.insert_one({
+                "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email,
+                "user_id": user_id, "is_parent": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
         user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+        # Pending users get a restricted token — frontend must check status
+        if user.get("status") == "pending":
+            token = create_token(user_id)
+            return {"token": token, "user": user, "pending_approval": True}
+        token = create_token(user_id)
         return {"token": token, "user": user}
     except HTTPException:
         raise

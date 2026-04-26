@@ -64,7 +64,9 @@ import CallInterface from './components/CallInterface';
 import IncomingCallModal from './components/IncomingCallModal';
 import WalletBadgePage from './pages/WalletBadgePage';
 import HRPage from './pages/HRPage';
+import SalesPortalPage from './pages/SalesPortalPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { StaffRoute } from './components/RouteGuards';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -93,7 +95,8 @@ function AppRoutes() {
       <Route path="/marketplace" element={<PublicBookingsPage />} />
       <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
       <Route path="/badge/:token" element={<WalletBadgePage />} />
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+      <Route path="/sales-portal" element={<SalesPortalPage />} />
+      <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="members" element={<UnifiedPeoplePage />} />
