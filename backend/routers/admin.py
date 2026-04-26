@@ -66,7 +66,7 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    password = data.get("password") or "User@58:12"
+    password = data.get("password") or "Test@5812!"
     user_id = str(uuid.uuid4())
     user = {
         "id": user_id,
@@ -283,6 +283,27 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
         "password_reset_by": current_user["id"],
     }})
     await _audit(current_user["id"], "update", "password_reset", user_id)
+    # Send email notification to user about password reset
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "email": 1, "name": 1})
+    if user and user.get("email"):
+        try:
+            from email_helpers import send_notification_email
+            await send_notification_email(
+                user["email"],
+                "58:12 Global — Your Password Has Been Reset",
+                f"""<h2 style="color:#1a1a2e">Password Reset</h2>
+                <p>Hi {user.get('name', '')},</p>
+                <p>Your password has been reset by an administrator.</p>
+                <div style="background:#f8f9fa;border-left:4px solid #fbbf24;padding:12px 16px;margin:16px 0;border-radius:4px">
+                  <p style="font-size:14px;font-weight:600;margin:0">Your new password: <code>{new_password}</code></p>
+                </div>
+                <p style="font-size:13px;color:#666">Please log in and change your password immediately.</p>
+                <p style="margin-top:16px">
+                  <a href="https://5812-global.org" style="background:#1a1a2e;color:#fbbf24;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block">Log In Now</a>
+                </p>"""
+            )
+        except Exception as e:
+            logger.warning(f"Password reset email failed: {e}")
     return {"message": "Password reset successfully"}
 
 

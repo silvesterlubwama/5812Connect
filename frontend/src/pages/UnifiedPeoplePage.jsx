@@ -197,6 +197,9 @@ export default function UnifiedPeoplePage() {
   const [activeTab, setActiveTab] = useState('members');
   const [saving, setSaving] = useState(false);
   const [bulkDeleteTarget, setBulkDeleteTarget] = useState(null); // { type, ids, label }
+  const [editGuest, setEditGuest] = useState(null);
+  const [editGuestForm, setEditGuestForm] = useState({});
+  const [savingGuest, setSavingGuest] = useState(false);
 
   const downloadTemplate = async (type, filename) => {
     try {
@@ -440,6 +443,24 @@ export default function UnifiedPeoplePage() {
     } catch { toast.error('Import failed'); }
     finally { setImportLoading(false); }
   };
+
+  const openEditGuest = (g) => {
+    setEditGuest(g);
+    setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '' });
+  };
+
+  const saveEditGuest = async () => {
+    if (!editGuest) return;
+    setSavingGuest(true);
+    try {
+      await guestsApi.update(editGuest.id, editGuestForm);
+      setGuests(prev => prev.map(g => g.id === editGuest.id ? { ...g, ...editGuestForm } : g));
+      setEditGuest(null);
+      toast.success('Guest updated');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Update failed'); }
+    finally { setSavingGuest(false); }
+  };
+
 
   // Family/Child/Guest handlers
   const handleAddFamily = async (e) => { e.preventDefault(); setSaving(true); try { await familiesApi.create(familyForm); toast.success('Family added!'); setShowFamily(false); setFamilyForm({ family_name: '', primary_contact_name: '', primary_contact_email: '', primary_contact_phone: '', address: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
@@ -725,6 +746,7 @@ export default function UnifiedPeoplePage() {
                     <div className="flex items-center gap-2">
                       {g.is_parent && <Badge variant="outline" className="text-[10px] border-green-300 text-green-600">Parent</Badge>}
                       {g.referred_by && <Badge variant="secondary" className="text-[10px]">Ref: {g.referred_by}</Badge>}
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openEditGuest(g)} title="Edit" data-testid={`edit-guest-${g.id}`}><Eye size={13} /></Button>
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-guest-${g.id}`} onClick={async (e) => {
                         e.stopPropagation();
                         if (!window.confirm(`Delete guest "${g.name}"?`)) return;
@@ -1111,6 +1133,46 @@ export default function UnifiedPeoplePage() {
           <div className="flex gap-3 pt-2"><Button variant="outline" className="flex-1" onClick={() => setShowStaffImport(false)}>Cancel</Button><Button className="flex-1" disabled={importLoading || (!staffCsvData.trim() && !staffCsvFile)} onClick={handleStaffImport}>{importLoading ? 'Importing...' : 'Import'}</Button></div>
         </DialogContent>
       </Dialog>
+
+
+      {/* Edit Guest Dialog */}
+      <Dialog open={!!editGuest} onOpenChange={(o) => { if (!o) setEditGuest(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Guest: {editGuest?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label>Name *</Label><Input value={editGuestForm.name || ''} onChange={e => setEditGuestForm({...editGuestForm, name: e.target.value})} data-testid="edit-guest-name" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Phone</Label><Input value={editGuestForm.phone || ''} onChange={e => setEditGuestForm({...editGuestForm, phone: e.target.value})} /></div>
+              <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={editGuestForm.email || ''} onChange={e => setEditGuestForm({...editGuestForm, email: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Campus</Label>
+                <Select value={editGuestForm.location_id || '_none'} onValueChange={v => setEditGuestForm({...editGuestForm, location_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent><SelectItem value="_none">None</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label>Group</Label>
+                <Select value={editGuestForm.group || ''} onValueChange={v => setEditGuestForm({...editGuestForm, group: v})}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent>{MOCK_GROUPS.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" className="accent-primary" checked={editGuestForm.is_parent || false} onChange={e => setEditGuestForm({...editGuestForm, is_parent: e.target.checked})} /> Is Parent
+            </label>
+            <div className="space-y-1.5"><Label>Referred By</Label><Input value={editGuestForm.referred_by || ''} onChange={e => setEditGuestForm({...editGuestForm, referred_by: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Address</Label><Input value={editGuestForm.address || ''} onChange={e => setEditGuestForm({...editGuestForm, address: e.target.value})} /></div>
+            <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={editGuestForm.notes || ''} onChange={e => setEditGuestForm({...editGuestForm, notes: e.target.value})} /></div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditGuest(null)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveEditGuest} disabled={savingGuest} data-testid="save-guest-btn">{savingGuest ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
 
       {/* Bulk Edit Children Dialog */}
       <Dialog open={showBulkChildEdit} onOpenChange={setShowBulkChildEdit}>

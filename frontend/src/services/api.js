@@ -211,6 +211,7 @@ export const childrenApi = {
 export const guestsApi = {
   list: (params) => api.get('/guests', { params }),
   create: (data) => api.post('/guests', data),
+  update: (id, data) => api.put(`/guests/${id}`, data),
   delete: (id) => api.delete(`/guests/${id}`),
   bulkUpdate: (ids, updates) => api.put('/guests/bulk-update', { ids, updates }),
   bulkDelete: (ids) => api.post('/guests/bulk-delete', { ids }),
