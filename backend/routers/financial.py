@@ -376,8 +376,12 @@ async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_use
             raise HTTPException(status_code=403, detail="Only administrators can delete entries older than 30 days")
     
     await db.sales.delete_one({"id": sale_id})
+    # Restore stock for sold items
+    for item in (sale.get("items") or []):
+        if item.get("product_id"):
+            await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": item.get("qty", 1)}})
     await _audit(current_user["id"], "delete", "sale", sale_id)
-    return {"message": "Sale entry deleted"}
+    return {"message": "Sale entry deleted, stock restored"}
 
 
 # ========== SALES EXPORT / IMPORT ==========

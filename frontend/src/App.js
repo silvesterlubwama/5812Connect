@@ -63,6 +63,7 @@ import { CallProvider } from './context/CallContext';
 import CallInterface from './components/CallInterface';
 import IncomingCallModal from './components/IncomingCallModal';
 import WalletBadgePage from './pages/WalletBadgePage';
+import HRPage from './pages/HRPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 const ProtectedRoute = ({ children }) => {
@@ -124,6 +125,7 @@ function AppRoutes() {
         <Route path="volunteer-scheduling" element={<VolunteerSchedulingPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />
         <Route path="financial-apis" element={<FinancialApisPage />} />
+        <Route path="hr" element={<HRPage />} />
         <Route path="gdpr" element={<GdprSettingsPage />} />
         {/* Calling Feature Routes */}
         <Route path="call-history" element={<CallHistoryPage />} />

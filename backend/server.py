@@ -792,6 +792,8 @@ try:
     app.include_router(locations_router)
     app.include_router(settings_router)
     app.include_router(wave_router)
+    from routers.hr import router as hr_router
+    app.include_router(hr_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

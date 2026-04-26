@@ -415,6 +415,11 @@ export default function LocationsPage() {
                     <p className="text-xs text-muted-foreground">Only assigned staff can access</p></div>
                   <Switch checked={form.is_restricted} onCheckedChange={v => setForm({...form, is_restricted: v})} data-testid="is-restricted-toggle" />
                 </div>
+                <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Residential</p>
+                    <p className="text-xs text-muted-foreground">Allows residents (children, members) to be assigned</p></div>
+                  <Switch checked={form.allows_residents !== false} onCheckedChange={v => setForm({...form, allows_residents: v})} data-testid="allows-residents-toggle" />
+                </div>
               </div>
             )}
 

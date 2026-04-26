@@ -89,6 +89,7 @@ const NAV_SECTIONS = [
     roles: ADMIN_ROLES,
     items: [
       { to: '/locations', icon: MapPin, label: 'Campuses' },
+      { to: '/hr', icon: Users, label: 'HR & Payroll' },
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
       { to: '/email-templates', icon: Mail, label: 'Email Templates' },
       { to: '/settings', icon: Settings, label: 'Settings' },
@@ -264,10 +265,11 @@ export default function Layout() {
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
-    // Campus feature toggles — hide financial only if the specific campus has it disabled
-    if (item.to === '/financial' && activeCampus && !campusFeatures.financial_enabled) return false;
-    if (item.to === '/sales' && activeCampus && !campusFeatures.marketplace_enabled) return false;
+    // Campus feature toggles — hide financial when no campus selected or campus has it disabled
+    if (item.to === '/financial' && (!activeCampus || !campusFeatures.financial_enabled)) return false;
+    if (item.to === '/sales' && (!activeCampus || !campusFeatures.marketplace_enabled)) return false;
     if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
+    if (item.to === '/hr' && !activeCampus) return false; // HR requires campus context
     return true;
   };
 
@@ -301,8 +303,17 @@ export default function Layout() {
               </SelectTrigger>
               <SelectContent>
                 {isGlobalAdmin && <SelectItem value="__all__">All Locations</SelectItem>}
-                {(isGlobalAdmin ? campuses.filter(c => c.type !== 'sub-location') : campuses.filter(c => (user?.location_ids || []).includes(c.id))).map(c => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                {(isGlobalAdmin
+                  ? campuses.filter(c => c.type !== 'sub-location')
+                  : campuses.filter(c => {
+                      const userLocs = user?.location_ids || [];
+                      if (userLocs.includes(c.id)) return true;
+                      // Also show sub-locations under user's campuses
+                      if (c.parent_id && userLocs.includes(c.parent_id)) return true;
+                      return false;
+                    })
+                ).map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.type === 'sub-location' ? `  ${c.name}` : c.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

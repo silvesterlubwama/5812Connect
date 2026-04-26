@@ -186,7 +186,8 @@ export default function DashboardPage() {
         <StatCard title="Events This Month" value={stats?.events_this_month} sub={`${stats?.upcoming_events ?? 0} upcoming`} icon={Calendar} color="bg-blue-500" loading={loadingStats} onClick={() => navigate('/events')} />
       </div>
 
-      {/* Financial summary */}
+      {/* Financial summary — only when a campus is selected */}
+      {selectedCampus !== 'all' && (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
@@ -222,6 +223,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Alerts Row */}
       {!loadingStats && lowStockProducts.length > 0 && (

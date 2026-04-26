@@ -41,7 +41,7 @@ export default function AccessPage() {
   const [validateResult, setValidateResult] = useState(null);
   const [showValidateResult, setShowValidateResult] = useState(false);
 
-  const [residentForm, setResidentForm] = useState({ member_id: '', tags: '' });
+  const [residentForm, setResidentForm] = useState({ member_id: '', tags: '', search: '', searchResults: [] });
   const [staffForm, setStaffForm] = useState({ staff_id: '' });
   const [guestForm, setGuestForm] = useState({ guest_name: '', guest_phone: '', guest_id_number: '', purpose: '', visit_date: new Date().toISOString().split('T')[0], visit_time: '' });
   const [scanForm, setScanForm] = useState({ member_id: '', action: 'in', guest_request_id: '', guest_name: '' });
@@ -108,6 +108,20 @@ export default function AccessPage() {
 
   useEffect(() => { fetchLocationData(); }, [fetchLocationData]);
 
+  const searchResidents = async (q) => {
+    if (!q || q.length < 2) { setResidentForm(prev => ({ ...prev, searchResults: [] })); return; }
+    try {
+      const [memRes, childRes] = await Promise.all([
+        membersApi.list({ search: q, limit: 10 }),
+        api.get('/children', { params: { search: q, limit: 10 } }),
+      ]);
+      const mems = (memRes.data?.members || memRes.data || []).map(m => ({ id: m.id, name: m.name, type: m.role || 'member' }));
+      const children = (childRes.data || []).map(c => ({ id: c.id, name: c.name, type: 'child' }));
+      setResidentForm(prev => ({ ...prev, searchResults: [...mems, ...children] }));
+    } catch { setResidentForm(prev => ({ ...prev, searchResults: [] })); }
+  };
+
+
   const handleAssignResident = async (e) => {
     e.preventDefault();
     if (!residentForm.member_id) { toast.error('Select a person'); return; }
@@ -120,23 +134,6 @@ export default function AccessPage() {
       fetchLocationData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
-  };
-
-  const searchResidents = async (q) => {
-    if (q.length < 2) { setResidentForm(prev => ({ ...prev, searchResults: [] })); return; }
-    try {
-      const [childRes, guestRes, memberRes] = await Promise.all([
-        api.get('/children', { params: { search: q, limit: 10 } }),
-        api.get('/guests', { params: { search: q, limit: 10 } }),
-        api.get('/members', { params: { search: q, limit: 10 } }),
-      ]);
-      const results = [
-        ...(childRes.data || []).map(c => ({ id: c.id, name: c.name, type: 'child' })),
-        ...(guestRes.data || []).map(g => ({ id: g.id, name: g.name, type: 'guest' })),
-        ...((memberRes.data?.members || memberRes.data || []).map(m => ({ id: m.id, name: m.name, type: m.role || 'member' }))),
-      ];
-      setResidentForm(prev => ({ ...prev, searchResults: results }));
-    } catch (e) { console.warn(e.message || e); }
   };
 
   const handleAssignStaff = async (e) => {
@@ -512,11 +509,19 @@ export default function AccessPage() {
           <DialogHeader><DialogTitle>Assign Resident</DialogTitle></DialogHeader>
           <form onSubmit={handleAssignResident} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label>Member</Label>
-              <Select value={residentForm.member_id} onValueChange={v => setResidentForm({ ...residentForm, member_id: v })}>
-                <SelectTrigger data-testid="resident-member-select"><SelectValue placeholder="Select member" /></SelectTrigger>
-                <SelectContent>{members.map(m => <SelectItem key={m.id} value={m.id}>{m.name} ({m.role})</SelectItem>)}</SelectContent>
-              </Select>
+              <Label>Search by name</Label>
+              <Input placeholder="Type name to search members & children..." value={residentForm.search || ''} onChange={e => { setResidentForm({ ...residentForm, search: e.target.value }); searchResidents(e.target.value); }} data-testid="resident-search-input" />
+              {(residentForm.searchResults || []).length > 0 && (
+                <div className="max-h-40 overflow-y-auto border rounded-lg p-1 space-y-0.5">
+                  {(residentForm.searchResults || []).map(r => (
+                    <button key={r.id} type="button" className={`w-full text-left p-2 rounded text-sm hover:bg-accent/50 ${residentForm.member_id === r.id ? 'bg-primary/10 font-medium' : ''}`}
+                      onClick={() => setResidentForm({ ...residentForm, member_id: r.id, search: r.name })}>
+                      {r.name} <span className="text-xs text-muted-foreground capitalize">({r.type})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {residentForm.member_id && <p className="text-xs text-primary">Selected: {residentForm.search}</p>}
             </div>
             <div className="space-y-2">
               <Label>Tags (comma separated)</Label>
