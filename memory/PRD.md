@@ -1,22 +1,22 @@
 # 58:12 Connect - Product Requirements
 
 ## Overview
-Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badges, HR/payroll, sales portal, and PBX integration.
+Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badges, HR/payroll, sales portal, customer accounts, and PBX integration.
 
-## Latest Changes (Iteration 68 - Feb 2026)
-- [x] **Security Fix**: Google Auth new signups get pending status + pending_approval flag, auto-create guest record. Suspended users blocked (403).
-- [x] **Guest/Pending Route Guard**: StaffRoute redirects Guest/pending users to /portal. Full app only accessible to staff+.
-- [x] **Sales Portal**: /sales-portal with PIN+last name login, product grid, cart, sale completion, device lock (admin-password-only unlock)
-- [x] **Portal Self-Service**: Badge display + PDF download on portal dashboard for all users
-- [x] **Portal Bug Fixes**: Variable names corrected (t→c, ev→e in PortalDashboard)
-- [x] **Kiosk Lock**: No exit points when locked (Setup/Logout/Exit hidden)
+## Latest Changes (Iteration 69 - Feb 2026)
+- [x] Customer Accounts: CRUD at /api/customers with auto-guest linking (email/phone match)
+- [x] Customer search by name/phone/email
+- [x] Customer purchase history tracking (total_purchases, total_spent auto-updated on sale)
+- [x] Sales linked to customers via customer_id on SaleCreate model
+- [x] Sales portal customer lookup in cart section
+- [x] customersApi frontend bindings
 
-## Previous (Iterations 49-67)
-Profile PDF, sub-location accounts, HR module, financial campus isolation, dashboard actions, email notifications, safety features, import fixes, badges, venue/group management.
+## Previous (Iteration 68)
+- Security: Google Auth pending status, StaffRoute guard, guest portal restriction
+- Sales Portal: PIN+last name login, product grid, cart, lock mode
+- Portal: badge + PDF self-service
 
-## Architecture
-- **Route Guards**: StaffRoute (redirects guests to portal), AdminRoute (admin-only pages)
-- **Sales Portal**: Standalone page at /sales-portal with PIN+last name auth via /api/auth/sales-portal-login
-- **Google Auth Security**: New users → Guest role, pending status, auto guest record
+## Completed Feature Set (Iterations 49-69)
+Multi-campus RBAC, Financial management (sub-location accounts, customer accounts), Dashboard actions, Email notifications, Import/export with templates, NFC badges (read/write), Wallet badges, Profile photos + PDF, Cascade deletions, Error boundary, Bulk delete safeguards, WebRTC calling, Chat/AI, Kiosk check-in (QR/NFC/PIN), Programme/Outreach, Venue management, Group types, HR/Payroll (salaries/payslips/contracts/docs), Sales Portal, Customer Accounts, Route Guards.
 
-## Test Reports: Iterations 49-68 all passed (68: 17/17 backend, 100% frontend)
+## Test Reports: Iterations 49-69 all passed (69: 17/17 backend, 100% frontend)
