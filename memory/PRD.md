@@ -1,22 +1,17 @@
 # 58:12 Connect - Product Requirements
 
 ## Overview
-Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badges, HR/payroll, sales portal, customer accounts, and PBX integration.
+Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badges, HR/payroll, sales portal, restricted access control, and PBX integration.
 
-## Latest Changes (Iteration 69 - Feb 2026)
-- [x] Customer Accounts: CRUD at /api/customers with auto-guest linking (email/phone match)
-- [x] Customer search by name/phone/email
-- [x] Customer purchase history tracking (total_purchases, total_spent auto-updated on sale)
-- [x] Sales linked to customers via customer_id on SaleCreate model
-- [x] Sales portal customer lookup in cart section
-- [x] customersApi frontend bindings
+## Latest Changes (Iteration 71 - Feb 2026)
+- [x] Resident assignment: batch add (member_ids array), resolves from members/children/guests, auto-issues access badge
+- [x] Eligible residents: includes guests + search by name parameter
+- [x] Public guest access request: no auth, creates guest profile, auto-issues temp badge on approval
+- [x] Convert guest pass to resident: director+ converts temp pass to permanent residency
+- [x] Kiosk access validation: POST /api/access/validate checks QR/NFC/fingerprint against resident/staff/guest access
+- [x] Fingerprint database: CRUD at /api/access/fingerprints for WebAuthn credential storage
 
-## Previous (Iteration 68)
-- Security: Google Auth pending status, StaffRoute guard, guest portal restriction
-- Sales Portal: PIN+last name login, product grid, cart, lock mode
-- Portal: badge + PDF self-service
+## Completed Feature Set (Iterations 49-71)
+Multi-campus RBAC, Financial management (sub-location accounts, customer accounts), Dashboard actions, Email notifications, Import/export, NFC badges (read/write), Wallet badges, Profile photos + PDF, Cascade deletions, Error boundary, WebRTC calling, Chat/AI, Kiosk (QR/NFC/PIN/phone-last-4/fingerprint), Programme/Outreach, Venue management, Group types, HR/Payroll, Sales Portal, Customer Accounts, Route Guards, Restricted Access Control with fingerprint database.
 
-## Completed Feature Set (Iterations 49-69)
-Multi-campus RBAC, Financial management (sub-location accounts, customer accounts), Dashboard actions, Email notifications, Import/export with templates, NFC badges (read/write), Wallet badges, Profile photos + PDF, Cascade deletions, Error boundary, Bulk delete safeguards, WebRTC calling, Chat/AI, Kiosk check-in (QR/NFC/PIN), Programme/Outreach, Venue management, Group types, HR/Payroll (salaries/payslips/contracts/docs), Sales Portal, Customer Accounts, Route Guards.
-
-## Test Reports: Iterations 49-69 all passed (69: 17/17 backend, 100% frontend)
+## Test Reports: Iterations 49-71 all passed (71: 21/21 backend, 100% frontend)
