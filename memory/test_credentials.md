@@ -4,7 +4,9 @@
 - **Email**: admin@5812uganda.org
 - **Password**: Admin@5812
 - **Role**: admin
-- **Extension**: 2450 (assigned during testing)
+
+## Default Password for New Users
+- **Password**: Test@5812!
 
 ## Login Notes
 - Login uses `identifier` field (not `email` directly)
@@ -22,7 +24,6 @@
 ## Calling System
 - Extension 2450 assigned to admin user
 - Dialer accessible via green phone icon in header
-- Extensions must be assigned before users appear in dialer contacts
 
 ## SIP/PBX Configuration
 - **Provider**: RingTele / SkySwitch
