@@ -806,16 +806,36 @@ async def kiosk_lookup(identifier: str):
 
 @router.post("/kiosk/pin-checkin")
 async def kiosk_pin_checkin(data: dict):
-    """Kiosk PIN-based check-in/out (no auth required)"""
+    """Kiosk PIN or phone-last-4 based check-in/out (no auth required)"""
     pin = data.get("pin", "").strip()
     event_id = data.get("event_id")
     event_name = data.get("event_name", "")
     action = data.get("action", "checkin")
     if not pin:
-        raise HTTPException(status_code=400, detail="PIN required")
+        raise HTTPException(status_code=400, detail="PIN or phone digits required")
+    # Try PIN match first, then phone-last-4
     member = await db.members.find_one({"pin": pin}, {"_id": 0})
+    if not member and len(pin) >= 4:
+        # Try matching last 4 digits of phone
+        phone_regex = f"{pin}$"
+        member = await db.members.find_one({"phone": {"$regex": phone_regex}}, {"_id": 0})
+        if not member:
+            # Also check users collection
+            user = await db.users.find_one({"phone": {"$regex": phone_regex}, "status": "active"}, {"_id": 0, "password_hash": 0})
+            if user:
+                member = await db.members.find_one({"user_id": user["id"]}, {"_id": 0})
+                if not member:
+                    # Create a temporary member entry for check-in
+                    member = {"id": user["id"], "name": user.get("name", ""), "role": user.get("role", "Guest"), "phone": user.get("phone", "")}
+            if not member:
+                # Check guests
+                guest = await db.guests.find_one({"phone": {"$regex": phone_regex}}, {"_id": 0})
+                if guest:
+                    member = {"id": guest["id"], "name": guest.get("name", ""), "role": "guest", "phone": guest.get("phone", "")}
     if not member:
-        raise HTTPException(status_code=404, detail="Invalid PIN")
+        raise HTTPException(status_code=404, detail="No match found for this PIN or phone number")
+    if action == "lookup":
+        return {"member_name": member.get("name"), "member_id": member.get("id"), "role": member.get("role", ""), "type": member.get("role", "member")}
     if action == "checkout":
         last_ci = await db.checkins.find_one(
             {"member_id": member["id"], "check_out_time": None},

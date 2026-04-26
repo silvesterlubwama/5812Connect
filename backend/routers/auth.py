@@ -89,12 +89,22 @@ async def visitor_register(data: dict) -> dict:
 
 @router.post("/auth/login")
 async def login(data: UserLogin) -> dict:
-    identifier = data.identifier.strip().lower()
+    identifier = data.identifier.strip()
+    identifier_lower = identifier.lower()
+    # Build flexible lookup — exact match on email, phone (with normalization), national_id
+    phone_variants = [identifier]
+    # Handle phone number normalization (e.g. 0700... → +256700...)
+    if identifier.startswith('+'):
+        phone_variants.append(identifier.lstrip('+'))
+        if len(identifier) > 4:
+            phone_variants.append('0' + identifier[-9:])  # +256700... → 0700...
+    elif identifier.startswith('0') and len(identifier) >= 9:
+        phone_variants.append('+256' + identifier[1:])  # 0700... → +256700...
     user = await db.users.find_one({
         "$or": [
-            {"email": identifier},
-            {"phone": identifier},
-            {"national_id": data.identifier.strip()},
+            {"email": identifier_lower},
+            {"phone": {"$in": phone_variants}},
+            {"national_id": identifier},
         ]
     })
     if not user or not verify_password(data.password, user.get("password_hash", "")):

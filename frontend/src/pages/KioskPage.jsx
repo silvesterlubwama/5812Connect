@@ -402,9 +402,19 @@ export default function KioskPage() {
     setLookupLoading(true);
     setFoundMember(null);
     try {
+      // Short numeric input (4-6 digits) → try PIN / phone-last-4 first
+      if (/^\d{4,6}$/.test(lookupId.trim())) {
+        try {
+          const pinRes = await api.post('/kiosk/pin-checkin', { pin: lookupId.trim(), action: 'lookup' });
+          if (pinRes.data?.member_name) {
+            setFoundMember({ id: pinRes.data.member_id || pinRes.data.checkin?.member_id, name: pinRes.data.member_name, role: pinRes.data.type || 'member' });
+            return;
+          }
+        } catch { /* fall through to regular lookup */ }
+      }
       const res = await kioskApi.lookup(lookupId);
       setFoundMember(res.data);
-    } catch { toast.error('Member not found'); }
+    } catch { toast.error('No match found. Try your PIN, last 4 of phone, or full email.'); }
     finally { setLookupLoading(false); }
   };
 
@@ -886,12 +896,12 @@ export default function KioskPage() {
         <Card className="w-full max-w-md shadow rounded-xl">
           <CardHeader className="text-center space-y-3">
             <div className="mx-auto w-20 h-20 rounded-full bg-primary flex items-center justify-center"><CreditCard size={36} className="text-primary-foreground" /></div>
-            <CardTitle className="text-2xl font-heading">ID Check-In</CardTitle>
-            <CardDescription>Enter National ID, phone, or email</CardDescription>
+            <CardTitle className="text-2xl font-heading">Check-In</CardTitle>
+            <CardDescription>Enter PIN, last 4 digits of phone, ID number, or email</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <form onSubmit={handleIdLookup} className="space-y-3">
-              <Input className="h-12 text-lg" placeholder="ID, phone, or email" value={lookupId} onChange={e => setLookupId(e.target.value)} required data-testid="kiosk-id-input" />
+              <Input className="h-12 text-lg" placeholder="PIN, last 4 of phone, or email" value={lookupId} onChange={e => setLookupId(e.target.value)} required data-testid="kiosk-id-input" />
               <Button type="submit" className="w-full h-12 gap-2" disabled={lookupLoading}><Search size={18} /> {lookupLoading ? 'Looking...' : 'Find'}</Button>
             </form>
             {foundMember && (
