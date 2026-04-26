@@ -55,10 +55,10 @@ async def notify_role_level(min_level: int, notification_type: str, data: dict):
 
 @router.post("/access/residents")
 async def assign_resident(data: dict, current_user: dict = Depends(get_current_user)):
-    """Assign a child/person as resident of a restricted sub-location"""
-    member_id = data.get("member_id")
+    """Assign a child/person/guest as resident of a restricted sub-location. Supports multiple IDs."""
+    member_ids = data.get("member_ids") or ([data["member_id"]] if data.get("member_id") else [])
     location_id = data.get("location_id")
-    tags = data.get("tags", [])  # e.g. ["special_needs", "shelter"]
+    tags = data.get("tags", [])
 
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
     if not loc or not loc.get("is_restricted"):
@@ -66,24 +66,60 @@ async def assign_resident(data: dict, current_user: dict = Depends(get_current_u
     if not loc.get("allows_residents", True):
         raise HTTPException(status_code=400, detail="This location does not allow residents")
 
-    doc = {
-        "id": f"res_{str(uuid.uuid4())[:8]}",
-        "member_id": member_id,
-        "location_id": location_id,
-        "tags": tags,
-        "status": "active",
-        "assigned_by": current_user["id"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.residents.insert_one(doc)
-    doc.pop("_id", None)
-    # Update member record
-    await db.members.update_one(
-        {"id": member_id},
-        {"$set": {"is_resident": True, "resident_location_id": location_id, "resident_tags": tags}}
-    )
-    await _audit(current_user["id"], "create", "resident_assignment", doc["id"])
-    return doc
+    created = []
+    for member_id in member_ids:
+        # Skip if already a resident
+        existing = await db.residents.find_one({"member_id": member_id, "location_id": location_id, "status": "active"})
+        if existing:
+            continue
+        # Resolve name from members, children, or guests
+        name = ""
+        source = "member"
+        person = await db.members.find_one({"id": member_id}, {"_id": 0, "name": 1, "role": 1})
+        if person:
+            name = person.get("name", "")
+        else:
+            child = await db.children.find_one({"id": member_id}, {"_id": 0, "name": 1})
+            if child:
+                name = child.get("name", ""); source = "child"
+                await db.children.update_one({"id": member_id}, {"$set": {"is_resident": True, "resident_location_id": location_id}})
+            else:
+                guest = await db.guests.find_one({"id": member_id}, {"_id": 0, "name": 1})
+                if guest:
+                    name = guest.get("name", ""); source = "guest"
+                    await db.guests.update_one({"id": member_id}, {"$set": {"is_resident": True, "resident_location_id": location_id}})
+        doc = {
+            "id": f"res_{str(uuid.uuid4())[:8]}",
+            "member_id": member_id,
+            "member_name": name,
+            "source": source,
+            "location_id": location_id,
+            "tags": tags,
+            "status": "active",
+            "assigned_by": current_user["id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.residents.insert_one(doc)
+        doc.pop("_id", None)
+        created.append(doc)
+        # Update member record if it exists
+        await db.members.update_one(
+            {"id": member_id},
+            {"$set": {"is_resident": True, "resident_location_id": location_id, "resident_tags": tags}}
+        )
+        # Auto-issue access badge for residents (unless staff badge exists)
+        existing_badge = await db.wallet_badges.find_one({"member_id": member_id})
+        if not existing_badge:
+            badge_token = uuid.uuid4().hex[:16]
+            await db.wallet_badges.insert_one({
+                "id": f"wbadge_{badge_token}", "token": badge_token,
+                "member_id": member_id, "name": name, "role": "Resident",
+                "qr_data": member_id, "location_name": loc.get("name", ""),
+                "country": loc.get("country", ""), "country_code": loc.get("country_code", ""),
+                "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+            })
+    await _audit(current_user["id"], "create", "resident_assignment", location_id, {"count": len(created)})
+    return created if len(created) != 1 else created[0] if created else {"message": "Already residents"}
 
 
 @router.get("/access/residents")
@@ -455,46 +491,37 @@ async def extend_guest_pass(pass_id: str, data: dict, current_user: dict = Depen
 
 
 @router.get("/access/eligible-residents/{location_id}")
-async def list_eligible_residents(location_id: str, current_user: dict = Depends(get_current_user)):
-    """Return people eligible to be added as residents to a restricted sub-location.
-    Only staff, children, or people in that campus can be selected.
-    EDs and Advisers belong to all so are always eligible."""
+async def list_eligible_residents(location_id: str, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Return people eligible as residents: members, children, AND guests in the campus."""
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
-
     parent_campus_id = loc.get("parent_id") or location_id
-    GLOBAL_ROLES = {"admin", "system_admin", "executive director", "adviser", "director"}
 
-    # Members in the campus or with global roles
-    members = await db.members.find({
-        "$or": [
-            {"location_id": parent_campus_id},
-            {"location_ids": parent_campus_id},
-            {"location_id": location_id},
-            {"location_ids": location_id},
-        ]
-    }, {"_id": 0, "id": 1, "name": 1, "role": 1, "location_id": 1}).to_list(500)
+    member_q = {"$or": [{"location_id": parent_campus_id}, {"location_ids": parent_campus_id}, {"location_id": location_id}]}
+    child_q = {"$or": [{"location_id": parent_campus_id}, {"location_id": location_id}]}
+    guest_q = {"$or": [{"location_id": parent_campus_id}, {"location_id": location_id}, {"location_id": {"$in": [None, ""]}}]}
+    if search:
+        name_filter = {"name": {"$regex": search, "$options": "i"}}
+        member_q = {"$and": [member_q, name_filter]}
+        child_q = {"$and": [child_q, name_filter]}
+        guest_q = {"$and": [guest_q, name_filter]}
+
+    members = await db.members.find(member_q, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(200)
+    children = await db.children.find(child_q, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+    guests = await db.guests.find(guest_q, {"_id": 0, "id": 1, "name": 1, "phone": 1, "is_parent": 1}).to_list(200)
 
     # Add global role users
-    global_users = await db.users.find(
-        {"role": {"$regex": "^(admin|system_admin|Executive Director|Adviser|Director)$", "$options": "i"}},
-        {"_id": 0, "id": 1, "name": 1, "role": 1}
-    ).to_list(100)
-
-    # Merge unique
+    global_q = {"role": {"$regex": "^(admin|system_admin|Executive Director|Adviser|Director)$", "$options": "i"}}
+    if search:
+        global_q["name"] = {"$regex": search, "$options": "i"}
+    global_users = await db.users.find(global_q, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(100)
     seen = {m["id"] for m in members}
     for u in global_users:
         if u["id"] not in seen:
-            members.append(u)
-            seen.add(u["id"])
+            members.append(u); seen.add(u["id"])
 
-    # Also include children in the campus
-    children = await db.children.find({
-        "$or": [{"location_id": parent_campus_id}, {"location_id": location_id}]
-    }, {"_id": 0, "id": 1, "name": 1}).to_list(200)
-
-    return {"members": members, "children": children}
+    return {"members": members, "children": children, "guests": guests}
 
 
 # ========== ACCESS CONTROL API CONNECTIONS ==========
@@ -615,3 +642,181 @@ async def submit_guest_access_request(token: str, data: dict):
     request_doc.pop("_id", None)
     await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
     return request_doc
+
+
+
+# ========== GUEST ACCESS REQUEST ENHANCEMENTS ==========
+
+@router.post("/public/access-request/{token}")
+async def submit_guest_access_request_v2(token: str, data: dict):
+    """Public endpoint — guest submits access request, auto-creates guest profile."""
+    # This override handles the full flow: creates guest profile + request
+    link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
+    if not link:
+        raise HTTPException(status_code=404, detail="Invalid or expired link")
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    phone = (data.get("phone") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    # Check if guest already exists (by email or phone)
+    guest = None
+    if email:
+        guest = await db.guests.find_one({"email": email}, {"_id": 0})
+    if not guest and phone:
+        guest = await db.guests.find_one({"phone": phone}, {"_id": 0})
+    if not guest:
+        guest = {
+            "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email,
+            "phone": phone, "location_id": link.get("location_id", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.guests.insert_one(guest)
+        guest.pop("_id", None)
+    request_doc = {
+        "id": f"areq_{uuid.uuid4().hex[:8]}",
+        "link_id": link["id"], "guest_id": guest["id"],
+        "guest_name": name, "guest_email": email, "guest_phone": phone,
+        "purpose": data.get("purpose", ""), "visit_date": data.get("visit_date", ""),
+        "location_id": link.get("location_id"), "space_name": link.get("space_name"),
+        "status": "pending" if link.get("requires_approval") else "approved",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guest_access_requests.insert_one(request_doc)
+    request_doc.pop("_id", None)
+    await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
+    # If auto-approved, issue temporary badge
+    if request_doc["status"] == "approved":
+        badge_token = uuid.uuid4().hex[:16]
+        from datetime import timedelta
+        valid_until = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()[:10]
+        await db.access_guest_passes.insert_one({
+            "id": f"gp_{uuid.uuid4().hex[:8]}", "guest_id": guest["id"],
+            "guest_name": name, "guest_phone": phone,
+            "location_id": link.get("location_id"), "badge_token": badge_token,
+            "valid_until": valid_until, "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        request_doc["badge_token"] = badge_token
+        request_doc["valid_until"] = valid_until
+    return request_doc
+
+
+@router.put("/access/guest-passes/{pass_id}/convert-to-resident")
+async def convert_pass_to_resident(pass_id: str, current_user: dict = Depends(get_current_user)):
+    """Convert a temporary guest pass to permanent residency."""
+    if get_role_level(current_user.get("role", "")) < 8:
+        raise HTTPException(status_code=403, detail="Director+ required")
+    gp = await db.access_guest_passes.find_one({"id": pass_id}, {"_id": 0})
+    if not gp:
+        raise HTTPException(status_code=404, detail="Pass not found")
+    guest_id = gp.get("guest_id")
+    location_id = gp.get("location_id")
+    if not guest_id or not location_id:
+        raise HTTPException(status_code=400, detail="Pass missing guest or location")
+    # Create resident record
+    existing = await db.residents.find_one({"member_id": guest_id, "location_id": location_id, "status": "active"})
+    if not existing:
+        res_doc = {
+            "id": f"res_{uuid.uuid4().hex[:8]}", "member_id": guest_id,
+            "member_name": gp.get("guest_name", ""), "source": "guest_pass_conversion",
+            "location_id": location_id, "tags": [], "status": "active",
+            "assigned_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.residents.insert_one(res_doc)
+    await db.guests.update_one({"id": guest_id}, {"$set": {"is_resident": True, "resident_location_id": location_id}})
+    await db.access_guest_passes.update_one({"id": pass_id}, {"$set": {"status": "converted_to_resident", "converted_at": datetime.now(timezone.utc).isoformat()}})
+    await _audit(current_user["id"], "update", "convert_to_resident", pass_id)
+    return {"message": "Pass converted to permanent residency"}
+
+
+# ========== KIOSK ACCESS VALIDATION ==========
+
+@router.post("/access/validate")
+async def validate_access(data: dict, current_user: dict = Depends(get_current_user)):
+    """Validate whether a person (by QR, NFC serial, fingerprint, or ID) has access to a restricted location."""
+    location_id = data.get("location_id", "")
+    qr_data = data.get("qr_data", "")
+    nfc_serial = data.get("nfc_serial", "")
+    fingerprint_id = data.get("fingerprint_id", "")
+    member_id = data.get("member_id", "")
+
+    person_id = member_id
+    person_name = ""
+
+    # Resolve person from QR/NFC/fingerprint
+    if qr_data and not person_id:
+        person_id = qr_data
+    if nfc_serial and not person_id:
+        tag_owner = await db.members.find_one({"nfc_tags.serial_number": nfc_serial}, {"_id": 0, "id": 1, "name": 1})
+        if tag_owner:
+            person_id = tag_owner["id"]; person_name = tag_owner.get("name", "")
+    if fingerprint_id and not person_id:
+        fp = await db.fingerprints.find_one({"credential_id": fingerprint_id}, {"_id": 0, "user_id": 1})
+        if fp:
+            person_id = fp["user_id"]
+
+    if not person_id:
+        return {"allowed": False, "reason": "No identification provided"}
+
+    # Resolve name
+    if not person_name:
+        for coll in [db.members, db.users, db.children, db.guests]:
+            doc = await coll.find_one({"id": person_id}, {"_id": 0, "name": 1})
+            if doc:
+                person_name = doc.get("name", ""); break
+
+    # Check 1: Is this person a resident of this location?
+    resident = await db.residents.find_one({"member_id": person_id, "location_id": location_id, "status": "active"})
+    if resident:
+        return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "resident", "valid_until": "permanent"}
+
+    # Check 2: Staff with access pass for this location
+    staff_pass = await db.staff_passes.find_one({"staff_id": person_id, "location_id": location_id, "status": "active"})
+    if staff_pass:
+        return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "staff", "valid_until": staff_pass.get("valid_until", "permanent")}
+
+    # Check 3: Active guest pass for this location
+    guest_pass = await db.access_guest_passes.find_one({"$or": [{"guest_id": person_id}, {"guest_request_id": person_id}], "location_id": location_id, "status": "active"})
+    if guest_pass:
+        valid_until = guest_pass.get("valid_until", "")
+        if valid_until and valid_until < datetime.now(timezone.utc).isoformat()[:10]:
+            return {"allowed": False, "person_id": person_id, "person_name": person_name, "reason": "Guest pass expired"}
+        return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "guest_pass", "valid_until": valid_until}
+
+    return {"allowed": False, "person_id": person_id, "person_name": person_name, "reason": "No access authorization for this location"}
+
+
+# ========== FINGERPRINT DATABASE ==========
+
+@router.post("/access/fingerprints")
+async def register_fingerprint(data: dict, current_user: dict = Depends(require_staff)):
+    """Register a fingerprint credential for a user."""
+    user_id = data.get("user_id") or current_user["id"]
+    credential_id = data.get("credential_id", "")
+    if not credential_id:
+        raise HTTPException(status_code=400, detail="credential_id required")
+    doc = {
+        "id": f"fp_{uuid.uuid4().hex[:8]}",
+        "user_id": user_id,
+        "credential_id": credential_id,
+        "public_key": data.get("public_key", ""),
+        "label": data.get("label", "Fingerprint"),
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+        "registered_by": current_user["id"],
+    }
+    await db.fingerprints.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.get("/access/fingerprints/{user_id}")
+async def list_user_fingerprints(user_id: str, current_user: dict = Depends(get_current_user)):
+    fps = await db.fingerprints.find({"user_id": user_id}, {"_id": 0}).to_list(10)
+    return fps
+
+
+@router.delete("/access/fingerprints/{fp_id}")
+async def delete_fingerprint(fp_id: str, current_user: dict = Depends(require_staff)):
+    await db.fingerprints.delete_one({"id": fp_id})
+    return {"message": "Fingerprint removed"}
