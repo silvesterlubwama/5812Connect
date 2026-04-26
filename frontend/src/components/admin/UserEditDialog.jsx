@@ -176,6 +176,19 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     try { await documentsApi.delete(docId); setMemberDocs(prev => prev.filter(d => d.id !== docId)); toast.success('Document deleted'); } catch { toast.error('Delete failed'); }
   };
 
+  const downloadProfilePdf = async () => {
+    const memberId = selectedUser?.member_id || selectedUser?.id;
+    if (!memberId) return;
+    try {
+      const res = await api.get(`/members/${memberId}/profile-pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a'); a.href = url; a.download = `profile-${(selectedUser?.name || 'user').replace(/\s/g, '_')}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Profile PDF downloaded');
+    } catch { toast.error('PDF download failed'); }
+  };
+
+
   const submitDocRequest = async () => {
     if (!selectedUser) return;
     try {
@@ -216,8 +229,13 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Edit Profile: {selectedUser?.name}</DialogTitle>
-          <DialogDescription>Full member profile, account settings, and documents</DialogDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <DialogTitle>Edit Profile: {selectedUser?.name}</DialogTitle>
+              <DialogDescription>Full member profile, account settings, and documents</DialogDescription>
+            </div>
+            <Button size="sm" variant="outline" className="gap-1.5 text-xs shrink-0" onClick={downloadProfilePdf} data-testid="download-profile-pdf"><Download size={12} /> PDF</Button>
+          </div>
         </DialogHeader>
         <Tabs defaultValue="profile" className="mt-2">
           <TabsList className="w-full grid grid-cols-5">

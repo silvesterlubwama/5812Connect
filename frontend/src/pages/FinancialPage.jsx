@@ -78,6 +78,7 @@ export default function FinancialPage() {
   const [assetForm, setAssetForm] = useState({ name: '', value: 0, category: 'equipment', purchase_date: '', depreciation_years: 5 });
   const [showApprovalComment, setShowApprovalComment] = useState(null);
   const [approvalComment, setApprovalComment] = useState('');
+  const [subAccounts, setSubAccounts] = useState(null);
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
@@ -114,7 +115,7 @@ export default function FinancialPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); }, []);
+  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); }, []);
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const fetchPending = async () => {
@@ -310,6 +311,7 @@ export default function FinancialPage() {
         <TabsList>
           <TabsTrigger value="donations" data-testid="tab-donations">Donations</TabsTrigger>
           <TabsTrigger value="expenses" data-testid="tab-expenses">Expenses</TabsTrigger>
+          <TabsTrigger value="accounts" data-testid="tab-accounts">Accounts</TabsTrigger>
           <TabsTrigger value="balance" data-testid="tab-balance" onClick={fetchBalanceSheet}>Balance Sheet</TabsTrigger>
           <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
         </TabsList>
@@ -514,6 +516,38 @@ export default function FinancialPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Sub-Location Accounts Tab */}
+        <TabsContent value="accounts" className="mt-4 space-y-4">
+          {subAccounts ? (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <Card className="rounded-xl bg-green-50 dark:bg-green-950/20 border-green-200"><CardContent className="p-4 text-center"><p className="text-xs text-green-600 font-medium">Campus Income</p><p className="text-lg font-bold text-green-700">{(subAccounts.campus_total_income || 0).toLocaleString()}</p></CardContent></Card>
+                <Card className="rounded-xl bg-red-50 dark:bg-red-950/20 border-red-200"><CardContent className="p-4 text-center"><p className="text-xs text-red-600 font-medium">Campus Expenses</p><p className="text-lg font-bold text-red-700">{(subAccounts.campus_total_expenses || 0).toLocaleString()}</p></CardContent></Card>
+                <Card className="rounded-xl bg-blue-50 dark:bg-blue-950/20 border-blue-200"><CardContent className="p-4 text-center"><p className="text-xs text-blue-600 font-medium">Campus Balance</p><p className="text-lg font-bold text-blue-700">{(subAccounts.campus_balance || 0).toLocaleString()}</p></CardContent></Card>
+              </div>
+              <Card className="rounded-xl shadow-soft">
+                <CardContent className="p-0">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Location</th><th className="p-3 text-left text-xs text-muted-foreground">Type</th><th className="p-3 text-right text-xs text-muted-foreground">Income</th><th className="p-3 text-right text-xs text-muted-foreground">Expenses</th><th className="p-3 text-right text-xs text-muted-foreground">Balance</th></tr></thead>
+                    <tbody>
+                      {(subAccounts.accounts || []).map(a => (
+                        <tr key={a.location_id} className="border-b last:border-0 hover:bg-accent/30">
+                          <td className="p-3 font-medium">{a.location_name}</td>
+                          <td className="p-3"><Badge variant="secondary" className="text-[10px]">{a.location_type}</Badge></td>
+                          <td className="p-3 text-right text-green-600">{(a.total_income || 0).toLocaleString()}</td>
+                          <td className="p-3 text-right text-red-600">{(a.total_expenses || 0).toLocaleString()}</td>
+                          <td className="p-3 text-right font-medium">{(a.balance || 0).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+            </>
+          ) : <p className="text-sm text-muted-foreground text-center py-8">Select a campus to view sub-location accounts</p>}
+        </TabsContent>
+
       </Tabs>
 
       {/* Rejection Comment Dialog */}

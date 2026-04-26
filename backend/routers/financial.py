@@ -799,3 +799,48 @@ async def get_sponsor(sponsor_id: str, current_user: dict = Depends(require_staf
             # Hide sensitive info
             sponsor = {k: v for k, v in sponsor.items() if k in {"id", "child_id", "child_name", "first_name", "status", "frequency"}}
     return sponsor
+
+
+
+# ========== SUB-LOCATION ACCOUNTS (unified at campus) ==========
+
+@router.get("/financial/accounts")
+async def list_sublocation_accounts(campus_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
+    """Get financial accounts per sub-location within a campus, unified at campus level."""
+    campus = await get_campus_filter(current_user)
+    target_campus = campus_id or current_user.get("active_campus_id") or ""
+    if not target_campus:
+        raise HTTPException(status_code=400, detail="Campus ID required")
+    # Get all sub-locations under this campus
+    subs = await db.locations.find(
+        {"$or": [{"parent_id": target_campus}, {"id": target_campus}]},
+        {"_id": 0, "id": 1, "name": 1, "type": 1}
+    ).to_list(50)
+    sub_ids = [s["id"] for s in subs]
+    accounts = []
+    campus_total_in = 0
+    campus_total_out = 0
+    for sub in subs:
+        sid = sub["id"]
+        donations = await db.donations.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        expenses = await db.expenses.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        sales = await db.sales.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
+        total_in = (donations[0]["total"] if donations else 0) + (sales[0]["total"] if sales else 0)
+        total_out = expenses[0]["total"] if expenses else 0
+        campus_total_in += total_in
+        campus_total_out += total_out
+        accounts.append({
+            "location_id": sid,
+            "location_name": sub.get("name", ""),
+            "location_type": sub.get("type", ""),
+            "total_income": total_in,
+            "total_expenses": total_out,
+            "balance": total_in - total_out,
+        })
+    return {
+        "campus_id": target_campus,
+        "accounts": accounts,
+        "campus_total_income": campus_total_in,
+        "campus_total_expenses": campus_total_out,
+        "campus_balance": campus_total_in - campus_total_out,
+    }

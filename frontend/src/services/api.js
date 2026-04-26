@@ -141,6 +141,7 @@ export const kioskApi = {
 // ---- FINANCIAL ----
 export const financialApi = {
   summary: (location_id) => api.get('/financial/summary', { params: location_id ? { location_id } : {} }),
+  accounts: (params) => api.get('/financial/accounts', { params }),
   donations: (params) => api.get('/financial/donations', { params }),
   createDonation: (data) => api.post('/financial/donations', data),
   expenses: (params) => api.get('/financial/expenses', { params }),
