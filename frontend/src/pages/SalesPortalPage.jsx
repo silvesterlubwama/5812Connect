@@ -25,6 +25,9 @@ export default function SalesPortalPage() {
   const [showManage, setShowManage] = useState(false);
   const [productForm, setProductForm] = useState({ name: '', price: '', stock: '', category: '' });
   const [recentSales, setRecentSales] = useState([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [customers, setCustomers] = useState([]);
 
   const handleLogin = async () => {
     try {
@@ -52,6 +55,11 @@ export default function SalesPortalPage() {
 
   useEffect(() => { if (authed) { fetchProducts(); fetchRecentSales(); } }, [authed, fetchProducts, fetchRecentSales]);
 
+  const searchCustomers = async (q) => {
+    if (q.length < 2) { setCustomers([]); return; }
+    try { const res = await api.get('/customers', { params: { search: q } }); setCustomers(res.data || []); } catch { setCustomers([]); }
+  };
+
   const addToCart = (p) => {
     setCart(prev => {
       const existing = prev.find(c => c.product_id === p.id);
@@ -72,9 +80,9 @@ export default function SalesPortalPage() {
     if (cart.length === 0) return;
     setProcessing(true);
     try {
-      await api.post('/sales', { items: cart, total, payment_method: 'cash', cashier: staffName });
+      await api.post('/sales', { items: cart, total, payment_method: 'cash', cashier: staffName, customer_id: selectedCustomer?.id, customer_name: selectedCustomer?.name || 'Walk-in Customer' });
       toast.success(`Sale completed — ${total.toLocaleString()}`);
-      setCart([]);
+      setCart([]); setSelectedCustomer(null); setCustomerSearch('');
       fetchProducts();
       fetchRecentSales();
     } catch (err) { toast.error(err.response?.data?.detail || 'Sale failed'); }
@@ -179,6 +187,16 @@ export default function SalesPortalPage() {
         {/* Cart */}
         <div className="w-80 border-l bg-white dark:bg-slate-800 flex flex-col">
           <div className="p-3 border-b"><p className="text-sm font-semibold">Cart ({cart.length})</p></div>
+          {/* Customer lookup */}
+          <div className="p-2 border-b space-y-1">
+            <Input className="h-7 text-xs" placeholder="Customer name/phone..." value={customerSearch} onChange={e => { setCustomerSearch(e.target.value); searchCustomers(e.target.value); }} />
+            {customers.length > 0 && !selectedCustomer && (
+              <div className="max-h-24 overflow-auto border rounded text-xs">
+                {customers.map(c => <button key={c.id} className="w-full text-left px-2 py-1 hover:bg-accent/50" onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.name); setCustomers([]); }}>{c.name} {c.phone ? `(${c.phone})` : ''}</button>)}
+              </div>
+            )}
+            {selectedCustomer && <div className="flex items-center justify-between text-xs"><Badge variant="outline" className="text-[10px]">{selectedCustomer.name}</Badge><button className="text-destructive text-[10px]" onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}>Clear</button></div>}
+          </div>
           <div className="flex-1 overflow-auto p-2 space-y-1">
             {cart.map(c => (
               <div key={c.product_id} className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-700/50 text-sm">

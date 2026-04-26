@@ -184,6 +184,15 @@ export const salesApi = {
   import: (data) => api.post('/sales/import', data),
 };
 
+export const customersApi = {
+  list: (params) => api.get('/customers', { params }),
+  get: (id) => api.get(`/customers/${id}`),
+  create: (data) => api.post('/customers', data),
+  update: (id, data) => api.put(`/customers/${id}`, data),
+  delete: (id) => api.delete(`/customers/${id}`),
+  purchases: (id) => api.get(`/customers/${id}/purchases`),
+};
+
 // ---- FAMILIES ----
 export const familiesApi = {
   list: (params) => api.get('/families', { params }),

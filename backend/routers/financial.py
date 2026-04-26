@@ -42,6 +42,7 @@ class ProductUpdate(BaseModel):
 
 class SaleCreate(BaseModel):
     items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
+    customer_id: Optional[str] = None
     total: float; payment_method: str = "cash"; notes: Optional[str] = None; location_id: Optional[str] = None
 
 
@@ -248,6 +249,13 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
     for item in data.items:
         if item.get("product_id"):
             await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+    # Update customer account totals if linked
+    customer_id = doc.get("customer_id")
+    if customer_id:
+        await db.customer_accounts.update_one(
+            {"id": customer_id},
+            {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)}}
+        )
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "sale", sale_id)
     return doc
@@ -844,3 +852,98 @@ async def list_sublocation_accounts(campus_id: Optional[str] = None, current_use
         "campus_total_expenses": campus_total_out,
         "campus_balance": campus_total_in - campus_total_out,
     }
+
+
+
+# ========== CUSTOMER ACCOUNTS ==========
+
+@router.get("/customers")
+async def list_customers(location_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List customer accounts. Each customer is linked to a guest and a location."""
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+        ]
+    return await db.customer_accounts.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/customers")
+async def create_customer(data: dict, current_user: dict = Depends(require_staff)):
+    """Create or link a customer account. Optionally link to existing guest."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    location_id = data.get("location_id") or current_user.get("active_campus_id") or ""
+    guest_id = data.get("guest_id", "")
+    # Auto-link to guest if email/phone matches
+    if not guest_id:
+        email = (data.get("email") or "").strip().lower()
+        phone = (data.get("phone") or "").strip()
+        if email or phone:
+            q = []
+            if email: q.append({"email": email})
+            if phone: q.append({"phone": phone})
+            guest = await db.guests.find_one({"$or": q}, {"_id": 0, "id": 1})
+            if guest:
+                guest_id = guest["id"]
+    doc = {
+        "id": f"cust_{uuid.uuid4().hex[:8]}",
+        "name": name,
+        "email": (data.get("email") or "").strip().lower(),
+        "phone": (data.get("phone") or "").strip(),
+        "guest_id": guest_id,
+        "location_id": location_id,
+        "notes": data.get("notes", ""),
+        "total_purchases": 0,
+        "total_spent": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.customer_accounts.insert_one(doc)
+    doc.pop("_id", None)
+    # Also mark the guest as customer
+    if guest_id:
+        await db.guests.update_one({"id": guest_id}, {"$set": {"is_customer": True, "customer_id": doc["id"]}})
+    return doc
+
+
+@router.get("/customers/{customer_id}")
+async def get_customer(customer_id: str, current_user: dict = Depends(get_current_user)):
+    customer = await db.customer_accounts.find_one({"id": customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    # Include purchase history
+    purchases = await db.sales.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    customer["purchases"] = purchases
+    return customer
+
+
+@router.put("/customers/{customer_id}")
+async def update_customer(customer_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    allowed = {"name", "email", "phone", "notes", "guest_id"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.customer_accounts.update_one({"id": customer_id}, {"$set": update})
+    return await db.customer_accounts.find_one({"id": customer_id}, {"_id": 0})
+
+
+@router.delete("/customers/{customer_id}")
+async def delete_customer(customer_id: str, current_user: dict = Depends(require_manager)):
+    await db.customer_accounts.delete_one({"id": customer_id})
+    return {"message": "Customer account deleted"}
+
+
+@router.get("/customers/{customer_id}/purchases")
+async def get_customer_purchases(customer_id: str, current_user: dict = Depends(get_current_user)):
+    purchases = await db.sales.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    total = sum(p.get("total", 0) for p in purchases)
+    return {"purchases": purchases, "total_count": len(purchases), "total_spent": total}
