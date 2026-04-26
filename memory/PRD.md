@@ -1,28 +1,25 @@
 # 58:12 Connect - Product Requirements
 
 ## Overview
-Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, and PBX integration.
+Multi-tenant CRM for 58:12 Global with WebRTC calling, unified comms, NFC badge management, HR/payroll, and PBX integration.
 
-## Latest Changes (Iteration 64 - Feb 2026)
-- [x] Delete buttons added to assets table and sales table for admin/finance admin
-- [x] isFinanceAdmin expanded to include Director role
-- [x] Comprehensive testing: 45/48 backend + 100% frontend verified
+## Latest Changes (Iteration 66 - Feb 2026)
+- [x] Sale deletion restores product stock via $inc
+- [x] Finance nav/dashboard hidden on "All Locations" 
+- [x] Campus switcher: non-admin directors see sub-locations within their campus
+- [x] Resident assignment: searchable input with members + children results
+- [x] Residency toggle (allows_residents) on sub-locations
+- [x] Sponsored children tracking (GET /api/hr/sponsored-children)
+- [x] **Full HR Module**: Salaries (CRUD + line items), Payslips (generate + approve), Contract Templates (CRUD + variable replacement), Contract Issuing (email notification), Document Requests (email), Per-campus HR Settings (hr_enabled toggle)
+- [x] HRPage with 4 tabs: Salaries, Payslips, Contracts, Documents
 
-## Completed Feature Set (Iterations 49-64)
-- Multi-campus RBAC with data isolation
-- Financial management with campus-level filtering
-- Dashboard action widgets (overdue, pending, expiring, unassigned)
-- Email notifications (task assignment, check-in)
-- Import/export with CSV templates and campus resolution
-- NFC badge management with tag writing (director+)
-- Wallet badge shareable URLs
-- Profile photos for members and children
-- Cascade deletion across all collections
-- Error boundary, bulk delete safeguards, unsaved form warnings
-- WebRTC calling, chat, AI assistant
-- Kiosk check-in with QR camera, NFC, biometric
-- Programme/outreach tracking with recurrence (bi-monthly, quarterly)
-- Venue management (internal + external) in campus settings
-- Admin-configurable group types
+## Architecture
+- **HR Module**: /api/hr/ with require_hr (HR role, finance dept, or director+)
+- **HR Settings**: Per-campus via hr_settings collection (hr_enabled, pay_frequency, currency, pay_day)
+- **Payslips**: Generated from active salary records, calculates allowances/deductions, approve workflow
+- **Contracts**: Template variables ({{staff_name}}, {{role}}, etc.), issue with email notification
 
-## Test Reports: Iterations 49-64 all passed (final: 93.75% backend, 100% frontend)
+## Test Reports: Iterations 49-66 all passed (Iteration 66: 22/22 backend, 100% frontend)
+
+## Completed Feature Set
+Multi-campus RBAC, Financial management, Dashboard actions, Email notifications, Import/export, NFC badges, Wallet badges, Profile photos, Cascade deletions, Error boundary, WebRTC calling, Chat/AI, Kiosk check-in, Programme/Outreach, Venue management, Group types, HR/Payroll module.
