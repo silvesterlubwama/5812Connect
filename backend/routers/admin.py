@@ -279,6 +279,7 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     await db.users.update_one({"id": user_id}, {"$set": {
         "password_hash": hash_password(new_password),
+        "status": "active",
         "password_reset_at": datetime.now(timezone.utc).isoformat(),
         "password_reset_by": current_user["id"],
     }})
