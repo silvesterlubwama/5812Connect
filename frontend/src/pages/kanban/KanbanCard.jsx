@@ -1,4 +1,4 @@
-import { Archive, Paperclip, CheckSquare, Calendar } from 'lucide-react';
+import { Archive, Paperclip, CheckSquare, Calendar, Link2 } from 'lucide-react';
 
 const PRIORITY_COLORS = { low: '#10b981', medium: '#f59e0b', high: '#f97316', urgent: '#ef4444' };
 
@@ -9,7 +9,10 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
   const checklist = task.checklist || [];
   const completed = checklist.filter(i => i.completed).length;
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'done';
-  const attachCount = (task.attachments || []).length;
+  const allAttachments = task.attachments || [];
+  const fileCount = allAttachments.filter(a => a.type !== 'link').length;
+  const linkCount = allAttachments.filter(a => a.type === 'link').length;
+  const attachCount = allAttachments.length;
 
   return (
     <div
@@ -66,9 +69,14 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
             <CheckSquare size={9} /> {completed}/{checklist.length}
           </span>
         )}
-        {attachCount > 0 && (
+        {fileCount > 0 && (
           <span className="flex items-center gap-1 text-[10px] text-slate-500">
-            <Paperclip size={9} /> {attachCount}
+            <Paperclip size={9} /> {fileCount}
+          </span>
+        )}
+        {linkCount > 0 && (
+          <span className="flex items-center gap-1 text-[10px] text-blue-400">
+            <Link2 size={9} /> {linkCount}
           </span>
         )}
         {assignedMembers.length > 0 && (

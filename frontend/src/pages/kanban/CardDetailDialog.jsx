@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download } from 'lucide-react';
+import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download, Link2, ExternalLink } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -23,6 +23,8 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
   const [newCheckItem, setNewCheckItem] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [linkForm, setLinkForm] = useState({ url: '', name: '' });
   const [isRecurring, setIsRecurring] = useState(card?.is_recurring || false);
   const [recurrencePattern, setRecurrencePattern] = useState(card?.recurrence_pattern || 'weekly');
   const [recurrenceInterval, setRecurrenceInterval] = useState(card?.recurrence_interval || 1);
@@ -83,6 +85,17 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
       await tasksExtApi.deleteAttachment(card.id, attId);
       setAttachments(prev => prev.filter(a => a.id !== attId));
     } catch { toast.error('Failed to remove attachment'); }
+  };
+
+  const addLinkAttachment = () => {
+    if (!linkForm.url.trim()) return;
+    const url = linkForm.url.trim().startsWith('http') ? linkForm.url.trim() : `https://${linkForm.url.trim()}`;
+    const name = linkForm.name.trim() || new URL(url).hostname;
+    const att = { id: `link_${Date.now()}`, name, url, type: 'link', source: 'manual' };
+    setAttachments(prev => [...prev, att]);
+    setLinkForm({ url: '', name: '' });
+    setShowAddLink(false);
+    toast.success(`Link added: ${name}`);
   };
 
   const toggleLabel = (color) => {
@@ -161,18 +174,45 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 <Label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
                   <Paperclip size={14} /> Attachments {attachments.length > 0 && <span className="text-xs text-slate-500">({attachments.length})</span>}
                 </Label>
-                <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400 hover:text-white gap-1.5"
-                  onClick={() => fileRef.current?.click()} disabled={uploadingAttachment} data-testid="attach-file-btn">
-                  <Upload size={11} /> {uploadingAttachment ? 'Uploading...' : 'Attach'}
-                </Button>
-                <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+                <div className="flex gap-1">
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400 hover:text-white gap-1.5"
+                    onClick={() => setShowAddLink(!showAddLink)} data-testid="add-link-btn">
+                    <Link2 size={11} /> Link
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400 hover:text-white gap-1.5"
+                    onClick={() => fileRef.current?.click()} disabled={uploadingAttachment} data-testid="attach-file-btn">
+                    <Upload size={11} /> {uploadingAttachment ? 'Uploading...' : 'File'}
+                  </Button>
+                  <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+                </div>
               </div>
+              {/* Add Link Form */}
+              {showAddLink && (
+                <div className="rounded-lg bg-[#0f172a] border border-white/10 p-3 space-y-2">
+                  <Input className="h-8 text-xs bg-[#1e293b] border-white/10 text-white" placeholder="https://..." value={linkForm.url} onChange={e => setLinkForm({ ...linkForm, url: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') addLinkAttachment(); }} data-testid="link-url-input" autoFocus />
+                  <Input className="h-8 text-xs bg-[#1e293b] border-white/10 text-white" placeholder="Display name (optional)" value={linkForm.name} onChange={e => setLinkForm({ ...linkForm, name: e.target.value })} />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400" onClick={() => { setShowAddLink(false); setLinkForm({ url: '', name: '' }); }}>Cancel</Button>
+                    <Button size="sm" className="h-7 text-xs" disabled={!linkForm.url.trim()} onClick={addLinkAttachment} data-testid="save-link-btn">Add Link</Button>
+                  </div>
+                </div>
+              )}
               {attachments.map((att, i) => {
-                const isImage = att.name?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-                const isPdf = att.name?.match(/\.pdf$/i);
+                const isLink = att.type === 'link' || (!att.name?.match(/\.\w+$/) && att.url?.startsWith('http'));
+                const isImage = !isLink && att.name?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+                const isPdf = !isLink && att.name?.match(/\.pdf$/i);
                 const fullUrl = att.url?.startsWith('http') ? att.url : (att.url ? `${process.env.REACT_APP_BACKEND_URL}${att.url.startsWith('/') ? '' : '/'}${att.url}` : '');
                 return (
                 <div key={att.id || att.name || i} className="rounded-lg bg-[#0f172a] border border-white/10 group overflow-hidden">
+                  {isLink && fullUrl && (
+                    <a href={fullUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 hover:bg-white/5 transition-colors">
+                      <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0"><ExternalLink size={16} className="text-blue-400" /></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-blue-300 truncate">{att.name}</p>
+                        <p className="text-[10px] text-slate-500 truncate">{fullUrl}</p>
+                      </div>
+                    </a>
+                  )}
                   {isImage && fullUrl && (
                     <a href={fullUrl} target="_blank" rel="noopener noreferrer">
                       <img src={fullUrl} alt={att.name} className="w-full h-32 object-cover rounded-t-lg hover:opacity-80 transition-opacity" onError={e => { e.target.style.display = 'none'; }} />
@@ -183,6 +223,7 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                       <div className="text-center"><Paperclip size={24} className="text-red-400 mx-auto mb-1" /><p className="text-[10px] text-slate-400">PDF — Click to view</p></div>
                     </div>
                   )}
+                  {!isLink && (
                   <div className="flex items-center gap-2 p-2">
                     <Paperclip size={12} className="text-slate-400 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -195,6 +236,12 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                       <button onClick={() => removeAttachment(att.id)} className="text-slate-400 hover:text-red-400 p-1" title="Delete"><X size={11} /></button>
                     </div>
                   </div>
+                  )}
+                  {isLink && (
+                    <div className="flex items-center justify-end gap-1 px-2 pb-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => removeAttachment(att.id)} className="text-slate-400 hover:text-red-400 p-1" title="Remove"><X size={11} /></button>
+                    </div>
+                  )}
                 </div>
                 );
               })}
