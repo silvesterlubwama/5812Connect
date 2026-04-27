@@ -245,12 +245,26 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               {lastName && <div style={{ fontSize: isSmall ? '11px' : '14px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
               <div style={{ fontSize: isSmall ? '8px' : '10px', color: colors.accent, marginTop: isSmall ? '4px' : '8px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
               {person.department && <div style={{ fontSize: '9px', color: kioskMode ? '#999' : '#888', marginTop: '2px' }}>{person.department}</div>}
+              {/* Medical symbol for staff */}
+              {type !== 'child' && person.is_medical && (
+                <div style={{ marginTop: '3px' }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+                </div>
+              )}
               {/* Parent info for child badges */}
               {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
                 <div key={i} style={{ fontSize: '8px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '4px' : '1px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
               ))}
               {/* Campus info for child badges */}
               {type === 'child' && person.location_name && <div style={{ fontSize: '8px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
+              {/* Status symbols for child badges */}
+              {type === 'child' && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                  {person.is_medical && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>}
+                  {person.is_resident && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
+                  {person.is_sponsored && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               <QRCodeSVG value={qrData} size={isSmall ? 50 : 72} bgColor="transparent" fgColor={qrFg} level="M" />

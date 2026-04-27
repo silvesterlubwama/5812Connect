@@ -365,6 +365,7 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <div className="flex items-center justify-between"><Label className="text-sm">Is Parent</Label><Switch data-testid="flag-is_parent" checked={editForm.is_parent || false} onCheckedChange={v => setEditForm({...editForm, is_parent: v})} /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Is Guest</Label><Switch checked={editForm.is_guest || false} onCheckedChange={v => setEditForm({...editForm, is_guest: v})} /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Is Customer</Label><Switch checked={editForm.is_customer || false} onCheckedChange={v => setEditForm({...editForm, is_customer: v})} /></div>
+              <div className="flex items-center justify-between"><Label className="text-sm">Medical Enabled</Label><Switch checked={editForm.is_medical || false} onCheckedChange={v => setEditForm({...editForm, is_medical: v})} data-testid="flag-is_medical" /></div>
             </div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>Cancel</Button>

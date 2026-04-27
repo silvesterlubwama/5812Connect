@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -303,7 +303,7 @@ export default function UnifiedPeoplePage() {
   const openEditChild = (c, e) => {
     if (e) e.stopPropagation();
     setEditChild(c);
-    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '', is_sponsored: c.is_sponsored || false, sponsor_first_name: c.sponsor_first_name || '', photo_url: c.photo_url || '' });
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '', is_sponsored: c.is_sponsored || false, sponsor_first_name: c.sponsor_first_name || '', is_medical: c.is_medical || false, photo_url: c.photo_url || '' });
   };
   const saveEditChild = async () => {
     if (!editChild) return;
@@ -712,6 +712,11 @@ export default function UnifiedPeoplePage() {
                             {c.is_resident && <Badge className="text-[10px] bg-blue-100 text-blue-700">Resident</Badge>}
                             {isRestricted && <Badge className="text-[10px] bg-amber-100 text-amber-700">Tracked</Badge>}
                           </div>
+                          <div className="flex gap-1.5 mt-1">
+                            {c.is_medical && <span title="Medical enabled" className="text-red-500"><Heart size={12} /></span>}
+                            {c.is_resident && <span title="Resident" className="text-blue-500"><Home size={12} /></span>}
+                            {c.is_sponsored && <span title="Sponsored" className="text-purple-500"><GraduationCap size={12} /></span>}
+                          </div>
                           {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.map(pid => { const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid); return p?.name; }).filter(Boolean).join(', ') || c.parent_ids.length}</p>}
                         </div>
                       </div>
@@ -720,7 +725,7 @@ export default function UnifiedPeoplePage() {
                           {canGetBadge && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => {
                             const loc = allLocations.find(l => l.id === c.location_id);
                             const cParents = (c.parent_ids || []).map(pid => guests.find(g => g.id === pid) || members.find(s => s.id === pid)).filter(Boolean).map(p => ({ name: p.name, phone: p.phone || '' }));
-                            setBadgePerson({ ...c, role: 'child', country: loc?.country, country_code: loc?.country_code, location_name: loc?.name, campus_phone: loc?.contact_phone, parents: cParents });
+                            setBadgePerson({ ...c, role: 'child', country: loc?.country, country_code: loc?.country_code, location_name: loc?.name, campus_phone: loc?.contact_phone, parents: cParents, is_medical: c.is_medical, is_resident: c.is_resident, is_sponsored: c.is_sponsored });
                             setShowBadge(true);
                           }} title="Print Badge" data-testid={`badge-child-${c.id}`}><Printer size={13} /></Button>}
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-child-${c.id}`} onClick={() => openEditChild(c)} title="Edit"><Eye size={13} /></Button>
@@ -1071,6 +1076,10 @@ export default function UnifiedPeoplePage() {
               {editChildForm.is_sponsored && (
                 <Input className="h-8 text-xs" placeholder="Sponsor first name (staff-only visible)" value={editChildForm.sponsor_first_name || ''} onChange={e => setEditChildForm({ ...editChildForm, sponsor_first_name: e.target.value })} data-testid="sponsor-name-input" />
               )}
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="accent-primary" checked={editChildForm.is_medical || false} onChange={e => setEditChildForm({ ...editChildForm, is_medical: e.target.checked })} data-testid="child-medical-toggle" />
+                Medical Enabled
+              </label>
             </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">

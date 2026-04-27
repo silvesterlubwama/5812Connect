@@ -73,6 +73,7 @@ class MemberUpdate(BaseModel):
     is_parent: Optional[bool] = None
     is_customer: Optional[bool] = None
     is_donor: Optional[bool] = None
+    is_medical: Optional[bool] = None
     pin: Optional[str] = None
 
 class FamilyCreate(BaseModel):
@@ -104,6 +105,7 @@ class ChildCreate(BaseModel):
     resident_location_id: Optional[str] = None
     is_sponsored: Optional[bool] = False
     sponsor_first_name: Optional[str] = None
+    is_medical: Optional[bool] = False
     photo_url: Optional[str] = None
 
 class GuestCreate(BaseModel):
