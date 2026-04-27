@@ -233,7 +233,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
           }}>
             <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: logoFilter }} crossOrigin="anonymous" />
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {isStaffType && <NfcSymbol size={isSmall ? 10 : 13} color={colors.accent} />}
+              {(isStaffType || type === 'child') && <NfcSymbol size={isSmall ? 10 : 13} color={colors.accent} />}
               <span style={{ color: colors.accent, fontSize: isSmall ? '8px' : '10px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{colors.label}</span>
             </div>
           </div>
@@ -281,7 +281,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
           <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={addToWallet} data-testid="wallet-badge">
             <Smartphone size={12} /> Wallet
           </Button>
-          {canWriteNfc && isStaffType && (
+          {canWriteNfc && (isStaffType || type === 'child') && (
             <Button size="sm" variant="outline" className="gap-1.5 text-xs text-blue-600 border-blue-200 hover:bg-blue-50" onClick={writeToNfc} disabled={nfcWriting} data-testid="write-nfc-badge">
               <Wifi size={12} /> {nfcWriting ? 'Writing...' : 'Write NFC'}
             </Button>

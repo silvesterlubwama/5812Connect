@@ -690,7 +690,7 @@ export default function UnifiedPeoplePage() {
                   const parentMember = members.find(m => m.id === pid);
                   return parentMember && (parentMember.role === 'Staff' || parentMember.role === 'Director' || parentMember.role === 'Manager' || parentMember.role === 'Coordinator');
                 });
-                const canGetBadge = isRestricted || parentHasAccess;
+                const canGetBadge = isRestricted || parentHasAccess || c.is_sponsored;
                 return (
                 <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
                   <CardContent className="p-4">

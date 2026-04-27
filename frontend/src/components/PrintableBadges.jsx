@@ -175,7 +175,10 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
           <CountryWatermarkInline country={country} countryCode={countryCode} width={60} height={60} color={watermarkColor} />
           <div style={{ background: kioskMode ? '#f0f0f5' : bg, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '6px', borderBottom: '2px solid #a78bfa' }}>
             <img src={LOGO_URL} alt="58:12" style={{ height: '14px', filter: logoFilter }} crossOrigin="anonymous" />
-            <span style={{ color: '#a78bfa', fontSize: '7px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>CHILD TAG</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <NfcIcon size={10} color="#a78bfa" />
+              <span style={{ color: '#a78bfa', fontSize: '7px', fontWeight: 700, letterSpacing: '1px' }}>CHILD TAG</span>
+            </span>
           </div>
           <div style={{ flex: 1, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative', zIndex: 1 }}>
             {child.photo_url ? (
