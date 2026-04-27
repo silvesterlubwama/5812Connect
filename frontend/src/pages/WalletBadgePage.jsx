@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 import api from '../services/api';
 import { getCountryOutline } from '../components/countryOutlines';
 
@@ -77,7 +77,7 @@ export default function WalletBadgePage() {
               {badge.location_name && <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>{badge.location_name}</div>}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <QRCodeSVG value={badge.qr_data || badge.member_id || ''} size={90} bgColor="transparent" fgColor="#ffffff" level="M" />
+              <QRCodeLogo value={badge.qr_data || badge.member_id || ''} size={100} bgColor="transparent" fgColor="#ffffff" ecLevel="H" logoImage={badge.photo_url || ''} logoWidth={34} logoHeight={34} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
             </div>
           </div>
 

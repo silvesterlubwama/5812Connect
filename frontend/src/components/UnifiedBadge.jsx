@@ -1,12 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
 import { Download, Printer, Smartphone, Wifi } from 'lucide-react';
 import { Button } from './ui/button';
 import DOMPurify from 'dompurify';
 import { toast } from 'sonner';
-import { getCountryOutline } from './countryOutlines';
+import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
+import { getCountryOutline } from './countryOutlines';
 
 const BADGE_COLORS = {
   staff: { bg: '#1a1a2e', accent: '#fbbf24', label: 'STAFF' },
@@ -266,8 +266,8 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — left: name+info | center: QR | right: photo */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '6px' : '10px', position: 'relative', zIndex: 1 }}>
+          {/* Body — left: name+info | right: QR with embedded photo */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: isSmall ? '18px' : '24px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
               {lastName && <div style={{ fontSize: isSmall ? '11px' : '13px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
@@ -279,19 +279,23 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               ))}
               {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <QRCodeSVG value={qrData} size={isSmall ? 48 : 64} bgColor="transparent" fgColor={qrFg} level="H" />
+            {/* QR code with embedded profile photo */}
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
+              <QRCodeLogo
+                value={qrData}
+                size={isSmall ? 72 : 96}
+                bgColor="transparent"
+                fgColor={qrFg}
+                ecLevel="H"
+                logoImage={person.photo_url || ''}
+                logoWidth={isSmall ? 24 : 32}
+                logoHeight={isSmall ? 24 : 32}
+                logoPadding={2}
+                logoPaddingStyle="circle"
+                removeQrCodeBehindLogo={true}
+                qrStyle="dots"
+              />
             </div>
-            {/* Profile photo */}
-            {person.photo_url ? (
-              <div style={{ width: isSmall ? '42px' : '56px', height: isSmall ? '42px' : '56px', borderRadius: '8px', overflow: 'hidden', flexShrink: 0, border: `2px solid ${colors.accent}33` }}>
-                <img src={person.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              </div>
-            ) : (
-              <div style={{ width: isSmall ? '42px' : '56px', height: isSmall ? '42px' : '56px', borderRadius: '8px', flexShrink: 0, background: kioskMode ? '#e8e8f0' : 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isSmall ? '14px' : '18px', fontWeight: 700, color: colors.accent }}>
-                {(firstName || '?')[0]}
-              </div>
-            )}
           </div>
 
           {/* Footer */}

@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
 import DOMPurify from 'dompurify';
@@ -80,19 +80,16 @@ export function StaffBadge({ user, kioskMode = false }) {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </span>
           </div>
-          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative', zIndex: 1 }}>
+          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{user.name}</div>
               <div style={{ fontSize: '10px', color: subColor, marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{user.role}</div>
               {user.department && <div style={{ fontSize: '9px', color: kioskMode ? '#888' : '#666', marginTop: '1px' }}>{user.department}</div>}
               <div style={{ fontSize: '9px', color: kioskMode ? '#aaa' : '#888', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
-            <QRCodeSVG value={user.id || 'N/A'} size={52} level="H" bgColor="transparent" fgColor={textColor} />
-            {user.photo_url ? (
-              <img src={user.photo_url} alt="" style={{ width: '50px', height: '50px', borderRadius: '8px', objectFit: 'cover', border: `2px solid ${kioskMode ? '#ddd' : '#fbbf2433'}`, flexShrink: 0 }} />
-            ) : (
-              <div style={{ width: '50px', height: '50px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, flexShrink: 0, ...initialsStyle }}>{initials}</div>
-            )}
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
+              <QRCodeLogo value={user.id || 'N/A'} size={80} bgColor="transparent" fgColor={textColor} ecLevel="H" logoImage={user.photo_url || ''} logoWidth={28} logoHeight={28} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            </div>
           </div>
           <div style={{ background: footerBg, padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: footerColor, borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
             <span>ID: {memberId}</span>
@@ -128,7 +125,9 @@ export function ParentBadge({ parent, children: childList, kioskMode = false }) 
             <span style={{ color: '#34d399', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>PARENT</span>
           </div>
           <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
-            <QRCodeSVG value={parent.id || parent.phone || 'N/A'} size={72} level="L" bgColor="transparent" fgColor={qrColor} />
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
+              <QRCodeLogo value={parent.id || parent.phone || 'N/A'} size={72} bgColor="transparent" fgColor={qrColor} ecLevel="H" qrStyle="dots" />
+            </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{parent.name}</div>
               {parent.phone && <div style={{ fontSize: '10px', color: kioskMode ? '#555' : '#ccc', marginTop: '2px' }}>{parent.phone}</div>}
@@ -187,19 +186,13 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
               <div style={{ fontSize: '18px', fontWeight: 800, color: textColor, lineHeight: 1.1 }}>{firstName}</div>
               {child.class_group && <div style={{ fontSize: '10px', color: kioskMode ? '#555' : '#5eead4', marginTop: '2px', fontWeight: 600 }}>{child.class_group}</div>}
               {eventName && <div style={{ fontSize: '8px', color: kioskMode ? '#6366f1' : '#a78bfa', marginTop: '1px' }}>{eventName}</div>}
-              {/* Parents */}
               {parentLines.map((line, i) => (
                 <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{line}</div>
               ))}
             </div>
-            <QRCodeSVG value={child.id || 'N/A'} size={48} level="H" bgColor="transparent" fgColor={qrColor} />
-            {child.photo_url ? (
-              <img src={child.photo_url} alt="" style={{ width: '44px', height: '44px', borderRadius: '6px', objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(167,139,250,0.3)' }} />
-            ) : (
-              <div style={{ width: '44px', height: '44px', borderRadius: '6px', flexShrink: 0, background: kioskMode ? '#e8e8f0' : 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 700, color: '#a78bfa' }}>
-                {(firstName || '?')[0]}
-              </div>
-            )}
+            <div style={{ flexShrink: 0, borderRadius: '6px', overflow: 'hidden' }}>
+              <QRCodeLogo value={child.id || 'N/A'} size={68} bgColor="transparent" fgColor={qrColor} ecLevel="H" logoImage={child.photo_url || ''} logoWidth={24} logoHeight={24} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            </div>
           </div>
           <div style={{ background: kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: kioskMode ? '#777' : '#aaa', borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
             <span>{locationName || ''}{campusPhone ? ` | ${campusPhone}` : ''}</span>
