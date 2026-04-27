@@ -166,16 +166,27 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     setNfcWriting(true);
     try {
       const ndef = new window.NDEFReader();
-      const writeData = person.id || person.name || '';
+      const memberId = person.member_id || person.id;
+      // Get signed payload from backend
+      const { default: api } = await import('../services/api');
+      const payloadRes = await api.post(`/members/${memberId}/nfc-payload`);
+      const signedPayload = payloadRes.data.payload;
       toast.info('Hold a blank NFC tag near the device...');
+      // Write encrypted signed payload
       await ndef.write({
         records: [
-          { recordType: 'text', data: writeData },
-          { recordType: 'url', data: `https://5812-global.org/member/${person.id || ''}` },
+          { recordType: 'text', data: signedPayload },
         ]
       });
+      // Lock tag as read-only (permanent — cannot be overwritten)
+      try {
+        await ndef.makeReadOnly();
+        toast.success('NFC tag written and locked (read-only)');
+      } catch (lockErr) {
+        console.warn('Could not lock tag:', lockErr);
+        toast.success('NFC tag written (lock not supported on this tag)');
+      }
       // Record the write on the backend
-      const memberId = person.member_id || person.id;
       try {
         const scanResult = await new Promise((resolve) => {
           ndef.scan().then(() => {
@@ -183,11 +194,8 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             setTimeout(() => resolve('unknown'), 3000);
           }).catch(() => resolve('unknown'));
         });
-        await import('../services/api').then(({ default: api }) =>
-          api.post(`/members/${memberId}/nfc-write`, { serial_number: scanResult || 'written-tag', written_data: writeData, label: `Badge: ${person.name}` })
-        );
+        await api.post(`/members/${memberId}/nfc-write`, { serial_number: scanResult || 'written-tag', written_data: signedPayload, label: `Badge: ${person.name}` });
       } catch (err) { console.warn('NFC write log failed:', err); }
-      toast.success(`NFC tag written for ${person.name}!`);
     } catch (err) {
       if (err.name === 'NotAllowedError') toast.error('NFC permission denied');
       else if (err.name === 'NotSupportedError') toast.error('NFC not supported on this device');

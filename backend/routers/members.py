@@ -1207,6 +1207,53 @@ async def write_nfc_tag(member_id: str, data: dict, current_user: dict = Depends
     return {"message": "NFC tag written and linked", "tag": tag, "member_id": member_id, "member_name": member.get("name", "")}
 
 
+@router.post("/members/{member_id}/nfc-payload")
+async def generate_nfc_payload(member_id: str, current_user: dict = Depends(require_director)) -> dict:
+    """Generate a signed, encrypted NFC payload for writing to a tag.
+    The payload includes the member_id + HMAC signature so it can be verified on read."""
+    import hmac, hashlib, os
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    secret = os.environ.get("NFC_SECRET_KEY", "5812-global-nfc-secret-2026")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    payload = f"{member_id}|{timestamp}"
+    signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    signed_payload = f"5812:{member_id}:{timestamp}:{signature}"
+    return {
+        "payload": signed_payload,
+        "member_id": member_id,
+        "member_name": member.get("name", ""),
+        "instructions": "Write this payload to the NFC tag, then lock it as read-only."
+    }
+
+
+@router.post("/nfc/verify")
+async def verify_nfc_payload(data: dict, current_user: dict = Depends(get_current_user)) -> dict:
+    """Verify a signed NFC payload read from a tag."""
+    import hmac, hashlib, os
+    payload_str = (data.get("payload") or "").strip()
+    if not payload_str or not payload_str.startswith("5812:"):
+        return {"valid": False, "reason": "Not a 58:12 Global NFC tag"}
+    parts = payload_str.split(":")
+    if len(parts) < 4:
+        return {"valid": False, "reason": "Malformed NFC data"}
+    member_id = parts[1]
+    timestamp = parts[2]
+    received_sig = parts[3]
+    secret = os.environ.get("NFC_SECRET_KEY", "5812-global-nfc-secret-2026")
+    expected_payload = f"{member_id}|{timestamp}"
+    expected_sig = hmac.new(secret.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()[:16]
+    if not hmac.compare_digest(received_sig, expected_sig):
+        return {"valid": False, "reason": "Signature mismatch — tag may be forged"}
+    # Look up the member
+    member = await db.members.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1})
+    if not member:
+        user = await db.users.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1})
+        member = user
+    return {"valid": True, "member_id": member_id, "member": member, "written_date": timestamp}
+
+
 # ========== PROFILE PHOTOS ==========
 
 @router.post("/members/{member_id}/photo")

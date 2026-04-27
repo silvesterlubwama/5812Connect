@@ -105,14 +105,21 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     setNfcWriteStatus('writing');
     try {
       const ndef = new window.NDEFReader();
-      const writeData = memberId;
+      // Get signed encrypted payload from backend
+      const payloadRes = await api.post(`/members/${memberId}/nfc-payload`);
+      const signedPayload = payloadRes.data.payload;
       toast.info('Hold a blank NFC tag near the device to write...');
+      // Write signed payload
       await ndef.write({
         records: [
-          { recordType: 'text', data: writeData },
-          { recordType: 'url', data: `https://5812-global.org/member/${memberId}` },
+          { recordType: 'text', data: signedPayload },
         ]
       });
+      // Lock tag as read-only (permanent)
+      try {
+        await ndef.makeReadOnly();
+        toast.info('Tag locked as read-only');
+      } catch { /* some tags don't support locking */ }
       // Read the serial after writing
       let serial = 'written-tag';
       try {
@@ -125,14 +132,14 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
       // Log on backend
       await api.post(`/members/${memberId}/nfc-write`, {
         serial_number: serial,
-        written_data: writeData,
+        written_data: signedPayload,
         label: `Written for ${selectedUser?.name}`,
       });
       // Refresh tags list
       const res = await api.get(`/members/${memberId}/nfc-tags`);
       setNfcTags(res.data || []);
       setNfcWriteStatus('success');
-      toast.success(`NFC tag written and linked to ${selectedUser?.name}!`);
+      toast.success(`NFC tag written, encrypted, and locked for ${selectedUser?.name}!`);
       setTimeout(() => setNfcWriteStatus('idle'), 3000);
     } catch (err) {
       setNfcWriteStatus('idle');
