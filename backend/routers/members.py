@@ -828,6 +828,52 @@ async def create_wallet_badge(member_id: str, current_user: dict = Depends(requi
     return badge_data
 
 
+@router.post("/children/{child_id}/wallet-badge")
+async def create_child_wallet_badge(child_id: str, current_user: dict = Depends(require_staff)) -> dict:
+    """Generate a wallet badge for a child. Verifies parent has staff access if child is not at a restricted location."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    # Check if child is at restricted location OR has a staff parent
+    loc = await db.locations.find_one({"id": child.get("location_id", "")}, {"_id": 0}) if child.get("location_id") else None
+    is_restricted = child.get("is_resident") or (loc and loc.get("is_restricted"))
+    if not is_restricted:
+        # Check if any parent is staff with access
+        parent_ids = child.get("parent_ids", [])
+        has_staff_parent = False
+        for pid in parent_ids:
+            parent_user = await db.users.find_one({"id": pid, "status": "active"}, {"_id": 0, "role": 1})
+            if not parent_user:
+                parent_member = await db.members.find_one({"id": pid}, {"_id": 0, "user_id": 1})
+                if parent_member and parent_member.get("user_id"):
+                    parent_user = await db.users.find_one({"id": parent_member["user_id"], "status": "active"}, {"_id": 0, "role": 1})
+            if parent_user and parent_user.get("role") in ("Staff", "Director", "Manager", "Coordinator", "Leader", "HR", "Volunteer", "admin", "system_admin", "Executive Director", "Adviser"):
+                has_staff_parent = True; break
+        if not has_staff_parent:
+            raise HTTPException(status_code=403, detail="Child's parent must be staff with access to issue a badge")
+    # Get parent details for badge
+    parents = []
+    for pid in (child.get("parent_ids") or []):
+        p = await db.guests.find_one({"id": pid}, {"_id": 0, "name": 1, "phone": 1})
+        if not p: p = await db.users.find_one({"id": pid}, {"_id": 0, "name": 1, "phone": 1})
+        if p: parents.append(p)
+    token = uuid.uuid4().hex[:16]
+    badge_data = {
+        "id": f"wbadge_{token}", "token": token,
+        "member_id": child_id, "name": child.get("name", ""), "role": "Child",
+        "photo_url": child.get("photo_url", ""),
+        "location_name": loc.get("name") if loc else "", "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+        "qr_data": child_id, "parents": parents,
+        "campus_phone": loc.get("contact_phone") if loc else "",
+        "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+    }
+    await db.wallet_badges.update_one({"member_id": child_id}, {"$set": badge_data}, upsert=True)
+    return badge_data
+
+
+
+
 @router.get("/wallet-badge/{token}")
 async def get_wallet_badge(token: str):
     """Public endpoint to view a wallet badge (no auth required)."""

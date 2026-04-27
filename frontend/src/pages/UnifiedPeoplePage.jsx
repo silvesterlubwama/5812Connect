@@ -683,8 +683,14 @@ export default function UnifiedPeoplePage() {
               onBulkDelete={async () => { setBulkDeleteTarget({ type: 'children', ids: [...selChildren], label: 'children' }); }}
             /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredChildren.map(c => {
+              {children.length > 0 && filteredChildren.map(c => {
                 const isRestricted = c.is_resident || allLocations.find(l => l.id === c.location_id)?.is_restricted;
+                // Children of staff with restricted access also get badges
+                const parentHasAccess = !isRestricted && (c.parent_ids || []).some(pid => {
+                  const parentMember = members.find(m => m.id === pid);
+                  return parentMember && (parentMember.role === 'Staff' || parentMember.role === 'Director' || parentMember.role === 'Manager' || parentMember.role === 'Coordinator');
+                });
+                const canGetBadge = isRestricted || parentHasAccess;
                 return (
                 <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
                   <CardContent className="p-4">
@@ -711,7 +717,7 @@ export default function UnifiedPeoplePage() {
                       </div>
                       {isCoordinator && (
                         <div className="flex gap-1">
-                          {isRestricted && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => {
+                          {canGetBadge && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => {
                             const loc = allLocations.find(l => l.id === c.location_id);
                             const cParents = (c.parent_ids || []).map(pid => guests.find(g => g.id === pid) || members.find(s => s.id === pid)).filter(Boolean).map(p => ({ name: p.name, phone: p.phone || '' }));
                             setBadgePerson({ ...c, role: 'child', country: loc?.country, country_code: loc?.country_code, location_name: loc?.name, campus_phone: loc?.contact_phone, parents: cParents });
