@@ -492,3 +492,80 @@ async def bulk_restore_items(data: dict, current_user: dict = Depends(require_ad
         await db.deleted_items.delete_one({"id": item_id})
         restored += 1
     return {"message": f"Restored {restored} items"}
+
+
+
+@router.post("/cleanup-orphans")
+async def cleanup_orphaned_references(current_user: dict = Depends(require_admin)) -> dict:
+    """Scan and remove orphaned references to deleted profiles across all collections."""
+    cleaned = {}
+
+    # Get all valid IDs
+    valid_user_ids = set()
+    async for u in db.users.find({}, {"_id": 0, "id": 1}):
+        valid_user_ids.add(u["id"])
+    valid_member_ids = set()
+    async for m in db.members.find({}, {"_id": 0, "id": 1}):
+        valid_member_ids.add(m["id"])
+    valid_guest_ids = set()
+    async for g in db.guests.find({}, {"_id": 0, "id": 1}):
+        valid_guest_ids.add(g["id"])
+    valid_child_ids = set()
+    async for c in db.children.find({}, {"_id": 0, "id": 1}):
+        valid_child_ids.add(c["id"])
+    all_valid = valid_user_ids | valid_member_ids | valid_guest_ids | valid_child_ids
+
+    # Clean tasks: remove invalid assignees
+    tasks_cleaned = 0
+    async for task in db.tasks.find({"assignees": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1, "assignees": 1}):
+        invalid = [a for a in (task.get("assignees") or []) if a not in all_valid]
+        if invalid:
+            await db.tasks.update_one({"id": task["id"]}, {"$pull": {"assignees": {"$in": invalid}}})
+            tasks_cleaned += len(invalid)
+    if tasks_cleaned: cleaned["tasks_assignees"] = tasks_cleaned
+
+    # Clean boards: remove invalid tagged_members
+    boards_cleaned = 0
+    async for board in db.boards.find({"tagged_members": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1, "tagged_members": 1}):
+        invalid = [m for m in (board.get("tagged_members") or []) if m not in all_valid]
+        if invalid:
+            await db.boards.update_one({"id": board["id"]}, {"$pull": {"tagged_members": {"$in": invalid}}})
+            boards_cleaned += len(invalid)
+    if boards_cleaned: cleaned["boards_tagged_members"] = boards_cleaned
+
+    # Clean children: remove invalid parent_ids
+    children_cleaned = 0
+    async for child in db.children.find({"parent_ids": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1, "parent_ids": 1}):
+        invalid = [p for p in (child.get("parent_ids") or []) if p not in all_valid]
+        if invalid:
+            await db.children.update_one({"id": child["id"]}, {"$pull": {"parent_ids": {"$in": invalid}}})
+            children_cleaned += len(invalid)
+    if children_cleaned: cleaned["children_parent_ids"] = children_cleaned
+
+    # Clean conversations: remove invalid participants
+    convs_cleaned = 0
+    async for conv in db.conversations.find({"participants": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1, "participants": 1}):
+        invalid = [p for p in (conv.get("participants") or []) if p not in valid_user_ids]
+        if invalid:
+            await db.conversations.update_one({"id": conv["id"]}, {"$pull": {"participants": {"$in": invalid}}})
+            convs_cleaned += len(invalid)
+    if convs_cleaned: cleaned["conversations_participants"] = convs_cleaned
+
+    # Clean residents: remove entries for deleted people
+    residents_cleaned = 0
+    async for res in db.residents.find({"status": "active"}, {"_id": 0, "id": 1, "member_id": 1}):
+        if res.get("member_id") not in all_valid:
+            await db.residents.update_one({"id": res["id"]}, {"$set": {"status": "orphaned"}})
+            residents_cleaned += 1
+    if residents_cleaned: cleaned["residents"] = residents_cleaned
+
+    # Clean members with invalid user_id
+    members_cleaned = 0
+    async for mem in db.members.find({"user_id": {"$exists": True, "$ne": ""}}, {"_id": 0, "id": 1, "user_id": 1}):
+        if mem.get("user_id") and mem["user_id"] not in valid_user_ids:
+            await db.members.update_one({"id": mem["id"]}, {"$unset": {"user_id": ""}})
+            members_cleaned += 1
+    if members_cleaned: cleaned["members_user_ids"] = members_cleaned
+
+    await _audit(current_user["id"], "maintenance", "cleanup_orphans", "system", cleaned)
+    return {"cleaned": cleaned, "total_orphans_removed": sum(cleaned.values())}

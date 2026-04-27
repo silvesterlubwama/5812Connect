@@ -128,12 +128,31 @@ async def list_residents(location_id: Optional[str] = None, current_user: dict =
     if location_id:
         query["location_id"] = location_id
     residents = await db.residents.find(query, {"_id": 0}).to_list(200)
-    # Enrich with member data
+    # Also add children tagged as residents for this location
+    if location_id:
+        resident_children = await db.children.find({"is_resident": True, "resident_location_id": location_id}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        existing_ids = {r["member_id"] for r in residents}
+        for child in resident_children:
+            if child["id"] not in existing_ids:
+                residents.append({"id": f"auto_{child['id']}", "member_id": child["id"], "member_name": child.get("name", ""), "member_role": "child", "source": "child", "location_id": location_id, "status": "active"})
+        # Also add guests tagged as residents
+        resident_guests = await db.guests.find({"is_resident": True, "resident_location_id": location_id}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        for guest in resident_guests:
+            if guest["id"] not in existing_ids:
+                residents.append({"id": f"auto_{guest['id']}", "member_id": guest["id"], "member_name": guest.get("name", ""), "member_role": "guest", "source": "guest", "location_id": location_id, "status": "active"})
+    # Enrich with member/child/guest data
     for r in residents:
-        member = await db.members.find_one({"id": r["member_id"]}, {"_id": 0, "name": 1, "role": 1})
-        if member:
-            r["member_name"] = member.get("name")
-            r["member_role"] = member.get("role")
+        if not r.get("member_name"):
+            person = await db.members.find_one({"id": r["member_id"]}, {"_id": 0, "name": 1, "role": 1})
+            if not person:
+                person = await db.children.find_one({"id": r["member_id"]}, {"_id": 0, "name": 1})
+                if person: person["role"] = "child"
+            if not person:
+                person = await db.guests.find_one({"id": r["member_id"]}, {"_id": 0, "name": 1})
+                if person: person["role"] = "guest"
+            if person:
+                r["member_name"] = person.get("name")
+                r["member_role"] = person.get("role")
     return residents
 
 
@@ -768,6 +787,16 @@ async def validate_access(data: dict, current_user: dict = Depends(get_current_u
 
     # Check 1: Is this person a resident of this location?
     resident = await db.residents.find_one({"member_id": person_id, "location_id": location_id, "status": "active"})
+    if not resident:
+        # Also check children tagged as residents
+        child_res = await db.children.find_one({"id": person_id, "is_resident": True, "resident_location_id": location_id})
+        if child_res:
+            resident = True
+    if not resident:
+        # Also check guests tagged as residents
+        guest_res = await db.guests.find_one({"id": person_id, "is_resident": True, "resident_location_id": location_id})
+        if guest_res:
+            resident = True
     if resident:
         return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "resident", "valid_until": "permanent"}
 

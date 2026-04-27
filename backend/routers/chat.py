@@ -19,7 +19,10 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
         ]
         # Simplify: just filter by participant — conversations are already participant-scoped
         query = {"participants": current_user["id"]}
-    return await db.conversations.find(query, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    convs = await db.conversations.find(query, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    # Filter out conversations hidden by this user
+    uid = current_user["id"]
+    return [c for c in convs if uid not in (c.get("hidden_by") or [])]
 
 
 @router.get("/chat/users")
@@ -239,3 +242,90 @@ async def sync_offline_messages(data: dict, current_user: dict = Depends(get_cur
         }
         await db.chat_messages.insert_one(doc); synced += 1
     return {"synced": synced}
+
+
+
+# ========== CONVERSATION MANAGEMENT ==========
+
+@router.delete("/chat/conversations/{conv_id}")
+async def delete_conversation_for_user(conv_id: str, current_user: dict = Depends(get_current_user)):
+    """Hide a conversation for the current user only (doesn't delete for others)."""
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    # Add user to hidden_by list
+    await db.conversations.update_one({"id": conv_id}, {"$addToSet": {"hidden_by": current_user["id"]}})
+    return {"message": "Conversation hidden"}
+
+
+@router.put("/chat/conversations/{conv_id}/members")
+async def update_group_members(conv_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Add or remove members from a group conversation."""
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv.get("type") != "group":
+        raise HTTPException(status_code=400, detail="Can only edit group conversations")
+    add_ids = data.get("add", [])
+    remove_ids = data.get("remove", [])
+    update_ops = {}
+    if add_ids:
+        update_ops["$addToSet"] = {"participants": {"$each": add_ids}}
+    if remove_ids:
+        if "$pull" not in update_ops:
+            update_ops["$pull"] = {}
+        # Can't use $addToSet and $pull together, handle sequentially
+    if add_ids:
+        await db.conversations.update_one({"id": conv_id}, {"$addToSet": {"participants": {"$each": add_ids}}})
+        # Add system message
+        names = []
+        for uid in add_ids:
+            u = await db.users.find_one({"id": uid}, {"_id": 0, "name": 1})
+            if u: names.append(u.get("name", ""))
+        if names:
+            await db.chat_messages.insert_one({
+                "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+                "sender_id": "system", "sender_name": "System", "text": f"{', '.join(names)} joined the group",
+                "type": "system", "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+    if remove_ids:
+        await db.conversations.update_one({"id": conv_id}, {"$pull": {"participants": {"$in": remove_ids}}})
+        names = []
+        for uid in remove_ids:
+            u = await db.users.find_one({"id": uid}, {"_id": 0, "name": 1})
+            if u: names.append(u.get("name", ""))
+        if names:
+            await db.chat_messages.insert_one({
+                "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+                "sender_id": "system", "sender_name": "System", "text": f"{', '.join(names)} left the group",
+                "type": "system", "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+    if data.get("name"):
+        await db.conversations.update_one({"id": conv_id}, {"$set": {"name": data["name"]}})
+    updated = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    return updated
+
+
+@router.delete("/chat/messages/{message_id}")
+async def delete_message(message_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a message — only if sender and not yet read by others."""
+    msg = await db.chat_messages.find_one({"id": message_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.get("sender_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    # Check if read by others
+    read_by = msg.get("read_by", [])
+    others_read = [r for r in read_by if r != current_user["id"]]
+    if others_read:
+        raise HTTPException(status_code=400, detail="Message already read by other members — cannot delete")
+    await db.chat_messages.delete_one({"id": message_id})
+    # Broadcast deletion to conversation participants
+    try:
+        from routers.websocket import manager
+        conv = await db.conversations.find_one({"id": msg.get("conversation_id")}, {"_id": 0, "participants": 1})
+        if conv:
+            await manager.send_to_users(conv.get("participants", []), {"type": "message_deleted", "conversation_id": msg["conversation_id"], "message_id": message_id})
+    except Exception:
+        pass
+    return {"message": "Message deleted"}

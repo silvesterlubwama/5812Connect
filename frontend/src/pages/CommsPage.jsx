@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight } from 'lucide-react';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight, Trash2, Settings } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -48,6 +48,8 @@ export default function CommsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [replyTo, setReplyTo] = useState(null);
+  const [showEditGroup, setShowEditGroup] = useState(false);
+  const [groupAddSearch, setGroupAddSearch] = useState('');
 
   const [aiMessages, setAiMessages] = useState([]);
   const [aiSessionId] = useState(() => `ai_${user?.id || 'anon'}_${Date.now()}`);
@@ -166,6 +168,17 @@ export default function CommsPage() {
     return unsub;
   }, [addListener, selectedRoom?.id]);
 
+  // Listen for message deletions
+  useEffect(() => {
+    const unsub = addListener('message_deleted', (data) => {
+      if (data.conversation_id === selectedRoom?.id) {
+        setMessages(prev => prev.filter(m => m.id !== data.message_id));
+      }
+    });
+    return unsub;
+  }, [addListener, selectedRoom?.id]);
+
+
   const selectRoom = async (room) => {
     setSelectedRoom(room);
     setReplyTo(null);
@@ -270,6 +283,49 @@ export default function CommsPage() {
   };
 
   const getUserPresence = (userId) => presenceMap[userId] || (onlineUsers.includes(userId) ? 'online' : 'offline');
+
+  const handleDeleteConversation = async (convId) => {
+    if (!window.confirm('Hide this conversation? It will be removed from your list only.')) return;
+    try {
+      await chatApi.deleteConversation(convId);
+      setConversations(prev => prev.filter(c => c.id !== convId));
+      if (selectedRoom?.id === convId) { setSelectedRoom(null); setMessages([]); }
+      toast.success('Conversation hidden');
+    } catch { toast.error('Failed'); }
+  };
+
+  const handleDeleteMessage = async (msgId) => {
+    try {
+      await chatApi.deleteMessage(msgId);
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+      toast.success('Message deleted');
+    } catch (err) { toast.error(err.response?.data?.detail || 'Cannot delete — already read'); }
+  };
+
+  const handleAddGroupMembers = async (userIds) => {
+    if (!selectedRoom || selectedRoom.type !== 'group') return;
+    try {
+      const res = await chatApi.updateGroupMembers(selectedRoom.id, { add: userIds });
+      setSelectedRoom(res.data);
+      setConversations(prev => prev.map(c => c.id === selectedRoom.id ? res.data : c));
+      setShowEditGroup(false);
+      setGroupAddSearch('');
+      toast.success('Members added');
+    } catch { toast.error('Failed'); }
+  };
+
+  const handleRemoveGroupMember = async (userId) => {
+    if (!selectedRoom || selectedRoom.type !== 'group') return;
+    if (!window.confirm('Remove this member from the group?')) return;
+    try {
+      const res = await chatApi.updateGroupMembers(selectedRoom.id, { remove: [userId] });
+      setSelectedRoom(res.data);
+      setConversations(prev => prev.map(c => c.id === selectedRoom.id ? res.data : c));
+      toast.success('Member removed');
+    } catch { toast.error('Failed'); }
+  };
+
+
 
   // Thread support
   const openThread = async (msg) => {
@@ -460,13 +516,16 @@ export default function CommsPage() {
                   </button>
                 )}
                 {/* Reply + Reaction + Thread buttons */}
-                <div className="absolute -left-20 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                <div className="absolute -left-24 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                   <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" onClick={() => setReplyTo(msg)} data-testid={`reply-btn-${msg.id}`}>
                     <Reply size={12} />
                   </button>
                   <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" onClick={() => openThread(msg)} title="Thread">
                     <MessageSquare size={12} />
                   </button>
+                  {isMine && <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-destructive/20 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteMessage(msg.id)} title="Delete (before read)" data-testid={`delete-msg-${msg.id}`}>
+                    <Trash2 size={11} />
+                  </button>}
                   <Popover open={showEmojiFor === msg.id} onOpenChange={(open) => setShowEmojiFor(open ? msg.id : null)}>
                     <PopoverTrigger asChild>
                       <button className="h-6 w-6 flex items-center justify-center rounded-full bg-secondary hover:bg-accent text-muted-foreground" data-testid={`react-btn-${msg.id}`}>
@@ -571,10 +630,14 @@ export default function CommsPage() {
                     <div key={role}>
                       <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1">{role}s</p>
                       {roleStaff.map(s => (
-                        <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" onClick={() => {
+                        <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" onClick={async () => {
                           const existing = conversations.find(c => c.type === 'direct' && c.participants?.includes(s.id));
-                          if (existing) selectRoom(existing);
-                          else { setConvForm({ name: s.name, participants: [s.id], type: 'direct' }); handleCreateConv(); }
+                          if (existing) { selectRoom(existing); return; }
+                          try {
+                            const res = await chatApi.createConversation({ name: s.name, participants: [s.id, user?.id], type: 'direct' });
+                            setConversations(prev => [res.data, ...prev]);
+                            selectRoom(res.data);
+                          } catch { toast.error('Failed to start conversation'); }
                         }}>
                           <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[getUserPresence(s.id)] || 'bg-gray-400'}`} />
                           <span className="truncate">{s.name}</span>
@@ -608,6 +671,7 @@ export default function CommsPage() {
                   </div>}
                   subtitle={typingUsers[conv.id] ? <span className="italic text-primary">typing...</span> : (conv.last_message || 'No messages')}
                   onClick={() => selectRoom(conv)}
+                  onDelete={() => handleDeleteConversation(conv.id)}
                 />
               );
             })}
@@ -665,6 +729,9 @@ export default function CommsPage() {
                 <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={() => setShowNewAnnouncement(true)} data-testid="post-announcement-btn">
                   <Plus size={12} /> Post
                 </Button>
+              )}
+              {selectedRoom.type === 'group' && !selectedRoom.id.startsWith('__') && (
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setShowEditGroup(true)} title="Edit Group" data-testid="edit-group-btn"><Settings size={14} /></Button>
               )}
             </div>
           )}
@@ -775,14 +842,47 @@ export default function CommsPage() {
         setForm={setAnnouncementForm}
         onSubmit={handlePostAnnouncement}
       />
+
+      {/* Edit Group Dialog */}
+      <Dialog open={showEditGroup} onOpenChange={setShowEditGroup}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Group: {selectedRoom?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">Members ({selectedRoom?.participants?.length || 0})</p>
+            <div className="space-y-1 max-h-40 overflow-auto">
+              {(selectedRoom?.participants || []).map(pid => {
+                const s = allStaff.find(x => x.id === pid);
+                return (
+                  <div key={pid} className="flex items-center justify-between p-2 rounded-lg hover:bg-accent/30 text-sm">
+                    <span>{s?.name || pid} {pid === user?.id && <span className="text-xs text-muted-foreground">(you)</span>}</span>
+                    {pid !== user?.id && <button className="text-xs text-destructive hover:underline" onClick={() => handleRemoveGroupMember(pid)}>Remove</button>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground">Add Members</p>
+              <Input placeholder="Search staff..." value={groupAddSearch} onChange={e => setGroupAddSearch(e.target.value)} className="h-8 text-sm" data-testid="group-add-search" />
+              {groupAddSearch.trim().length >= 2 && (
+                <div className="max-h-32 overflow-auto border rounded-lg p-1 space-y-0.5">
+                  {allStaff.filter(s => s.id !== user?.id && !(selectedRoom?.participants || []).includes(s.id) && s.name?.toLowerCase().includes(groupAddSearch.toLowerCase())).slice(0, 10).map(s => (
+                    <button key={s.id} className="w-full text-left p-2 rounded hover:bg-accent/50 text-sm" onClick={() => handleAddGroupMembers([s.id])}>{s.name} ({s.role})</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button variant="outline" className="w-full" onClick={() => setShowEditGroup(false)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function SidebarItem({ room, selected, icon, subtitle, badge, onClick }) {
+function SidebarItem({ room, selected, icon, subtitle, badge, onClick, onDelete }) {
   return (
     <div
-      className={`px-3 py-2.5 cursor-pointer transition-colors flex items-center gap-2.5 hover:bg-accent/50 ${selected ? 'bg-accent' : ''}`}
+      className={`px-3 py-2.5 cursor-pointer transition-colors flex items-center gap-2.5 hover:bg-accent/50 group ${selected ? 'bg-accent' : ''}`}
       onClick={onClick} data-testid="sidebar-chat-item"
     >
       <div className="p-1.5 rounded-lg bg-secondary shrink-0">{icon}</div>
@@ -791,6 +891,7 @@ function SidebarItem({ room, selected, icon, subtitle, badge, onClick }) {
         <p className="text-[11px] text-muted-foreground truncate">{subtitle}</p>
       </div>
       {badge && <Badge variant="secondary" className="text-[10px] h-5 px-1.5 shrink-0">{badge}</Badge>}
+      {onDelete && <button className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive p-0.5 shrink-0" onClick={e => { e.stopPropagation(); onDelete(); }} data-testid="delete-conv-btn"><X size={12} /></button>}
     </div>
   );
 }
