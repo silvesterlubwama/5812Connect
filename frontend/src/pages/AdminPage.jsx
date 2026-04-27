@@ -180,7 +180,15 @@ export default function AdminPage() {
   const resetPassword = async () => {
     if (!selectedUser || !newPassword) return;
     setSaving(true);
-    try { await adminApi.resetPassword(selectedUser.id, newPassword); setShowResetPw(false); setNewPassword(''); toast.success('Password reset'); }
+    try {
+      const res = await adminApi.resetPassword(selectedUser.id, newPassword);
+      const emailSent = res.data?.email_sent;
+      const msg = emailSent
+        ? `Password reset and email sent to ${selectedUser.email}`
+        : `Password reset to: ${newPassword} (email not sent — share manually)`;
+      toast.success(msg, { duration: 8000 });
+      setShowResetPw(false); setNewPassword('');
+    }
     catch (err) { toast.error(err.response?.data?.detail || 'Reset failed'); }
     finally { setSaving(false); }
   };

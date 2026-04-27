@@ -1311,8 +1311,9 @@ export default function UnifiedPeoplePage() {
               <Button variant="outline" className="flex-1" onClick={() => { setShowResetPw(false); setNewPassword(''); }}>Cancel</Button>
               <Button className="flex-1" disabled={newPassword.length < 6} onClick={async () => {
                 try {
-                  await adminApi.resetPassword(resetPwUser.id, newPassword);
-                  toast.success(`Password reset for ${resetPwUser.name}`);
+                  const res = await adminApi.resetPassword(resetPwUser.id, newPassword);
+                  const emailSent = res.data?.email_sent;
+                  toast.success(emailSent ? `Password reset and email sent to ${resetPwUser.email}` : `Password reset to: ${newPassword} (share manually)`, { duration: 8000 });
                   setShowResetPw(false); setNewPassword('');
                 } catch (err) { toast.error(err.response?.data?.detail || 'Reset failed'); }
               }} data-testid="confirm-reset-pw">Reset Password</Button>

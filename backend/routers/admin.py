@@ -285,11 +285,12 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
     }})
     await _audit(current_user["id"], "update", "password_reset", user_id)
     # Send email notification to user about password reset
+    email_sent = False
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "email": 1, "name": 1})
     if user and user.get("email"):
         try:
             from email_helpers import send_notification_email
-            await send_notification_email(
+            email_sent = await send_notification_email(
                 user["email"],
                 "58:12 Global — Your Password Has Been Reset",
                 f"""<h2 style="color:#1a1a2e">Password Reset</h2>
@@ -305,7 +306,7 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
             )
         except Exception as e:
             logger.warning(f"Password reset email failed: {e}")
-    return {"message": "Password reset successfully"}
+    return {"message": "Password reset successfully", "email_sent": email_sent, "new_password": new_password}
 
 
 @router.delete("/users/{user_id}")
