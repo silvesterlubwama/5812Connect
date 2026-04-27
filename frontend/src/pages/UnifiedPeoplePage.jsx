@@ -155,6 +155,8 @@ export default function UnifiedPeoplePage() {
   const [savingChild, setSavingChild] = useState(false);
   const [parentSearch, setParentSearch] = useState('');
   const [uploadingChildPhoto, setUploadingChildPhoto] = useState(false);
+  const [childSearch, setChildSearch] = useState('');
+  const [guestSearch, setGuestSearch] = useState('');
 
   // Documents
   const [memberDocuments, setMemberDocuments] = useState([]);
@@ -301,7 +303,7 @@ export default function UnifiedPeoplePage() {
   const openEditChild = (c, e) => {
     if (e) e.stopPropagation();
     setEditChild(c);
-    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '' });
+    setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '', is_sponsored: c.is_sponsored || false, sponsor_first_name: c.sponsor_first_name || '', photo_url: c.photo_url || '' });
   };
   const saveEditChild = async () => {
     if (!editChild) return;
@@ -658,11 +660,17 @@ export default function UnifiedPeoplePage() {
 
         {/* CHILDREN TAB */}
         <TabsContent value="children" className="mt-4">
-          <div className="flex justify-end mb-3">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-9 h-8 text-sm" placeholder="Search children by name..." value={childSearch} onChange={e => setChildSearch(e.target.value)} data-testid="children-search" />
+            </div>
             <Button size="sm" className="gap-2" onClick={() => setShowChild(true)} data-testid="add-child-btn"><Plus size={14} /> Add Child</Button>
           </div>
-          {children.length === 0 ? (
-            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Baby size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No children registered</p></CardContent></Card>
+          {(() => {
+            const filteredChildren = childSearch.trim() ? children.filter(c => (c.name || '').toLowerCase().includes(childSearch.toLowerCase())) : children;
+            return filteredChildren.length === 0 ? (
+            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Baby size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">{childSearch ? 'No children match search' : 'No children registered'}</p></CardContent></Card>
           ) : (
             <div>
             {/* Select All + Bulk Actions for Children */}
@@ -675,7 +683,7 @@ export default function UnifiedPeoplePage() {
               onBulkDelete={async () => { setBulkDeleteTarget({ type: 'children', ids: [...selChildren], label: 'children' }); }}
             /></div>}
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {children.map(c => {
+              {filteredChildren.map(c => {
                 const isRestricted = c.is_resident || allLocations.find(l => l.id === c.location_id)?.is_restricted;
                 return (
                 <Card key={c.id} className={`shadow-soft rounded-xl ${selChildren.has(c.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`child-card-${c.id}`}>
@@ -703,7 +711,12 @@ export default function UnifiedPeoplePage() {
                       </div>
                       {isCoordinator && (
                         <div className="flex gap-1">
-                          {isRestricted && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => { setBadgePerson({ ...c, role: 'child', country: allLocations.find(l => l.id === c.location_id)?.country }); setShowBadge(true); }} title="Print Badge" data-testid={`badge-child-${c.id}`}><Printer size={13} /></Button>}
+                          {isRestricted && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={() => {
+                            const loc = allLocations.find(l => l.id === c.location_id);
+                            const cParents = (c.parent_ids || []).map(pid => guests.find(g => g.id === pid) || members.find(s => s.id === pid)).filter(Boolean).map(p => ({ name: p.name, phone: p.phone || '' }));
+                            setBadgePerson({ ...c, role: 'child', country: loc?.country, country_code: loc?.country_code, location_name: loc?.name, campus_phone: loc?.contact_phone, parents: cParents });
+                            setShowBadge(true);
+                          }} title="Print Badge" data-testid={`badge-child-${c.id}`}><Printer size={13} /></Button>}
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-child-${c.id}`} onClick={() => openEditChild(c)} title="Edit"><Eye size={13} /></Button>
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => childrenApi.delete(c.id).then(() => { toast.success('Deleted'); emitDataChanged('children', c.id); fetchPeople(); })}><Trash2 size={13} /></Button>
                         </div>
@@ -715,16 +728,23 @@ export default function UnifiedPeoplePage() {
               })}
             </div>
             </div>
-          )}
+          );
+          })()}
         </TabsContent>
 
         {/* GUESTS TAB */}
         <TabsContent value="guests" className="mt-4">
-          <div className="flex justify-end mb-3">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-9 h-8 text-sm" placeholder="Search guests by name or phone..." value={guestSearch} onChange={e => setGuestSearch(e.target.value)} data-testid="guests-search" />
+            </div>
             <Button size="sm" className="gap-2" onClick={() => setShowGuest(true)} data-testid="add-guest-btn"><Plus size={14} /> Record Guest</Button>
           </div>
-          {guests.length === 0 ? (
-            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><UserPlus size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No guest visits recorded</p></CardContent></Card>
+          {(() => {
+            const filteredGuests = guestSearch.trim() ? guests.filter(g => (g.name || '').toLowerCase().includes(guestSearch.toLowerCase()) || (g.phone || '').includes(guestSearch)) : guests;
+            return filteredGuests.length === 0 ? (
+            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><UserPlus size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">{guestSearch ? 'No guests match search' : 'No guest visits recorded'}</p></CardContent></Card>
           ) : (
             <div>
             {/* Select All + Bulk Actions for Guests */}
@@ -736,7 +756,7 @@ export default function UnifiedPeoplePage() {
               onBulkDelete={async () => { setBulkDeleteTarget({ type: 'guests', ids: [...selGuests], label: 'guests' }); }}
             /></div>}
             <div className="space-y-2">
-              {guests.map(g => (
+              {filteredGuests.map(g => (
                 <Card key={g.id} className={`shadow-soft rounded-xl ${selGuests.has(g.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`guest-card-${g.id}`}>
                   <CardContent className="p-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -758,7 +778,8 @@ export default function UnifiedPeoplePage() {
               ))}
             </div>
             </div>
-          )}
+          );
+          })()}
         </TabsContent>
 
         {/* PENDING TAB */}
@@ -1033,6 +1054,16 @@ export default function UnifiedPeoplePage() {
                   <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select restricted location" /></SelectTrigger>
                   <SelectContent><SelectItem value="__none__">None</SelectItem>{allLocations.filter(l => l.is_restricted).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
                 </Select>
+              )}
+            </div>
+            {/* Sponsorship */}
+            <div className="p-3 border border-border rounded-lg space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="accent-primary" checked={editChildForm.is_sponsored || false} onChange={e => setEditChildForm({ ...editChildForm, is_sponsored: e.target.checked, sponsor_first_name: e.target.checked ? editChildForm.sponsor_first_name : '' })} data-testid="child-sponsored-toggle" />
+                Sponsored / Supported
+              </label>
+              {editChildForm.is_sponsored && (
+                <Input className="h-8 text-xs" placeholder="Sponsor first name (staff-only visible)" value={editChildForm.sponsor_first_name || ''} onChange={e => setEditChildForm({ ...editChildForm, sponsor_first_name: e.target.value })} data-testid="sponsor-name-input" />
               )}
             </div>
             <div className="space-y-1.5">

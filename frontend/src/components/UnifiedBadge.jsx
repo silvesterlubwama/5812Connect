@@ -245,6 +245,12 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               {lastName && <div style={{ fontSize: isSmall ? '11px' : '14px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
               <div style={{ fontSize: isSmall ? '8px' : '10px', color: colors.accent, marginTop: isSmall ? '4px' : '8px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
               {person.department && <div style={{ fontSize: '9px', color: kioskMode ? '#999' : '#888', marginTop: '2px' }}>{person.department}</div>}
+              {/* Parent info for child badges */}
+              {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
+                <div key={i} style={{ fontSize: '8px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '4px' : '1px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
+              ))}
+              {/* Campus info for child badges */}
+              {type === 'child' && person.location_name && <div style={{ fontSize: '8px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               <QRCodeSVG value={qrData} size={isSmall ? 50 : 72} bgColor="transparent" fgColor={qrFg} level="M" />

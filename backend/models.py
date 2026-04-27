@@ -102,6 +102,9 @@ class ChildCreate(BaseModel):
     location_id: Optional[str] = None
     is_resident: Optional[bool] = False
     resident_location_id: Optional[str] = None
+    is_sponsored: Optional[bool] = False
+    sponsor_first_name: Optional[str] = None
+    photo_url: Optional[str] = None
 
 class GuestCreate(BaseModel):
     name: str
