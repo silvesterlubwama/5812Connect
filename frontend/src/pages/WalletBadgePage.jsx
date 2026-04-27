@@ -7,6 +7,17 @@ import { getCountryOutline } from '../components/countryOutlines';
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 const STAFF_TYPES = new Set(['staff', 'director', 'volunteer', 'coordinator', 'manager', 'leader', 'hr', 'executive director', 'adviser', 'admin', 'system_admin']);
 
+function genInitials(name, bg = '#fbbf24', fg = '#1a1a2e', sz = 128) {
+  const ini = (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  const c = document.createElement('canvas'); c.width = sz; c.height = sz;
+  const ctx = c.getContext('2d');
+  ctx.beginPath(); ctx.arc(sz/2, sz/2, sz/2, 0, Math.PI*2); ctx.fillStyle = bg; ctx.fill();
+  ctx.fillStyle = fg; ctx.font = `bold ${sz*0.42}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(ini, sz/2, sz/2);
+  return c.toDataURL('image/png');
+}
+
+
 export default function WalletBadgePage() {
   const { token } = useParams();
   const [badge, setBadge] = useState(null);
@@ -77,7 +88,7 @@ export default function WalletBadgePage() {
               {badge.location_name && <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>{badge.location_name}</div>}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <QRCodeLogo value={badge.qr_data || badge.member_id || ''} size={100} bgColor="transparent" fgColor="#ffffff" ecLevel="H" logoImage={badge.photo_url || ''} logoWidth={34} logoHeight={34} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+              <QRCodeLogo value={badge.qr_data || badge.member_id || ''} size={120} bgColor="transparent" fgColor="#ffffff" ecLevel="H" logoImage={badge.photo_url || genInitials(badge.name, '#fbbf24', '#1a1a2e')} logoWidth={44} logoHeight={44} logoPadding={3} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
             </div>
           </div>
 

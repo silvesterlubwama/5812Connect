@@ -10,6 +10,17 @@ const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/r
 function printElement(ref, title) {
   const html = ref.current?.innerHTML;
   if (!html) return;
+
+function generateInitialsImg(name, bg = '#fbbf24', fg = '#1a1a2e', sz = 128) {
+  const initials = (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  const c = document.createElement('canvas'); c.width = sz; c.height = sz;
+  const ctx = c.getContext('2d');
+  ctx.beginPath(); ctx.arc(sz/2, sz/2, sz/2, 0, Math.PI*2); ctx.fillStyle = bg; ctx.fill();
+  ctx.fillStyle = fg; ctx.font = `bold ${sz*0.42}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(initials, sz/2, sz/2);
+  return c.toDataURL('image/png');
+}
+
   const win = window.open('', '_blank', 'width=500,height=400');
   if (!win) return;
   const doc = win.document;
@@ -87,8 +98,8 @@ export function StaffBadge({ user, kioskMode = false }) {
               {user.department && <div style={{ fontSize: '9px', color: kioskMode ? '#888' : '#666', marginTop: '1px' }}>{user.department}</div>}
               <div style={{ fontSize: '9px', color: kioskMode ? '#aaa' : '#888', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
-            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
-              <QRCodeLogo value={user.id || 'N/A'} size={80} bgColor="transparent" fgColor={textColor} ecLevel="H" logoImage={user.photo_url || ''} logoWidth={28} logoHeight={28} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            <div style={{ flexShrink: 0, borderRadius: '10px', overflow: 'hidden' }}>
+              <QRCodeLogo value={user.id || 'N/A'} size={96} bgColor="transparent" fgColor={textColor} ecLevel="H" logoImage={user.photo_url || generateInitialsImg(user.name, '#fbbf24', kioskMode ? '#fff' : '#1a1a2e')} logoWidth={36} logoHeight={36} logoPadding={3} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
             </div>
           </div>
           <div style={{ background: footerBg, padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: footerColor, borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
@@ -190,8 +201,8 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
                 <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{line}</div>
               ))}
             </div>
-            <div style={{ flexShrink: 0, borderRadius: '6px', overflow: 'hidden' }}>
-              <QRCodeLogo value={child.id || 'N/A'} size={68} bgColor="transparent" fgColor={qrColor} ecLevel="H" logoImage={child.photo_url || ''} logoWidth={24} logoHeight={24} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
+              <QRCodeLogo value={child.id || 'N/A'} size={80} bgColor="transparent" fgColor={qrColor} ecLevel="H" logoImage={child.photo_url || generateInitialsImg(child.name, '#a78bfa', '#fff')} logoWidth={30} logoHeight={30} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
             </div>
           </div>
           <div style={{ background: kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: kioskMode ? '#777' : '#aaa', borderTop: kioskMode ? '1px solid #eee' : 'none' }}>

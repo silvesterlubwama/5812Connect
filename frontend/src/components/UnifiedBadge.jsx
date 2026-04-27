@@ -72,6 +72,23 @@ function CountryWatermark({ country, countryCode, width, height, color }) {
   );
 }
 
+/**
+ * Generate a base64 data URL with initials on a colored circle.
+ * Used as logo fallback when no photo_url is available.
+ */
+function generateInitialsImage(name, bgColor = '#fbbf24', textColor = '#1a1a2e', size = 128) {
+  const initials = (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); ctx.fillStyle = bgColor; ctx.fill();
+  ctx.fillStyle = textColor; ctx.font = `bold ${size * 0.42}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(initials, size / 2, size / 2);
+  return canvas.toDataURL('image/png');
+}
+
+
+
 function NfcSymbol({ size = 14, color = '#fbbf24' }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle' }}>
@@ -279,18 +296,18 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               ))}
               {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
             </div>
-            {/* QR code with embedded profile photo */}
-            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
+            {/* QR code with embedded profile photo or initials */}
+            <div style={{ flexShrink: 0, borderRadius: '10px', overflow: 'hidden' }}>
               <QRCodeLogo
                 value={qrData}
-                size={isSmall ? 72 : 96}
+                size={isSmall ? 88 : 116}
                 bgColor="transparent"
                 fgColor={qrFg}
                 ecLevel="H"
-                logoImage={person.photo_url || ''}
-                logoWidth={isSmall ? 24 : 32}
-                logoHeight={isSmall ? 24 : 32}
-                logoPadding={2}
+                logoImage={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e')}
+                logoWidth={isSmall ? 34 : 44}
+                logoHeight={isSmall ? 34 : 44}
+                logoPadding={3}
                 logoPaddingStyle="circle"
                 removeQrCodeBehindLogo={true}
                 qrStyle="dots"
