@@ -542,6 +542,33 @@ async def update_child(child_id: str, data: ChildCreate, current_user: dict = De
     return await db.children.find_one({"id": child_id}, {"_id": 0})
 
 
+
+@router.get("/children/{child_id}/parents")
+async def get_child_parents(child_id: str, current_user: dict = Depends(get_current_user)):
+    """Get full parent details for a child (for badge/profile display)."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "parent_ids": 1, "location_id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    parents = []
+    for pid in (child.get("parent_ids") or []):
+        # Check guests first, then users/members
+        p = await db.guests.find_one({"id": pid}, {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1})
+        if not p:
+            p = await db.users.find_one({"id": pid}, {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1})
+        if not p:
+            p = await db.members.find_one({"id": pid}, {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1})
+        if p:
+            parents.append(p)
+    # Get campus contact info
+    campus_phone = ""
+    if child.get("location_id"):
+        loc = await db.locations.find_one({"id": child["location_id"]}, {"_id": 0, "contact_phone": 1, "name": 1})
+        if loc:
+            campus_phone = loc.get("contact_phone", "")
+    return {"parents": parents, "campus_phone": campus_phone}
+
+
+
 @router.delete("/children/{child_id}")
 async def delete_child(child_id: str, current_user: dict = Depends(get_current_user)):
     child = await db.children.find_one({"id": child_id}, {"_id": 0})

@@ -152,7 +152,7 @@ export function ParentBadge({ parent, children: childList, kioskMode = false }) 
   );
 }
 
-export function ChildTag({ child, parentPhone, eventName, locationName, kioskMode = false }) {
+export function ChildTag({ child, parentPhone, eventName, locationName, kioskMode = false, parents = [], campusPhone = '' }) {
   const ref = useRef(null);
   const firstName = (child.name || '').split(' ')[0];
   const phone4 = (parentPhone || '').slice(-4);
@@ -163,11 +163,15 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
   const qrColor = kioskMode ? '#1a1a2e' : '#fff';
   const watermarkColor = kioskMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)';
   const logoFilter = kioskMode ? 'none' : 'brightness(0) invert(1)';
+  const parentLines = parents.length > 0
+    ? parents.map(p => `${p.name}${p.phone ? ' (' + p.phone + ')' : ''}`).slice(0, 2)
+    : phone4 ? [`Parent: ****${phone4}`] : [];
 
   return (
     <div className="space-y-3">
       <div ref={ref}>
-        <div style={{ width: '280px', height: '160px', border: kioskMode ? '1.5px solid #ddd' : 'none', borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: bg, margin: '0 auto', position: 'relative', boxShadow: kioskMode ? 'none' : '0 4px 12px rgba(0,0,0,0.3)' }}>
+        {/* Front of badge */}
+        <div style={{ width: '280px', height: kioskMode ? '160px' : '180px', border: kioskMode ? '1.5px solid #ddd' : 'none', borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: bg, margin: '0 auto', position: 'relative', boxShadow: kioskMode ? 'none' : '0 4px 12px rgba(0,0,0,0.3)' }}>
           <CountryWatermarkInline country={country} countryCode={countryCode} width={60} height={60} color={watermarkColor} />
           <div style={{ background: kioskMode ? '#f0f0f5' : bg, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '6px', borderBottom: '2px solid #a78bfa' }}>
             <img src={LOGO_URL} alt="58:12" style={{ height: '14px', filter: logoFilter }} crossOrigin="anonymous" />
@@ -183,11 +187,14 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
               <div style={{ fontSize: '18px', fontWeight: 800, color: textColor, lineHeight: 1.1 }}>{firstName}</div>
               {child.class_group && <div style={{ fontSize: '11px', color: kioskMode ? '#555' : '#5eead4', marginTop: '2px', fontWeight: 600 }}>{child.class_group}</div>}
               {eventName && <div style={{ fontSize: '9px', color: kioskMode ? '#6366f1' : '#a78bfa', marginTop: '1px' }}>{eventName}</div>}
-              {phone4 && <div style={{ fontSize: '9px', color: kioskMode ? '#888' : '#aaa', marginTop: '3px' }}>Parent: ****{phone4}</div>}
+              {/* Parents */}
+              {parentLines.map((line, i) => (
+                <div key={i} style={{ fontSize: '8px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '4px' : '1px' }}>{line}</div>
+              ))}
             </div>
           </div>
           <div style={{ background: kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: kioskMode ? '#777' : '#aaa', borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
-            <span>{locationName || ''}</span>
+            <span>{locationName || ''}{campusPhone ? ` | ${campusPhone}` : ''}</span>
             <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>
             <span>58:12 GLOBAL - {new Date().toLocaleDateString()}</span>
           </div>

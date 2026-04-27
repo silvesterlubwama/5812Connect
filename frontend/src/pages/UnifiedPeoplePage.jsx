@@ -698,7 +698,7 @@ export default function UnifiedPeoplePage() {
                             {c.is_resident && <Badge className="text-[10px] bg-blue-100 text-blue-700">Resident</Badge>}
                             {isRestricted && <Badge className="text-[10px] bg-amber-100 text-amber-700">Tracked</Badge>}
                           </div>
-                          {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.length}</p>}
+                          {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.map(pid => { const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid); return p?.name; }).filter(Boolean).join(', ') || c.parent_ids.length}</p>}
                         </div>
                       </div>
                       {isCoordinator && (
@@ -1036,46 +1036,61 @@ export default function UnifiedPeoplePage() {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label>Linked Parents</Label>
-              <Input
-                placeholder="Search parents by name or phone..."
-                value={parentSearch}
-                onChange={e => setParentSearch(e.target.value)}
-                className="h-8 text-xs"
-                data-testid="parent-search-input"
-              />
-              <div className="max-h-32 overflow-y-auto border rounded-lg p-2 space-y-1">
-                {(() => {
-                  const parentGuests = guests.filter(g => g.is_parent || g.family_id);
-                  const filtered = parentSearch.trim()
-                    ? parentGuests.filter(g => (g.name || '').toLowerCase().includes(parentSearch.toLowerCase()) || (g.phone || '').includes(parentSearch))
-                    : parentGuests;
-                  if (filtered.length === 0) return (
-                    <p className="text-xs text-muted-foreground text-center py-2">{parentSearch ? 'No parents match search' : 'No parents found in guests'}</p>
-                  );
-                  return filtered.map(g => (
-                    <label key={g.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-accent/30 cursor-pointer text-sm">
-                      <input
-                        type="checkbox"
-                        checked={(editChildForm.parent_ids || []).includes(g.id)}
-                        onChange={(e) => {
-                          const ids = editChildForm.parent_ids || [];
-                          setEditChildForm({ ...editChildForm, parent_ids: e.target.checked ? [...ids, g.id] : ids.filter(id => id !== g.id) });
-                        }}
-                        className="rounded"
-                      />
-                      {g.name} {g.phone ? `(${g.phone})` : ''}
-                    </label>
-                  ));
-                })()}
+              <div className="flex items-center justify-between">
+                <Label>Parents / Guardians</Label>
+                <Button size="sm" variant="outline" className="h-6 text-xs gap-1" onClick={() => setParentSearch(parentSearch ? '' : ' ')} data-testid="add-parent-btn"><Plus size={11} /> Add Parent</Button>
               </div>
+              {/* Selected parents */}
               {(editChildForm.parent_ids || []).length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1">
+                <div className="space-y-1.5">
                   {(editChildForm.parent_ids || []).map(pid => {
-                    const p = guests.find(g => g.id === pid);
-                    return p ? <Badge key={pid} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => setEditChildForm({ ...editChildForm, parent_ids: (editChildForm.parent_ids || []).filter(id => id !== pid) })}>{p.name} <X size={10} /></Badge> : null;
+                    const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid);
+                    if (!p) return null;
+                    return (
+                      <div key={pid} className="flex items-center justify-between p-2 rounded-lg border border-border bg-accent/20">
+                        <div>
+                          <p className="text-sm font-medium">{p.name}</p>
+                          <p className="text-[10px] text-muted-foreground">{p.phone || p.email || ''} {p.role ? `(${p.role})` : p.is_parent ? '(Parent)' : ''}</p>
+                        </div>
+                        <button className="text-destructive" onClick={() => setEditChildForm({ ...editChildForm, parent_ids: (editChildForm.parent_ids || []).filter(id => id !== pid) })}><X size={14} /></button>
+                      </div>
+                    );
                   })}
                 </div>
+              )}
+              {/* Search to add parents */}
+              {parentSearch !== '' && (
+                <div className="space-y-1.5">
+                  <Input
+                    placeholder="Search staff or guests by name or phone..."
+                    value={parentSearch.trim() ? parentSearch : ''}
+                    onChange={e => setParentSearch(e.target.value)}
+                    className="h-8 text-xs"
+                    data-testid="parent-search-input"
+                    autoFocus
+                  />
+                  <div className="max-h-36 overflow-y-auto border rounded-lg p-1 space-y-0.5">
+                    {(() => {
+                      const q = parentSearch.trim().toLowerCase();
+                      const currentIds = new Set(editChildForm.parent_ids || []);
+                      // Search guests (parents) + all staff
+                      const guestMatches = guests.filter(g => !currentIds.has(g.id) && (q.length < 2 || (g.name || '').toLowerCase().includes(q) || (g.phone || '').includes(q)));
+                      const staffMatches = members.filter(s => !currentIds.has(s.id) && (q.length < 2 || (s.name || '').toLowerCase().includes(q) || (s.phone || '').includes(q)));
+                      const results = [...guestMatches.map(g => ({ ...g, _type: g.is_parent ? 'parent' : 'guest' })), ...staffMatches.map(s => ({ ...s, _type: 'staff' }))].slice(0, 20);
+                      if (results.length === 0) return <p className="text-xs text-muted-foreground text-center py-2">No matches found</p>;
+                      return results.map(r => (
+                        <button key={r.id} type="button" className="w-full text-left p-2 rounded hover:bg-accent/50 text-sm flex items-center justify-between"
+                          onClick={() => { setEditChildForm(prev => ({ ...prev, parent_ids: [...(prev.parent_ids || []), r.id] })); setParentSearch(''); }}>
+                          <span>{r.name} {r.phone ? <span className="text-muted-foreground text-xs">({r.phone})</span> : ''}</span>
+                          <Badge variant="outline" className="text-[9px] capitalize">{r._type}</Badge>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              )}
+              {(editChildForm.parent_ids || []).length === 0 && parentSearch === '' && (
+                <p className="text-xs text-muted-foreground py-2">No parents linked. Click "Add Parent" to search.</p>
               )}
             </div>
             <div className="flex gap-3 pt-2">
