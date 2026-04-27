@@ -74,27 +74,25 @@ export function StaffBadge({ user, kioskMode = false }) {
           <CountryWatermarkInline country={country} countryCode={countryCode} color={watermarkColor} />
           <div style={{ background: headerBg, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '2px solid #fbbf24' }}>
             <img src={LOGO_URL} alt="58:12" style={{ height: '18px', filter: logoFilter }} crossOrigin="anonymous" />
-            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
-              <NfcIcon size={12} color="#fbbf24" />
-              <span style={{ color: '#fbbf24', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: '4px' }}>STAFF</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <NfcIcon size={11} color="#fbbf24" />
+              {user.is_medical && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M12 14v-4M10 12h4"/></svg>}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </span>
           </div>
-          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-              {user.photo_url ? (
-                <img src={user.photo_url} alt="" style={{ width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', border: `2px solid ${kioskMode ? '#1a1a2e' : '#fbbf24'}` }} />
-              ) : (
-                <div style={{ width: '48px', height: '48px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 700, ...initialsStyle }}>{initials}</div>
-              )}
-              <QRCodeSVG value={user.id || 'N/A'} size={48} level="L" bgColor="transparent" fgColor={textColor} />
-            </div>
+          <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative', zIndex: 1 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{user.name}</div>
               <div style={{ fontSize: '10px', color: subColor, marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{user.role}</div>
               {user.department && <div style={{ fontSize: '9px', color: kioskMode ? '#888' : '#666', marginTop: '1px' }}>{user.department}</div>}
-              {user.is_medical && <div style={{ marginTop: '2px' }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg></div>}
               <div style={{ fontSize: '9px', color: kioskMode ? '#aaa' : '#888', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
+            <QRCodeSVG value={user.id || 'N/A'} size={52} level="H" bgColor="transparent" fgColor={textColor} />
+            {user.photo_url ? (
+              <img src={user.photo_url} alt="" style={{ width: '50px', height: '50px', borderRadius: '8px', objectFit: 'cover', border: `2px solid ${kioskMode ? '#ddd' : '#fbbf2433'}`, flexShrink: 0 }} />
+            ) : (
+              <div style={{ width: '50px', height: '50px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, flexShrink: 0, ...initialsStyle }}>{initials}</div>
+            )}
           </div>
           <div style={{ background: footerBg, padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: footerColor, borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
             <span>ID: {memberId}</span>
@@ -178,30 +176,30 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
             <img src={LOGO_URL} alt="58:12" style={{ height: '14px', filter: logoFilter }} crossOrigin="anonymous" />
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <NfcIcon size={10} color="#a78bfa" />
-              <span style={{ color: '#a78bfa', fontSize: '7px', fontWeight: 700, letterSpacing: '1px' }}>CHILD TAG</span>
+              {child.is_medical && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M12 14v-4M10 12h4"/></svg>}
+              {child.is_resident && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
+              {child.is_sponsored && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>
             </span>
           </div>
-          <div style={{ flex: 1, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative', zIndex: 1 }}>
-            {child.photo_url ? (
-              <img src={child.photo_url} alt="" style={{ width: '56px', height: '56px', borderRadius: '8px', objectFit: 'cover' }} />
-            ) : (
-              <QRCodeSVG value={child.id || 'N/A'} size={56} level="L" bgColor="transparent" fgColor={qrColor} />
-            )}
-            <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '6px', position: 'relative', zIndex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: '18px', fontWeight: 800, color: textColor, lineHeight: 1.1 }}>{firstName}</div>
-              {child.class_group && <div style={{ fontSize: '11px', color: kioskMode ? '#555' : '#5eead4', marginTop: '2px', fontWeight: 600 }}>{child.class_group}</div>}
-              {eventName && <div style={{ fontSize: '9px', color: kioskMode ? '#6366f1' : '#a78bfa', marginTop: '1px' }}>{eventName}</div>}
+              {child.class_group && <div style={{ fontSize: '10px', color: kioskMode ? '#555' : '#5eead4', marginTop: '2px', fontWeight: 600 }}>{child.class_group}</div>}
+              {eventName && <div style={{ fontSize: '8px', color: kioskMode ? '#6366f1' : '#a78bfa', marginTop: '1px' }}>{eventName}</div>}
               {/* Parents */}
               {parentLines.map((line, i) => (
-                <div key={i} style={{ fontSize: '8px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '4px' : '1px' }}>{line}</div>
+                <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{line}</div>
               ))}
-              {/* Status symbols */}
-              <div style={{ display: 'flex', gap: '5px', marginTop: '3px' }}>
-                {child.is_medical && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>}
-                {child.is_resident && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
-                {child.is_sponsored && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>}
-              </div>
             </div>
+            <QRCodeSVG value={child.id || 'N/A'} size={48} level="H" bgColor="transparent" fgColor={qrColor} />
+            {child.photo_url ? (
+              <img src={child.photo_url} alt="" style={{ width: '44px', height: '44px', borderRadius: '6px', objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(167,139,250,0.3)' }} />
+            ) : (
+              <div style={{ width: '44px', height: '44px', borderRadius: '6px', flexShrink: 0, background: kioskMode ? '#e8e8f0' : 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 700, color: '#a78bfa' }}>
+                {(firstName || '?')[0]}
+              </div>
+            )}
           </div>
           <div style={{ background: kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: kioskMode ? '#777' : '#aaa', borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
             <span>{locationName || ''}{campusPhone ? ` | ${campusPhone}` : ''}</span>

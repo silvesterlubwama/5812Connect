@@ -10,14 +10,39 @@ const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/r
 
 const BADGE_COLORS = {
   staff: { bg: '#1a1a2e', accent: '#fbbf24', label: 'STAFF' },
-  volunteer: { bg: '#1a1a2e', accent: '#22c55e', label: 'VOLUNTEER' },
-  director: { bg: '#1a1a2e', accent: '#8b5cf6', label: 'DIRECTOR' },
+  volunteer: { bg: '#1a1a2e', accent: '#22c55e', label: 'VOL' },
+  director: { bg: '#1a1a2e', accent: '#8b5cf6', label: 'DIR' },
   guest: { bg: '#334155', accent: '#60a5fa', label: 'GUEST' },
-  visitor: { bg: '#334155', accent: '#60a5fa', label: 'VISITOR' },
+  visitor: { bg: '#334155', accent: '#60a5fa', label: 'GUEST' },
   child: { bg: '#0f766e', accent: '#5eead4', label: 'CHILD' },
   parent: { bg: '#1e3a5f', accent: '#93c5fd', label: 'PARENT' },
-  member: { bg: '#1a1a2e', accent: '#e2e8f0', label: 'MEMBER' },
+  member: { bg: '#1a1a2e', accent: '#e2e8f0', label: 'MBR' },
 };
+
+// Badge type icons (inline SVG) — replace text labels
+function BadgeTypeIcon({ type, size = 14, color }) {
+  const s = size;
+  switch (type) {
+    case 'staff': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+    case 'director': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/><path d="M4 22h16"/></svg>;
+    case 'volunteer': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>;
+    case 'child': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>;
+    case 'parent': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>;
+    case 'guest': case 'visitor': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/></svg>;
+    default: return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+  }
+}
+
+// Status symbols (medical, resident, sponsored)
+function MedicalIcon({ size = 11, color = '#ef4444' }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M12 14v-4M10 12h4"/></svg>;
+}
+function ResidentIcon({ size = 11, color = '#3b82f6' }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
+}
+function SponsorIcon({ size = 11, color = '#8b5cf6' }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>;
+}
 
 const STAFF_TYPES = new Set(['staff', 'director', 'volunteer']);
 
@@ -224,7 +249,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             color={watermarkColor}
           />
 
-          {/* Header */}
+          {/* Header — logo | status symbols + badge type icon */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: isSmall ? '6px 10px' : '8px 14px',
@@ -232,43 +257,41 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             background: headerBg,
           }}>
             <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: logoFilter }} crossOrigin="anonymous" />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {(isStaffType || type === 'child') && <NfcSymbol size={isSmall ? 10 : 13} color={colors.accent} />}
-              <span style={{ color: colors.accent, fontSize: isSmall ? '8px' : '10px', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{colors.label}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              {(isStaffType || type === 'child') && <NfcSymbol size={isSmall ? 9 : 11} color={colors.accent} />}
+              {person.is_medical && <MedicalIcon size={isSmall ? 9 : 11} color="#ef4444" />}
+              {person.is_resident && <ResidentIcon size={isSmall ? 9 : 11} color="#3b82f6" />}
+              {person.is_sponsored && <SponsorIcon size={isSmall ? 9 : 11} color="#8b5cf6" />}
+              <BadgeTypeIcon type={type} size={isSmall ? 11 : 13} color={colors.accent} />
             </div>
           </div>
 
-          {/* Body */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '12px 14px', gap: '10px', position: 'relative', zIndex: 1 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: isSmall ? '18px' : '26px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
-              {lastName && <div style={{ fontSize: isSmall ? '11px' : '14px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
-              <div style={{ fontSize: isSmall ? '8px' : '10px', color: colors.accent, marginTop: isSmall ? '4px' : '8px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
-              {person.department && <div style={{ fontSize: '9px', color: kioskMode ? '#999' : '#888', marginTop: '2px' }}>{person.department}</div>}
-              {/* Medical symbol for staff */}
-              {type !== 'child' && person.is_medical && (
-                <div style={{ marginTop: '3px' }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
-                </div>
-              )}
+          {/* Body — left: name+info | center: QR | right: photo */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '6px' : '10px', position: 'relative', zIndex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: isSmall ? '18px' : '24px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
+              {lastName && <div style={{ fontSize: isSmall ? '11px' : '13px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
+              <div style={{ fontSize: isSmall ? '8px' : '9px', color: colors.accent, marginTop: isSmall ? '4px' : '6px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
+              {person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px' }}>{person.department}</div>}
               {/* Parent info for child badges */}
               {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
-                <div key={i} style={{ fontSize: '8px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '4px' : '1px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
+                <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
               ))}
-              {/* Campus info for child badges */}
-              {type === 'child' && person.location_name && <div style={{ fontSize: '8px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
-              {/* Status symbols for child badges */}
-              {type === 'child' && (
-                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                  {person.is_medical && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>}
-                  {person.is_resident && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>}
-                  {person.is_sponsored && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>}
-                </div>
-              )}
+              {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <QRCodeSVG value={qrData} size={isSmall ? 50 : 72} bgColor="transparent" fgColor={qrFg} level="M" />
+              <QRCodeSVG value={qrData} size={isSmall ? 48 : 64} bgColor="transparent" fgColor={qrFg} level="H" />
             </div>
+            {/* Profile photo */}
+            {person.photo_url ? (
+              <div style={{ width: isSmall ? '42px' : '56px', height: isSmall ? '42px' : '56px', borderRadius: '8px', overflow: 'hidden', flexShrink: 0, border: `2px solid ${colors.accent}33` }}>
+                <img src={person.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+            ) : (
+              <div style={{ width: isSmall ? '42px' : '56px', height: isSmall ? '42px' : '56px', borderRadius: '8px', flexShrink: 0, background: kioskMode ? '#e8e8f0' : 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isSmall ? '14px' : '18px', fontWeight: 700, color: colors.accent }}>
+                {(firstName || '?')[0]}
+              </div>
+            )}
           </div>
 
           {/* Footer */}
