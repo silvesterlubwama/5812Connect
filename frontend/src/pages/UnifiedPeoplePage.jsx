@@ -76,6 +76,13 @@ function MemberForm({ data, onChange, locations, showDepartment }) {
           </Select>
         </div>
       </div>
+      {/* System Admin toggle */}
+      {!['Parent', 'Customer', 'Guest', 'Child'].includes(data.role) && (
+        <div className="flex items-center justify-between p-2.5 rounded-lg border border-amber-200 bg-amber-50/50">
+          <div><Label className="text-xs font-medium">System Admin</Label><p className="text-[10px] text-muted-foreground">Full cross-campus access</p></div>
+          <Switch checked={data.is_admin || false} onCheckedChange={v => onChange({ ...data, is_admin: v })} data-testid="member-admin-toggle" />
+        </div>
+      )}
       {showDepartment && !isNonDeptRole && departmentOptions.length > 0 && (
         <div className="space-y-1.5"><Label className="text-xs">Department</Label>
           <Select value={data.department || ''} onValueChange={v => onChange({ ...data, department: v })}>
@@ -280,7 +287,7 @@ export default function UnifiedPeoplePage() {
   const openEditMember = (m, e) => {
     if (e) e.stopPropagation();
     setEditMember(m);
-    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: m.pin || '', notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false });
+    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: m.pin || '', notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false, is_admin: m.role === 'admin' || m.role === 'system_admin' });
   };
   const saveEditMember = async () => {
     if (!editMember) return;
@@ -290,6 +297,7 @@ export default function UnifiedPeoplePage() {
       const res = await membersApi.update(editMember.id, editMemberForm);
       // Also update users collection for flag fields (is_parent, is_guest, etc.)
       const flagFields = { is_parent: editMemberForm.is_parent, is_guest: editMemberForm.is_guest, is_customer: editMemberForm.is_customer, is_donor: editMemberForm.is_donor };
+      if (editMemberForm.is_admin) flagFields.role = 'admin';
       try { await adminApi.updateUser(editMember.id, flagFields); } catch (e) { console.warn(e.message || e); }
       setMembers(prev => prev.map(m => m.id === editMember.id ? { ...m, ...res.data, ...flagFields } : m));
       if (selectedMember?.id === editMember.id) setMemberDetail(prev => ({ ...prev, ...res.data, ...flagFields }));
