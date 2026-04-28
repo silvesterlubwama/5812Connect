@@ -785,6 +785,11 @@ async def validate_access(data: dict, current_user: dict = Depends(get_current_u
             if doc:
                 person_name = doc.get("name", ""); break
 
+    # Check 0: Is this person's badge invalidated?
+    invalidated_badge = await db.wallet_badges.find_one({"member_id": person_id, "status": "invalidated"})
+    if invalidated_badge:
+        return {"allowed": False, "person_id": person_id, "person_name": person_name, "reason": "Badge has been invalidated by admin"}
+
     # Check 1: Is this person a resident of this location?
     resident = await db.residents.find_one({"member_id": person_id, "location_id": location_id, "status": "active"})
     if not resident:

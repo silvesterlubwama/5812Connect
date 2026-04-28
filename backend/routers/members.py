@@ -880,6 +880,8 @@ async def get_wallet_badge(token: str):
     badge = await db.wallet_badges.find_one({"token": token}, {"_id": 0})
     if not badge:
         raise HTTPException(status_code=404, detail="Badge not found")
+    if badge.get("status") == "invalidated":
+        raise HTTPException(status_code=403, detail="This badge has been invalidated")
     return badge
 
 
@@ -1454,5 +1456,104 @@ This document was auto-generated. Member ID: {member_id}
         logger.warning(f"PDF generation failed, falling back to HTML: {e}")
         return Response(content=html.encode(), media_type="text/html",
                        headers={"Content-Disposition": f'attachment; filename="profile-{name.replace(" ", "_")}.html"'})
+
+
+
+# ========== MOVE BETWEEN ROLES ==========
+
+@router.post("/children/{child_id}/move-to-guest")
+async def move_child_to_guest(child_id: str, current_user: dict = Depends(require_manager)) -> dict:
+    """Move a child record to the guests collection."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    guest_id = f"gst_{uuid.uuid4().hex[:8]}"
+    guest = {
+        "id": guest_id, "name": child.get("name", ""), "phone": child.get("emergency_contact", ""),
+        "email": "", "location_id": child.get("location_id", ""),
+        "is_parent": False, "notes": f"Moved from children. DOB: {child.get('date_of_birth', '')}",
+        "created_at": datetime.now(timezone.utc).isoformat(), "moved_from": "children", "original_id": child_id,
+    }
+    await db.guests.insert_one(guest)
+    await db.children.delete_one({"id": child_id})
+    guest.pop("_id", None)
+    await _audit(current_user["id"], "move", "child_to_guest", child_id, {"new_id": guest_id})
+    return {"message": f"Moved {child.get('name')} to guests", "guest_id": guest_id}
+
+
+@router.post("/guests/{guest_id}/move-to-staff")
+async def move_guest_to_staff(guest_id: str, data: dict = None, current_user: dict = Depends(require_director)) -> dict:
+    """Move a guest to a staff user account. Body: {role?, department?, password?}"""
+    if data is None: data = {}
+    guest = await db.guests.find_one({"id": guest_id}, {"_id": 0})
+    if not guest:
+        raise HTTPException(status_code=404, detail="Guest not found")
+    # Check if user already exists with this email
+    email = guest.get("email", "")
+    if email:
+        existing = await db.users.find_one({"email": email})
+        if existing:
+            raise HTTPException(status_code=409, detail="A user with this email already exists")
+    user_id = str(uuid.uuid4())
+    password = data.get("password", "Test@5812!")
+    role = data.get("role", "Staff")
+    user = {
+        "id": user_id, "name": guest.get("name", ""), "email": email,
+        "phone": guest.get("phone", ""), "password_hash": hash_password(password),
+        "role": role, "status": "active", "department": data.get("department", ""),
+        "location_id": guest.get("location_id") or current_user.get("active_campus_id", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(), "moved_from": "guests", "original_id": guest_id,
+    }
+    await db.users.insert_one(user)
+    # Create member profile
+    member_id = str(uuid.uuid4())
+    await db.members.insert_one({
+        "id": member_id, "user_id": user_id, "name": user["name"], "email": email,
+        "phone": user["phone"], "role": "member", "membership_type": role.lower(),
+        "status": "active", "location_id": user["location_id"], "department": user.get("department", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Link guest to user
+    await db.guests.update_one({"id": guest_id}, {"$set": {"user_id": user_id, "is_staff_guest": True, "moved_to_staff": True}})
+    user.pop("_id", None); user.pop("password_hash", None)
+    await _audit(current_user["id"], "move", "guest_to_staff", guest_id, {"user_id": user_id, "role": role})
+    return {"message": f"Moved {guest.get('name')} to staff as {role}", "user_id": user_id, "member_id": member_id}
+
+
+# ========== BADGE INVALIDATION ==========
+
+@router.post("/badges/{badge_id}/invalidate")
+async def invalidate_badge(badge_id: str, current_user: dict = Depends(require_admin)) -> dict:
+    """Invalidate a badge so it no longer works for access."""
+    # Check wallet_badges
+    badge = await db.wallet_badges.find_one({"$or": [{"id": badge_id}, {"token": badge_id}]}, {"_id": 0})
+    if not badge:
+        raise HTTPException(status_code=404, detail="Badge not found")
+    await db.wallet_badges.update_one(
+        {"$or": [{"id": badge_id}, {"token": badge_id}]},
+        {"$set": {"status": "invalidated", "invalidated_at": datetime.now(timezone.utc).isoformat(), "invalidated_by": current_user["id"]}}
+    )
+    await _audit(current_user["id"], "update", "badge_invalidate", badge_id)
+    return {"message": "Badge invalidated", "badge_id": badge.get("id"), "member_id": badge.get("member_id")}
+
+
+@router.post("/badges/{badge_id}/reactivate")
+async def reactivate_badge(badge_id: str, current_user: dict = Depends(require_admin)) -> dict:
+    """Reactivate a previously invalidated badge."""
+    await db.wallet_badges.update_one(
+        {"$or": [{"id": badge_id}, {"token": badge_id}]},
+        {"$set": {"status": "active", "reactivated_at": datetime.now(timezone.utc).isoformat(), "reactivated_by": current_user["id"]}}
+    )
+    return {"message": "Badge reactivated"}
+
+
+@router.get("/badges/list")
+async def list_badges(current_user: dict = Depends(require_staff)) -> list:
+    """List all issued badges."""
+    campus = await get_campus_filter(current_user)
+    query = {}
+    if campus:
+        query.update(campus)
+    return await db.wallet_badges.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 

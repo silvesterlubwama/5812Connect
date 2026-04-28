@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -448,7 +448,7 @@ export default function UnifiedPeoplePage() {
 
   const openEditGuest = (g) => {
     setEditGuest(g);
-    setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '' });
+    setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, is_medical: g.is_medical || false, is_resident: g.is_resident || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '' });
   };
 
   const saveEditGuest = async () => {
@@ -592,6 +592,11 @@ export default function UnifiedPeoplePage() {
                     <Badge variant="outline" className="text-[10px] capitalize">{m.role}</Badge>
                     <Badge variant="secondary" className="text-[10px]">{m.group}</Badge>
                     <Badge className={`text-[10px] ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{m.status || 'active'}</Badge>
+                    <div className="flex gap-1.5">
+                      {m.is_medical && <span title="Medical" className="text-red-500"><Heart size={12} /></span>}
+                      {m.is_resident && <span title="Resident" className="text-blue-500"><Home size={12} /></span>}
+                      {m.has_restricted_access && <span title="Restricted Access" className="text-amber-500"><Shield size={12} /></span>}
+                    </div>
                     {isCoordinator && (
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
@@ -777,6 +782,8 @@ export default function UnifiedPeoplePage() {
                     <div className="flex items-center gap-2">
                       {g.is_parent && <Badge variant="outline" className="text-[10px] border-green-300 text-green-600">Parent</Badge>}
                       {g.referred_by && <Badge variant="secondary" className="text-[10px]">Ref: {g.referred_by}</Badge>}
+                      {g.is_medical && <span title="Medical" className="text-red-500"><Heart size={11} /></span>}
+                      {g.is_resident && <span title="Resident" className="text-blue-500"><Home size={11} /></span>}
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openEditGuest(g)} title="Edit" data-testid={`edit-guest-${g.id}`}><Eye size={13} /></Button>
                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" data-testid={`delete-guest-${g.id}`} onClick={async (e) => {
                         e.stopPropagation();
@@ -1222,6 +1229,12 @@ export default function UnifiedPeoplePage() {
             </div>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" className="accent-primary" checked={editGuestForm.is_parent || false} onChange={e => setEditGuestForm({...editGuestForm, is_parent: e.target.checked})} /> Is Parent
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" className="accent-primary" checked={editGuestForm.is_medical || false} onChange={e => setEditGuestForm({...editGuestForm, is_medical: e.target.checked})} /> Medical Enabled
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" className="accent-primary" checked={editGuestForm.is_resident || false} onChange={e => setEditGuestForm({...editGuestForm, is_resident: e.target.checked})} /> Resident
             </label>
             <div className="space-y-1.5"><Label>Referred By</Label><Input value={editGuestForm.referred_by || ''} onChange={e => setEditGuestForm({...editGuestForm, referred_by: e.target.value})} /></div>
             <div className="space-y-1.5"><Label>Address</Label><Input value={editGuestForm.address || ''} onChange={e => setEditGuestForm({...editGuestForm, address: e.target.value})} /></div>

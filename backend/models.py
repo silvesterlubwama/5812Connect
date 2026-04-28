@@ -74,6 +74,9 @@ class MemberUpdate(BaseModel):
     is_customer: Optional[bool] = None
     is_donor: Optional[bool] = None
     is_medical: Optional[bool] = None
+    is_resident: Optional[bool] = None
+    has_restricted_access: Optional[bool] = None
+    resident_location_id: Optional[str] = None
     pin: Optional[str] = None
 
 class FamilyCreate(BaseModel):

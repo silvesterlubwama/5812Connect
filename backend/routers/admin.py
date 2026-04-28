@@ -197,7 +197,7 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)) -> dict:
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments", "notes",
-                      "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "pin",
+                      "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
                       "location_id", "location_ids", "title", "extension", "forward_to",
                       "gender", "date_of_birth", "group", "program"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
