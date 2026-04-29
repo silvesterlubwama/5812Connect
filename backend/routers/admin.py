@@ -290,9 +290,22 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
     # Resolve: if user_id is actually a member_id, find the linked user
     user_exists = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1})
     if not user_exists:
-        member = await db.members.find_one({"id": user_id}, {"_id": 0, "user_id": 1})
-        if member and member.get("user_id"):
-            user_id = member["user_id"]
+        # Try member → user_id lookup
+        member = await db.members.find_one({"id": user_id}, {"_id": 0, "user_id": 1, "email": 1, "name": 1})
+        if member:
+            if member.get("user_id"):
+                user_id = member["user_id"]
+            elif member.get("email"):
+                # Fallback: find user by email
+                user_by_email = await db.users.find_one({"email": member["email"]}, {"_id": 0, "id": 1})
+                if user_by_email:
+                    user_id = user_by_email["id"]
+                    # Fix the broken link while we're at it
+                    await db.members.update_one({"id": member.get("id", user_id)}, {"$set": {"user_id": user_id}})
+                else:
+                    raise HTTPException(status_code=404, detail=f"No user account found for {member.get('name', 'this member')}. Create a user account first.")
+            else:
+                raise HTTPException(status_code=404, detail="Member has no linked user account or email to look up")
         else:
             raise HTTPException(status_code=404, detail="User not found")
     result = await db.users.update_one({"id": user_id}, {"$set": {
