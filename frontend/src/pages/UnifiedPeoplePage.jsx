@@ -608,7 +608,7 @@ export default function UnifiedPeoplePage() {
                     {isCoordinator && (
                       <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
-                        {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser(m); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
+                        {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser({ ...m, _userId: m.user_id || m.id }); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={e => { e.stopPropagation(); setBadgePerson(m); setShowBadge(true); }} title="Badge"><Printer size={13} /></Button>
                         <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); emitDataChanged('members', m.id); fetchMembers(); }); }}><Trash2 size={13} /></Button>
                       </div>
@@ -1350,7 +1350,7 @@ export default function UnifiedPeoplePage() {
               <Button variant="outline" className="flex-1" onClick={() => { setShowResetPw(false); setNewPassword(''); }}>Cancel</Button>
               <Button className="flex-1" disabled={newPassword.length < 6} onClick={async () => {
                 try {
-                  const res = await adminApi.resetPassword(resetPwUser.id, newPassword);
+                  const res = await adminApi.resetPassword(resetPwUser._userId || resetPwUser.user_id || resetPwUser.id, newPassword);
                   const emailSent = res.data?.email_sent;
                   toast.success(emailSent ? `Password reset and email sent to ${resetPwUser.email}` : `Password reset to: ${newPassword} (share manually)`, { duration: 8000 });
                   setShowResetPw(false); setNewPassword('');

@@ -287,12 +287,22 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
     new_password = data.get("new_password", "").strip()
     if not new_password or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    await db.users.update_one({"id": user_id}, {"$set": {
+    # Resolve: if user_id is actually a member_id, find the linked user
+    user_exists = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1})
+    if not user_exists:
+        member = await db.members.find_one({"id": user_id}, {"_id": 0, "user_id": 1})
+        if member and member.get("user_id"):
+            user_id = member["user_id"]
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    result = await db.users.update_one({"id": user_id}, {"$set": {
         "password_hash": hash_password(new_password),
         "status": "active",
         "password_reset_at": datetime.now(timezone.utc).isoformat(),
         "password_reset_by": current_user["id"],
     }})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
     await _audit(current_user["id"], "update", "password_reset", user_id)
     # Send email notification to user about password reset
     email_sent = False
