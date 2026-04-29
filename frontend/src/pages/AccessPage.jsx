@@ -111,13 +111,15 @@ export default function AccessPage() {
   const searchResidents = async (q) => {
     if (!q || q.length < 2) { setResidentForm(prev => ({ ...prev, searchResults: [] })); return; }
     try {
-      const [memRes, childRes] = await Promise.all([
+      const [memRes, childRes, guestRes] = await Promise.all([
         membersApi.list({ search: q, limit: 10 }),
         api.get('/children', { params: { search: q, limit: 10 } }),
+        api.get('/guests', { params: { search: q, limit: 10 } }),
       ]);
-      const mems = (memRes.data?.members || memRes.data || []).map(m => ({ id: m.id, name: m.name, type: m.role || 'member' }));
+      const mems = (memRes.data?.members || memRes.data || []).map(m => ({ id: m.id, name: m.name, type: m.role || 'staff' }));
       const children = (childRes.data || []).map(c => ({ id: c.id, name: c.name, type: 'child' }));
-      setResidentForm(prev => ({ ...prev, searchResults: [...mems, ...children] }));
+      const guests = (guestRes.data || []).map(g => ({ id: g.id, name: g.name, type: 'guest' }));
+      setResidentForm(prev => ({ ...prev, searchResults: [...mems, ...children, ...guests] }));
     } catch { setResidentForm(prev => ({ ...prev, searchResults: [] })); }
   };
 
@@ -510,7 +512,7 @@ export default function AccessPage() {
           <form onSubmit={handleAssignResident} className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Search by name</Label>
-              <Input placeholder="Type name to search members & children..." value={residentForm.search || ''} onChange={e => { setResidentForm({ ...residentForm, search: e.target.value }); searchResidents(e.target.value); }} data-testid="resident-search-input" />
+              <Input placeholder="Search staff, guests, or children by name..." value={residentForm.search || ''} onChange={e => { setResidentForm({ ...residentForm, search: e.target.value }); searchResidents(e.target.value); }} data-testid="resident-search-input" />
               {(residentForm.searchResults || []).length > 0 && (
                 <div className="max-h-40 overflow-y-auto border rounded-lg p-1 space-y-0.5">
                   {(residentForm.searchResults || []).map(r => (

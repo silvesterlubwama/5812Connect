@@ -120,8 +120,12 @@ class GuestCreate(BaseModel):
     address: Optional[str] = None
     notes: Optional[str] = None
     is_parent: Optional[bool] = False
+    is_medical: Optional[bool] = False
+    is_resident: Optional[bool] = False
+    resident_location_id: Optional[str] = None
     family_id: Optional[str] = None
     location_id: Optional[str] = None
+    group: Optional[str] = None
 
 class EventCreate(BaseModel):
     title: str

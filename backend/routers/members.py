@@ -736,6 +736,17 @@ async def create_guest(data: GuestCreate, current_user: dict = Depends(get_curre
 async def update_guest(guest_id: str, data: GuestCreate, current_user: dict = Depends(get_current_user)):
     update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.guests.update_one({"id": guest_id}, {"$set": update})
+    # Auto-add to restricted residents if is_resident + resident_location_id set
+    if update.get("is_resident") and update.get("resident_location_id"):
+        existing_res = await db.residents.find_one({"member_id": guest_id, "location_id": update["resident_location_id"], "status": "active"})
+        if not existing_res:
+            guest = await db.guests.find_one({"id": guest_id}, {"_id": 0, "name": 1})
+            await db.residents.insert_one({
+                "id": f"res_{uuid.uuid4().hex[:8]}", "member_id": guest_id,
+                "member_name": guest.get("name", "") if guest else "", "source": "guest_flag",
+                "location_id": update["resident_location_id"], "tags": [], "status": "active",
+                "assigned_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
+            })
     return await db.guests.find_one({"id": guest_id}, {"_id": 0})
 
 

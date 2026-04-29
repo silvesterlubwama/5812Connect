@@ -217,6 +217,16 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
 
     await _sync_member_profile(user_id, user, update, ACCOUNT_FIELDS, loc_id, expanded)
+    # Auto-add to restricted residents if is_resident + resident_location_id set
+    if update.get("is_resident") and update.get("resident_location_id"):
+        existing_res = await db.residents.find_one({"member_id": user_id, "location_id": update["resident_location_id"], "status": "active"})
+        if not existing_res:
+            await db.residents.insert_one({
+                "id": f"res_{uuid.uuid4().hex[:8]}", "member_id": user_id,
+                "member_name": user.get("name", ""), "source": "flag_toggle",
+                "location_id": update["resident_location_id"], "tags": [], "status": "active",
+                "assigned_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
+            })
     await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
     return user
 

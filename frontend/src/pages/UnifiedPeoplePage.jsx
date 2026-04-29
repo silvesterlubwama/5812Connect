@@ -1244,6 +1244,15 @@ export default function UnifiedPeoplePage() {
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" className="accent-primary" checked={editGuestForm.is_resident || false} onChange={e => setEditGuestForm({...editGuestForm, is_resident: e.target.checked})} /> Resident
             </label>
+            {editGuestForm.is_resident && (
+              <div className="space-y-1.5 pl-4 border-l-2 border-blue-200">
+                <Label className="text-xs text-muted-foreground">Restricted Sub-Location</Label>
+                <Select value={editGuestForm.resident_location_id || ''} onValueChange={v => setEditGuestForm({...editGuestForm, resident_location_id: v})}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select location" /></SelectTrigger>
+                  <SelectContent>{allLocations.filter(l => l.is_restricted || l.type === 'sub-location').map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5"><Label>Referred By</Label><Input value={editGuestForm.referred_by || ''} onChange={e => setEditGuestForm({...editGuestForm, referred_by: e.target.value})} /></div>
             <div className="space-y-1.5"><Label>Address</Label><Input value={editGuestForm.address || ''} onChange={e => setEditGuestForm({...editGuestForm, address: e.target.value})} /></div>
             <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={editGuestForm.notes || ''} onChange={e => setEditGuestForm({...editGuestForm, notes: e.target.value})} /></div>

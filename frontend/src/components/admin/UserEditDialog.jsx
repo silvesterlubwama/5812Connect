@@ -367,6 +367,15 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <div className="flex items-center justify-between"><Label className="text-sm">Is Customer</Label><Switch checked={editForm.is_customer || false} onCheckedChange={v => setEditForm({...editForm, is_customer: v})} /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Medical Enabled</Label><Switch checked={editForm.is_medical || false} onCheckedChange={v => setEditForm({...editForm, is_medical: v})} data-testid="flag-is_medical" /></div>
               <div className="flex items-center justify-between"><Label className="text-sm">Resident</Label><Switch checked={editForm.is_resident || false} onCheckedChange={v => setEditForm({...editForm, is_resident: v})} data-testid="flag-is_resident" /></div>
+              {editForm.is_resident && (
+                <div className="space-y-1.5 pl-4 border-l-2 border-blue-200">
+                  <Label className="text-xs text-muted-foreground">Restricted Sub-Location</Label>
+                  <Select value={editForm.resident_location_id || ''} onValueChange={v => setEditForm({...editForm, resident_location_id: v})}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select restricted location" /></SelectTrigger>
+                    <SelectContent>{locations.filter(l => l.is_restricted || l.type === 'sub-location').map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="flex items-center justify-between"><Label className="text-sm">Restricted Access</Label><Switch checked={editForm.has_restricted_access || false} onCheckedChange={v => setEditForm({...editForm, has_restricted_access: v})} data-testid="flag-restricted_access" /></div>
             </div>
             <div className="flex gap-3 pt-2">
