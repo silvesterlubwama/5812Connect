@@ -33,12 +33,14 @@ class ExpenseCreate(BaseModel):
     date: Optional[str] = None; notes: Optional[str] = None; submitted_by: Optional[str] = None; location_id: Optional[str] = None
 
 class ProductCreate(BaseModel):
-    name: str; description: Optional[str] = None; price: float; currency: str = "UGX"; stock: int = 0
+    name: str; description: Optional[str] = None; price: float = 0; currency: str = "UGX"; stock: int = 0
     category: Optional[str] = None; sku: Optional[str] = None; reorder_level: int = 5; location_id: Optional[str] = None
+    has_variants: bool = False; product_type: Optional[str] = None; variants: Optional[List[dict]] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
     stock: Optional[int] = None; category: Optional[str] = None; reorder_level: Optional[int] = None; location_id: Optional[str] = None
+    has_variants: Optional[bool] = None; product_type: Optional[str] = None
 
 class SaleCreate(BaseModel):
     items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
@@ -947,3 +949,235 @@ async def get_customer_purchases(customer_id: str, current_user: dict = Depends(
     purchases = await db.sales.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
     total = sum(p.get("total", 0) for p in purchases)
     return {"purchases": purchases, "total_count": len(purchases), "total_spent": total}
+
+
+
+# ========== FINANCIAL ACCOUNTS (editable, with starting balance) ==========
+
+@router.get("/financial/campus-accounts/{campus_id}")
+async def list_campus_accounts(campus_id: str, current_user: dict = Depends(get_current_user)):
+    """List financial accounts for a campus (each sub-location + savings)."""
+    accounts = await db.financial_accounts.find({"campus_id": campus_id}, {"_id": 0}).sort("name", 1).to_list(50)
+    if not accounts:
+        # Auto-create accounts from sub-locations
+        subs = await db.locations.find({"$or": [{"parent_id": campus_id}, {"id": campus_id}]}, {"_id": 0, "id": 1, "name": 1}).to_list(50)
+        for sub in subs:
+            doc = {"id": f"acct_{uuid.uuid4().hex[:8]}", "campus_id": campus_id, "location_id": sub["id"], "name": sub["name"], "type": "operational", "starting_balance": 0, "currency": "UGX", "created_at": datetime.now(timezone.utc).isoformat()}
+            await db.financial_accounts.insert_one(doc); doc.pop("_id", None); accounts.append(doc)
+        # Add savings account
+        savings = {"id": f"acct_{uuid.uuid4().hex[:8]}", "campus_id": campus_id, "location_id": "", "name": "Savings", "type": "savings", "starting_balance": 0, "currency": "UGX", "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.financial_accounts.insert_one(savings); savings.pop("_id", None); accounts.append(savings)
+    return accounts
+
+
+@router.put("/financial/campus-accounts/{account_id}")
+async def update_campus_account(account_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Update account details (name, starting_balance, currency). Director or Finance Manager."""
+    allowed = {"name", "starting_balance", "currency", "type", "notes"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.financial_accounts.update_one({"id": account_id}, {"$set": update})
+    return await db.financial_accounts.find_one({"id": account_id}, {"_id": 0})
+
+
+# ========== INTER-ACCOUNT TRANSFERS ==========
+
+@router.post("/financial/transfers")
+async def create_transfer(data: dict, current_user: dict = Depends(require_manager)):
+    """Transfer between accounts (recorded as expense from source, income to destination)."""
+    from_account_id = data.get("from_account_id")
+    to_account_id = data.get("to_account_id")
+    amount = float(data.get("amount", 0))
+    if not from_account_id or not to_account_id or amount <= 0:
+        raise HTTPException(status_code=400, detail="from_account_id, to_account_id, and amount required")
+    from_acct = await db.financial_accounts.find_one({"id": from_account_id}, {"_id": 0})
+    to_acct = await db.financial_accounts.find_one({"id": to_account_id}, {"_id": 0})
+    if not from_acct or not to_acct:
+        raise HTTPException(status_code=404, detail="Account not found")
+    transfer_id = f"txfr_{uuid.uuid4().hex[:8]}"
+    # Record expense on source
+    await db.expenses.insert_one({
+        "id": f"exp_{uuid.uuid4().hex[:8]}", "category": "Transfer Out", "description": f"Transfer to {to_acct['name']}",
+        "amount": amount, "date": datetime.now(timezone.utc).isoformat()[:10], "status": "approved",
+        "location_id": from_acct.get("location_id", ""), "transfer_id": transfer_id,
+        "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+    })
+    # Record income on destination
+    await db.donations.insert_one({
+        "id": f"don_{uuid.uuid4().hex[:8]}", "donor_name": f"Transfer from {from_acct['name']}",
+        "amount": amount, "date": datetime.now(timezone.utc).isoformat()[:10], "category": "Transfer In",
+        "location_id": to_acct.get("location_id", ""), "transfer_id": transfer_id,
+        "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+    })
+    doc = {"id": transfer_id, "from_account_id": from_account_id, "to_account_id": to_account_id,
+           "from_name": from_acct["name"], "to_name": to_acct["name"], "amount": amount,
+           "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    await db.financial_transfers.insert_one(doc); doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "transfer", transfer_id, {"amount": amount})
+    return doc
+
+
+@router.get("/financial/transfers")
+async def list_transfers(campus_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if campus_id:
+        acct_ids = [a["id"] for a in await db.financial_accounts.find({"campus_id": campus_id}, {"_id": 0, "id": 1}).to_list(50)]
+        query = {"$or": [{"from_account_id": {"$in": acct_ids}}, {"to_account_id": {"$in": acct_ids}}]}
+    return await db.financial_transfers.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+# ========== BUDGETING ==========
+
+@router.get("/financial/budgets")
+async def list_budgets(campus_id: Optional[str] = None, period: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if campus_id: query["campus_id"] = campus_id
+    if period: query["period"] = period
+    return await db.financial_budgets.find(query, {"_id": 0}).sort("period", -1).to_list(100)
+
+
+@router.post("/financial/budgets")
+async def create_budget(data: dict, current_user: dict = Depends(require_manager)):
+    """Create/update budget for a sub-location or department."""
+    doc = {
+        "id": f"bgt_{uuid.uuid4().hex[:8]}",
+        "campus_id": data.get("campus_id") or current_user.get("active_campus_id", ""),
+        "location_id": data.get("location_id", ""),
+        "department": data.get("department", ""),
+        "period": data.get("period", datetime.now(timezone.utc).strftime("%Y-%m")),
+        "amount": float(data.get("amount", 0)),
+        "category": data.get("category", "general"),
+        "notes": data.get("notes", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
+    }
+    await db.financial_budgets.insert_one(doc); doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/financial/budgets/{budget_id}")
+async def delete_budget(budget_id: str, current_user: dict = Depends(require_manager)):
+    await db.financial_budgets.delete_one({"id": budget_id})
+    return {"message": "Budget deleted"}
+
+
+# ========== CATEGORIES & INCOME SOURCES (admin-editable) ==========
+
+@router.get("/financial/categories")
+async def list_financial_categories(current_user: dict = Depends(get_current_user)):
+    cats = await db.financial_categories.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    if not cats:
+        defaults = [
+            {"id": "fcat_tithe", "name": "Tithes", "type": "income"}, {"id": "fcat_offering", "name": "Offerings", "type": "income"},
+            {"id": "fcat_donation", "name": "Donations", "type": "income"}, {"id": "fcat_grant", "name": "Grants", "type": "income"},
+            {"id": "fcat_sales", "name": "Sales Revenue", "type": "income"}, {"id": "fcat_transfer_in", "name": "Transfer In", "type": "income"},
+            {"id": "fcat_salary", "name": "Salaries", "type": "expense"}, {"id": "fcat_rent", "name": "Rent/Utilities", "type": "expense"},
+            {"id": "fcat_supplies", "name": "Supplies", "type": "expense"}, {"id": "fcat_transport", "name": "Transport", "type": "expense"},
+            {"id": "fcat_food", "name": "Food/Meals", "type": "expense"}, {"id": "fcat_maintenance", "name": "Maintenance", "type": "expense"},
+            {"id": "fcat_transfer_out", "name": "Transfer Out", "type": "expense"}, {"id": "fcat_other", "name": "Other", "type": "both"},
+        ]
+        await db.financial_categories.insert_many(defaults)
+        for d in defaults: d.pop("_id", None)
+        return defaults
+    return cats
+
+
+@router.post("/financial/categories")
+async def create_financial_category(data: dict, current_user: dict = Depends(require_admin)):
+    doc = {"id": f"fcat_{uuid.uuid4().hex[:8]}", "name": data.get("name", ""), "type": data.get("type", "both"), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.financial_categories.insert_one(doc); doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/financial/categories/{cat_id}")
+async def delete_financial_category(cat_id: str, current_user: dict = Depends(require_admin)):
+    await db.financial_categories.delete_one({"id": cat_id})
+    return {"message": "Category deleted"}
+
+
+# ========== ASSETS (appreciation default, manual depreciation) ==========
+
+@router.put("/financial/assets/{asset_id}/valuation")
+async def update_asset_valuation(asset_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Manually update asset current value. Supports appreciation (default) or depreciation."""
+    new_value = data.get("current_value")
+    method = data.get("method", "appreciation")  # appreciation or depreciation
+    if new_value is None:
+        raise HTTPException(status_code=400, detail="current_value required")
+    await db.assets.update_one({"id": asset_id}, {"$set": {
+        "current_value": float(new_value), "valuation_method": method,
+        "last_valued_at": datetime.now(timezone.utc).isoformat(), "valued_by": current_user["id"],
+    }})
+    return await db.assets.find_one({"id": asset_id}, {"_id": 0})
+
+
+# ========== PRODUCT VARIANTS + BARCODES ==========
+
+@router.post("/products/{product_id}/variants")
+async def add_product_variant(product_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Add a variant to a product (size, color, etc.)."""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    # Ensure variants array exists
+    if product.get("variants") is None:
+        await db.products.update_one({"id": product_id}, {"$set": {"variants": []}})
+    # Generate barcode
+    loc = await db.locations.find_one({"id": product.get("location_id", "")}, {"_id": 0, "country_code": 1})
+    country_prefix = (loc.get("country_code") or "XX") if loc else "XX"
+    variant_num = len(product.get("variants") or []) + 1
+    barcode = data.get("barcode") or f"{country_prefix}-{product_id[-6:]}-V{variant_num:02d}"
+    variant = {
+        "id": f"var_{uuid.uuid4().hex[:6]}",
+        "name": data.get("name", ""),
+        "type": data.get("type", ""),  # e.g. "size", "color"
+        "value": data.get("value", ""),  # e.g. "Large", "Red"
+        "price": float(data.get("price", 0)),
+        "stock": int(data.get("stock", 0)),
+        "sku": data.get("sku", ""),
+        "barcode": barcode,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.products.update_one({"id": product_id}, {
+        "$push": {"variants": variant},
+        "$set": {"has_variants": True, "updated_at": datetime.now(timezone.utc).isoformat()},
+    })
+    return variant
+
+
+@router.put("/products/{product_id}/variants/{variant_id}")
+async def update_product_variant(product_id: str, variant_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Update a variant's price, stock, barcode, etc."""
+    allowed = {"name", "type", "value", "price", "stock", "sku", "barcode"}
+    update_fields = {f"variants.$.{k}": v for k, v in data.items() if k in allowed}
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No valid fields")
+    await db.products.update_one({"id": product_id, "variants.id": variant_id}, {"$set": update_fields})
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    return next((v for v in (product.get("variants") or []) if v["id"] == variant_id), None)
+
+
+@router.delete("/products/{product_id}/variants/{variant_id}")
+async def delete_product_variant(product_id: str, variant_id: str, current_user: dict = Depends(get_current_user)):
+    await db.products.update_one({"id": product_id}, {"$pull": {"variants": {"id": variant_id}}})
+    # Check if any variants remain
+    product = await db.products.find_one({"id": product_id}, {"_id": 0, "variants": 1})
+    if not product.get("variants"):
+        await db.products.update_one({"id": product_id}, {"$set": {"has_variants": False}})
+    return {"message": "Variant deleted"}
+
+
+@router.post("/products/{product_id}/generate-barcodes")
+async def generate_product_barcodes(product_id: str, current_user: dict = Depends(get_current_user)):
+    """Auto-generate barcodes for all variants of a product."""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    loc = await db.locations.find_one({"id": product.get("location_id", "")}, {"_id": 0, "country_code": 1})
+    country_prefix = (loc.get("country_code") or "XX") if loc else "XX"
+    updated = 0
+    for i, v in enumerate(product.get("variants") or []):
+        if not v.get("barcode"):
+            barcode = f"{country_prefix}-{product_id[-6:]}-V{i+1:02d}"
+            await db.products.update_one({"id": product_id, "variants.id": v["id"]}, {"$set": {"variants.$.barcode": barcode}})
+            updated += 1
+    return {"message": f"Generated {updated} barcodes", "prefix": country_prefix}
