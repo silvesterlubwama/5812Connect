@@ -10,6 +10,37 @@ from io import BytesIO
 router = APIRouter(prefix="/api")
 
 
+@router.get("/reports/summary")
+async def reports_summary(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Generate a quick summary report for the dashboard/reports page."""
+    campus = await get_campus_filter(current_user)
+    query = campus or {}
+    if location_id:
+        query["location_id"] = location_id
+    date_q = {}
+    if date_from: date_q["$gte"] = date_from
+    if date_to: date_q["$lte"] = date_to
+
+    don_q = {**query}; exp_q = {**query}
+    if date_q:
+        don_q["date"] = date_q; exp_q["date"] = date_q
+
+    donations = await db.donations.aggregate([{"$match": don_q}, {"$group": {"_id": "$type", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(20)
+    expenses = await db.expenses.aggregate([{"$match": exp_q}, {"$group": {"_id": "$category", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(20)
+    members_count = await db.members.count_documents(query if query else {})
+    events_count = await db.events.count_documents(query if query else {})
+    children_count = await db.children.count_documents(query if query else {})
+
+    total_income = sum(d["total"] for d in donations)
+    total_expenses = sum(e["total"] for e in expenses)
+
+    return {
+        "total_income": total_income, "total_expenses": total_expenses, "net": total_income - total_expenses,
+        "income_breakdown": donations, "expense_breakdown": expenses,
+        "members_count": members_count, "events_count": events_count, "children_count": children_count,
+    }
+
+
 @router.get("/reports")
 async def list_reports(current_user: dict = Depends(get_current_user)):
     reports = await db.reports.find({"$or": [{"created_by": current_user["id"]}, {"is_shared": True}]}, {"_id": 0}).sort("created_at", -1).to_list(100)

@@ -136,7 +136,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price), currency: p.currency || 'UGX', stock: String(p.stock), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '' });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [] });
     setShowProductModal(true);
   };
 
@@ -490,6 +490,40 @@ export default function ProductsPage() {
             </div>
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
+            </div>
+            {/* Variants Section */}
+            <div className="border-t pt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-semibold">Variants</Label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={productForm.has_variants || false} onChange={e => setProductForm({...productForm, has_variants: e.target.checked, price: e.target.checked ? 0 : productForm.price})} /> Has variants</label>
+              </div>
+              {productForm.has_variants && (
+                <div className="space-y-2">
+                  {(productForm.variants || []).map((v, i) => (
+                    <div key={v.id || i} className="flex items-center gap-2 p-2 rounded bg-muted/50 text-xs">
+                      <span className="flex-1 font-medium">{v.name || v.value}</span>
+                      <span>{(v.price || 0).toLocaleString()}</span>
+                      <span className="text-muted-foreground">x{v.stock || 0}</span>
+                      <span className="text-muted-foreground font-mono text-[10px]">{v.barcode || '-'}</span>
+                      <button type="button" className="text-destructive" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>x</button>
+                    </div>
+                  ))}
+                  <div className="grid grid-cols-4 gap-1">
+                    <Input className="h-7 text-xs" placeholder="Name (e.g. Large)" id="_vname" />
+                    <Input className="h-7 text-xs" placeholder="Type" id="_vtype" />
+                    <Input className="h-7 text-xs" type="number" placeholder="Price" id="_vprice" />
+                    <Button type="button" size="sm" className="h-7 text-xs" onClick={() => {
+                      const n = document.getElementById('_vname')?.value; const t = document.getElementById('_vtype')?.value;
+                      const p = parseFloat(document.getElementById('_vprice')?.value) || 0;
+                      if (!n) return;
+                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, type: t, value: n, price: p, stock: 0, barcode: ''}]}));
+                      if (document.getElementById('_vname')) document.getElementById('_vname').value = '';
+                      if (document.getElementById('_vprice')) document.getElementById('_vprice').value = '';
+                    }}>+ Add</Button>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Price is per variant. Main product price is ignored when variants exist.</p>
+                </div>
+              )}
             </div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowProductModal(false)}>Cancel</Button>
