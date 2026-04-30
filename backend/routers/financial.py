@@ -7,17 +7,27 @@ from typing import Optional, List
 import uuid
 
 async def _financial_campus_filter(user: dict) -> dict:
-    """Financial data access: finance department staff or managers+ in the location.
-    Advisers/EDs/admins see everything."""
-    if is_system_admin(user):
+    """Financial data access: enforces need-to-know.
+    - System admins/EDs/Advisers: see all
+    - Directors: see entire campus
+    - Finance dept staff: see entire campus
+    - Managers at sub-location: see only their sub-location
+    - Others: no access"""
+    role = user.get("role", "")
+    if is_system_admin(user) or role in ("Executive Director", "Adviser"):
         return {}
-    depts = user.get("departments") or []
-    dept = user.get("department") or ""
-    is_finance = "finance" in [d.lower() for d in depts] or "finance" in dept.lower()
-    role_level = {"Manager": 7, "Coordinator": 6, "Staff": 5, "Volunteer": 4}.get(user.get("role"), 0)
-    if role_level >= 7 or is_finance:
+    if role == "Director":
         return await get_campus_filter(user)
-    # Staff without finance dept: no financial visibility
+    depts = [d.lower() for d in (user.get("departments") or [])]
+    dept = (user.get("department") or "").lower()
+    is_finance = "finance" in depts or dept == "finance"
+    if is_finance:
+        return await get_campus_filter(user)
+    role_level = get_role_level(role)
+    if role_level >= 7:  # Manager
+        # Restrict to their primary location (sub-location)
+        loc_id = user.get("active_campus_id") or user.get("location_id") or ""
+        return {"location_id": loc_id} if loc_id else await get_campus_filter(user)
     return {"location_id": "__no_access__"}
 
 
@@ -1187,3 +1197,36 @@ async def generate_product_barcodes(product_id: str, current_user: dict = Depend
             await db.products.update_one({"id": product_id, "variants.id": v["id"]}, {"$set": {"variants.$.barcode": barcode}})
             updated += 1
     return {"message": f"Generated {updated} barcodes", "prefix": country_prefix}
+
+
+
+@router.get("/products/{product_id}/barcode-labels")
+async def get_barcode_labels(product_id: str, current_user: dict = Depends(get_current_user)):
+    """Generate printable barcode SVGs for product variants."""
+    import barcode
+    from barcode.writer import SVGWriter
+    import io
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    labels = []
+    for v in (product.get("variants") or []):
+        code = v.get("barcode") or v.get("sku") or v.get("id", "")
+        try:
+            bc = barcode.get("code128", code, writer=SVGWriter())
+            buf = io.BytesIO()
+            bc.write(buf)
+            svg = buf.getvalue().decode()
+            labels.append({"variant_id": v["id"], "name": v.get("name", ""), "barcode": code, "price": v.get("price", 0), "svg": svg})
+        except Exception as e:
+            labels.append({"variant_id": v.get("id", ""), "name": v.get("name", ""), "barcode": code, "error": str(e)})
+    # Also generate for the main product if no variants
+    if not product.get("variants"):
+        code = product.get("sku") or product["id"]
+        try:
+            bc = barcode.get("code128", code, writer=SVGWriter())
+            buf = io.BytesIO(); bc.write(buf)
+            labels.append({"variant_id": "main", "name": product["name"], "barcode": code, "price": product.get("price", 0), "svg": buf.getvalue().decode()})
+        except Exception as e:
+            labels.append({"variant_id": "main", "name": product["name"], "barcode": code, "error": str(e)})
+    return {"product_name": product["name"], "labels": labels}

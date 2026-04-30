@@ -60,6 +60,26 @@ export default function SalesPortalPage() {
     try { const res = await api.get('/customers', { params: { search: q } }); setCustomers(res.data || []); } catch { setCustomers([]); }
   };
 
+  // Auto-lock after 5 minutes of inactivity
+  useEffect(() => {
+    if (!authed || locked) return;
+    let timer;
+    const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => setLocked(true), 5 * 60 * 1000); };
+    const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach(e => document.addEventListener(e, resetTimer));
+    resetTimer();
+    return () => { clearTimeout(timer); events.forEach(e => document.removeEventListener(e, resetTimer)); };
+  }, [authed, locked]);
+
+  // Request fullscreen on first auth
+  useEffect(() => {
+    if (authed && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }, [authed]);
+
+
+
   const addToCart = (p) => {
     setCart(prev => {
       const existing = prev.find(c => c.product_id === p.id);

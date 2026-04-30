@@ -81,6 +81,11 @@ export default function FinancialPage() {
   const [subAccounts, setSubAccounts] = useState(null);
   const [transfers, setTransfers] = useState([]);
   const [budgets, setBudgets] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [showCategories, setShowCategories] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatType, setNewCatType] = useState('both');
+  const [subLocations, setSubLocations] = useState([]);
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
@@ -117,7 +122,17 @@ export default function FinancialPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); financialApi.transfers().then(r => setTransfers(r.data || [])).catch(() => {}); financialApi.budgets().then(r => setBudgets(r.data || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    locationsApi.list().then(r => {
+      setAllLocations(r.data);
+      setSubLocations((r.data || []).filter(l => l.type === 'sub-location' || l.parent_id));
+    }).catch(() => {});
+    fetchPending();
+    financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {});
+    financialApi.transfers().then(r => setTransfers(r.data || [])).catch(() => {});
+    financialApi.budgets().then(r => setBudgets(r.data || [])).catch(() => {});
+    financialApi.categories().then(r => setCategories(r.data || [])).catch(() => {});
+  }, []);
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const fetchPending = async () => {
@@ -238,6 +253,7 @@ export default function FinancialPage() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={() => setShowDistribute(true)} className="gap-1.5" data-testid="distribute-funds-btn"><DollarSign size={14} /> Transfer</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowCategories(true)} data-testid="manage-categories-btn" className="gap-1.5 text-xs">Categories</Button>
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="financial-refresh"><RefreshCw size={14} /></Button>
           <Button variant="outline" size="sm" onClick={downloadCSV} className="gap-2" data-testid="financial-export">
             <Download size={14} /> Export CSV
@@ -650,8 +666,15 @@ export default function FinancialPage() {
               <Input type="date" value={donationForm.date} onChange={e => setDonationForm({...donationForm, date: e.target.value})} />
             </div>
             <div className="space-y-2">
-              <Label>Notes</Label>
-              <Input placeholder="Optional notes" value={donationForm.notes} onChange={e => setDonationForm({...donationForm, notes: e.target.value})} />
+              <Label>Sub-Location</Label>
+              <Select value={donationForm.sublocation_id || '_none'} onValueChange={v => setDonationForm({...donationForm, sublocation_id: v === '_none' ? '' : v})}>
+                <SelectTrigger className="h-9"><SelectValue placeholder="Campus default" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">Campus default</SelectItem>{subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes *</Label>
+              <Input placeholder="Notes (required)" value={donationForm.notes} onChange={e => setDonationForm({...donationForm, notes: e.target.value})} required />
             </div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowDonation(false)}>Cancel</Button>
@@ -695,8 +718,15 @@ export default function FinancialPage() {
               <Input type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
             </div>
             <div className="space-y-2">
-              <Label>Notes</Label>
-              <Input placeholder="Optional notes" value={expenseForm.notes} onChange={e => setExpenseForm({...expenseForm, notes: e.target.value})} />
+              <Label>Sub-Location</Label>
+              <Select value={expenseForm.sublocation_id || '_none'} onValueChange={v => setExpenseForm({...expenseForm, sublocation_id: v === '_none' ? '' : v})}>
+                <SelectTrigger className="h-9"><SelectValue placeholder="Campus default" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">Campus default</SelectItem>{subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes *</Label>
+              <Input placeholder="Notes (required)" value={expenseForm.notes} onChange={e => setExpenseForm({...expenseForm, notes: e.target.value})} required />
             </div>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowExpense(false)}>Cancel</Button>
@@ -856,6 +886,40 @@ export default function FinancialPage() {
                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
               }}>Save</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Categories Management Dialog */}
+      <Dialog open={showCategories} onOpenChange={setShowCategories}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Financial Categories</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-2 max-h-60 overflow-auto">
+              {categories.map(c => (
+                <div key={c.id} className="flex items-center justify-between p-2 rounded-lg border border-border">
+                  <div><p className="text-sm font-medium">{c.name}</p><Badge variant="outline" className="text-[10px]">{c.type}</Badge></div>
+                  {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { await financialApi.deleteCategory(c.id); setCategories(prev => prev.filter(x => x.id !== c.id)); toast.success('Deleted'); }}>Del</Button>}
+                </div>
+              ))}
+            </div>
+            {isFinanceAdmin && (
+              <div className="border-t pt-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground">Add Category</p>
+                <div className="flex gap-2">
+                  <Input className="flex-1 h-8 text-xs" placeholder="Category name" value={newCatName} onChange={e => setNewCatName(e.target.value)} data-testid="new-category-name" />
+                  <Select value={newCatType} onValueChange={setNewCatType}>
+                    <SelectTrigger className="w-24 h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="income">Income</SelectItem><SelectItem value="expense">Expense</SelectItem><SelectItem value="both">Both</SelectItem></SelectContent>
+                  </Select>
+                  <Button size="sm" className="h-8" disabled={!newCatName.trim()} onClick={async () => {
+                    try { const res = await financialApi.createCategory({ name: newCatName.trim(), type: newCatType }); setCategories(prev => [...prev, res.data]); setNewCatName(''); toast.success('Added'); }
+                    catch { toast.error('Failed'); }
+                  }} data-testid="add-category-btn">Add</Button>
+                </div>
+              </div>
+            )}
+            <Button variant="outline" className="w-full" onClick={() => setShowCategories(false)}>Close</Button>
           </div>
         </DialogContent>
       </Dialog>
