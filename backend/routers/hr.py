@@ -341,3 +341,47 @@ async def get_sponsored_children_stats(location_id: Optional[str] = None, curren
     sponsored = await db.children.count_documents(query)
     total = await db.children.count_documents({k: v for k, v in query.items() if k != "is_sponsored"})
     return {"sponsored": sponsored, "total": total, "percentage": round(sponsored / max(total, 1) * 100, 1)}
+
+
+
+@router.post("/payslips/auto-generate")
+async def auto_generate_payslips(current_user: dict = Depends(require_director)):
+    """Auto-generate payslips for current pay period based on campus HR settings.
+    Checks if today is payday, generates for all campuses where it's due."""
+    today = datetime.now(timezone.utc)
+    current_period = today.strftime("%Y-%m")
+    generated_total = 0
+    # Get all campuses with HR enabled
+    campuses = await db.hr_settings.find({"hr_enabled": True}, {"_id": 0}).to_list(50)
+    for campus_settings in campuses:
+        pay_day = campus_settings.get("pay_day", 28)
+        loc_id = campus_settings.get("location_id", "")
+        # Check if already generated for this period
+        existing = await db.hr_payslips.count_documents({"location_id": loc_id, "period": current_period})
+        if existing > 0:
+            continue
+        # Check if today is on or after payday
+        if today.day >= pay_day:
+            salaries = await db.hr_salaries.find({"status": "active", "location_id": loc_id}, {"_id": 0}).to_list(500)
+            for sal in salaries:
+                gross = sal.get("base_salary", 0)
+                deductions = 0; allowances = 0; items = []
+                for li in (sal.get("line_items") or []):
+                    amt = float(li.get("amount", 0))
+                    if li.get("is_percentage"): amt = gross * amt / 100
+                    if li.get("type") == "deduction": deductions += amt
+                    else: allowances += amt
+                    items.append({**li, "calculated_amount": amt})
+                net = gross + allowances - deductions
+                payslip = {
+                    "id": f"ps_{uuid.uuid4().hex[:8]}", "salary_id": sal["id"], "staff_id": sal["staff_id"],
+                    "staff_name": sal.get("staff_name", ""), "department": sal.get("department", ""),
+                    "location_id": loc_id, "period": current_period,
+                    "gross_salary": gross, "allowances": allowances, "deductions": deductions, "net_salary": net,
+                    "currency": sal.get("currency", "UGX"), "line_items": items, "status": "draft",
+                    "auto_generated": True, "pay_day": pay_day,
+                    "created_at": datetime.now(timezone.utc).isoformat(), "created_by": "system",
+                }
+                await db.hr_payslips.insert_one(payslip)
+                generated_total += 1
+    return {"message": f"Auto-generated {generated_total} payslips for {current_period}", "count": generated_total}

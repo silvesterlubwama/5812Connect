@@ -151,6 +151,7 @@ export const financialApi = {
   categories: () => api.get('/financial/categories'),
   createCategory: (data) => api.post('/financial/categories', data),
   deleteCategory: (id) => api.delete(`/financial/categories/${id}`),
+  updateAssetValuation: (id, data) => api.put(`/financial/assets/${id}/valuation`, data),
   donations: (params) => api.get('/financial/donations', { params }),
   createDonation: (data) => api.post('/financial/donations', data),
   expenses: (params) => api.get('/financial/expenses', { params }),

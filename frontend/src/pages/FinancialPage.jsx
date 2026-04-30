@@ -79,6 +79,8 @@ export default function FinancialPage() {
   const [showApprovalComment, setShowApprovalComment] = useState(null);
   const [approvalComment, setApprovalComment] = useState('');
   const [subAccounts, setSubAccounts] = useState(null);
+  const [transfers, setTransfers] = useState([]);
+  const [budgets, setBudgets] = useState([]);
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
@@ -115,7 +117,7 @@ export default function FinancialPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); }, []);
+  useEffect(() => { locationsApi.list().then(r => setAllLocations(r.data)).catch(() => {}); fetchPending(); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); financialApi.transfers().then(r => setTransfers(r.data || [])).catch(() => {}); financialApi.budgets().then(r => setBudgets(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
   const fetchPending = async () => {
@@ -312,6 +314,8 @@ export default function FinancialPage() {
           <TabsTrigger value="donations" data-testid="tab-donations">Donations</TabsTrigger>
           <TabsTrigger value="expenses" data-testid="tab-expenses">Expenses</TabsTrigger>
           <TabsTrigger value="accounts" data-testid="tab-accounts">Accounts</TabsTrigger>
+          <TabsTrigger value="transfers" data-testid="tab-transfers">Transfers</TabsTrigger>
+          <TabsTrigger value="budgets" data-testid="tab-budgets">Budgets</TabsTrigger>
           <TabsTrigger value="balance" data-testid="tab-balance" onClick={fetchBalanceSheet}>Balance Sheet</TabsTrigger>
           <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
         </TabsList>
@@ -423,6 +427,40 @@ export default function FinancialPage() {
         </TabsContent>
 
         {/* BALANCE SHEET TAB */}
+
+        {/* Transfers Tab */}
+        <TabsContent value="transfers" className="mt-4 space-y-3">
+          <div className="flex justify-end">
+            <Button size="sm" className="gap-1.5" onClick={() => {
+              const from = prompt('From Account ID:'); const to = prompt('To Account ID:'); const amt = prompt('Amount:');
+              if (from && to && amt) { financialApi.createTransfer({ from_account_id: from, to_account_id: to, amount: parseFloat(amt) }).then(() => { toast.success('Transfer created'); fetchAll(); }).catch(() => toast.error('Failed')); }
+            }} data-testid="create-transfer-btn">Create Transfer</Button>
+          </div>
+          <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
+            <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">From</th><th className="p-3 text-left text-xs text-muted-foreground">To</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Date</th></tr></thead>
+            <tbody>{(transfers || []).map(t => <tr key={t.id} className="border-b last:border-0"><td className="p-3">{t.from_name}</td><td className="p-3">{t.to_name}</td><td className="p-3 text-right font-medium">{(t.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground text-xs">{t.created_at?.slice(0, 10)}</td></tr>)}
+            {(!transfers || transfers.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs">No transfers yet</td></tr>}
+            </tbody></table>
+          </CardContent></Card>
+        </TabsContent>
+
+        {/* Budgets Tab */}
+        <TabsContent value="budgets" className="mt-4 space-y-3">
+          <div className="flex justify-end">
+            <Button size="sm" className="gap-1.5" onClick={() => {
+              const dept = prompt('Department:'); const period = prompt('Period (YYYY-MM):', new Date().toISOString().slice(0, 7)); const amt = prompt('Budget Amount:');
+              if (dept && amt) { financialApi.createBudget({ department: dept, period, amount: parseFloat(amt) }).then(() => { toast.success('Budget created'); fetchAll(); }).catch(() => toast.error('Failed')); }
+            }} data-testid="create-budget-btn">Add Budget</Button>
+          </div>
+          <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
+            <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Department</th><th className="p-3 text-left text-xs text-muted-foreground">Period</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Category</th></tr></thead>
+            <tbody>{(budgets || []).map(b => <tr key={b.id} className="border-b last:border-0"><td className="p-3">{b.department || b.location_id}</td><td className="p-3">{b.period}</td><td className="p-3 text-right font-medium">{(b.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground">{b.category}</td></tr>)}
+            {(!budgets || budgets.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs">No budgets set</td></tr>}
+            </tbody></table>
+          </CardContent></Card>
+        </TabsContent>
+
+
         <TabsContent value="balance" className="mt-4">
           {bsLoading ? (
             <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}</div>
@@ -459,20 +497,27 @@ export default function FinancialPage() {
                     <p className="text-xs text-muted-foreground text-center py-4">No assets recorded. Track equipment, vehicles, property values here.</p>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Date</th>{isFinanceAdmin && <th className="pb-2 w-8"></th>}</tr></thead>
+                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Method</th>{isFinanceAdmin && <th className="pb-2 w-20"></th>}</tr></thead>
                       <tbody className="divide-y">
                         {assets.map(a => {
                           const age = a.purchase_date ? (new Date().getFullYear() - new Date(a.purchase_date).getFullYear()) : 0;
-                          const depRate = a.depreciation_years > 0 ? 1 / a.depreciation_years : 0;
-                          const currentVal = Math.max(0, (a.value || 0) * (1 - depRate * Math.min(age, a.depreciation_years || 5)));
+                          const method = a.valuation_method || 'appreciation';
+                          const rate = a.depreciation_years > 0 ? 1 / a.depreciation_years : 0.03;
+                          const currentVal = a.current_value != null ? a.current_value : (method === 'depreciation' ? Math.max(0, (a.value || 0) * (1 - rate * Math.min(age, a.depreciation_years || 10))) : (a.value || 0) * (1 + rate * age));
                           return (
                             <tr key={a.id || a.name}>
                               <td className="py-2 font-medium">{a.name}</td>
                               <td className="py-2 text-muted-foreground capitalize">{a.category}</td>
                               <td className="py-2">{fmt(a.value)}</td>
-                              <td className="py-2 text-blue-600">{fmt(currentVal)}</td>
-                              <td className="py-2 text-muted-foreground">{a.purchase_date || '-'}</td>
-                              {isFinanceAdmin && <td className="py-2"><Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm(`Delete asset "${a.name}"?`)) return; try { await financialApi.deleteAsset(a.id); setAssets(prev => prev.filter(x => x.id !== a.id)); toast.success('Asset deleted'); } catch { toast.error('Failed'); } }} data-testid={`delete-asset-${a.id}`}>Del</Button></td>}
+                              <td className={`py-2 font-medium ${method === 'depreciation' ? 'text-red-600' : 'text-green-600'}`}>{fmt(currentVal)}</td>
+                              <td className="py-2"><Badge variant="outline" className={`text-[10px] ${method === 'depreciation' ? 'border-red-200 text-red-500' : 'border-green-200 text-green-600'}`}>{method}</Badge></td>
+                              {isFinanceAdmin && <td className="py-2 flex gap-1">
+                                <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
+                                  const newVal = prompt(`New value for "${a.name}":`, currentVal); const m = prompt('Method (appreciation/depreciation):', method);
+                                  if (newVal) { financialApi.updateAssetValuation(a.id, { current_value: parseFloat(newVal), method: m || method }).then(() => { toast.success('Revalued'); fetchBalanceSheet(); }).catch(() => toast.error('Failed')); }
+                                }}>Revalue</Button>
+                                <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm(`Delete "${a.name}"?`)) return; try { await financialApi.deleteAsset(a.id); setAssets(prev => prev.filter(x => x.id !== a.id)); toast.success('Deleted'); } catch { toast.error('Failed'); } }}>Del</Button>
+                              </td>}
                             </tr>
                           );
                         })}
