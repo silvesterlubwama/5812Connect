@@ -1,0 +1,144 @@
+# 58:12 Connect — Changelog
+
+## Iteration 77 (Apr 30, 2026)
+- Reports page fully rewritten to match API response format
+- Financial transfers + budgets UI tabs added
+- Asset valuation: appreciation default, revalue button, method badge
+- HR auto-payslip generation on payday
+
+## Iteration 76 (Apr 30, 2026)
+- Sales portal customer creation inline
+- Product variants frontend editing
+- Reports endpoint /api/reports/summary added
+- HR toggle on campus settings
+
+## Iteration 75 (Apr 30, 2026)
+- Financial accounts with starting balance
+- Inter-account transfers (expense→income pair)
+- Budgeting per sub-location/department
+- Admin-editable financial categories (14 defaults)
+- Asset appreciation/depreciation valuation
+- Product variants + auto-barcodes (country_code prefix)
+
+## Iteration 74 (Apr 27, 2026)
+- Restricted access: children + guests checked as residents
+- Chat: conversation delete, group member management, message delete (before read)
+- Orphan cleanup endpoint
+
+## Iteration 73 (Apr 27, 2026)
+- Child sponsor toggle + sponsor name field
+- Child badge: parents + campus info on front
+- Children + guests type-ahead search
+
+## Iteration 72 (Apr 27, 2026)
+- Child edit: Add Parent button + typed search (staff + guests)
+- Parent names shown on child cards
+- ChildTag badge: parents with phones, campus contact
+
+## Iteration 71 (Apr 26, 2026)
+- Resident batch assignment (members + children + guests)
+- Public guest access request (no auth, temp badge)
+- Kiosk access validation (QR/NFC/fingerprint)
+- Fingerprint database CRUD
+
+## Iteration 70 (Apr 26, 2026)
+- Phone number login (normalization)
+- Phone-last-4 check-in at kiosk
+
+## Iteration 69 (Apr 26, 2026)
+- Customer accounts CRUD with auto-guest linking
+- Purchase history tracking
+- Sales portal customer search
+
+## Iteration 68 (Apr 26, 2026)
+- Google Auth security fix (pending status)
+- StaffRoute guard (guests → portal)
+- Sales portal (PIN + last name login, lock mode)
+- Portal self-service (badge + PDF)
+
+## Iteration 67 (Apr 25, 2026)
+- Profile PDF download (weasyprint)
+- Sub-location financial accounts
+
+## Iteration 66 (Apr 25, 2026)
+- Full HR module (salaries, payslips, contracts, document requests)
+- Sale deletion restores stock
+- Campus switcher for directors (sub-locations)
+- Resident search includes guests + children
+- Sponsored children tracking
+
+## Iteration 65 (Apr 25, 2026)
+- Default password Test@5812!
+- Password reset email notification
+- Guest profile editing dialog
+
+## Iteration 64 (Apr 25, 2026)
+- Finance delete buttons (assets, sales)
+- Comprehensive testing (45/48 backend, 100% frontend)
+
+## Iteration 63 (Apr 25, 2026)
+- Children import fixed (correct endpoint, parent creation)
+
+## Iteration 62 (Apr 25, 2026)
+- Financial campus isolation (all endpoints filtered)
+
+## Iteration 61 (Apr 25, 2026)
+- Dashboard action widgets (overdue, pending, expiring, unassigned)
+- Email notifications (task assignment, check-in)
+
+## Iteration 60 (Apr 25, 2026)
+- Template download buttons (authenticated fetch)
+
+## Iteration 59 (Apr 25, 2026)
+- Error boundary, bulk delete confirm, unsaved form warnings
+
+## Iteration 58 (Apr 25, 2026)
+- Wallet badge system (shareable URL)
+- Cascade deletion on all endpoints
+- Frontend data events bus
+
+## Iteration 57 (Apr 25, 2026)
+- Children import: parent cache dedup, admin campus fallback
+- Badge bg restored (dark default, white kiosk only)
+- Timezones expanded (50+)
+- Venue CRUD + group types in campus settings
+
+## Iteration 56 (Apr 25, 2026)
+- User directory endpoint (cross-campus)
+- Outreach location/venue selectors
+- Bi-monthly + quarterly recurrence
+
+## Iteration 55 (Apr 25, 2026)
+- Staff-guest linking, portal button fix
+- Country code field, guest individual delete
+- ID Number rename, group removed from staff, donor tag removed
+- Kiosk locked mode (no exit)
+
+## Iteration 54 (Apr 25, 2026)
+- Profile photo upload UI
+- Child edit: typed parent search
+- Children at restricted locations: tracked badge
+- Staff auto-guest on creation
+
+## Iteration 53 (Apr 24, 2026)
+- Real country outlines (world-map-country-shapes)
+- CSV template downloads
+- Children import enhanced (parents without email)
+- Photo upload API
+
+## Iteration 52 (Apr 24, 2026)
+- NFC tag writing (director+ only, encrypted)
+
+## Iteration 51 (Apr 24, 2026)
+- Badge country watermark, NFC symbol, footer redesign
+- NFC tag CRUD
+
+## Iteration 50 (Apr 24, 2026)
+- CallContext hooks refactor
+- Backend type hints
+- Nested ternary cleanup
+
+## Iteration 49 (Apr 24, 2026)
+- Kiosk QR camera fix (html5-qrcode)
+- Backend function decomposition
+- Frontend component splitting

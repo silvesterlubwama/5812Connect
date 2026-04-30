@@ -3,16 +3,30 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Latest Changes (Iteration 75 - Feb 2026)
-- [x] NFC symbol added to child badges (UnifiedBadge + ChildTag)
-- [x] NFC write button enabled for child badges (director+)
-- [x] Sponsored children automatically eligible for badge issuance
-- [x] Complete application documentation written (ADMIN_GUIDE.md)
+## Completed Features (Iterations 49-77)
+- Multi-campus RBAC with data isolation
+- Financial management: donations, expenses, accounts, transfers, budgets, categories, assets (appreciation/depreciation)
+- Dashboard action widgets
+- Email notifications (task assignment, check-in, password reset)
+- Import/export with CSV templates
+- NFC badges (encrypted HMAC-SHA256, read-only lock)
+- Wallet badges (shareable URL)
+- Profile photos + PDF download
+- Cascade deletions + orphan cleanup
+- Error boundary + bulk delete safeguards
+- WebRTC calling + chat (group management, message delete)
+- Kiosk check-in (QR/NFC/PIN/phone-last-4/fingerprint)
+- Programme/Outreach with recurrence
+- Venue management + group types
+- HR/Payroll (salaries, payslips, contracts, doc requests, auto-generate)
+- Sales portal with customer accounts
+- Restricted access control with fingerprint database
+- Product variants with auto-barcodes
+- Reports page with summary
 
-## Badge Eligibility for Children
-- At a restricted location (is_resident) → badge
-- Parent is staff with access → badge
-- Sponsored (is_sponsored) → badge
-- All child badges have NFC symbol + NFC write capability
+## Architecture
+See /app/ADMIN_GUIDE.md for full feature tree.
+See /app/memory/ROADMAP.md for backlog.
+See /app/memory/CHANGELOG.md for iteration history.
 
-## Test Reports: Iterations 49-75 all passed
+## Test Reports: Iterations 49-77 all passed
