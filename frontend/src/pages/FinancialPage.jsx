@@ -521,23 +521,31 @@ export default function FinancialPage() {
         <TabsContent value="accounts" className="mt-4 space-y-4">
           {subAccounts ? (
             <>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <Card className="rounded-xl bg-green-50 dark:bg-green-950/20 border-green-200"><CardContent className="p-4 text-center"><p className="text-xs text-green-600 font-medium">Campus Income</p><p className="text-lg font-bold text-green-700">{(subAccounts.campus_total_income || 0).toLocaleString()}</p></CardContent></Card>
                 <Card className="rounded-xl bg-red-50 dark:bg-red-950/20 border-red-200"><CardContent className="p-4 text-center"><p className="text-xs text-red-600 font-medium">Campus Expenses</p><p className="text-lg font-bold text-red-700">{(subAccounts.campus_total_expenses || 0).toLocaleString()}</p></CardContent></Card>
-                <Card className="rounded-xl bg-blue-50 dark:bg-blue-950/20 border-blue-200"><CardContent className="p-4 text-center"><p className="text-xs text-blue-600 font-medium">Campus Balance</p><p className="text-lg font-bold text-blue-700">{(subAccounts.campus_balance || 0).toLocaleString()}</p></CardContent></Card>
+                <Card className="rounded-xl bg-blue-50 dark:bg-blue-950/20 border-blue-200"><CardContent className="p-4 text-center"><p className="text-xs text-blue-600 font-medium">Net Balance</p><p className="text-lg font-bold text-blue-700">{(subAccounts.campus_balance || 0).toLocaleString()}</p></CardContent></Card>
+                <Card className="rounded-xl bg-purple-50 dark:bg-purple-950/20 border-purple-200"><CardContent className="p-4 text-center"><p className="text-xs text-purple-600 font-medium">Starting Balance</p><p className="text-lg font-bold text-purple-700">{(subAccounts.accounts || []).reduce((s, a) => s + (a.starting_balance || 0), 0).toLocaleString()}</p></CardContent></Card>
               </div>
               <Card className="rounded-xl shadow-soft">
                 <CardContent className="p-0">
                   <table className="w-full text-sm">
-                    <thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Location</th><th className="p-3 text-left text-xs text-muted-foreground">Type</th><th className="p-3 text-right text-xs text-muted-foreground">Income</th><th className="p-3 text-right text-xs text-muted-foreground">Expenses</th><th className="p-3 text-right text-xs text-muted-foreground">Balance</th></tr></thead>
+                    <thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Location</th><th className="p-3 text-left text-xs text-muted-foreground">Type</th><th className="p-3 text-right text-xs text-muted-foreground">Starting Bal.</th><th className="p-3 text-right text-xs text-muted-foreground">Income</th><th className="p-3 text-right text-xs text-muted-foreground">Expenses</th><th className="p-3 text-right text-xs text-muted-foreground">Balance</th><th className="p-3 w-16"></th></tr></thead>
                     <tbody>
                       {(subAccounts.accounts || []).map(a => (
-                        <tr key={a.location_id} className="border-b last:border-0 hover:bg-accent/30">
+                        <tr key={a.location_id || a.id} className="border-b last:border-0 hover:bg-accent/30">
                           <td className="p-3 font-medium">{a.location_name}</td>
-                          <td className="p-3"><Badge variant="secondary" className="text-[10px]">{a.location_type}</Badge></td>
+                          <td className="p-3"><Badge variant="secondary" className="text-[10px]">{a.location_type || a.type || ''}</Badge></td>
+                          <td className="p-3 text-right text-purple-600">{(a.starting_balance || 0).toLocaleString()}</td>
                           <td className="p-3 text-right text-green-600">{(a.total_income || 0).toLocaleString()}</td>
                           <td className="p-3 text-right text-red-600">{(a.total_expenses || 0).toLocaleString()}</td>
-                          <td className="p-3 text-right font-medium">{(a.balance || 0).toLocaleString()}</td>
+                          <td className="p-3 text-right font-medium">{((a.starting_balance || 0) + (a.balance || 0)).toLocaleString()}</td>
+                          <td className="p-3">{isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
+                            const newBal = prompt(`Starting balance for ${a.location_name}:`, a.starting_balance || 0);
+                            if (newBal !== null && a.id) {
+                              financialApi.updateAccount(a.id, { starting_balance: parseFloat(newBal) || 0 }).then(() => { toast.success('Updated'); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); }).catch(() => toast.error('Failed'));
+                            }
+                          }} data-testid={`edit-account-${a.location_id}`}>Edit</Button>}</td>
                         </tr>
                       ))}
                     </tbody>

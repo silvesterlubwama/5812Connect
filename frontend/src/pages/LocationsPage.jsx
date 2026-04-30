@@ -438,6 +438,11 @@ export default function LocationsPage() {
                   <Switch checked={form.marketplace_enabled !== false} onCheckedChange={v => setForm({...form, marketplace_enabled: v})} data-testid="marketplace-toggle" />
                 </div>
                 <div className="flex items-center justify-between">
+                  <div><p className="text-sm font-medium">HR & Payroll</p>
+                    <p className="text-xs text-muted-foreground">Salaries, contracts, payslips</p></div>
+                  <Switch checked={form.hr_enabled !== false} onCheckedChange={v => setForm({...form, hr_enabled: v})} data-testid="hr-toggle" />
+                </div>
+                <div className="flex items-center justify-between">
                   <div><p className="text-sm font-medium">Financial APIs</p>
                     <p className="text-xs text-muted-foreground">Payment gateways, mobile money</p></div>
                   <Switch checked={form.financial_apis_enabled !== false} onCheckedChange={v => setForm({...form, financial_apis_enabled: v})} data-testid="apis-toggle" />

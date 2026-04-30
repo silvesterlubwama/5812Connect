@@ -26,11 +26,13 @@ router = APIRouter(prefix="/api", tags=["financial"])
 
 class DonationCreate(BaseModel):
     donor_name: str; amount: float; currency: str = "UGX"; type: str = "tithe"
-    date: Optional[str] = None; notes: Optional[str] = None; member_id: Optional[str] = None; location_id: Optional[str] = None
+    date: Optional[str] = None; notes: str = ""; member_id: Optional[str] = None
+    location_id: Optional[str] = None; sublocation_id: Optional[str] = None
 
 class ExpenseCreate(BaseModel):
     title: str; amount: float; currency: str = "UGX"; category: str = "general"
-    date: Optional[str] = None; notes: Optional[str] = None; submitted_by: Optional[str] = None; location_id: Optional[str] = None
+    date: Optional[str] = None; notes: str = ""; submitted_by: Optional[str] = None
+    location_id: Optional[str] = None; sublocation_id: Optional[str] = None
 
 class ProductCreate(BaseModel):
     name: str; description: Optional[str] = None; price: float = 0; currency: str = "UGX"; stock: int = 0
@@ -107,9 +109,11 @@ async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[
 
 @router.post("/financial/donations")
 async def create_donation(data: DonationCreate, current_user: dict = Depends(require_staff)):
-    doc = {"id": f"don_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    doc = {"id": f"don_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if doc.get("sublocation_id") and not doc.get("location_id"):
+        doc["location_id"] = doc["sublocation_id"]
     await db.donations.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "donation", doc["id"])
     return doc
@@ -131,9 +135,11 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
 
 @router.post("/financial/expenses")
 async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_staff)):
-    doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if doc.get("sublocation_id") and not doc.get("location_id"):
+        doc["location_id"] = doc["sublocation_id"]
     await db.expenses.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "expense", doc["id"])
     return doc

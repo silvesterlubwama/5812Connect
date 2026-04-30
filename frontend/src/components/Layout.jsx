@@ -148,7 +148,7 @@ export default function Layout() {
   const canSwitchCampus = isGlobalAdmin || hasMultipleCampuses;
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [campusFeatures, setCampusFeatures] = useState({ financial_enabled: true, marketplace_enabled: true, financial_apis_enabled: true });
+  const [campusFeatures, setCampusFeatures] = useState({ financial_enabled: true, marketplace_enabled: true, financial_apis_enabled: true, hr_enabled: true });
   const { addListener } = useWebSocket();
   const { t, lang, changeLang, languages } = useI18n();
 
@@ -265,11 +265,11 @@ export default function Layout() {
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
-    // Campus feature toggles — hide financial when no campus selected or campus has it disabled
+    // Campus feature toggles — hide when no campus selected or campus has feature disabled
     if (item.to === '/financial' && (!activeCampus || !campusFeatures.financial_enabled)) return false;
     if (item.to === '/sales' && (!activeCampus || !campusFeatures.marketplace_enabled)) return false;
     if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
-    if (item.to === '/hr' && !activeCampus) return false; // HR requires campus context
+    if (item.to === '/hr' && (!activeCampus || !campusFeatures.hr_enabled)) return false;
     return true;
   };
 
