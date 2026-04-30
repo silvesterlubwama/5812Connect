@@ -189,7 +189,17 @@ export default function SalesPortalPage() {
           <div className="p-3 border-b"><p className="text-sm font-semibold">Cart ({cart.length})</p></div>
           {/* Customer lookup */}
           <div className="p-2 border-b space-y-1">
-            <Input className="h-7 text-xs" placeholder="Customer name/phone..." value={customerSearch} onChange={e => { setCustomerSearch(e.target.value); searchCustomers(e.target.value); }} />
+            <div className="flex gap-1">
+              <Input className="h-7 text-xs flex-1" placeholder="Customer name/phone..." value={customerSearch} onChange={e => { setCustomerSearch(e.target.value); searchCustomers(e.target.value); }} />
+              {customerSearch.trim() && !selectedCustomer && customers.length === 0 && (
+                <Button size="sm" className="h-7 text-[10px] shrink-0" onClick={async () => {
+                  try {
+                    const res = await api.post('/customers', { name: customerSearch.trim() });
+                    setSelectedCustomer(res.data); setCustomers([]); toast.success('Customer created');
+                  } catch { toast.error('Failed'); }
+                }} data-testid="create-customer-btn">+ New</Button>
+              )}
+            </div>
             {customers.length > 0 && !selectedCustomer && (
               <div className="max-h-24 overflow-auto border rounded text-xs">
                 {customers.map(c => <button key={c.id} className="w-full text-left px-2 py-1 hover:bg-accent/50" onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.name); setCustomers([]); }}>{c.name} {c.phone ? `(${c.phone})` : ''}</button>)}
