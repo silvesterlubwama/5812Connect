@@ -7,7 +7,15 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
 ## Recently Resolved — Iteration 78 (May 1, 2026)
-All 6 critical routing/filtering bugs from the previous session + 1 bonus fix verified via `testing_agent_v3_fork` (9/9 backend tests PASS).
+
+### Part B — P1 + Selected P2 (verified 5/5 backend PASS)
+- ✅ **HR Auto-Payday Payslip** — `POST /api/hr/payslips/generate-payday` generates missing payslips for campuses whose `pay_day` matches today. Idempotent. "Run Payday Now" button on HR → Payslips tab.
+- ✅ **Multi-campus user creation** — `POST /api/admin/users` now accepts `location_ids` array (mirrors to member record; expands parent campuses).
+- ✅ **Finance Dialogs** — 4 `window.prompt()` call sites replaced with real Dialog forms: Transfer, Budget, Revalue Asset, Set Starting Balance.
+- ✅ **Variant Barcode Printing UI** — new `VariantBarcodePrint` component (JsBarcode CODE128) with layouts 4×6 / 3×8 / 2×5 grid + single-per-page; copies multiplier; print-preview + `window.open` print.
+- ✅ **PWA Wallet Passes Offline** — `sw.js` dedicated `WALLET_CACHE` with cache-first + stale-while-revalidate for `/api/wallet-badge/*` and `/badge/:token`; `prefetch-wallet-pass` message handler.
+
+### Part A — Routing/Filtering Fixes (6 bugs) verified 9/9 backend PASS
 
 - ✅ **Bug 1: Tasks Assignee Scope** — `/api/admin/users/directory` now returns only active staff roles (admin, system_admin, Executive Director, Adviser, Director, Manager, Leader, Coordinator, Staff, HR, Volunteer) scoped to `get_campus_filter`. `include_all=true` reserved for sysadmins. TasksPage `boardStaff` further filters by board location.
 - ✅ **Bug 2: Restricted Location Filtering** — `get_campus_filter` in `/app/backend/deps.py` now excludes restricted sub-locations (`is_restricted: true`) for non-sysadmins unless the user's `location_ids` explicitly includes that sub-location.
@@ -20,16 +28,14 @@ All 6 critical routing/filtering bugs from the previous session + 1 bonus fix ve
 ## Pending / Backlog
 
 ### P1
-- HR auto-payslip generation on payday (verify logic)
-- Add task source/color tweaks on calendar (make tasks more distinguishable)
-- Directory `location_ids` PUT on create (currently POST admin/users drops `location_ids`)
+- (Optional polish) Add `<DialogDescription>` to the 4 new Finance dialogs to clear radix a11y console warning.
+- Verify/tune HR auto-payday against production scheduling preferences (cron on backend startup?).
 
 ### P2
-- Full variant barcode printing UI
-- Finance categories management dialog (replace `prompt()`)
+- Finance `prompt()` cleanup: receipt URL upload in expense edit (line ~438 FinancialPage.jsx) still uses prompt — last holdout.
 - `server.py` modularization (oversized)
 - `UnifiedPeoplePage.jsx` split (~1400 lines)
-- PWA offline support + Service Worker for Wallet Passes
+- Full PWA offline beyond Wallet Passes (app shell + last-viewed pages)
 - Wave H5 SDK native upgrade
 - Scheduled cron jobs for overdue task emails
 

@@ -1,5 +1,12 @@
 # 58:12 Connect — Changelog
 
+## Iteration 78 (May 1, 2026) — Continuation: HR + UI Polish + PWA
+- **HR auto-payday payslip**: `POST /api/hr/payslips/generate-payday` — finds campuses with `pay_day` matching today, generates missing payslips for current period. Idempotent. "Run Payday Now" button added to HR → Payslips tab.
+- **Multi-campus user creation**: `POST /api/admin/users` now accepts `location_ids` array; mirrors to member record; auto-expands with parent campuses via `resolve_parent_campus`.
+- **Finance dialogs**: replaced 4 `window.prompt()` call sites with proper shadcn Dialog forms — Transfer (From/To/Amount/Currency/Notes), Budget (Department/Period/Amount/Category), Revalue Asset (Value/Method/Notes), Set Starting Balance.
+- **Variant barcode printing**: new `VariantBarcodePrint` component (JsBarcode CODE128) with 4 layouts (4×6, 3×8, 2×5 grid, single/page), copies multiplier, show-name/show-price toggles, print-preview + `window.open` print. Button on product card + inside Edit dialog's Variants section.
+- **PWA Wallet Passes offline**: `sw.js` now has dedicated `WALLET_CACHE` with cache-first + stale-while-revalidate for `/api/wallet-badge/*` and `/badge/:token`. `prefetch-wallet-pass` message handler pre-caches pass URLs on demand. `WalletBadgePage` automatically posts prefetch message when badge loads.
+
 ## Iteration 78 (May 1, 2026) — Routing/Filtering Fixes
 - Task assignee dropdown: now campus-scoped & staff-only (excludes Guest/Parent/Member)
 - `get_campus_filter` in deps.py: excludes restricted sub-locations for non-admins
