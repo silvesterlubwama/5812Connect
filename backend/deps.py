@@ -120,33 +120,46 @@ def has_campus_switcher(user: dict) -> bool:
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
     Only expands to actual sub-locations (rooms, buildings), NOT sibling campuses.
-    System admins/EDs get an empty dict unless they have active_campus_id set."""
-    if is_system_admin(user) or has_campus_switcher(user):
+    System admins/EDs get an empty dict unless they have active_campus_id set.
+    Restricted sub-locations are EXCLUDED for users not explicitly assigned to them."""
+    user_loc_ids = set(user.get("location_ids") or [])
+    if user.get("location_id"):
+        user_loc_ids.add(user.get("location_id"))
+    _is_admin = is_system_admin(user)
+    if _is_admin or has_campus_switcher(user):
         active = user.get("active_campus_id")
         if active:
             # Only include sub-locations (type=sub-location), not sibling campuses
             sub_locs = await db.locations.find(
                 {"parent_id": active, "type": "sub-location"},
-                {"_id": 0, "id": 1}
+                {"_id": 0, "id": 1, "is_restricted": 1}
             ).to_list(200)
-            all_locs = [active] + [s["id"] for s in sub_locs]
+            # For non-system-admins, exclude restricted sub-locs unless explicitly assigned
+            if _is_admin:
+                allowed_subs = [s["id"] for s in sub_locs]
+            else:
+                allowed_subs = [s["id"] for s in sub_locs
+                                if not s.get("is_restricted") or s["id"] in user_loc_ids]
+            all_locs = [active] + allowed_subs
             if len(all_locs) == 1:
                 return {"$or": [{field: active}, {"location_ids": active}]}
             return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
-        if is_system_admin(user):
+        if _is_admin:
             return {}
-    locs = list(user.get("location_ids") or [])
-    loc = user.get("location_id")
-    if loc and loc not in locs:
-        locs.append(loc)
+    locs = list(user_loc_ids)
     if not locs:
         return {}
-    # Only expand to sub-locations, not sibling campuses
+    # Only expand to sub-locations; restricted sub-locs only if in user's location_ids
     sub_locs = await db.locations.find(
         {"parent_id": {"$in": locs}, "type": "sub-location"},
-        {"_id": 0, "id": 1}
+        {"_id": 0, "id": 1, "is_restricted": 1}
     ).to_list(200)
-    all_locs = list(set(locs + [s["id"] for s in sub_locs]))
+    expanded = list(locs)
+    for s in sub_locs:
+        if s.get("is_restricted") and s["id"] not in user_loc_ids:
+            continue  # Skip restricted sub-locs not explicitly assigned
+        expanded.append(s["id"])
+    all_locs = list(set(expanded))
     if len(all_locs) == 1:
         return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
     return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}

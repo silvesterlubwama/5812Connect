@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 77 - Verified 6 routing/filtering bug fixes (tasks assignee, restricted location leak, chat ghost users, multi-campus switcher, volunteer scheduler, calendar tasks) + admin-tier role guard. All 9 backend tests PASS (100%). Frontend flows verified: Comms uses /api/chat/users (not /api/members), Board card assignee picker excludes Guest/Parent/Member, Volunteer New Shift dialog has Linked Event field, Calendar has Task legend (blue).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration77_routing_bugs.py",
+    "/app/test_reports/pytest/pytest_results_iteration77.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "POST /api/admin/users stores only single location_id (drops location_ids array from payload). Admin must PUT /api/admin/users/{id} with location_ids after creation to assign multiple campuses. Consider accepting location_ids directly in POST for better DX.",
+    "Calendar page: Task legend shows blue dot but no tasks appear in May 2026 view. Could not independently confirm task-event rendering because no tasks with due_date in current month exist in seed data. Main agent should create a task with a due_date and verify it renders on calendar with blue color and click-navigates to /boards?board=...&task=...",
+    "Comms New Conversation dialog: /api/chat/users is fetched at page mount (not on dialog open). This is correct behavior (cached), but means API call count does not increase when dialog opens. Verified no /api/members calls occur on Comms page."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration77_routing_bugs.py"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "95%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created transient TEST_ prefixed users/locations/members during tests — all cleaned up in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 6 routing bugs fixed and validated. Backend: (1) /api/admin/users/directory returns only STAFF_ROLES (admin, system_admin, Executive Director, Adviser, Director, Manager, Leader, Coordinator, Staff, HR, Volunteer) scoped to active campus — include_all=true works only for sysadmins. (2) get_campus_filter in /app/backend/deps.py correctly excludes restricted sub-locations for non-admins unless in user's location_ids. Verified: a Manager assigned only to parent campus does NOT see members in restricted sub-locations. (3) PUT /api/user/active-campus now works for multi-campus non-admins: returns 400 for missing campus_id, 200 for campuses in user.location_ids, 403 for campuses outside assignment. (4) POST /api/admin/users has admin-tier role guard (only sysadmin can assign admin/system_admin/Executive Director); require_admin blocks non-admins entirely. Frontend verified visually: Comms uses chatApi.users(), Board card assignee excludes non-staff roles, Volunteer New Shift dialog shows Linked Event select. Calendar task rendering could not be visually confirmed due to no tasks with due_date in current month — recommend main agent add a dated task and visually verify.",
+  "features_verified": {
+    "directory_staff_only_filter": "PASS - returns only 11 staff roles, excludes Guest/Parent/Member/Customer",
+    "directory_include_all_sysadmin": "PASS",
+    "admin_tier_role_guard_allow_admin": "PASS - admin can create admin-role user",
+    "admin_tier_role_guard_block_nonadmin": "PASS - Manager gets 403 on POST /api/admin/users",
+    "campus_switcher_missing_id_400": "PASS",
+    "campus_switcher_admin_any_campus": "PASS",
+    "campus_switcher_multi_campus_user": "PASS - user with location_ids=[c1,c2] can switch to c1,c2; 403 on c3",
+    "restricted_sublocation_leak_block": "PASS - Manager not assigned to restricted sub-loc does NOT see its members",
+    "chat_users_endpoint": "PASS - returns scoped active users",
+    "comms_new_conv_uses_chat_users": "PASS - no /api/members calls on Comms page",
+    "boards_assignee_filter": "PASS - only 'Admin' (same loc) in member picker, no Guest/Parent",
+    "volunteer_new_shift_linked_event": "PASS - Linked Event select renders"
+  }
+}

@@ -1,0 +1,218 @@
+<analysis>**original_problem_statement**: 
+The user wants to resolve a final batch of critical system bugs involving data leakage and routing, specifically targeting: 
+1. Task assignment scope (showing global/non-staff users instead of location-scoped staff).
+2. Main calendar missing due tasks.
+3. Scheduler/shift assignments showing out-of-scope staff and not auto-setting times.
+4. Restricted locations failing to filter data properly (data bleeding).
+5. Chat system showing non-existent users, incorrect active status, and failing to send messages to actual users.
+6. Campus switcher failing for users assigned to multiple campuses.
+PRODUCT REQUIREMENTS: A multi-tenant CRM with WebRTC calling, unified comms, NFC badge management, HR/payroll, sales portal, and PBX integration.
+
+**User's preferred language**: English (INSTRUCT next agent to respond in English only)
+
+**what currently exists?** 
+A massive, fully-featured React + FastAPI + MongoDB application. It includes modules for Unified Communications (WebSockets), Kanban Tasks, Financial tracking (with RBAC and Sub-locations), an HR/Payroll module, a locked-down Sales Portal, Kiosk Check-ins (with phone-last-4-digits, QR, and NFC support), and advanced Profile/Badge generation (QR+Photo combined, NFC encrypted payload writing).
+
+**Last working item**: 
+    - Last item agent was working: The agent received a list of 6 critical routing/filtering bugs from the user (Tasks, Calendar, Scheduler, Restricted Locations, Chat, Campus Switcher). Instead of fixing them, the agent documented them into  and  and finished the session. The next agent MUST pick up these 6 critical bugs immediately.
+    - Status: NOT STARTED
+    - Agent Testing Done: N
+    - Which testing method agent to use? testing_agent_v3_fork
+    - User Testing Done: N
+
+**All Pending/In progress Issue list**: 
+  Issue 1: Task Assignee Filtering Leakage (P0)
+  Issue 2: Restricted Locations Data Bleeding (P0)
+  Issue 3: Chat System Ghost Users & Delivery Failures (P0)
+  Issue 4: Multiple Campus Switcher Broken (P0)
+  Issue 5: Shift Assignments / Scheduler Scope (P1)
+  Issue 6: Tasks Missing from Main Calendar (P1)
+
+  Issues Detail:
+  - Issue 1: 
+     - Attempted fixes: None in this specific context yet.
+     - Next debug checklist: Check , , and  /  (directory endpoints). Ensure the user fetch logic for assignees applies the correct  and  filters so only valid local staff appear.
+     - Why fix this issue and what will be achieved with the fix? Prevents cross-campus data leakage and assigns tasks to correct local staff.
+     - Status: NOT STARTED
+     - Is recurring issue? Y (Location filtering has broken multiple times)
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+
+  - Issue 2: 
+     - Attempted fixes: None.
+     - Next debug checklist: Review  and restricted location access logic in . Ensure that when a location is marked restricted, ONLY residents and explicitly authorized staff can query its data.
+     - Why fix this issue and what will be achieved with the fix? Critical security and privacy requirement.
+     - Status: NOT STARTED
+     - Is recurring issue? Y
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+
+  - Issue 3: 
+     - Attempted fixes: None.
+     - Next debug checklist: Check  and . The user list for chat might be querying soft-deleted users or users outside the campus. Fix the user directory fetch for the chat sidebar.
+     - Why fix this issue and what will be achieved with the fix? Makes the unified comms usable.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+
+  - Issue 4: 
+     - Attempted fixes: None.
+     - Next debug checklist: Investigate  campus switcher dropdown and  in backend. Ensure users with multiple IDs in their  array can successfully swap their .
+     - Why fix this issue and what will be achieved with the fix? Unblocks regional directors from managing their assigned locations.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+
+  - Issue 5: 
+     - Attempted fixes: None.
+     - Next debug checklist: Update  and . Filter staff/volunteers by active campus. Map the selected event's start/end times automatically into the shift creation form.
+     - Why fix this issue and what will be achieved with the fix? Improves UX and prevents assigning wrong users to shifts.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
+
+  - Issue 6: 
+     - Attempted fixes: None.
+     - Next debug checklist: In , fetch data from  (filtered by due date) and map them into the calendar view alongside standard events.
+     - Why fix this issue and what will be achieved with the fix? Provides a unified view of upcoming obligations.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? frontend
+     - Blocked on other issue: None
+
+**In progress Task List**: 
+  None actively in code.
+
+**Upcoming and Future Tasks**
+  Upcoming Tasks:
+  - Fix HR auto-payslip generation on payday (P1)
+  - Full variant barcode printing UI (P2)
+  - Finance categories management dialog (currently uses ) (P2)
+  Future Tasks:
+  - Wave H5 SDK native upgrade
+  -  modularization (split into smaller files)
+  - PWA offline support and Service Worker for Wallet Passes
+  - Scheduled cron jobs for overdue task emails
+
+**Completed work in this session**
+- Kiosk phone-last-4-digits check-in and locked exit points (DONE)
+- HR Module (Salaries, Payslips, Contracts, Documents) (DONE)
+- Sales Portal (Locked down, customer association, variants) (DONE)
+- Finance Sub-locations, RBAC, Asset appreciation/depreciation, budgets (DONE)
+- NFC badge encryption (HMAC-SHA256) and read-only locking (DONE)
+- Profile PDF generation and template CSV downloads via authenticated fetch (DONE)
+- UnifiedBadge layout redesigned (QR and Profile Photo merged using , SVG icons replacing text) (DONE)
+- Medical, Resident, and Restricted Access toggles & SVG indicators (DONE)
+- Password Reset logic (Fixed member_id vs user_id resolution) (DONE)
+- Cascade deletion of orphaned records (tasks, boards, chat) (DONE)
+
+**Earlier issues found/mentioned but not fixed**
+   - None explicitly outside the Pending Issue list.
+
+**Known issue recurrence from previous fork**
+  - Location filtering / Campus data leakage
+  - Recurrence count: 4+
+  - Status: IN PROGRESS (Re-reported in Issue 1, 2, 3, 5)
+  - Note:  location filtering often clashes with specific directory queries. Always verify that  is applied to , task assignees, and chat directories.
+
+**Code Architecture**
+/app/
+├── backend/
+│   ├── routers/ (events.py, admin.py, members.py, financial.py, hr.py, chat.py, access.py, etc.)
+│   ├── deps.py (Core Auth, RBAC, Campus filtering logic)
+│   ├── models.py (Pydantic models)
+│   ├── email_helpers.py (Resend integration)
+│   └── server.py (FastAPI entry point)
+├── frontend/
+│   ├── src/
+│   │   ├── components/ (UnifiedBadge.jsx, PrintableBadges.jsx, BulkDeleteConfirm.jsx, etc.)
+│   │   ├── pages/ (UnifiedPeoplePage, SalesPortalPage, HRPage, CommsPage, TasksPage, etc.)
+│   │   ├── services/ (api.js, dataEvents.js, secureStorage.js)
+│   │   └── context/ (AuthContext, WebSocketContext)
+└── memory/
+    └── PRD.md, ROADMAP.md, CHANGELOG.md, test_credentials.md
+
+**Key Technical Concepts**
+FastAPI, React, MongoDB, WebRTC, WebSockets, HTML5-QRCode, React-QRCode-Logo, WebNDEF (NFC), HMAC-SHA256 (NFC Signatures), RBAC.
+
+**key DB schema**
+  -  / : {role, active_campus_id, location_ids, is_resident, is_medical, is_sponsored, status}
+  - : {sublocation_id, entered_by, location_id}
+  - : {has_variants, variants: [{name, price, stock, barcode}]}
+  -  & 
+
+**changes in tech stack**
+  - Added  for embedded profile pictures in QR codes.
+  - Added  for SVG country outlines.
+  - Added  /  (Python) for Profile PDF generation.
+
+**All files of reference** 
+-  (Fix assignee scope)
+-  (Add tasks due)
+-  (Fix scope and auto-time)
+-  (Fix restricted location logic)
+-  (Fix ghost users)
+-  (Fix campus switcher)
+
+**Areas that need refactoring**: 
+-  is oversized and needs modularization.
+-  is extremely large (~1400 lines) and complex.
+
+**key api endpoints**
+-  (Used for lightweight fetching, ensure campus rules apply properly)
+-  (Generates HMAC for tags)
+-  (Financial/People stats)
+
+**Critical Info for New Agent** 
+- **IMMEDIATE PRIORITY:** The previous agent ended the session right after the user reported 6 major bugs (Tasks scope, Calendar tasks, Scheduler scope, Restricted location filtering, Chat ghost users, Campus switcher). **You must start by fixing these 6 items.**
+- **Route Ordering:** Static routes must always precede dynamic parameterized routes (e.g.,  BEFORE ).
+- **Data Deletion:** The system uses a Soft Delete to Recycle Bin paradigm (). Ensure  is attached.
+- **NFC Security:** NFC payloads are now HMAC-SHA256 signed. Do not alter the signature verification logic unless absolutely necessary.
+- **Email:** The app uses Resend. The free tier limits sending to the verified owner email. Ensure email failures are caught gracefully so they do not block API execution (e.g., password resets).
+
+**documents and test reports created in this job** 
+  - /app/ADMIN_GUIDE.md
+  - /app/memory/ROADMAP.md
+  - /app/memory/CHANGELOG.md
+  - /app/memory/PRD.md
+  - /app/test_reports/iteration_76.json
+
+**Last 10 User Messages and any pending HUMAN messages** 
+ - *User:* editing tasks generates all user even those outside the location/campus. Task assignment shows non staff... Show tasks due from the main calendar... Non admins, can not assign admin roles. Shift assignemnts arent showing up... scheduler shows, non location staff... set the time automatically from the selected event... Restricted locations are not filtering... The chat is still showing non existent users... The campus switcher isnt working for user with multiple campuses
+ - *Agent:* [Tool call: ask_human]
+ - *User:* b
+ - *Agent:* [Tool call: finish] (Dumped to PRD and exited without fixing the bugs).
+
+**Project Health Check:**
+- Broken: Location/Campus filtering across Tasks, Scheduler, Chat, and Restricted Locations. Campus Switcher.
+- Mocked: Background checks (skipped per user instruction).
+
+**3rd Party Integrations** 
+ - Wave CloudUCM (Grandstream API via iframe) — uses User credentials
+ - Resend (Emails) — requires User API Key (Configured in )
+ - Google OAuth — managed via Emergent integrations
+
+**Testing status**
+  - Testing agent used after significant changes: YES (Heavily used, latest Iteration 76)
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: Yes, inside 
+  - Known regressions: Location filtering scoping (failing again).
+
+**Credentials to test flow:**
+  Refer to  (Default password for new users is now )
+
+**What agent forgot to execute**
+The agent completely ignored the user's final bug report message (Msg 2413), asked a nonsensical , and immediately finished the session. You must resolve the 6 routing/filtering bugs requested in that final prompt.
+
+**Debugging checklist for current issue**
+    Issue: Task assignment, Scheduler, and Chat showing global/non-existent users instead of local staff.
+    Frontend files to check: 
+    -  (Assignee dropdown mapping)
+    -  (Staff fetch logic)
+    -  (Online/Directory user mapping)
+    Backend files to check:
+    -  (Specifically  - ensure it respects  if it was previously bypassed)
+    -  (Check restricted location authorization logic)</analysis>

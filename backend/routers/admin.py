@@ -12,12 +12,21 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ========== USER MANAGEMENT ==========
 
 @router.get("/users/directory")
-async def user_directory(current_user: dict = Depends(get_current_user)) -> list:
+async def user_directory(include_all: bool = False, current_user: dict = Depends(get_current_user)) -> list:
     """Lightweight user list for cross-referencing in boards, tasks, etc.
-    Returns ALL users regardless of campus (id, name, role, photo_url, location_id only)."""
+    Scoped to current user's campus; returns active staff-capable users only.
+    Admins can pass include_all=true to bypass filters."""
+    STAFF_ROLES = ["admin", "system_admin", "Executive Director", "Adviser", "Director",
+                   "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"]
+    if include_all and is_system_admin(current_user):
+        query = {"status": {"$ne": "deleted"}}
+    else:
+        campus = await get_campus_filter(current_user)
+        base = {"status": "active", "role": {"$in": STAFF_ROLES}}
+        query = {"$and": [base, campus]} if campus else base
     users = await db.users.find(
-        {"status": {"$ne": "deleted"}},
-        {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1, "location_id": 1, "email": 1}
+        query,
+        {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1, "location_id": 1, "location_ids": 1, "email": 1}
     ).sort("name", 1).to_list(1000)
     return users
 
@@ -59,6 +68,11 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
 @router.post("/users")
 async def create_user(data: dict, current_user: dict = Depends(require_admin)) -> dict:
     """Create a new user account. Optionally also creates a linked member record."""
+    # Guard: only system admins can grant admin-tier roles
+    ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
+    new_role = data.get("role", "Staff")
+    if new_role in ADMIN_TIER and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{new_role}' role")
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     if not name or not email:
@@ -195,6 +209,10 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
 
 @router.put("/users/{user_id}")
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)) -> dict:
+    # Guard: only system admins can grant admin-tier roles
+    ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
+    if data.get("role") in ADMIN_TIER and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{data['role']}' role")
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
@@ -374,6 +392,10 @@ async def bulk_update_users(data: dict, current_user: dict = Depends(require_adm
     updates = data.get("updates", {})
     if not user_ids:
         raise HTTPException(status_code=400, detail="No user_ids provided")
+    # Guard: only system admins can bulk-grant admin-tier roles
+    ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
+    if updates.get("role") in ADMIN_TIER and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{updates['role']}' role")
     allowed = {"role", "status", "department", "notes", "secondary_roles", "is_parent", "is_customer", "is_donor"}
     clean_updates = {k: v for k, v in updates.items() if k in allowed and v is not None}
     if not clean_updates:

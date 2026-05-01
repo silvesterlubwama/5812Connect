@@ -97,19 +97,24 @@ export default function CommsPage() {
       try {
         const [annRes, staffRes] = await Promise.all([
           api.get('/announcements'),
-          membersApi.list({ limit: 200 }),
+          chatApi.users(),
         ]);
         setAnnouncements(annRes.data || []);
-        let staff = staffRes.data?.members || staffRes.data || [];
+        let staff = staffRes.data || [];
         // For directors+, also load directors from other campuses for cross-campus messaging
-        const userRole = (user?.role || '').toLowerCase();
-        if (['admin', 'system_admin', 'executive director', 'adviser', 'director'].includes(user?.role)) {
+        if (['admin', 'system_admin', 'executive director', 'adviser', 'director'].includes((user?.role || '').toLowerCase())) {
           try {
-            const dirRes = await api.get('/admin/users', { params: { role: 'Director', limit: 50 } });
-            const edRes = await api.get('/admin/users', { params: { role: 'Executive Director', limit: 20 } });
+            const [dirRes, edRes] = await Promise.all([
+              api.get('/admin/users', { params: { role: 'Director', limit: 50 } }),
+              api.get('/admin/users', { params: { role: 'Executive Director', limit: 20 } }),
+            ]);
             const allDirs = [...(dirRes.data || []), ...(edRes.data || [])];
             const existingIds = new Set(staff.map(s => s.id));
-            for (const d of allDirs) { if (!existingIds.has(d.id)) { staff.push({ ...d, is_cross_campus: true }); } }
+            for (const d of allDirs) {
+              if (!existingIds.has(d.id) && d.id !== user?.id && d.status !== 'deleted') {
+                staff.push({ ...d, is_cross_campus: true });
+              }
+            }
           } catch (e) { console.warn(e.message || e); }
         }
         setAllStaff(staff);

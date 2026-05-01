@@ -8,7 +8,7 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { eventsApi, exportApi, outreachApi } from '../services/api';
+import { eventsApi, exportApi, outreachApi, tasksApi } from '../services/api';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -23,6 +23,7 @@ const typeColors = {
   workshop: 'bg-violet-500',
   training: 'bg-cyan-500',
   social: 'bg-orange-500',
+  task: 'bg-blue-500',
   imported: 'bg-gray-300',
 };
 
@@ -50,7 +51,8 @@ export default function CalendarPage() {
       eventsApi.list(),
       outreachApi.sessions().catch(() => ({ data: [] })),
       outreachApi.programs().catch(() => ({ data: [] })),
-    ]).then(([evtRes, sessRes, progRes]) => {
+      tasksApi.list().catch(() => ({ data: [] })),
+    ]).then(([evtRes, sessRes, progRes, taskRes]) => {
       const allEvents = evtRes.data || [];
       // Convert outreach sessions to event-like objects for the calendar
       const programs = progRes.data || [];
@@ -70,10 +72,25 @@ export default function CalendarPage() {
           _isSession: true,
         };
       });
+      // Convert tasks with due_date into calendar events (task type)
+      const taskEvents = (taskRes.data || [])
+        .filter(t => t.due_date && !t.is_archived)
+        .map(t => ({
+          id: `task_${t.id}`,
+          title: `${t.status === 'done' ? '✓ ' : ''}${t.title || 'Task'}`,
+          type: 'task',
+          date: (t.due_date || '').slice(0, 10),
+          time: '',
+          location: t.board_name || '',
+          status: t.status,
+          _isTask: true,
+          _taskId: t.id,
+          _boardId: t.board_id,
+        }));
       // Merge: avoid duplicating sessions that already have a matching event
       const existingDates = new Set(allEvents.map(e => `${e.title}_${e.date}`));
       const newSessions = sessionEvents.filter(s => !existingDates.has(`${s.title}_${s.date}`));
-      setEvents([...allEvents, ...newSessions]);
+      setEvents([...allEvents, ...newSessions, ...taskEvents]);
     }).catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -138,6 +155,11 @@ export default function CalendarPage() {
 
   const openEditEvent = (ev) => {
     if (ev._isSession) return; // Don't edit outreach sessions from calendar
+    if (ev._isTask) {
+      // Navigate to the Boards page with the task's board; task card will open via board UI
+      window.location.href = `/boards?board=${encodeURIComponent(ev._boardId || '')}&task=${encodeURIComponent(ev._taskId || '')}`;
+      return;
+    }
     setEditEvent(ev);
     setEditForm({
       title: ev.title || '', date: ev.date || '', time: ev.time || '', end_time: ev.end_time || '',

@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { volunteerApi, locationsApi, eventsApi, membersApi } from '../services/api';
+import { volunteerApi, locationsApi, eventsApi, adminApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -59,15 +59,15 @@ export default function VolunteerSchedulingPage() {
         volunteerApi.myShifts(),
         locationsApi.list(),
         eventsApi.list({ status: 'upcoming' }),
-        membersApi.list({ limit: 200 }),
+        adminApi.userDirectory(),
       ]);
 
       setShifts(shiftsRes.data || []);
       setMyShifts(myShiftsRes.data || []);
       setLocations(locsRes.data || []);
       setEvents(eventsRes.data || []);
-      // Members API returns { members: [], total: N }
-      setMembers(membersRes.data?.members || membersRes.data || []);
+      // Directory returns campus-scoped staff only
+      setMembers(membersRes.data || []);
     } catch {
       toast.error('Failed to load shifts');
     } finally {
@@ -359,8 +359,24 @@ export default function VolunteerSchedulingPage() {
 
             <div className="space-y-2">
               <Label>Linked Event (optional)</Label>
-              <Select value={form.event_id || '_none'} onValueChange={v => setForm({ ...form, event_id: v === '_none' ? '' : v })}>
-                <SelectTrigger><SelectValue placeholder="Select event..." /></SelectTrigger>
+              <Select value={form.event_id || '_none'} onValueChange={v => {
+                if (v === '_none') { setForm({ ...form, event_id: '' }); return; }
+                const ev = events.find(x => x.id === v);
+                if (ev) {
+                  setForm(prev => ({
+                    ...prev,
+                    event_id: v,
+                    title: prev.title || ev.title || '',
+                    date: ev.date || prev.date,
+                    start_time: ev.time || prev.start_time,
+                    end_time: ev.end_time || prev.end_time,
+                    location_id: ev.location_id || prev.location_id,
+                  }));
+                } else {
+                  setForm({ ...form, event_id: v });
+                }
+              }}>
+                <SelectTrigger data-testid="shift-event-select"><SelectValue placeholder="Select event..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="_none">No linked event</SelectItem>
                   {events.map(e => <SelectItem key={e.id} value={e.id}>{e.title} ({e.date})</SelectItem>)}

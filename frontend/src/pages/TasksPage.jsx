@@ -58,9 +58,19 @@ export default function TasksPage() {
   const canEdit = isAdmin || ['manager', 'coordinator', 'staff'].includes((user?.role || '').toLowerCase());
 
   // Staff filtered by board's location (if set), otherwise all staff
+  const STAFF_ROLES = ['admin', 'system_admin', 'executive director', 'adviser', 'director',
+                       'manager', 'leader', 'coordinator', 'staff', 'hr', 'volunteer'];
   const boardStaff = useMemo(() => {
-    if (!board || board.is_global || !board.location_id) return staffUsers;
-    return staffUsers.filter(u => !u.location_id || u.location_id === board.location_id);
+    const staffOnly = staffUsers.filter(u => {
+      const role = (u.role || '').toLowerCase();
+      return STAFF_ROLES.includes(role);
+    });
+    if (!board || board.is_global || !board.location_id) return staffOnly;
+    return staffOnly.filter(u => {
+      if (u.location_id === board.location_id) return true;
+      const userLocs = u.location_ids || [];
+      return userLocs.includes(board.location_id);
+    });
   }, [staffUsers, board]);
 
   // ===== LOAD DATA =====

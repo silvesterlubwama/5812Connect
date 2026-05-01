@@ -345,11 +345,25 @@ async def people_stats(current_user: dict = Depends(get_current_user)):
 
 @api_router.put("/user/active-campus")
 async def set_active_campus(data: dict, current_user: dict = Depends(get_current_user)):
-    """Set active campus for data filtering. Admins/EDs/Advisers."""
-    from deps import has_campus_switcher
-    if not has_campus_switcher(current_user):
-        raise HTTPException(status_code=403, detail="Insufficient permissions for campus switching")
+    """Set active campus for data filtering. Admins/EDs/Advisers can switch to any campus.
+    Multi-campus users can switch among their assigned campuses."""
+    from deps import has_campus_switcher, is_system_admin
     campus_id = data.get("campus_id")
+    if not campus_id:
+        raise HTTPException(status_code=400, detail="campus_id is required")
+    if has_campus_switcher(current_user) or is_system_admin(current_user):
+        pass  # Can switch to any campus
+    else:
+        # Regular users: must have this campus in their location_ids (or be its sub-location parent)
+        user_locs = set(current_user.get("location_ids") or [])
+        if current_user.get("location_id"):
+            user_locs.add(current_user["location_id"])
+        if campus_id not in user_locs:
+            # Also allow if the campus is the parent of one of the user's sub-locations
+            loc = await db.locations.find_one({"id": campus_id}, {"_id": 0, "type": 1})
+            if not loc:
+                raise HTTPException(status_code=404, detail="Campus not found")
+            raise HTTPException(status_code=403, detail="You are not assigned to this campus")
     await db.users.update_one({"id": current_user["id"]}, {"$set": {"active_campus_id": campus_id}})
     return {"active_campus_id": campus_id}
 

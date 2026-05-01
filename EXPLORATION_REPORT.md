@@ -1,7 +1,7 @@
 # 58:12 Global Connect - Comprehensive Application Exploration Report
 
 **Date:** March 23, 2026  
-**Application URL:** https://comms-hub-57.preview.emergentagent.com/  
+**Application URL:** https://multi-tenant-scope.preview.emergentagent.com/  
 **Testing Agent:** E2 (Testing Sub-Agent)
 
 ---
