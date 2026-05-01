@@ -205,7 +205,18 @@ export default function HRPage() {
 
         {/* PAYSLIPS TAB */}
         <TabsContent value="payslips" className="mt-4">
-          <div className="flex justify-end mb-3">
+          <div className="flex justify-end gap-2 mb-3">
+            <Button size="sm" variant="outline" className="gap-1.5" data-testid="generate-payday-btn" onClick={async () => {
+              try {
+                const res = await api.post('/hr/payslips/generate-payday');
+                if (res.data.generated > 0) {
+                  toast.success(`Generated ${res.data.generated} payslips for ${res.data.period} (payday today!)`);
+                  setPayslips(prev => [...(res.data.payslips || []), ...prev]);
+                } else {
+                  toast.info(res.data.message || `No campuses have payday today (${res.data.day_of_month})`);
+                }
+              } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+            }}><CheckCircle size={14} /> Run Payday Now</Button>
             <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
           </div>
           {payslips.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No payslips generated yet.</p> : (

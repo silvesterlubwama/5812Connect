@@ -24,7 +24,16 @@ export default function WalletBadgePage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    api.get(`/wallet-badge/${token}`).then(r => setBadge(r.data)).catch(() => setError('Badge not found or expired'));
+    api.get(`/wallet-badge/${token}`).then(r => {
+      setBadge(r.data);
+      // Ask the Service Worker to pre-cache this pass for offline use
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'prefetch-wallet-pass',
+          urls: [`/api/wallet-badge/${token}`, `/badge/${token}`],
+        });
+      }
+    }).catch(() => setError('Badge not found or expired'));
   }, [token]);
 
   if (error) return (

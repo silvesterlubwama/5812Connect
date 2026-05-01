@@ -127,14 +127,17 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
     location_id = data.get("location_id") or current_user.get("active_campus_id", "")
     if not period:
         raise HTTPException(status_code=400, detail="Pay period required (e.g. 2026-02)")
-    # Get active salaries for this location
+    return await _generate_payslips_for(period, location_id, current_user)
+
+
+async def _generate_payslips_for(period: str, location_id: str, current_user: dict) -> dict:
+    """Shared helper: generate missing payslips for a period + optional location."""
     query = {"status": "active"}
     if location_id:
         query["location_id"] = location_id
     salaries = await db.hr_salaries.find(query, {"_id": 0}).to_list(500)
     generated = []
     for sal in salaries:
-        # Check if already generated
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
         if existing:
             continue
@@ -176,6 +179,36 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
         generated.append(payslip)
     await _audit(current_user["id"], "create", "payslips", period, {"count": len(generated)})
     return {"generated": len(generated), "payslips": generated}
+
+
+@router.post("/payslips/generate-payday")
+async def generate_payday_payslips(current_user: dict = Depends(require_director)):
+    """Generate payslips for all campuses whose pay_day matches today's day-of-month.
+    Period defaults to current YYYY-MM. Skips already-generated ones. Idempotent."""
+    today = datetime.now(timezone.utc)
+    today_day = today.day
+    period = f"{today.year:04d}-{today.month:02d}"
+    # Find campuses with matching pay_day AND hr_enabled
+    campus_q = {"hr_enabled": True, "pay_day": today_day}
+    settings = await db.hr_settings.find(campus_q, {"_id": 0, "location_id": 1, "pay_day": 1}).to_list(100)
+    if not settings:
+        return {"generated": 0, "payslips": [], "message": f"No campuses have pay_day={today_day} today", "period": period}
+    all_generated = []
+    total_count = 0
+    for s in settings:
+        loc_id = s.get("location_id", "")
+        if not loc_id:
+            continue
+        res = await _generate_payslips_for(period, loc_id, current_user)
+        total_count += res["generated"]
+        all_generated.extend(res["payslips"])
+    return {
+        "generated": total_count,
+        "payslips": all_generated,
+        "period": period,
+        "day_of_month": today_day,
+        "campuses_matched": [s.get("location_id") for s in settings],
+    }
 
 
 @router.put("/payslips/{payslip_id}")

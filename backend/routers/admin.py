@@ -82,6 +82,16 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         raise HTTPException(status_code=400, detail="Email already registered")
     password = data.get("password") or "Test@5812!"
     user_id = str(uuid.uuid4())
+    # Support multi-campus: accept location_ids array + expand with parent campuses
+    primary_loc = data.get("location_id", "") or ""
+    loc_ids = list(data.get("location_ids") or [])
+    if primary_loc and primary_loc not in loc_ids:
+        loc_ids.append(primary_loc)
+    expanded_locs = list(set(loc_ids))
+    for lid in list(expanded_locs):
+        parent = await resolve_parent_campus(lid)
+        if parent and parent not in expanded_locs:
+            expanded_locs.append(parent)
     user = {
         "id": user_id,
         "name": name,
@@ -90,7 +100,8 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         "role": data.get("role", "Staff"),
         "status": data.get("status", "active"),
         "department": data.get("department", ""),
-        "location_id": data.get("location_id", ""),
+        "location_id": primary_loc,
+        "location_ids": expanded_locs,
         "password_hash": hash_password(password),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
@@ -106,7 +117,8 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
             "id": member_id, "user_id": user_id,
             "name": name, "email": email, "phone": data.get("phone", ""),
             "role": "member", "membership_type": data.get("role", "Staff").lower(),
-            "status": "active", "location_id": data.get("location_id", ""),
+            "status": "active", "location_id": primary_loc,
+            "location_ids": expanded_locs,
             "department": data.get("department", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })

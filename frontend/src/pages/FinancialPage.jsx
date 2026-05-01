@@ -89,6 +89,15 @@ export default function FinancialPage() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
+  // Replace prompt() with dialogs
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferForm, setTransferForm] = useState({ from_account_id: '', to_account_id: '', amount: '', currency: 'UGX', notes: '' });
+  const [showBudget, setShowBudget] = useState(false);
+  const [budgetForm, setBudgetForm] = useState({ department: '', period: new Date().toISOString().slice(0, 7), amount: '', category: 'general' });
+  const [showRevalue, setShowRevalue] = useState(null); // holds the asset being revalued
+  const [revalueForm, setRevalueForm] = useState({ current_value: 0, method: 'appreciation', notes: '' });
+  const [showStartingBal, setShowStartingBal] = useState(null); // holds the account
+  const [startingBalValue, setStartingBalValue] = useState('');
   const today = new Date().toISOString().split('T')[0];
 
   const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
@@ -454,10 +463,7 @@ export default function FinancialPage() {
         {/* Transfers Tab */}
         <TabsContent value="transfers" className="mt-4 space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" className="gap-1.5" onClick={() => {
-              const from = prompt('From Account ID:'); const to = prompt('To Account ID:'); const amt = prompt('Amount:');
-              if (from && to && amt) { financialApi.createTransfer({ from_account_id: from, to_account_id: to, amount: parseFloat(amt) }).then(() => { toast.success('Transfer created'); fetchAll(); }).catch(() => toast.error('Failed')); }
-            }} data-testid="create-transfer-btn">Create Transfer</Button>
+            <Button size="sm" className="gap-1.5" onClick={() => { setTransferForm({ from_account_id: '', to_account_id: '', amount: '', currency: currentCurrency || 'UGX', notes: '' }); setShowTransfer(true); }} data-testid="create-transfer-btn">Create Transfer</Button>
           </div>
           <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
             <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">From</th><th className="p-3 text-left text-xs text-muted-foreground">To</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Date</th></tr></thead>
@@ -470,10 +476,7 @@ export default function FinancialPage() {
         {/* Budgets Tab */}
         <TabsContent value="budgets" className="mt-4 space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" className="gap-1.5" onClick={() => {
-              const dept = prompt('Department:'); const period = prompt('Period (YYYY-MM):', new Date().toISOString().slice(0, 7)); const amt = prompt('Budget Amount:');
-              if (dept && amt) { financialApi.createBudget({ department: dept, period, amount: parseFloat(amt) }).then(() => { toast.success('Budget created'); fetchAll(); }).catch(() => toast.error('Failed')); }
-            }} data-testid="create-budget-btn">Add Budget</Button>
+            <Button size="sm" className="gap-1.5" onClick={() => { setBudgetForm({ department: '', period: new Date().toISOString().slice(0, 7), amount: '', category: 'general' }); setShowBudget(true); }} data-testid="create-budget-btn">Add Budget</Button>
           </div>
           <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
             <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Department</th><th className="p-3 text-left text-xs text-muted-foreground">Period</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Category</th></tr></thead>
@@ -536,9 +539,9 @@ export default function FinancialPage() {
                               <td className="py-2"><Badge variant="outline" className={`text-[10px] ${method === 'depreciation' ? 'border-red-200 text-red-500' : 'border-green-200 text-green-600'}`}>{method}</Badge></td>
                               {isFinanceAdmin && <td className="py-2 flex gap-1">
                                 <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
-                                  const newVal = prompt(`New value for "${a.name}":`, currentVal); const m = prompt('Method (appreciation/depreciation):', method);
-                                  if (newVal) { financialApi.updateAssetValuation(a.id, { current_value: parseFloat(newVal), method: m || method }).then(() => { toast.success('Revalued'); fetchBalanceSheet(); }).catch(() => toast.error('Failed')); }
-                                }}>Revalue</Button>
+                                  setShowRevalue(a);
+                                  setRevalueForm({ current_value: Number(currentVal) || 0, method: method || 'appreciation', notes: '' });
+                                }} data-testid={`revalue-asset-${a.id}`}>Revalue</Button>
                                 <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm(`Delete "${a.name}"?`)) return; try { await financialApi.deleteAsset(a.id); setAssets(prev => prev.filter(x => x.id !== a.id)); toast.success('Deleted'); } catch { toast.error('Failed'); } }}>Del</Button>
                               </td>}
                             </tr>
@@ -609,10 +612,8 @@ export default function FinancialPage() {
                           <td className="p-3 text-right text-red-600">{(a.total_expenses || 0).toLocaleString()}</td>
                           <td className="p-3 text-right font-medium">{((a.starting_balance || 0) + (a.balance || 0)).toLocaleString()}</td>
                           <td className="p-3">{isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
-                            const newBal = prompt(`Starting balance for ${a.location_name}:`, a.starting_balance || 0);
-                            if (newBal !== null && a.id) {
-                              financialApi.updateAccount(a.id, { starting_balance: parseFloat(newBal) || 0 }).then(() => { toast.success('Updated'); financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {}); }).catch(() => toast.error('Failed'));
-                            }
+                            setShowStartingBal(a);
+                            setStartingBalValue(String(a.starting_balance || 0));
                           }} data-testid={`edit-account-${a.location_id}`}>Edit</Button>}</td>
                         </tr>
                       ))}
@@ -927,6 +928,182 @@ export default function FinancialPage() {
               </div>
             )}
             <Button variant="outline" className="w-full" onClick={() => setShowCategories(false)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Transfer Dialog */}
+      <Dialog open={showTransfer} onOpenChange={setShowTransfer}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Create Inter-Account Transfer</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1">
+              <Label className="text-xs">From Account</Label>
+              <Select value={transferForm.from_account_id} onValueChange={v => setTransferForm({ ...transferForm, from_account_id: v })}>
+                <SelectTrigger data-testid="transfer-from-select"><SelectValue placeholder="Select source account" /></SelectTrigger>
+                <SelectContent>
+                  {(subAccounts?.accounts || []).filter(a => a.id).map(a => <SelectItem key={a.id} value={a.id}>{a.location_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">To Account</Label>
+              <Select value={transferForm.to_account_id} onValueChange={v => setTransferForm({ ...transferForm, to_account_id: v })}>
+                <SelectTrigger data-testid="transfer-to-select"><SelectValue placeholder="Select destination account" /></SelectTrigger>
+                <SelectContent>
+                  {(subAccounts?.accounts || []).filter(a => a.id && a.id !== transferForm.from_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.location_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Amount</Label>
+                <Input type="number" min={0} value={transferForm.amount} onChange={e => setTransferForm({ ...transferForm, amount: e.target.value })} data-testid="transfer-amount-input" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Currency</Label>
+                <Input value={transferForm.currency} onChange={e => setTransferForm({ ...transferForm, currency: e.target.value.toUpperCase() })} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Input value={transferForm.notes} onChange={e => setTransferForm({ ...transferForm, notes: e.target.value })} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowTransfer(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="confirm-transfer-btn" onClick={async () => {
+                if (!transferForm.from_account_id || !transferForm.to_account_id || !transferForm.amount) { toast.error('All fields required'); return; }
+                try {
+                  await financialApi.createTransfer({
+                    from_account_id: transferForm.from_account_id,
+                    to_account_id: transferForm.to_account_id,
+                    amount: parseFloat(transferForm.amount),
+                    currency: transferForm.currency || 'UGX',
+                    notes: transferForm.notes,
+                  });
+                  toast.success('Transfer created');
+                  setShowTransfer(false);
+                  fetchAll();
+                } catch { toast.error('Failed to create transfer'); }
+              }}>Create</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Budget Dialog */}
+      <Dialog open={showBudget} onOpenChange={setShowBudget}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Add Budget</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Department</Label>
+              <Input value={budgetForm.department} onChange={e => setBudgetForm({ ...budgetForm, department: e.target.value })} data-testid="budget-department-input" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Period (YYYY-MM)</Label>
+                <Input value={budgetForm.period} onChange={e => setBudgetForm({ ...budgetForm, period: e.target.value })} placeholder="2026-05" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Category</Label>
+                <Select value={budgetForm.category} onValueChange={v => setBudgetForm({ ...budgetForm, category: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="general">General</SelectItem>
+                    {(categories || []).filter(c => c.name).map(c => <SelectItem key={c.id || c.name} value={c.name}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Amount</Label>
+              <Input type="number" min={0} value={budgetForm.amount} onChange={e => setBudgetForm({ ...budgetForm, amount: e.target.value })} data-testid="budget-amount-input" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBudget(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="confirm-budget-btn" onClick={async () => {
+                if (!budgetForm.department || !budgetForm.amount) { toast.error('Department and amount required'); return; }
+                try {
+                  await financialApi.createBudget({
+                    department: budgetForm.department,
+                    period: budgetForm.period,
+                    amount: parseFloat(budgetForm.amount),
+                    category: budgetForm.category,
+                  });
+                  toast.success('Budget created');
+                  setShowBudget(false);
+                  fetchAll();
+                } catch { toast.error('Failed to create budget'); }
+              }}>Save Budget</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revalue Asset Dialog */}
+      <Dialog open={!!showRevalue} onOpenChange={(o) => { if (!o) setShowRevalue(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Revalue: {showRevalue?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1">
+              <Label className="text-xs">New current value</Label>
+              <Input type="number" value={revalueForm.current_value} onChange={e => setRevalueForm({ ...revalueForm, current_value: e.target.value })} data-testid="revalue-value-input" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Valuation method</Label>
+              <Select value={revalueForm.method} onValueChange={v => setRevalueForm({ ...revalueForm, method: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="appreciation">Appreciation</SelectItem>
+                  <SelectItem value="depreciation">Depreciation</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Input value={revalueForm.notes} onChange={e => setRevalueForm({ ...revalueForm, notes: e.target.value })} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowRevalue(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="confirm-revalue-btn" onClick={async () => {
+                try {
+                  await financialApi.updateAssetValuation(showRevalue.id, {
+                    current_value: parseFloat(revalueForm.current_value) || 0,
+                    method: revalueForm.method,
+                    notes: revalueForm.notes,
+                  });
+                  toast.success('Revalued');
+                  setShowRevalue(null);
+                  fetchBalanceSheet();
+                } catch { toast.error('Failed'); }
+              }}>Save</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Set Starting Balance Dialog */}
+      <Dialog open={!!showStartingBal} onOpenChange={(o) => { if (!o) setShowStartingBal(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Starting Balance — {showStartingBal?.location_name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Starting Balance ({showStartingBal?.currency || currentCurrency})</Label>
+              <Input type="number" value={startingBalValue} onChange={e => setStartingBalValue(e.target.value)} data-testid="starting-balance-input" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowStartingBal(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="confirm-starting-balance-btn" onClick={async () => {
+                if (!showStartingBal?.id) { toast.error('No account id'); return; }
+                try {
+                  await financialApi.updateAccount(showStartingBal.id, { starting_balance: parseFloat(startingBalValue) || 0 });
+                  toast.success('Updated');
+                  setShowStartingBal(null);
+                  financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {});
+                } catch { toast.error('Failed'); }
+              }}>Save</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

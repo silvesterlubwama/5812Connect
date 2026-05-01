@@ -1,5 +1,6 @@
 /* eslint-disable no-restricted-globals */
-const CACHE_NAME = '5812-crm-v2';
+const CACHE_NAME = '5812-crm-v3';
+const WALLET_CACHE = '5812-wallet-v1';
 const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/logo192.png', '/logo512.png'];
 const DB_NAME = '5812-offline-queue';
 const STORE_NAME = 'messages';
@@ -46,18 +47,46 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// ---- Activate ----
+// ---- Activate: purge old caches, keep wallet cache ----
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))).then(() => self.clients.claim())
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((k) => k !== CACHE_NAME && k !== WALLET_CACHE).map((k) => caches.delete(k))
+    )).then(() => self.clients.claim())
   );
 });
 
-// ---- Fetch: network-first for API, cache-first for static ----
+// ---- Wallet Pass detection: these must always work offline ----
+function isWalletRequest(url) {
+  const p = url.pathname;
+  // Public badge viewer page, wallet-badge endpoint, and QR image endpoints
+  return p.startsWith('/badge/')
+      || p.startsWith('/api/wallet-badge/')
+      || p.startsWith('/api/members/') && p.includes('/qr-code')
+      || p.startsWith('/api/members/') && p.includes('/profile-photo');
+}
+
+// ---- Fetch: wallet-first for passes, network-first for API, cache-first for static ----
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.protocol === 'ws:' || url.protocol === 'wss:') return;
+
+  // Wallet Pass: cache-first with stale-while-revalidate — must always render offline
+  if (isWalletRequest(url)) {
+    event.respondWith(
+      caches.open(WALLET_CACHE).then((cache) =>
+        cache.match(request).then((cached) => {
+          const fetchPromise = fetch(request).then((response) => {
+            if (response.ok) cache.put(request, response.clone());
+            return response;
+          }).catch(() => cached);
+          return cached || fetchPromise;
+        })
+      )
+    );
+    return;
+  }
 
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
@@ -101,7 +130,6 @@ async function syncOfflineMessages() {
     const items = await getQueuedItems();
     if (items.length === 0) return;
     const messages = items.map(i => i.payload);
-    // Try to sync with backend
     const response = await fetch('/api/sync/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${items[0]?.token || ''}` },
@@ -109,7 +137,6 @@ async function syncOfflineMessages() {
     });
     if (response.ok) {
       await clearQueue();
-      // Notify all clients
       const clients = await self.clients.matchAll();
       clients.forEach(client => client.postMessage({ type: 'sync-complete', synced: messages.length }));
     }
@@ -146,12 +173,25 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// ---- Message from main thread (queue offline messages) ----
+// ---- Message from main thread: queue offline messages, or prefetch wallet passes ----
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'queue-message') {
     addToQueue({ payload: event.data.payload, token: event.data.token, timestamp: Date.now() }).then(() => {
-      // Request background sync
       if (self.registration.sync) self.registration.sync.register('sync-messages');
+    });
+  }
+  if (event.data?.type === 'prefetch-wallet-pass') {
+    // Pre-cache wallet pass URLs so they're guaranteed offline
+    const urls = event.data.urls || [];
+    caches.open(WALLET_CACHE).then(async (cache) => {
+      await Promise.all(urls.map(async (u) => {
+        try {
+          const res = await fetch(u, { credentials: 'include' });
+          if (res.ok) await cache.put(u, res.clone());
+        } catch (e) {}
+      }));
+      const clients = await self.clients.matchAll();
+      clients.forEach(c => c.postMessage({ type: 'wallet-pass-cached', count: urls.length }));
     });
   }
 });

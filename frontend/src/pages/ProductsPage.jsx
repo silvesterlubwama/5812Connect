@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload } from 'lucide-react';
+import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload, Printer } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -14,6 +14,7 @@ import { productsApi, salesApi, locationsApi, storeSettingsApi } from '../servic
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
+import VariantBarcodePrint from '../components/VariantBarcodePrint';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -60,6 +61,8 @@ export default function ProductsPage() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
+  // Variant barcode printing
+  const [barcodePrintProduct, setBarcodePrintProduct] = useState(null);
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
 
@@ -354,6 +357,9 @@ export default function ProductsPage() {
                       <p className="font-semibold text-sm leading-tight flex-1">{p.name}</p>
                       <div className="flex gap-1 ml-2">
                         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openEditProduct(p)} data-testid="edit-product-btn"><Edit2 size={11} /></Button>
+                        {p.has_variants && (p.variants || []).length > 0 && (
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setBarcodePrintProduct(p)} data-testid="print-variant-barcodes-btn" title="Print variant barcodes"><Printer size={11} /></Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => deleteProduct(p.id)} data-testid="delete-product-btn"><Trash2 size={11} /></Button>
                       </div>
                     </div>
@@ -496,7 +502,14 @@ export default function ProductsPage() {
             <div className="border-t pt-3 space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-semibold">Variants</Label>
-                <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={productForm.has_variants || false} onChange={e => setProductForm({...productForm, has_variants: e.target.checked, price: e.target.checked ? 0 : productForm.price})} /> Has variants</label>
+                <div className="flex items-center gap-3">
+                  {editingProduct && (productForm.variants || []).length > 0 && (
+                    <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setBarcodePrintProduct({ ...editingProduct, ...productForm, price: Number(productForm.price) || 0 })} data-testid="print-variant-barcodes-dialog-btn">
+                      <Printer size={12} /> Print barcodes
+                    </Button>
+                  )}
+                  <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" className="accent-primary" checked={productForm.has_variants || false} onChange={e => setProductForm({...productForm, has_variants: e.target.checked, price: e.target.checked ? 0 : productForm.price})} /> Has variants</label>
+                </div>
               </div>
               {productForm.has_variants && (
                 <div className="space-y-2">
@@ -641,6 +654,14 @@ export default function ProductsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Variant Barcode Print Dialog */}
+      <VariantBarcodePrint
+        open={!!barcodePrintProduct}
+        onOpenChange={(open) => { if (!open) setBarcodePrintProduct(null); }}
+        product={barcodePrintProduct}
+        currency={barcodePrintProduct?.currency || 'UGX'}
+      />
     </div>
   );
 }
