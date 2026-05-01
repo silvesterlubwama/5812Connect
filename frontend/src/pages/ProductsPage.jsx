@@ -267,18 +267,19 @@ export default function ProductsPage() {
                     {filteredProducts.map(p => (
                       <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>
                         <div className="absolute top-2 left-2 z-10"><input type="checkbox" className="accent-primary" checked={selectedIds.has(p.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} onClick={e => e.stopPropagation()} /></div>
-                      <button data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={p.stock === 0}
-                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${p.stock === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
+                      <button data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0}
+                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
                         <div className="flex items-start justify-between mb-2">
                           <div className="p-2 rounded-lg bg-secondary"><Package size={16} className="text-muted-foreground" /></div>
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>{stockLabel(p.stock, p.reorder_level)}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock, p.reorder_level)}`}>{stockLabel(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock, p.reorder_level)}</span>
                         </div>
                         <p className="font-semibold text-sm leading-tight">{p.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
+                          {p.has_variants && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">{(p.variants || []).length} variants</span>}
                           {p.location_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground"><MapPin size={8} className="inline mr-0.5" />{locName(p.location_id)}</span>}
                         </div>
-                        <p className="text-primary font-bold mt-2 text-sm">{fmt(p.price, p.currency || activeCurrency)}</p>
+                        <p className="text-primary font-bold mt-2 text-sm">{p.has_variants && (p.variants || []).length > 0 ? `From ${fmt(Math.min(...(p.variants || []).map(v => v.price || Infinity)), p.currency || activeCurrency)}` : fmt(p.price, p.currency || activeCurrency)}</p>
                       </button>
                       </div>
                     ))}
@@ -449,7 +450,7 @@ export default function ProductsPage() {
 
       {/* Add/Edit Product Modal */}
       <Dialog open={showProductModal} onOpenChange={setShowProductModal}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editingProduct ? 'Edit Product' : 'Add Product'}</DialogTitle></DialogHeader>
           <form onSubmit={handleSaveProduct} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Product Name *</Label>
@@ -535,7 +536,7 @@ export default function ProductsPage() {
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt</DialogTitle></DialogHeader>
           {lastReceipt && (
             <div className="space-y-4 font-mono text-sm">
@@ -620,7 +621,7 @@ export default function ProductsPage() {
 
       {/* Import/Export Modal */}
       <Dialog open={showImportExport} onOpenChange={setShowImportExport}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Sales Import / Export</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">

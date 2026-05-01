@@ -95,8 +95,8 @@ export default function FinancialPage() {
 
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
-  const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '' }));
-  const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '' }));
+  const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
+  const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
 
   // Default non-admin users to their campus
   useEffect(() => {
@@ -124,8 +124,15 @@ export default function FinancialPage() {
 
   useEffect(() => {
     locationsApi.list().then(r => {
-      setAllLocations(r.data);
-      setSubLocations((r.data || []).filter(l => l.type === 'sub-location' || l.parent_id));
+      const allLocs = r.data || [];
+      setAllLocations(allLocs);
+      // Only show sub-locations under the user's active campus
+      const activeCampus = localStorage.getItem('5812_active_campus') || '';
+      if (activeCampus) {
+        setSubLocations(allLocs.filter(l => l.parent_id === activeCampus));
+      } else {
+        setSubLocations([]);
+      }
     }).catch(() => {});
     fetchPending();
     financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {});
@@ -621,7 +628,7 @@ export default function FinancialPage() {
 
       {/* Rejection Comment Dialog */}
       <Dialog open={!!showApprovalComment} onOpenChange={() => setShowApprovalComment(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Reject Expense</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <p className="text-sm">Rejecting: <strong>{showApprovalComment?.title}</strong></p>
@@ -636,7 +643,7 @@ export default function FinancialPage() {
 
       {/* Add Donation Modal */}
       <Dialog open={showDonation} onOpenChange={setShowDonation}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Record Donation</DialogTitle></DialogHeader>
           <form onSubmit={handleAddDonation} className="space-y-4 mt-2">
             <div className="space-y-2">
@@ -686,7 +693,7 @@ export default function FinancialPage() {
 
       {/* Add Expense Modal */}
       <Dialog open={showExpense} onOpenChange={setShowExpense}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
           <form onSubmit={handleAddExpense} className="space-y-4 mt-2">
             <div className="space-y-2">
@@ -738,7 +745,7 @@ export default function FinancialPage() {
 
       {/* Fund Distribution Dialog */}
       <Dialog open={showDistribute} onOpenChange={setShowDistribute}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Distribute Funds</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label>From Location *</Label>
@@ -789,7 +796,7 @@ export default function FinancialPage() {
 
       {/* Financial Import/Export Modal */}
       <Dialog open={showImportExport} onOpenChange={setShowImportExport}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Financial Data Import / Export</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">
@@ -812,7 +819,7 @@ export default function FinancialPage() {
 
       {/* Add Asset Dialog */}
       <Dialog open={showAssetForm} onOpenChange={setShowAssetForm}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Add Asset</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Asset Name</Label><Input value={assetForm.name} onChange={e => setAssetForm({...assetForm, name: e.target.value})} placeholder="e.g. Toyota Land Cruiser" /></div>
@@ -849,7 +856,7 @@ export default function FinancialPage() {
 
       {/* Edit Entry Dialog */}
       <Dialog open={!!editEntry} onOpenChange={v => { if (!v) setEditEntry(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit {editEntry?.type === 'donation' ? 'Donation' : 'Expense'}</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             {editEntry?.type === 'donation' ? (
