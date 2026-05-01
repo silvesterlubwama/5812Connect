@@ -1,5 +1,14 @@
 # 58:12 Connect — Changelog
 
+## Iteration 78 (May 1, 2026) — Routing/Filtering Fixes
+- Task assignee dropdown: now campus-scoped & staff-only (excludes Guest/Parent/Member)
+- `get_campus_filter` in deps.py: excludes restricted sub-locations for non-admins
+- Campus switcher: multi-campus non-admins can now switch among their assigned campuses (was admin/ED only)
+- Chat: `/chat/users` used everywhere (no more ghost users from /members)
+- Volunteer scheduling: staff list scoped to active campus; Linked Event auto-fills title/date/start/end/location
+- Calendar: tasks with `due_date` now render as blue "task" events and click-navigate to board
+- Admin-tier role guard: only system_admin can assign admin/system_admin/Executive Director roles (create_user, admin_update_user, bulk_update_users)
+
 ## Iteration 77 (Apr 30, 2026)
 - Reports page fully rewritten to match API response format
 - Financial transfers + budgets UI tabs added

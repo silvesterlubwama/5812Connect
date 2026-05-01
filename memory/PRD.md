@@ -3,53 +3,45 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Completed Features (Iterations 49-79)
-All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md
+## Completed Features (Iterations 49-78)
+All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
-## CRITICAL BUGS FOR NEXT SESSION (Priority Order)
+## Recently Resolved — Iteration 78 (May 1, 2026)
+All 6 critical routing/filtering bugs from the previous session + 1 bonus fix verified via `testing_agent_v3_fork` (9/9 backend tests PASS).
 
-### Bug 1: Tasks showing all users globally (P0)
-- Task assignment dropdown shows ALL users including non-staff and other campuses
-- Fix: TasksPage uses `adminApi.userDirectory()` which returns ALL users
-- Need: Filter by active campus + staff roles only in task assignment
-- Files: `/app/frontend/src/pages/TasksPage.jsx` (line 71 fetchBoards), `/app/frontend/src/pages/kanban/CardDetailDialog.jsx` (assignee select)
+- ✅ **Bug 1: Tasks Assignee Scope** — `/api/admin/users/directory` now returns only active staff roles (admin, system_admin, Executive Director, Adviser, Director, Manager, Leader, Coordinator, Staff, HR, Volunteer) scoped to `get_campus_filter`. `include_all=true` reserved for sysadmins. TasksPage `boardStaff` further filters by board location.
+- ✅ **Bug 2: Restricted Location Filtering** — `get_campus_filter` in `/app/backend/deps.py` now excludes restricted sub-locations (`is_restricted: true`) for non-sysadmins unless the user's `location_ids` explicitly includes that sub-location.
+- ✅ **Bug 3: Chat Ghost Users** — `CommsPage.jsx` now uses `chatApi.users()` (the scoped `/api/chat/users` endpoint) instead of `/api/members`, so only active in-scope users appear.
+- ✅ **Bug 4: Multi-Campus Switcher** — `PUT /api/user/active-campus` now allows regular users to switch among campuses in their `location_ids`; admins/EDs retain global switch. 400 for missing id, 403 for campuses outside assignment.
+- ✅ **Bug 5: Scheduler Scope + Auto-Time** — `VolunteerSchedulingPage.jsx` uses `adminApi.userDirectory()` (scoped). Selecting a Linked Event auto-populates title, date, start_time, end_time, location_id.
+- ✅ **Bug 6: Tasks on Main Calendar** — `CalendarPage.jsx` fetches `tasksApi.list()` and renders tasks with `due_date` as blue "task" events. Clicking navigates to `/boards?board=<id>&task=<id>`.
+- ✅ **Bonus: Admin Role Guard** — `create_user`, `admin_update_user`, `bulk_update_users` block non-sysadmins from assigning admin/system_admin/Executive Director roles.
 
-### Bug 2: Chat showing non-existent users + not delivering (P0)
-- Chat conversations reference deleted/non-existent user IDs
-- Messages not reaching actual users
-- Need: Run orphan cleanup on conversations, fix WebSocket message delivery
-- Files: `/app/backend/routers/chat.py`, `/app/backend/routers/websocket.py`, `/app/frontend/src/pages/CommsPage.jsx`
+## Pending / Backlog
 
-### Bug 3: Campus switcher broken for multi-campus users (P0)
-- Users with multiple `location_ids` can't switch between their campuses
-- Need: Check Layout.jsx campus switcher logic for multi-campus user handling
-- Files: `/app/frontend/src/components/Layout.jsx` (lines 295-310), `/app/backend/deps.py`
+### P1
+- HR auto-payslip generation on payday (verify logic)
+- Add task source/color tweaks on calendar (make tasks more distinguishable)
+- Directory `location_ids` PUT on create (currently POST admin/users drops `location_ids`)
 
-### Bug 4: Restricted locations not filtering (P0)
-- Restricted location data visible to everyone instead of only campus/sublocation staff
-- Need: Enforce location-level access check on restricted sub-location endpoints
-- Files: `/app/backend/routers/access.py`, `/app/backend/deps.py`
-
-### Bug 5: Tasks due dates not on main Calendar (P1)
-- Calendar page only shows events, not task due dates
-- Need: Fetch tasks with due_date and render on CalendarPage
-- Files: `/app/frontend/src/pages/CalendarPage.jsx`
-
-### Bug 6: Non-admins can assign admin roles (P1)
-- The System Admin toggle should only be visible to existing admins
-- Files: `/app/frontend/src/pages/UnifiedPeoplePage.jsx` (MemberForm admin toggle)
-
-### Bug 7: Shift scheduler showing wrong staff/locations (P1)
-- Scheduler shows non-location staff and all locations
-- Should scope to current campus and auto-set time from event
-- Files: Check shift/scheduler pages and endpoints
+### P2
+- Full variant barcode printing UI
+- Finance categories management dialog (replace `prompt()`)
+- `server.py` modularization (oversized)
+- `UnifiedPeoplePage.jsx` split (~1400 lines)
+- PWA offline support + Service Worker for Wallet Passes
+- Wave H5 SDK native upgrade
+- Scheduled cron jobs for overdue task emails
 
 ## Architecture
+- Backend: FastAPI + MongoDB + Motor + JWT auth. Routers under `/app/backend/routers/`.
+- Frontend: React + Vite + shadcn/ui + Tailwind. Pages under `/app/frontend/src/pages/`.
+- Realtime: WebSockets for chat, board events, presence.
+- Integrations: Resend (email), Wave CloudUCM (PBX), Emergent Google OAuth, Emergent LLM Key (Gemini for AI assistant).
+
 See /app/ADMIN_GUIDE.md for full feature tree.
 See /app/memory/ROADMAP.md for future backlog.
-See /app/memory/CHANGELOG.md for iteration history (49-79).
-
-## Test Reports: Iterations 49-79 all passed
+See /app/memory/CHANGELOG.md for iteration history.
 
 ## Credentials
-See /app/memory/test_credentials.md
+See /app/memory/test_credentials.md.
