@@ -52,6 +52,12 @@ async def health_check():
     return {"status": "healthy", "service": "58:12 Global Connect CRM"}
 
 
+@app.get("/health")
+async def root_health_check():
+    """Root-level health endpoint for deployment probes that hit /health directly."""
+    return {"status": "healthy", "service": "58:12 Global Connect CRM"}
+
+
 # Rate limiting middleware
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, requests_per_minute: int = 120):
@@ -898,7 +904,17 @@ async def startup():
         logger.error(f"Storage init failed: {e}")
     # Start background task reminder scheduler
     asyncio.create_task(_run_due_date_reminder_scheduler())
-    user_count = await db.users.count_documents({})
+    # Defer heavy seeding so the app becomes ready immediately
+    asyncio.create_task(_seed_initial_data())
+
+
+async def _seed_initial_data():
+    """Background-seed default admin, locations, notifications without blocking startup/readiness."""
+    try:
+        user_count = await db.users.count_documents({})
+    except Exception as e:
+        logger.warning(f"Seed skipped — DB not reachable yet: {e}")
+        return
     if user_count == 0:
         logger.info("Seeding initial data...")
         try:
@@ -928,11 +944,12 @@ async def startup():
             logger.info("Admin users created")
         except Exception as e:
             logger.warning(f"Admin creation: {e}")
-    uganda_admin = await db.users.find_one({"email": "admin@5812uganda.org"})
-    if not uganda_admin:
-        await db.users.insert_one({"id": str(uuid.uuid4()), "name": "Admin", "email": "admin@5812uganda.org", "phone": "+256 800 5813", "password_hash": hash_password("Admin@5812"), "role": "admin", "status": "active", "created_at": datetime.now(timezone.utc).isoformat()})
-    else:
-        await db.users.update_one({"email": "admin@5812uganda.org"}, {"$set": {"password_hash": hash_password("Admin@5812"), "role": "admin", "status": "active"}})
+    try:
+        uganda_admin = await db.users.find_one({"email": "admin@5812uganda.org"})
+        if not uganda_admin:
+            await db.users.insert_one({"id": str(uuid.uuid4()), "name": "Admin", "email": "admin@5812uganda.org", "phone": "+256 800 5813", "password_hash": hash_password("Admin@5812"), "role": "admin", "status": "active", "created_at": datetime.now(timezone.utc).isoformat()})
+    except Exception as e:
+        logger.warning(f"Uganda admin seed: {e}")
     try:
         if await db.locations.count_documents({}) == 0:
             locations = [
@@ -951,25 +968,27 @@ async def startup():
     except Exception as e:
         logger.warning(f"Location/notification seeding: {e}")
 
-    # Auto-promote silvester@lubwamas.org to system admin
-    silvester = await db.users.find_one({"email": "silvester@lubwamas.org"})
-    if silvester:
-        if silvester.get("role") != "admin":
-            await db.users.update_one({"email": "silvester@lubwamas.org"}, {"$set": {"role": "admin"}})
-            logger.info("Promoted silvester@lubwamas.org to admin")
-    else:
-        # Create admin account if doesn't exist
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "name": "Silvester Lubwama",
-            "email": "silvester@lubwamas.org",
-            "phone": "",
-            "password_hash": hash_password("Admin@5812"),
-            "role": "admin",
-            "status": "active",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info("Created admin account for silvester@lubwamas.org")
+    # Auto-promote silvester@lubwamas.org to system admin (non-fatal)
+    try:
+        silvester = await db.users.find_one({"email": "silvester@lubwamas.org"})
+        if silvester:
+            if silvester.get("role") != "admin":
+                await db.users.update_one({"email": "silvester@lubwamas.org"}, {"$set": {"role": "admin"}})
+                logger.info("Promoted silvester@lubwamas.org to admin")
+        else:
+            await db.users.insert_one({
+                "id": str(uuid.uuid4()),
+                "name": "Silvester Lubwama",
+                "email": "silvester@lubwamas.org",
+                "phone": "",
+                "password_hash": hash_password("Admin@5812"),
+                "role": "admin",
+                "status": "active",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Created admin account for silvester@lubwamas.org")
+    except Exception as e:
+        logger.warning(f"Silvester seed: {e}")
 
 
 @app.on_event("shutdown")
