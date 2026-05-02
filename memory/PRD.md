@@ -6,7 +6,14 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
-## Recently Resolved — Iteration 80 (May 2, 2026) — Critical Bugs + Receipt + Sheet Import
+## Recently Resolved — Iteration 81 (May 2, 2026) — Refactor + Polish
+**Verified 13/13 backend tests PASS + frontend 100%.**
+- ✅ **financial.py split** 1458→1003 lines + new `sales.py` (227) + `products.py` (154) + `sheet_import.py` (111)
+- ✅ **Customer profile receipt-tracking UI** — clickable rows in Sales → Customers open a dialog with Total Spent / Transactions / Last Visit + full receipt history + view-receipt buttons
+- ✅ **Auto-detect printer paper size** — `window.matchMedia` heuristic picks 58/80/A5/A4; manual override wins
+- ✅ **Inline approve/decline on expenses** — pending rows show ✓ Approve and ✕ Reject directly (finance admins only); reject prompts for reason
+
+## Recently Resolved — Iteration 80 (May 2, 2026)
 **Verified 12/12 backend tests PASS + frontend confirmed.**
 
 **P0 Bugs Fixed:** starting balance account-id, expense workflow (status-based), variant save, HR nav visibility, restricted locations UI, chat org structure, expense delete lag.

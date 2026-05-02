@@ -1,5 +1,15 @@
 # 58:12 Connect — Changelog
 
+## Iteration 81 (May 2, 2026) — Refactor + Polish
+**Verified 13/13 backend tests PASS + frontend 100%.**
+- **financial.py split (1458→1003 lines)** + 3 new focused routers:
+  - `routers/sales.py` (227 lines) — Sale CRUD, drafts/parked, /sales/by-receipt
+  - `routers/products.py` (154 lines) — Product CRUD + variant management + barcode generation
+  - `routers/sheet_import.py` (111 lines) — Google Sheet financial importer
+- **Customer profile receipt-tracking UI** — clickable customer rows in Sales → Customers tab open a profile dialog showing Total Spent / Transactions / Last Visit cards + full receipt history with mono-font receipt numbers and "View" buttons that open `/receipt/{number}` in new tab
+- **Auto-detect printer paper size** — Receipt component uses `window.matchMedia('(max-width: 60mm/90mm/160mm)')` heuristic to pick 58mm/80mm/A5; falls back to 80mm if no match. Manual override via Store Settings still wins.
+- **Inline approve/decline on expense list** — pending expenses now show `✓ Approve` and `✕ Reject` buttons inline (visible only to finance admins). Reject prompts for reason. No more dedicated tab needed.
+
 ## Iteration 80 (May 2, 2026) — Critical Bug Fixes + Receipt Overhaul + Sheet Import
 **Verified 12/12 backend tests PASS + frontend confirmed.**
 - **Bug fixes (P0):**
