@@ -491,7 +491,18 @@ export default function FinancialPage() {
                             )}
                           </td>
                           <td className="py-3">
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 flex-wrap">
+                              {e.status === 'pending' && isFinanceAdmin && (
+                                <>
+                                  <Button size="sm" variant="ghost" className="h-6 text-xs text-green-700 hover:bg-green-50" data-testid={`inline-approve-${e.id}`} onClick={async () => {
+                                    try { await financialApi.approveExpense(e.id, ''); setExpenses(prev => prev.map(x => x.id === e.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                                  }}>✓ Approve</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 text-xs text-red-700 hover:bg-red-50" data-testid={`inline-reject-${e.id}`} onClick={async () => {
+                                    const reason = window.prompt('Rejection reason (optional):') || '';
+                                    try { await financialApi.rejectExpense(e.id, reason); setExpenses(prev => prev.map(x => x.id === e.id ? { ...x, status: 'rejected' } : x)); toast.success('Rejected'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                                  }}>✕ Reject</Button>
+                                </>
+                              )}
                               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>
                               {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>

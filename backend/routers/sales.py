@@ -1,0 +1,227 @@
+"""Sales / POS / draft (parked) sales / receipt lookup — extracted from financial.py"""
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from deps import db, get_current_user, require_manager, _audit, get_campus_filter, get_role_level
+from datetime import datetime, timezone
+from typing import Optional, List
+import uuid
+
+router = APIRouter(prefix="/api", tags=["sales"])
+
+
+class SaleCreate(BaseModel):
+    items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
+    customer_id: Optional[str] = None
+    total: float; payment_method: str = "cash"; notes: Optional[str] = None; location_id: Optional[str] = None
+
+
+# ========== FINANCIAL SUMMARY ==========
+
+# ========== SALES ==========
+
+@router.get("/sales")
+async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    query = {**await get_campus_filter(current_user)}
+    return await db.sales.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+
+@router.post("/sales")
+async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):
+    # Traceable, human-readable receipt number: INV-YYYYMMDD-####
+    # Atomic counter guarantees uniqueness even under concurrent POSTs on same day
+    now = datetime.now(timezone.utc)
+    date_tag = now.strftime("%Y%m%d")
+    counter = await db.counters.find_one_and_update(
+        {"_id": f"sales_{date_tag}"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = (counter or {}).get("seq", 1)
+    receipt_number = f"INV-{date_tag}-{seq:04d}"
+    sale_id = receipt_number  # id equals receipt number for traceability
+    doc = {"id": sale_id, "receipt_number": receipt_number, **data.model_dump(), "created_at": now.isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown"), "cashier_id": current_user.get("id")}
+    if not doc.get("location_id"):
+        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    await db.sales.insert_one(doc)
+    for item in data.items:
+        if item.get("product_id"):
+            # If the item has a variant, decrement that specific variant's stock instead of main stock
+            if item.get("variant_id"):
+                await db.products.update_one(
+                    {"id": item["product_id"], "variants.id": item["variant_id"]},
+                    {"$inc": {"variants.$.stock": -item.get("qty", 1), "stock": -item.get("qty", 1)}}
+                )
+            else:
+                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+    # Update customer account totals if linked
+    customer_id = doc.get("customer_id")
+    if customer_id:
+        await db.customer_accounts.update_one(
+            {"id": customer_id},
+            {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)},
+             "$push": {"receipt_history": {"receipt_number": receipt_number, "total": doc.get("total", 0), "date": doc.get("created_at")}}}
+        )
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "sale", sale_id)
+    return doc
+
+
+# ========== DRAFT / PARKED SALES ==========
+
+@router.get("/sales/drafts")
+async def list_draft_sales(current_user: dict = Depends(get_current_user)):
+    """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""
+    loc_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    query = {"status": "draft"}
+    if loc_id:
+        query["location_id"] = loc_id
+    drafts = await db.sale_drafts.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return drafts
+
+
+@router.post("/sales/drafts")
+async def create_draft_sale(data: dict, current_user: dict = Depends(get_current_user)):
+    """Park/save an in-progress sale so it can be reopened later (by anyone at the same campus)."""
+    draft_id = f"draft_{uuid.uuid4().hex[:8]}"
+    loc_id = data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    doc = {
+        "id": draft_id,
+        "status": "draft",
+        "items": data.get("items", []),
+        "customer_name": data.get("customer_name", "Walk-in Customer"),
+        "customer_id": data.get("customer_id"),
+        "customer_phone": data.get("customer_phone"),
+        "payment_method": data.get("payment_method", "cash"),
+        "total": float(data.get("total", 0)),
+        "notes": data.get("notes", ""),
+        "location_id": loc_id,
+        "parked_by": current_user["id"],
+        "parked_by_name": current_user.get("name", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.sale_drafts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/sales/drafts/{draft_id}")
+async def delete_draft_sale(draft_id: str, current_user: dict = Depends(get_current_user)):
+    """Discard a parked draft sale."""
+    await db.sale_drafts.delete_one({"id": draft_id})
+    return {"message": "Draft discarded"}
+
+
+@router.get("/sales/by-receipt/{receipt_number}")
+async def get_sale_by_receipt(receipt_number: str):
+    """Public — look up a sale by its receipt number (used for QR code tracing)."""
+    sale = await db.sales.find_one({"$or": [{"receipt_number": receipt_number}, {"id": receipt_number}]}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    # Return minimal, non-sensitive fields
+    return {
+        "receipt_number": sale.get("receipt_number", sale.get("id")),
+        "created_at": sale.get("created_at"),
+        "total": sale.get("total"),
+        "customer_name": sale.get("customer_name"),
+        "cashier": sale.get("cashier"),
+        "items": [{"name": i.get("name"), "qty": i.get("qty"), "unit_price": i.get("unit_price")} for i in (sale.get("items") or [])],
+        "payment_method": sale.get("payment_method"),
+        "location_id": sale.get("location_id"),
+    }
+
+@router.delete("/sales/{sale_id}")
+async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a sale entry with time-based approval tiers:
+    - Within 5 min: user can delete own entry
+    - 5-30 min: manager approval needed
+    - 7+ days: director approval needed
+    - 30+ days: admin only"""
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    
+    created = sale.get("created_at", "")
+    role = (current_user.get("role") or "").lower()
+    role_level = get_role_level(current_user.get("role", ""))
+    is_owner = sale.get("created_by") == current_user["id"]
+    
+    minutes_old = 999999
+    if created:
+        try:
+            from dateutil.parser import parse as dt_parse
+            age = datetime.now(timezone.utc) - dt_parse(created).replace(tzinfo=timezone.utc)
+            minutes_old = age.total_seconds() / 60
+        except: pass
+    
+    can_delete = False
+    if role_level >= 10:  # Admin — always
+        can_delete = True
+    elif minutes_old <= 5 and is_owner:  # Own entry within 5 min
+        can_delete = True
+    elif minutes_old <= 30 and role_level >= 7:  # Manager+ within 30 min
+        can_delete = True
+    elif minutes_old <= (7 * 24 * 60) and role_level >= 8:  # Director+ within 7 days
+        can_delete = True
+    elif minutes_old <= (30 * 24 * 60) and role_level >= 8:  # Director+ within 30 days
+        can_delete = True
+    
+    if not can_delete:
+        if minutes_old <= 30:
+            raise HTTPException(status_code=403, detail="Manager approval required to delete entries older than 5 minutes")
+        elif minutes_old <= (7 * 24 * 60):
+            raise HTTPException(status_code=403, detail="Director approval required to delete entries older than 30 minutes")
+        else:
+            raise HTTPException(status_code=403, detail="Only administrators can delete entries older than 30 days")
+    
+    await db.sales.delete_one({"id": sale_id})
+    # Restore stock for sold items
+    for item in (sale.get("items") or []):
+        if item.get("product_id"):
+            await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": item.get("qty", 1)}})
+    await _audit(current_user["id"], "delete", "sale", sale_id)
+    return {"message": "Sale entry deleted, stock restored"}
+
+
+# ========== SALES EXPORT / IMPORT ==========
+
+@router.get("/sales/export")
+async def export_sales(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Export sales data as JSON for the given location/date range."""
+    query = {**await get_campus_filter(current_user)}
+    if location_id:
+        query["location_id"] = location_id
+    if date_from or date_to:
+        query["created_at"] = {}
+        if date_from:
+            query["created_at"]["$gte"] = date_from
+        if date_to:
+            query["created_at"]["$lte"] = date_to + "T23:59:59"
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return {"sales": sales, "count": len(sales)}
+
+
+@router.post("/sales/import")
+async def import_sales(data: dict, current_user: dict = Depends(require_manager)):
+    """Import sales data from JSON array."""
+    sales_data = data.get("sales", [])
+    if not sales_data:
+        raise HTTPException(status_code=400, detail="No sales data provided")
+    imported = 0
+    for sale in sales_data:
+        sale_id = f"inv_{str(uuid.uuid4())[:8].upper()}"
+        doc = {
+            "id": sale_id,
+            "items": sale.get("items", []),
+            "customer_name": sale.get("customer_name", "Imported"),
+            "total": float(sale.get("total", 0)),
+            "payment_method": sale.get("payment_method", "cash"),
+            "location_id": sale.get("location_id", current_user.get("location_id", "")),
+            "notes": sale.get("notes", "Imported"),
+            "created_at": sale.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "created_by": current_user["id"],
+            "cashier": current_user.get("name", "Import"),
+        }
+        await db.sales.insert_one(doc)
+        imported += 1
+    await _audit(current_user["id"], "create", "sales_import", None, {"count": imported})
+    return {"imported": imported}

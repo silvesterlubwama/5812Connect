@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
@@ -15,10 +15,28 @@ const PAPER_WIDTHS = {
 /**
  * Receipt — printable sales receipt with logo, QR, traceable number.
  * Auto-generates a tracking QR that points to /receipt/{number}.
+ * Auto-detects printer paper width on first render if not specified in storeSettings.
  */
 export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 Global Connect' }) {
   const printRef = useRef(null);
-  const paperSize = storeSettings.receipt_paper_size || '80mm';
+  const [autoPaperSize, setAutoPaperSize] = useState(null);
+
+  // Heuristic: try matchMedia for narrow screen / receipt printer detection.
+  // Thermal POS printers commonly resolve to <100mm width when used as default.
+  useEffect(() => {
+    if (storeSettings.receipt_paper_size || autoPaperSize) return;
+    try {
+      // Browser will treat thermal printers as ~58–80mm; A4 paper is ~210mm
+      if (window.matchMedia('(max-width: 60mm)').matches) setAutoPaperSize('58mm');
+      else if (window.matchMedia('(max-width: 90mm)').matches) setAutoPaperSize('80mm');
+      else if (window.matchMedia('(max-width: 160mm)').matches) setAutoPaperSize('A5');
+      else setAutoPaperSize('80mm'); // sensible default
+    } catch (e) {
+      setAutoPaperSize('80mm');
+    }
+  }, [storeSettings.receipt_paper_size, autoPaperSize]);
+
+  const paperSize = storeSettings.receipt_paper_size || autoPaperSize || '80mm';
   const paperWidth = PAPER_WIDTHS[paperSize] || '80mm';
   const showLogo = storeSettings.receipt_show_logo !== false;
   const showQR = storeSettings.receipt_show_qr !== false;

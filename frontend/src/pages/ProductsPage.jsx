@@ -65,23 +65,37 @@ export default function ProductsPage() {
   const [importingData, setImportingData] = useState(false);
   // Variant barcode printing
   const [barcodePrintProduct, setBarcodePrintProduct] = useState(null);
+  // Customer profile drawer (receipt history)
+  const [customerProfile, setCustomerProfile] = useState(null);
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [prodRes, salesRes, locRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 50 }), locationsApi.list()]);
+      const [prodRes, salesRes, locRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 200 }), locationsApi.list()]);
       setProducts(prodRes.data);
       setSales(salesRes.data);
       setLocations(locRes.data || []);
+      // Aggregate customers from sales — keep receipts per customer for the profile drawer
       const custMap = {};
       salesRes.data.forEach(s => {
         const name = s.customer_name || 'Walk-in Customer';
-        if (!custMap[name]) custMap[name] = { name, total_spent: 0, transactions: 0, last_purchase: s.created_at };
+        const phone = s.customer_phone || '';
+        if (!custMap[name]) custMap[name] = { name, phone, total_spent: 0, transactions: 0, last_purchase: s.created_at, receipts: [] };
         custMap[name].total_spent += s.total || 0;
         custMap[name].transactions += 1;
         if (s.created_at > (custMap[name].last_purchase || '')) custMap[name].last_purchase = s.created_at;
+        if (!custMap[name].phone && phone) custMap[name].phone = phone;
+        custMap[name].receipts.push({
+          receipt_number: s.receipt_number || s.id,
+          total: s.total || 0,
+          date: s.created_at,
+          payment_method: s.payment_method,
+          cashier: s.cashier,
+          items_count: (s.items || []).length,
+          items: s.items || [],
+        });
       });
       setCustomers(Object.values(custMap).sort((a, b) => b.total_spent - a.total_spent));
     } catch { toast.error('Failed to load data'); }
@@ -480,14 +494,16 @@ export default function ProductsPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Total Spent</th>
                       <th className="pb-2 font-medium text-muted-foreground">Transactions</th>
                       <th className="pb-2 font-medium text-muted-foreground">Last Purchase</th>
+                      <th className="pb-2 font-medium text-muted-foreground"></th>
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {customers.map((c, i) => (
-                        <tr key={c.email || c.name || i} className="hover:bg-accent/30 transition-colors" data-testid="customer-row">
-                          <td className="py-3 font-medium">{c.name}</td>
+                        <tr key={c.email || c.name || i} className="hover:bg-accent/30 transition-colors cursor-pointer" data-testid="customer-row" onClick={() => setCustomerProfile(c)}>
+                          <td className="py-3 font-medium">{c.name}{c.phone && <span className="block text-[10px] text-muted-foreground">{c.phone}</span>}</td>
                           <td className="py-3 text-primary font-semibold">{fmt(c.total_spent)}</td>
                           <td className="py-3 text-muted-foreground">{c.transactions}</td>
                           <td className="py-3 text-muted-foreground text-xs">{c.last_purchase?.slice(0, 10)}</td>
+                          <td className="py-3 text-xs text-primary">View →</td>
                         </tr>
                       ))}
                     </tbody>
@@ -740,6 +756,57 @@ export default function ProductsPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Customer Profile Drawer with Receipt History */}
+      <Dialog open={!!customerProfile} onOpenChange={(open) => { if (!open) setCustomerProfile(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="customer-profile-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">{customerProfile?.name}</DialogTitle>
+          </DialogHeader>
+          {customerProfile && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-primary/5 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Total Spent</p>
+                  <p className="text-lg font-bold text-primary">{fmt(customerProfile.total_spent, activeCurrency)}</p>
+                </div>
+                <div className="bg-secondary/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Transactions</p>
+                  <p className="text-lg font-bold">{customerProfile.transactions}</p>
+                </div>
+                <div className="bg-secondary/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Last Visit</p>
+                  <p className="text-sm font-bold">{customerProfile.last_purchase?.slice(0, 10) || '—'}</p>
+                </div>
+              </div>
+              {customerProfile.phone && (
+                <p className="text-xs text-muted-foreground">📞 {customerProfile.phone}</p>
+              )}
+              <div>
+                <p className="text-sm font-semibold mb-2">Receipt History</p>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {customerProfile.receipts.sort((a, b) => (b.date || '').localeCompare(a.date || '')).map((r, i) => (
+                    <div key={r.receipt_number || i} className="flex items-center justify-between p-2.5 rounded-lg border border-border hover:bg-accent/30" data-testid={`customer-receipt-${i}`}>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-mono font-medium">{r.receipt_number}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {r.date?.slice(0, 16).replace('T', ' ')} · {r.cashier} · {r.items_count} item{r.items_count === 1 ? '' : 's'} · <span className="capitalize">{r.payment_method}</span>
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-primary">{fmt(r.total, activeCurrency)}</span>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => { window.open(`/receipt/${encodeURIComponent(r.receipt_number)}`, '_blank'); }} title="View receipt">
+                          View
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </DialogContent>
