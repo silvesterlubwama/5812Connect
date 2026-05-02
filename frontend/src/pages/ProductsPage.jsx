@@ -92,6 +92,7 @@ export default function ProductsPage() {
           total: s.total || 0,
           date: s.created_at,
           payment_method: s.payment_method,
+          payment_status: s.payment_status || 'paid',
           cashier: s.cashier,
           items_count: (s.items || []).length,
           items: s.items || [],
@@ -452,25 +453,56 @@ export default function ProductsPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Items</th>
                       <th className="pb-2 font-medium text-muted-foreground">Total</th>
                       <th className="pb-2 font-medium text-muted-foreground">Payment</th>
+                      <th className="pb-2 font-medium text-muted-foreground">Status</th>
                       <th className="pb-2 font-medium text-muted-foreground">Location</th>
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
                       <th className="pb-2 font-medium text-muted-foreground">Cashier</th>
                       {isAdmin && <th className="pb-2 w-8"></th>}
                     </tr></thead>
                     <tbody className="divide-y divide-border">
-                      {sales.map(sale => (
-                        <tr key={sale.id} className="hover:bg-accent/30 transition-colors" data-testid="sale-row">
-                          <td className="py-3 font-mono text-xs text-primary font-semibold">{sale.id}</td>
+                      {sales.map(sale => {
+                        const status = sale.payment_status || (sale.payment_method === 'cash' ? 'paid' : 'paid');
+                        const isPending = status === 'pending';
+                        return (
+                        <tr key={sale.id} className={`hover:bg-accent/30 transition-colors ${isPending ? 'bg-amber-50/40 dark:bg-amber-950/10' : ''}`} data-testid="sale-row">
+                          <td className="py-3 font-mono text-xs text-primary font-semibold">{sale.receipt_number || sale.id}</td>
                           <td className="py-3">{sale.customer_name || '--'}</td>
                           <td className="py-3 text-muted-foreground">{(sale.items || []).length} items</td>
                           <td className="py-3 font-bold text-primary">{fmt(sale.total)}</td>
                           <td className="py-3"><Badge variant="outline" className="text-xs capitalize">{sale.payment_method}</Badge></td>
+                          <td className="py-3">
+                            {isPending ? (
+                              <Button size="sm" variant="outline" className="h-7 text-xs gap-1 border-amber-300 text-amber-700 hover:bg-amber-50" data-testid={`mark-paid-${sale.id}`} onClick={async (e) => {
+                                e.stopPropagation();
+                                const ref = window.prompt('Payment reference (transaction ID, optional):') || '';
+                                try {
+                                  await salesApi.setPaymentStatus(sale.id, 'paid', ref);
+                                  setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_status: 'paid', payment_reference: ref || s.payment_reference } : s));
+                                  toast.success('Marked as paid');
+                                } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                              }}>Mark as Paid</Button>
+                            ) : (
+                              <Badge className="bg-green-100 text-green-700 hover:bg-green-200 text-xs">Paid</Badge>
+                            )}
+                          </td>
                           <td className="py-3 text-xs text-muted-foreground">{sale.location_id ? locName(sale.location_id) : '--'}</td>
                           <td className="py-3 text-muted-foreground text-xs">{sale.created_at?.slice(0, 16).replace('T', ' ')}</td>
                           <td className="py-3 text-muted-foreground">{sale.cashier || '--'}</td>
-                          {isAdmin && <td className="py-3"><Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this sale?')) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button></td>}
-                        </tr>
-                      ))}
+                          {isAdmin && <td className="py-3 flex gap-1">
+                            {!isPending && isAdmin && (
+                              <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-600" data-testid={`mark-pending-${sale.id}`} onClick={async () => {
+                                if (!window.confirm('Revert this sale to pending payment?')) return;
+                                try {
+                                  await salesApi.setPaymentStatus(sale.id, 'pending');
+                                  setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_status: 'pending' } : s));
+                                  toast.success('Reverted to pending');
+                                } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                              }}>↺</Button>
+                            )}
+                            <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this sale?')) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
+                          </td>}
+                        </tr>);
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -795,6 +827,7 @@ export default function ProductsPage() {
                         <p className="text-xs font-mono font-medium">{r.receipt_number}</p>
                         <p className="text-[10px] text-muted-foreground">
                           {r.date?.slice(0, 16).replace('T', ' ')} · {r.cashier} · {r.items_count} item{r.items_count === 1 ? '' : 's'} · <span className="capitalize">{r.payment_method}</span>
+                          {r.payment_status === 'pending' && <span className="ml-1 text-amber-600 font-semibold">· UNPAID</span>}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">

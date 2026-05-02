@@ -145,7 +145,10 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginTop: 4 }}>
           <span>Paid:</span>
-          <span style={{ textTransform: 'capitalize' }}>{sale.payment_method || 'cash'}</span>
+          <span style={{ textTransform: 'capitalize' }}>
+            {sale.payment_method || 'cash'}
+            {sale.payment_status === 'pending' && <strong style={{ marginLeft: 6, color: '#b45309' }}>· UNPAID</strong>}
+          </span>
         </div>
         {showQR && receiptNumber && (
           <div className="qr" style={{ margin: '6px auto', textAlign: 'center' }}>

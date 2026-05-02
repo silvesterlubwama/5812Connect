@@ -13,30 +13,44 @@ def _is_admin(user: dict) -> bool:
 
 
 async def _can_access_board(board: dict, user: dict) -> bool:
-    if _is_admin(user):
+    """Access rules apply to everyone, including system admins.
+    Admins must be tagged / have a task / match location — same as regular users."""
+    user_id = user["id"]
+    # Always allow tagged members and the creator
+    if user_id in (board.get("tagged_members") or []) or user_id == board.get("created_by"):
         return True
+    # Restricted/private boards: ONLY tagged members + creator (already checked above)
+    if board.get("is_restricted") or board.get("is_private"):
+        return False
+    # Tasks assigned to this user on this board
+    has_task = await db.tasks.find_one(
+        {"board_id": board.get("id"), "$or": [{"assignees": user_id}, {"assignee": user_id}]},
+        {"_id": 0, "id": 1}
+    )
+    if has_task:
+        return True
+    # Global boards — visible to everyone when not restricted/private
     if board.get("is_global"):
         return True
     board_loc = board.get("location_id")
-    user_locs = user.get("location_ids") or []
-    user_loc = user.get("location_id")
-    if user_loc and user_loc not in user_locs:
-        user_locs = user_locs + [user_loc]
-    # Restricted boards in restricted sub-locations: only tagged members + admins
-    if board.get("is_restricted") or board.get("is_private"):
-        return user["id"] in (board.get("tagged_members") or []) or user["id"] == board.get("created_by")
-    # Check location match
-    if board_loc:
-        if board_loc in user_locs:
-            return True
-        # Check if board's location is a sub-location of user's campus
-        loc = await db.locations.find_one({"id": board_loc}, {"_id": 0, "parent_id": 1})
-        if loc and loc.get("parent_id") in user_locs:
-            return True
-        return False
-    # No location set = visible to all staff
-    role = (user.get("role") or "").lower()
-    return role in {"manager", "coordinator", "staff", "hr", "director", "adviser"}
+    if not board_loc:
+        # No location set — treat as global for staff-level users
+        role = (user.get("role") or "").lower()
+        return role in {"admin", "system_admin", "executive director", "adviser", "director",
+                        "manager", "leader", "coordinator", "staff", "hr"}
+    # Build user's location scope (location_ids + active_campus + their sub-locations)
+    user_locs = set(user.get("location_ids") or [])
+    if user.get("location_id"):
+        user_locs.add(user["location_id"])
+    if user.get("active_campus_id"):
+        user_locs.add(user["active_campus_id"])
+    if board_loc in user_locs:
+        return True
+    # Check if board's location is a sub-location of one of the user's campuses
+    loc = await db.locations.find_one({"id": board_loc}, {"_id": 0, "parent_id": 1})
+    if loc and loc.get("parent_id") in user_locs:
+        return True
+    return False
 
 
 async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_user: str = None):
@@ -57,59 +71,71 @@ async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_us
 
 @router.get("/boards")
 async def list_boards(current_user: dict = Depends(get_current_user)):
-    """Return all boards accessible to the current user.
-    Restricted/private boards in restricted sub-locations: only tagged members.
-    Otherwise: boards in user's location(s)."""
-    if _is_admin(current_user):
-        # Admins see boards filtered by active campus if set, otherwise all
-        active = current_user.get("active_campus_id")
-        if active:
-            sub_locs = await db.locations.find({"parent_id": active, "type": "sub-location"}, {"_id": 0, "id": 1}).to_list(200)
-            all_locs = [active] + [s["id"] for s in sub_locs]
-            boards = await db.boards.find({"$or": [
-                {"location_id": {"$in": all_locs}},
-                {"is_global": True},
-                {"location_id": {"$exists": False}}, {"location_id": None}, {"location_id": ""},
-                {"tagged_members": current_user["id"]}, {"created_by": current_user["id"]},
-            ]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-        else:
-            boards = await db.boards.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    else:
-        user_locs_raw = current_user.get("location_ids") or []
-        user_loc = current_user.get("location_id")
-        if user_loc and user_loc not in user_locs_raw:
-            user_locs_raw.append(user_loc)
-        # Expand sub-locations
-        if user_locs_raw:
-            sub_locs = await db.locations.find({"parent_id": {"$in": user_locs_raw}, "type": "sub-location"}, {"_id": 0, "id": 1}).to_list(200)
-            user_locs = list(set(user_locs_raw + [s["id"] for s in sub_locs]))
-        else:
-            user_locs = user_locs_raw
-        user_id = current_user["id"]
+    """Return boards accessible to the current user — applies even to system admins.
+    A board is visible if ANY of the following is true:
+    1. User is tagged on the board (tagged_members)
+    2. User created the board
+    3. User has a task assigned to them on that board
+    4. Board is global (is_global=True) AND not restricted/private
+    5. Board's location_id is in user's campus/location scope (active_campus + location_ids + sub-locations)
+    Restricted/private boards additionally require explicit tagging."""
+    user_id = current_user["id"]
 
-        # All boards user can see: global + their location + assigned to them
-        or_clauses = [
-            {"is_global": True},
-            {"tagged_members": user_id},
-            {"created_by": user_id},
-        ]
-        if user_locs:
-            or_clauses.append({"location_id": {"$in": user_locs}})
-        # Also boards with no location (legacy/unassigned)
-        or_clauses.append({"location_id": {"$exists": False}})
-        or_clauses.append({"location_id": None})
-        or_clauses.append({"location_id": ""})
+    # Resolve the set of locations this user can see boards in
+    user_locs = set(current_user.get("location_ids") or [])
+    if current_user.get("location_id"):
+        user_locs.add(current_user["location_id"])
+    # Admins & EDs/Advisers with an active_campus — treat active campus as their scope
+    active = current_user.get("active_campus_id")
+    if active:
+        user_locs.add(active)
+    # Expand to include sub-locations
+    if user_locs:
+        sub_locs = await db.locations.find(
+            {"parent_id": {"$in": list(user_locs)}, "type": "sub-location"},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(500)
+        for s in sub_locs:
+            # Include non-restricted sub-locations automatically; restricted ones only if explicitly assigned
+            if not s.get("is_restricted") or s["id"] in user_locs:
+                user_locs.add(s["id"])
+    user_locs_list = list(user_locs)
 
-        all_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0}).sort("created_at", -1).to_list(200)
-        # Post-filter: remove restricted/private boards unless user is tagged
-        boards = []
-        for b in all_boards:
-            if b.get("is_restricted") or b.get("is_private"):
-                if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by") or _is_admin(current_user):
-                    boards.append(b)
-            else:
+    # Boards on which user has a task assigned — include even if otherwise out of scope
+    task_board_ids = await db.tasks.distinct("board_id", {
+        "$or": [{"assignees": user_id}, {"assignee": user_id}],
+        "is_archived": {"$ne": True},
+    })
+    task_board_ids = [bid for bid in task_board_ids if bid]
+
+    or_clauses = [
+        {"tagged_members": user_id},
+        {"created_by": user_id},
+    ]
+    if task_board_ids:
+        or_clauses.append({"id": {"$in": task_board_ids}})
+    if user_locs_list:
+        or_clauses.append({"location_id": {"$in": user_locs_list}})
+
+    # Global boards — visible to everyone UNLESS restricted/private
+    or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
+
+    candidate_boards = await db.boards.find(
+        {"$or": or_clauses},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+
+    # Final filter: restricted/private boards require explicit tag OR ownership
+    boards = []
+    for b in candidate_boards:
+        if b.get("is_restricted") or b.get("is_private"):
+            if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by"):
                 boards.append(b)
+            # else: hide even for admins unless they're tagged or created it
+        else:
+            boards.append(b)
 
+    # Enrich with counts
     for b in boards:
         b["list_count"] = await db.board_lists.count_documents({"board_id": b["id"]})
         b["card_count"] = await db.tasks.count_documents({"board_id": b["id"], "is_archived": {"$ne": True}})

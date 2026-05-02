@@ -39,7 +39,20 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
     seq = (counter or {}).get("seq", 1)
     receipt_number = f"INV-{date_tag}-{seq:04d}"
     sale_id = receipt_number  # id equals receipt number for traceability
-    doc = {"id": sale_id, "receipt_number": receipt_number, **data.model_dump(), "created_at": now.isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown"), "cashier_id": current_user.get("id")}
+    # Payment status: cash sales are paid immediately, others default to pending until confirmed
+    pm = (data.payment_method or "cash").lower()
+    payment_status = "paid" if pm == "cash" else "pending"
+    doc = {
+        "id": sale_id,
+        "receipt_number": receipt_number,
+        **data.model_dump(),
+        "payment_status": payment_status,
+        "paid_at": now.isoformat() if payment_status == "paid" else None,
+        "created_at": now.isoformat(),
+        "created_by": current_user["id"],
+        "cashier": current_user.get("name", "Unknown"),
+        "cashier_id": current_user.get("id"),
+    }
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.sales.insert_one(doc)
@@ -59,11 +72,41 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         await db.customer_accounts.update_one(
             {"id": customer_id},
             {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)},
-             "$push": {"receipt_history": {"receipt_number": receipt_number, "total": doc.get("total", 0), "date": doc.get("created_at")}}}
+             "$push": {"receipt_history": {"receipt_number": receipt_number, "total": doc.get("total", 0), "date": doc.get("created_at"), "payment_status": payment_status}}}
         )
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "sale", sale_id)
     return doc
+
+
+@router.put("/sales/{sale_id}/payment-status")
+async def update_sale_payment_status(sale_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Toggle a sale's payment_status (paid/pending) — used for non-cash sales awaiting confirmation."""
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    new_status = (data.get("payment_status") or "").lower()
+    if new_status not in {"paid", "pending"}:
+        raise HTTPException(status_code=400, detail="payment_status must be 'paid' or 'pending'")
+    update = {
+        "payment_status": new_status,
+        "payment_updated_at": datetime.now(timezone.utc).isoformat(),
+        "payment_updated_by": current_user["id"],
+        "payment_updated_by_name": current_user.get("name", ""),
+    }
+    if new_status == "paid":
+        update["paid_at"] = datetime.now(timezone.utc).isoformat()
+        if data.get("payment_reference"):
+            update["payment_reference"] = data["payment_reference"]
+    await db.sales.update_one({"id": sale_id}, {"$set": update})
+    # Mirror to customer_accounts.receipt_history (if any)
+    if sale.get("customer_id"):
+        await db.customer_accounts.update_one(
+            {"id": sale["customer_id"], "receipt_history.receipt_number": sale.get("receipt_number") or sale_id},
+            {"$set": {"receipt_history.$.payment_status": new_status}}
+        )
+    await _audit(current_user["id"], "update", "sale_payment_status", sale_id, {"new_status": new_status})
+    return {**sale, **update}
 
 
 # ========== DRAFT / PARKED SALES ==========
@@ -126,6 +169,7 @@ async def get_sale_by_receipt(receipt_number: str):
         "cashier": sale.get("cashier"),
         "items": [{"name": i.get("name"), "qty": i.get("qty"), "unit_price": i.get("unit_price")} for i in (sale.get("items") or [])],
         "payment_method": sale.get("payment_method"),
+        "payment_status": sale.get("payment_status", "paid"),
         "location_id": sale.get("location_id"),
     }
 

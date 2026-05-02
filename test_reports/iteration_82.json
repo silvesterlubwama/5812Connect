@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 82 — Mark-as-Paid toggle (backend + UI) + Boards filter for admins verified end-to-end. Backend: 14/14 pytest PASS (cash=paid, non-cash=pending for 4 methods, PUT payment-status toggle + 400/404 validation, public by-receipt includes payment_status, boards admin-filter rules — creator visibility, global visibility, restricted+tagged visibility, 403/404 on missing board, iter81 regressions). Frontend: Mark-as-Paid button with data-testid=mark-paid-{id} rendered on pending rows with orange styling; prompt dialog accepts reference; PUT fires and state flips to paid (verified sale.payment_status='paid', payment_reference='TEST_REF_iter82', paid_at set); admin revert button data-testid=mark-pending-{id} appears on paid rows; 9 Paid badges visible, 2 Mark-as-Paid buttons on 2 pending sales. Note: UNPAID text is NOT shown on /receipt/{rn} because that route uses ReceiptViewPage.jsx which was not updated — only Receipt.jsx (POS print component used in ProductsPage) has the UNPAID line.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ReceiptViewPage.jsx (public /receipt/{rn})", "issue": "Does NOT render 'UNPAID' for pending sales. Review spec says Receipt component should show UNPAID; Receipt.jsx (used in POS/Print) has the logic correctly at L150, but the public receipt page ReceiptViewPage.jsx at /receipt/{rn} does not reference sale.payment_status at all. Users visiting the public receipt URL for a pending sale won't see payment status.", "selector": "/app/frontend/src/pages/ReceiptViewPage.jsx L57 (Payment row)", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration82_mark_paid_boards.py",
+    "/app/test_reports/pytest/pytest_iter82.xml"
+  ],
+  "action_items": [
+    "Update /app/frontend/src/pages/ReceiptViewPage.jsx to show '· UNPAID' (amber) after payment method when sale.payment_status === 'pending', mirroring Receipt.jsx L150. The backend /api/sales/by-receipt/{rn} already returns payment_status (verified)."
+  ],
+  "critical_code_review_comments": [
+    "[routers/sales.py L43-50] Good — payment_status computed from payment_method.lower(); cash→paid with paid_at, others→pending with paid_at=null. Consistent with the spec.",
+    "[routers/sales.py L82-109] PUT /sales/{id}/payment-status — validates allowed values (paid/pending), returns 400 for invalid and 404 for missing sale, clears payment_reference ONLY when not provided (minor: reverting to pending does NOT clear previously-set payment_reference — spec says 'reverting to pending clears' but code at L99-100 only sets reference on paid-path. Consider $unset on revert to fully clear paid_at/payment_reference). paid_at gets ISO timestamp on paid transitions but is never unset when reverted to pending — spec says 'reverting to pending clears'. BUG RISK — paid_at will remain from last paid transition.",
+    "[routers/sales.py L102-107] Customer_accounts.receipt_history mirror works — uses positional $ operator with receipt_number match. Good.",
+    "[routers/boards.py L15-53 _can_access_board] Clean 5-rule check; correctly treats restricted/private as tagged-only (including blocking admins). Location scope expansion to sub-locations via locations.parent_id lookup is correct.",
+    "[routers/boards.py L72-142 list_boards] Well-structured $or query with fallback through task assignments and location scope; final post-filter strips restricted boards user isn't tagged on. Sub-location expansion via db.locations query at L93-101 — note the sub-location 'is_restricted' field check uses the LOCATION's is_restricted (not BOARD's) — correct.",
+    "[routers/boards.py L82] admin user_id used consistently — admins NO LONGER get omniscient boards view. Breaking change documented in review_request — callers aware.",
+    "[frontend Receipt.jsx L150] Correctly renders '· UNPAID' in amber #b45309 when sale.payment_status === 'pending' after payment method. BUT this component is only used in ProductsPage (POS/Print). Public /receipt/{rn} route uses ReceiptViewPage.jsx which was NOT updated — missed.",
+    "[ProductsPage.jsx] Mark-as-Paid button with data-testid=mark-paid-{saleId} confirmed clickable, orange styling, prompts for reference, PUTs /sales/{id}/payment-status, badge flips green. Admin-only revert button data-testid=mark-pending-{saleId} appears on paid rows. UI flow verified end-to-end in browser automation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration82_mark_paid_boards.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "90% — Mark-as-Paid UI fully working; ReceiptViewPage missing UNPAID badge"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (token key is 'token' NOT 'access_token')",
+  "seed_data_creation": "Created & cleaned: 6 TEST_ sales (cash, mobile_money, card, bank_transfer, cheque, toggle, ui-seed x2, by-receipt), 3 TEST_ boards (out-of-scope, global, restricted-tagged). All deleted via DELETE /api/sales/{id} and /api/boards/{id}.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression suite at /app/backend/tests/test_iteration82_mark_paid_boards.py covers all payment-status flows + admin boards filter rules + iter81 regression endpoints (/sales, /products, /sales/drafts). Known minor issues worth surfacing: (1) ReceiptViewPage.jsx at /receipt/{rn} does not render UNPAID — spec-miss for public receipt. (2) When reverting paid→pending, the backend PUT does NOT unset paid_at or payment_reference fields (they remain from prior paid state). Spec says 'Reverting to pending clears' — consider $unset:{paid_at:'', payment_reference:''} in the pending branch at routers/sales.py L97-100.",
+  "rca of the issue": "ReceiptViewPage.jsx at /app/frontend/src/pages/ReceiptViewPage.jsx L57 renders <span className='font-medium capitalize'>{sale.payment_method}</span> but never consults sale.payment_status. Backend /api/sales/by-receipt/{rn} already returns payment_status (verified via curl, iter82 test PASS). Fix: append {sale.payment_status === 'pending' && <strong className='ml-1 text-amber-700'>· UNPAID</strong>} after the payment_method span."
+}

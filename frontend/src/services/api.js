@@ -201,6 +201,8 @@ export const salesApi = {
   saveDraft: (data) => api.post('/sales/drafts', data),
   deleteDraft: (id) => api.delete(`/sales/drafts/${id}`),
   lookupByReceipt: (receiptNumber) => api.get(`/sales/by-receipt/${encodeURIComponent(receiptNumber)}`),
+  // Payment status (paid/pending) toggle for non-cash sales
+  setPaymentStatus: (id, payment_status, payment_reference) => api.put(`/sales/${id}/payment-status`, { payment_status, payment_reference }),
 };
 
 export const customersApi = {
