@@ -1,5 +1,19 @@
 # 58:12 Connect — Changelog
 
+## Iteration 82 (May 2, 2026) — Mark-as-Paid + Boards Admin Filter
+**Verified 14/14 backend tests PASS + frontend 100%.**
+- **Mark-as-Paid toggle for non-cash sales**:
+  - `POST /api/sales` auto-sets `payment_status='paid'` for cash, `'pending'` for mobile_money/card/bank_transfer/cheque
+  - New `PUT /api/sales/{id}/payment-status` endpoint — flips paid↔pending; reverting clears `paid_at` + `payment_reference`
+  - Sales History table shows orange "Mark as Paid" button on pending rows + green "Paid" badge when settled
+  - Admin-only ↺ revert button to flip paid→pending if recorded in error
+  - Payment reference (transaction ID) captured via prompt on mark-paid
+  - "UNPAID" label shown on POS receipt, customer profile history, AND public `/receipt/{rn}` verification page
+- **Boards filter for admins** (breaking change, per user request):
+  - `list_boards` + `_can_access_board` rewritten — admins now follow the same rules as regular users
+  - Visible only if: user tagged, user created, user has task on board, board in user's campus scope (active_campus + location_ids + sub-locations), OR board is_global AND not restricted/private
+  - Restricted/private boards require explicit tagging — even admins can't see them unless tagged
+
 ## Iteration 81 (May 2, 2026) — Refactor + Polish
 **Verified 13/13 backend tests PASS + frontend 100%.**
 - **financial.py split (1458→1003 lines)** + 3 new focused routers:

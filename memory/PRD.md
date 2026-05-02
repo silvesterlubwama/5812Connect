@@ -6,7 +6,12 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
-## Recently Resolved — Iteration 81 (May 2, 2026) — Refactor + Polish
+## Recently Resolved — Iteration 82 (May 2, 2026)
+**Verified 14/14 backend tests PASS + frontend 100%.**
+- ✅ **Mark-as-Paid toggle** — `PUT /api/sales/{id}/payment-status`; cash auto-paid, non-cash default pending; UI buttons in Sales History; UNPAID shown on receipt/profile/public page; revert clears metadata
+- ✅ **Boards admin-filter** — breaking change; admins now follow same access rules as regular users (tagged/created/tasked/in-scope/global-not-restricted)
+
+## Recently Resolved — Iteration 81 (May 2, 2026)
 **Verified 13/13 backend tests PASS + frontend 100%.**
 - ✅ **financial.py split** 1458→1003 lines + new `sales.py` (227) + `products.py` (154) + `sheet_import.py` (111)
 - ✅ **Customer profile receipt-tracking UI** — clickable rows in Sales → Customers open a dialog with Total Spent / Transactions / Last Visit + full receipt history + view-receipt buttons

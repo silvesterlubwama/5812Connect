@@ -94,11 +94,19 @@ async def update_sale_payment_status(sale_id: str, data: dict, current_user: dic
         "payment_updated_by": current_user["id"],
         "payment_updated_by_name": current_user.get("name", ""),
     }
+    unset_fields = {}
     if new_status == "paid":
         update["paid_at"] = datetime.now(timezone.utc).isoformat()
         if data.get("payment_reference"):
             update["payment_reference"] = data["payment_reference"]
-    await db.sales.update_one({"id": sale_id}, {"$set": update})
+    else:
+        # Reverting to pending — clear paid metadata
+        unset_fields["paid_at"] = ""
+        unset_fields["payment_reference"] = ""
+    mongo_update = {"$set": update}
+    if unset_fields:
+        mongo_update["$unset"] = unset_fields
+    await db.sales.update_one({"id": sale_id}, mongo_update)
     # Mirror to customer_accounts.receipt_history (if any)
     if sale.get("customer_id"):
         await db.customer_accounts.update_one(

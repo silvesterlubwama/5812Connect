@@ -48,13 +48,21 @@ export default function ReceiptViewPage() {
         </div>
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
-            <p className="text-sm font-medium text-green-700">Authentic — sale on record</p>
+            <div className={`w-2.5 h-2.5 rounded-full ${sale.payment_status === 'pending' ? 'bg-amber-500' : 'bg-green-500'}`} />
+            <p className={`text-sm font-medium ${sale.payment_status === 'pending' ? 'text-amber-700' : 'text-green-700'}`}>
+              {sale.payment_status === 'pending' ? 'Awaiting Payment — sale on record' : 'Authentic — sale on record'}
+            </p>
           </div>
           <div className="bg-slate-50 rounded-lg p-3 space-y-1 text-sm">
             <div className="flex justify-between"><span className="text-slate-500">Customer</span><span className="font-medium">{sale.customer_name}</span></div>
             <div className="flex justify-between"><span className="text-slate-500">Cashier</span><span className="font-medium">{sale.cashier}</span></div>
-            <div className="flex justify-between"><span className="text-slate-500">Payment</span><span className="font-medium capitalize">{sale.payment_method}</span></div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Payment</span>
+              <span className="font-medium">
+                <span className="capitalize">{sale.payment_method}</span>
+                {sale.payment_status === 'pending' && <span className="ml-1 text-amber-700 font-bold">· UNPAID</span>}
+              </span>
+            </div>
           </div>
           <div className="space-y-1 border-t border-slate-200 pt-3">
             {(sale.items || []).map((item, i) => (
