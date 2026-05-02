@@ -1,5 +1,15 @@
 # 58:12 Connect — Changelog
 
+## Iteration 83 (May 2, 2026) — 58:12 Brand Theme Applied
+- **Primary color**: teal `#48a9c5` (hsl 193 51% 53%) — exact match with 5812-global.org site
+- **Foreground / text**: deep navy `#1a1a2e` (hsl 240 24% 14%) — from the "58:12" logo text
+- Full light + dark theme palettes updated in `src/index.css`
+- New brand tokens: `--brand-teal`, `--brand-teal-dark`, `--brand-teal-soft`, `--brand-navy`
+- Tailwind config extended with `brand.teal`, `brand.teal-dark`, `brand.teal-soft`, `brand.navy` color classes
+- `manifest.json` and `index.html` `theme-color` meta → `#48a9c5`
+- Selection colour, sidebar-active, shadows, scrollbar all re-tinted to teal/navy
+- Board reassignment on production: Uganda→loc_419f5d5e, Kenya→loc_67886e61, Haiti→loc_39aa9967, Thailand→loc_7169eead (58:12 United)
+
 ## Iteration 82 (May 2, 2026) — Mark-as-Paid + Boards Admin Filter
 **Verified 14/14 backend tests PASS + frontend 100%.**
 - **Mark-as-Paid toggle for non-cash sales**:

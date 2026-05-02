@@ -11,50 +11,70 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ============================================================
+   58:12 Global brand palette
+   - Primary teal: #48a9c5  = hsl(193, 51%, 53%)
+   - Deep navy:    #1a1a2e  = hsl(240, 24%, 14%)
+   - Warm cream bg: hsl(40 20% 98%)
+   - Extracted from https://5812-global.org
+   ============================================================ */
+
 @layer base {
   :root {
-    --background: 40 20% 97%;
-    --foreground: 20 14% 12%;
+    --background: 0 0% 100%;
+    --foreground: 240 24% 14%;
     --card: 0 0% 100%;
-    --card-foreground: 20 14% 12%;
+    --card-foreground: 240 24% 14%;
     --popover: 0 0% 100%;
-    --popover-foreground: 20 14% 12%;
-    --primary: 18 69% 32%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 40 15% 92%;
-    --secondary-foreground: 20 14% 12%;
-    --muted: 40 15% 92%;
-    --muted-foreground: 20 10% 50%;
-    --accent: 40 15% 90%;
-    --accent-foreground: 20 14% 12%;
-    --destructive: 0 84.2% 60.2%;
+    --popover-foreground: 240 24% 14%;
+    /* Primary = 58:12 teal */
+    --primary: 193 51% 53%;
+    --primary-foreground: 0 0% 100%;
+    /* Secondary = soft neutral with a hint of teal */
+    --secondary: 193 25% 95%;
+    --secondary-foreground: 240 24% 14%;
+    --muted: 210 16% 94%;
+    --muted-foreground: 240 10% 40%;
+    --accent: 193 35% 90%;
+    --accent-foreground: 240 24% 14%;
+    --destructive: 0 78% 56%;
     --destructive-foreground: 0 0% 98%;
-    --border: 20 10% 88%;
-    --input: 20 10% 88%;
-    --ring: 18 69% 32%;
+    --border: 210 16% 88%;
+    --input: 210 16% 88%;
+    --ring: 193 51% 53%;
     --radius: 0.625rem;
+    /* Extra brand tokens */
+    --brand-navy: 240 24% 14%;          /* #1a1a2e — "58:12" text */
+    --brand-teal: 193 51% 53%;          /* #48a9c5 — "Global" text + CTAs */
+    --brand-teal-dark: 193 51% 40%;     /* Hover / pressed states */
+    --brand-teal-soft: 193 60% 92%;     /* Subtle backgrounds */
   }
 
   .dark {
-    --background: 20 14% 8%;
-    --foreground: 40 20% 95%;
-    --card: 20 14% 11%;
-    --card-foreground: 40 20% 95%;
-    --popover: 20 14% 11%;
-    --popover-foreground: 40 20% 95%;
-    --primary: 18 69% 48%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 20 10% 16%;
-    --secondary-foreground: 40 20% 95%;
-    --muted: 20 10% 16%;
-    --muted-foreground: 20 10% 60%;
-    --accent: 20 10% 18%;
-    --accent-foreground: 40 20% 95%;
-    --destructive: 0 62% 50%;
+    /* Dark mode — navy base with teal accents */
+    --background: 240 24% 8%;
+    --foreground: 193 20% 96%;
+    --card: 240 20% 12%;
+    --card-foreground: 193 20% 96%;
+    --popover: 240 20% 12%;
+    --popover-foreground: 193 20% 96%;
+    --primary: 193 56% 60%;
+    --primary-foreground: 240 24% 10%;
+    --secondary: 240 16% 18%;
+    --secondary-foreground: 193 20% 96%;
+    --muted: 240 16% 18%;
+    --muted-foreground: 210 14% 65%;
+    --accent: 240 16% 22%;
+    --accent-foreground: 193 20% 96%;
+    --destructive: 0 68% 52%;
     --destructive-foreground: 0 0% 98%;
-    --border: 20 10% 20%;
-    --input: 20 10% 20%;
-    --ring: 18 69% 48%;
+    --border: 240 16% 22%;
+    --input: 240 16% 22%;
+    --ring: 193 56% 60%;
+    --brand-navy: 240 24% 8%;
+    --brand-teal: 193 56% 60%;
+    --brand-teal-dark: 193 56% 45%;
+    --brand-teal-soft: 193 40% 25%;
   }
 }
 
@@ -69,14 +89,15 @@ body {
 
 .font-heading {
   font-family: 'Inter', sans-serif;
+  letter-spacing: -0.01em;
 }
 
 .shadow-soft {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 3px hsl(var(--brand-navy) / 0.06), 0 1px 2px hsl(var(--brand-navy) / 0.04);
 }
 
 .shadow-soft-lg {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  box-shadow: 0 4px 12px hsl(var(--brand-navy) / 0.08), 0 2px 4px hsl(var(--brand-navy) / 0.04);
 }
 
 /* Scrollbar */
@@ -86,8 +107,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
 
 .sidebar-active {
-  background-color: hsl(18 69% 32% / 0.1);
-  color: hsl(18 69% 32%);
+  background-color: hsl(var(--brand-teal) / 0.12);
+  color: hsl(var(--brand-teal));
   font-weight: 500;
 }
 
@@ -97,6 +118,19 @@ body {
 
 .sidebar-link:hover:not(.sidebar-active) {
   background-color: hsl(var(--accent));
+}
+
+/* Brand helper classes */
+.bg-brand-teal { background-color: hsl(var(--brand-teal)); }
+.bg-brand-navy { background-color: hsl(var(--brand-navy)); }
+.text-brand-teal { color: hsl(var(--brand-teal)); }
+.text-brand-navy { color: hsl(var(--brand-navy)); }
+.border-brand-teal { border-color: hsl(var(--brand-teal)); }
+
+/* Selection color */
+::selection {
+  background: hsl(var(--brand-teal) / 0.25);
+  color: hsl(var(--brand-navy));
 }
 
 /* Safe area for mobile notch/home indicator */
