@@ -6,7 +6,18 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
-## Recently Resolved — Iteration 79 (May 1, 2026) — Performance + Admin + Refactor
+## Recently Resolved — Iteration 80 (May 2, 2026) — Critical Bugs + Receipt + Sheet Import
+**Verified 12/12 backend tests PASS + frontend confirmed.**
+
+**P0 Bugs Fixed:** starting balance account-id, expense workflow (status-based), variant save, HR nav visibility, restricted locations UI, chat org structure, expense delete lag.
+
+**Receipt Overhaul:** atomic `INV-YYYYMMDD-NNNN`, 58:12 logo, tracking QR, per-kiosk paper sizes (58mm/80mm/A5/A4), public verification page at `/receipt/:number`, WhatsApp share, variant-aware stock decrement.
+
+**Park / Parked Sales:** shared per-campus drafts with reopen/discard.
+
+**Google Sheet Financial Integration:** extended expense schema (vendor/account/department/budget_category/usd_equivalent), Advanced section in Add Expense, CSV-paste importer auto-normalizing DD/MM dates and currency-prefixed amounts.
+
+## Recently Resolved — Iteration 79 (May 1, 2026)
 Verified 20/20 backend tests PASS + frontend 100%.
 
 - ✅ **MongoDB indexes audit** (40+ indexes, idempotent) — `sessions.jti` unique, TTL on password_resets/sessions/deleted_items (30d auto-cleanup)

@@ -265,11 +265,12 @@ export default function Layout() {
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
-    // Campus feature toggles — hide when no campus selected or campus has feature disabled
-    if (item.to === '/financial' && (!activeCampus || !campusFeatures.financial_enabled)) return false;
-    if (item.to === '/sales' && (!activeCampus || !campusFeatures.marketplace_enabled)) return false;
+    // Campus feature toggles — show if any campus user has access to has the feature enabled.
+    // Active campus selected → check that campus's flag. "All Locations" → check user's primary campus flag.
+    if (item.to === '/financial' && !campusFeatures.financial_enabled) return false;
+    if (item.to === '/sales' && !campusFeatures.marketplace_enabled) return false;
     if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
-    if (item.to === '/hr' && (!activeCampus || !campusFeatures.hr_enabled)) return false;
+    if (item.to === '/hr' && !campusFeatures.hr_enabled) return false;
     return true;
   };
 

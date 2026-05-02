@@ -1,5 +1,33 @@
 # 58:12 Connect — Changelog
 
+## Iteration 80 (May 2, 2026) — Critical Bug Fixes + Receipt Overhaul + Sheet Import
+**Verified 12/12 backend tests PASS + frontend confirmed.**
+- **Bug fixes (P0):**
+  - Starting balance "no account id" — `/financial/accounts` now auto-creates and returns account `id` + `starting_balance`
+  - Expense workflow status-based — pending expenses excluded from monthly_expenses & cashflow_out totals; new `pending_expenses_total/count` fields on summary; visual badge in expense list
+  - Variant edits not saving — `ProductUpdate` model now accepts `variants`; main `stock` auto-recomputed from variant totals
+  - HR & Payroll nav hidden — `setCampusFeatures` now reads `hr_enabled`; `canAccess` no longer requires explicit campus selection
+  - Restricted locations leak — `GET /api/locations` filters non-admins to their assigned locations + non-restricted children only
+  - Chat org structure — Organization sidebar expanded by default with role count badges, presence dots, sorted Adviser→ED→Director→Manager→Leader→Coordinator→Staff→Volunteer
+  - Expense deletion lag — explicit `fetchAll()` after delete to refresh totals
+- **Receipt overhaul (P1):**
+  - Traceable receipt number `INV-YYYYMMDD-NNNN` via atomic `db.counters` (no race conditions)
+  - 58:12 logo + tracking QR code on receipt (configurable per kiosk)
+  - Per-kiosk receipt paper size: 58mm / 80mm / A5 / A4
+  - New `Receipt.jsx` component with full salesperson/customer/items/total breakdown
+  - Public `/receipt/:receiptNumber` page (no auth) — QR target for verification
+  - Variant stock decrements when sold (variant qty + main stock together)
+  - WhatsApp share button when customer phone available
+- **Park / Parked Sales (P1):**
+  - "Park Sale" button saves cart as draft (shared per campus)
+  - "Parked (N)" dialog lists drafts with Reopen/Discard buttons
+  - New endpoints: `GET/POST /api/sales/drafts`, `DELETE /api/sales/drafts/{id}`
+- **Google Sheet financial integration (P2):**
+  - Extended `expenses` schema with `vendor`, `purpose`, `receipt_number`, `account`, `department`, `budget_category`, `usd_equivalent`
+  - Add Expense form has expandable "Advanced" section for these fields
+  - New `POST /api/financial/import-sheet` accepts CSV-paste with the 58:12 spreadsheet column headers; auto-normalizes DD/MM dates and currency-prefixed amounts
+  - Import dialog on Financial page
+
 ## Iteration 79 (May 1, 2026) — Performance + Admin + Refactor
 - **MongoDB indexes audit**: `_ensure_indexes()` runs on every startup (idempotent). Adds 40+ indexes including `sessions.jti` (unique), TTL on `password_resets.expires_at`, `sessions.expires_at`, and `deleted_items.deleted_at` (30d auto-cleanup). Unique `push_subscriptions.subscription.endpoint`.
 - **Session manager**: JWTs now include `jti`. Login persists a session record (user_agent, ip, expires_at) in `db.sessions`. New endpoints: `GET /api/auth/sessions` (list + `is_current` flag), `DELETE /api/auth/sessions/{jti}`, `POST /api/auth/sessions/revoke-others`. Logout now revokes the current jti. Settings → Security page has an "Active Sessions" card with "Sign out other devices" button.

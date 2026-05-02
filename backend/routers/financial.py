@@ -384,12 +384,16 @@ async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depen
 @router.post("/sales")
 async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):
     # Traceable, human-readable receipt number: INV-YYYYMMDD-####
+    # Atomic counter guarantees uniqueness even under concurrent POSTs on same day
     now = datetime.now(timezone.utc)
     date_tag = now.strftime("%Y%m%d")
-    # Count today's sales to compute sequential number
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    today_count = await db.sales.count_documents({"created_at": {"$gte": today_start}})
-    seq = today_count + 1
+    counter = await db.counters.find_one_and_update(
+        {"_id": f"sales_{date_tag}"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = (counter or {}).get("seq", 1)
     receipt_number = f"INV-{date_tag}-{seq:04d}"
     sale_id = receipt_number  # id equals receipt number for traceability
     doc = {"id": sale_id, "receipt_number": receipt_number, **data.model_dump(), "created_at": now.isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown"), "cashier_id": current_user.get("id")}
