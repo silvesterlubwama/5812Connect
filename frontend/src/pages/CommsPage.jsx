@@ -76,7 +76,7 @@ export default function CommsPage() {
 
   // Conference
   const [showConference, setShowConference] = useState(false);
-  const [showOrgChart, setShowOrgChart] = useState(false);
+  const [showOrgChart, setShowOrgChart] = useState(true);
   const [confForm, setConfForm] = useState({ title: '', description: '', scheduled_at: '', duration_minutes: 60, user_ids: [], external_emails: '', is_video_enabled: true, password: '', create_calendar_event: true, send_email_invites: true });
 
   const messagesEndRef = useRef(null);
@@ -621,20 +621,49 @@ export default function CommsPage() {
             <SidebarItem room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'} icon={<Megaphone size={14} className="text-amber-600" />} subtitle={`${announcements.length} announcements`} badge={announcements.length > 0 ? announcements.length : null} onClick={() => selectRoom(ANNOUNCE_ROOM)} />
           </div>
 
-          {/* Org Chart - Staff by Role */}
+          {/* Org Chart - Staff by Role (campus-scoped, live presence) */}
           <div className="border-b border-border">
-            <button onClick={() => setShowOrgChart(!showOrgChart)} className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1 flex items-center gap-1 w-full hover:text-foreground">
-              <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization
+            <button onClick={() => setShowOrgChart(!showOrgChart)} className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1 flex items-center gap-1 w-full hover:text-foreground" data-testid="org-chart-toggle">
+              <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization <span className="ml-auto normal-case text-[9px] opacity-60">{allStaff.length} people</span>
             </button>
             {showOrgChart && (
-              <div className="px-2 pb-2 space-y-0.5 max-h-48 overflow-y-auto">
+              <div className="px-2 pb-2 space-y-0.5 max-h-80 overflow-y-auto">
+                {allStaff.length === 0 && <p className="text-[10px] text-muted-foreground text-center py-3">No staff in your campus yet</p>}
                 {ORG_ROLES.map(role => {
-                  const roleStaff = allStaff.filter(s => s.role === role);
+                  const roleStaff = allStaff.filter(s => (s.role || '').toLowerCase() === role.toLowerCase());
                   if (roleStaff.length === 0) return null;
                   return (
                     <div key={role}>
-                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1">{role}s</p>
-                      {roleStaff.map(s => (
+                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1.5 font-semibold">{role}{roleStaff.length > 1 ? 's' : ''} <span className="opacity-70">· {roleStaff.length}</span></p>
+                      {roleStaff.map(s => {
+                        const pres = getUserPresence(s.id);
+                        return (
+                          <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" data-testid={`org-user-${s.id}`} onClick={async () => {
+                            const existing = conversations.find(c => c.type === 'direct' && c.participants?.includes(s.id));
+                            if (existing) { selectRoom(existing); return; }
+                            try {
+                              const res = await chatApi.createConversation({ name: s.name, participants: [s.id, user?.id], type: 'direct' });
+                              setConversations(prev => [res.data, ...prev]);
+                              selectRoom(res.data);
+                            } catch { toast.error('Failed to start conversation'); }
+                          }}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[pres] || 'bg-gray-400'}`} title={PRESENCE_LABELS[pres] || 'Offline'} />
+                            <span className="truncate flex-1">{s.name}</span>
+                            {s.is_cross_campus && <span className="text-[8px] px-1 rounded bg-purple-100 text-purple-700">xCampus</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {/* Other roles not in standard org tree */}
+                {(() => {
+                  const uncategorized = allStaff.filter(s => !ORG_ROLES.some(r => r.toLowerCase() === (s.role || '').toLowerCase()));
+                  if (uncategorized.length === 0) return null;
+                  return (
+                    <div>
+                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1.5 font-semibold">Other · {uncategorized.length}</p>
+                      {uncategorized.map(s => (
                         <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" onClick={async () => {
                           const existing = conversations.find(c => c.type === 'direct' && c.participants?.includes(s.id));
                           if (existing) { selectRoom(existing); return; }
@@ -645,12 +674,13 @@ export default function CommsPage() {
                           } catch { toast.error('Failed to start conversation'); }
                         }}>
                           <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[getUserPresence(s.id)] || 'bg-gray-400'}`} />
-                          <span className="truncate">{s.name}</span>
+                          <span className="truncate flex-1">{s.name}</span>
+                          <span className="text-[8px] opacity-60">{s.role}</span>
                         </div>
                       ))}
                     </div>
                   );
-                })}
+                })()}
               </div>
             )}
           </div>

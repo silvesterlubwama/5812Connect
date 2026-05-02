@@ -1,6 +1,6 @@
 """Locations, exchange-rate, and location-related endpoints — extracted from server.py"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin, _audit
+from deps import db, get_current_user, require_admin, _audit, is_system_admin
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -57,7 +57,34 @@ class LocationUpdate(BaseModel):
 
 @router.get("/locations")
 async def list_locations(current_user: dict = Depends(get_current_user)) -> list:
-    return await db.locations.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    """List locations. Non-admins see only their campuses + non-restricted sub-locations + restricted ones they're explicitly assigned to."""
+    all_locs = await db.locations.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    if is_system_admin(current_user):
+        return all_locs
+    user_loc_ids = set(current_user.get("location_ids") or [])
+    if current_user.get("location_id"):
+        user_loc_ids.add(current_user["location_id"])
+    # Include parent campuses of any assigned sub-location
+    for loc in all_locs:
+        if loc.get("id") in user_loc_ids and loc.get("parent_id"):
+            user_loc_ids.add(loc["parent_id"])
+    visible = []
+    for loc in all_locs:
+        loc_id = loc.get("id")
+        # User's own assigned locations (including sub-locations) are always visible
+        if loc_id in user_loc_ids:
+            visible.append(loc)
+            continue
+        # Top-level campus that user belongs to — visible
+        if loc.get("type") in ("main", "campus") and loc_id in user_loc_ids:
+            visible.append(loc)
+            continue
+        # Sub-locations of user's campuses — visible only if NOT restricted
+        if loc.get("parent_id") in user_loc_ids:
+            if not loc.get("is_restricted"):
+                visible.append(loc)
+            # Restricted sub-locations are hidden unless explicitly assigned (already handled above)
+    return visible
 
 
 @router.post("/locations")

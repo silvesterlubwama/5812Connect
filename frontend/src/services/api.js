@@ -196,6 +196,11 @@ export const salesApi = {
   delete: (id) => api.delete(`/sales/${id}`),
   export: (params) => api.get('/sales/export', { params }),
   import: (data) => api.post('/sales/import', data),
+  // Draft / parked sales
+  drafts: () => api.get('/sales/drafts'),
+  saveDraft: (data) => api.post('/sales/drafts', data),
+  deleteDraft: (id) => api.delete(`/sales/drafts/${id}`),
+  lookupByReceipt: (receiptNumber) => api.get(`/sales/by-receipt/${encodeURIComponent(receiptNumber)}`),
 };
 
 export const customersApi = {

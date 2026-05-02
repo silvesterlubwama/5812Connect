@@ -43,6 +43,15 @@ class ExpenseCreate(BaseModel):
     title: str; amount: float; currency: str = "UGX"; category: str = "general"
     date: Optional[str] = None; notes: str = ""; submitted_by: Optional[str] = None
     location_id: Optional[str] = None; sublocation_id: Optional[str] = None
+    # Extended fields aligned with 58:12 Global budget spreadsheet columns
+    vendor: Optional[str] = None  # Who was paid (e.g. "Bulunzi bugagga farm supply")
+    purpose: Optional[str] = None  # Purpose/Beneficiary/Notes — free text
+    receipt_number: Optional[str] = None  # Reff./Receipt# for reconciliation
+    account: Optional[str] = None  # Payment source: CASH DRAWER, MTN MOMO, AIRTEL MONEY, BANK, etc.
+    department: Optional[str] = None  # FARM, SHELTER, OUTREACH, ADMIN/OPS, SECURITY, EDUCATION, MAINTENANCE
+    budget_category: Optional[str] = None  # Uganda Farm, Petty Cash, Wages & Salaries, Bank Fees, etc.
+    usd_equivalent: Optional[float] = None  # For multi-currency tracking
+    exchange_rate: Optional[float] = None  # UGX per USD
 
 class ProductCreate(BaseModel):
     name: str; description: Optional[str] = None; price: float = 0; currency: str = "UGX"; stock: int = 0
@@ -51,8 +60,10 @@ class ProductCreate(BaseModel):
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
+    currency: Optional[str] = None; sku: Optional[str] = None
     stock: Optional[int] = None; category: Optional[str] = None; reorder_level: Optional[int] = None; location_id: Optional[str] = None
     has_variants: Optional[bool] = None; product_type: Optional[str] = None
+    variants: Optional[List[dict]] = None
 
 class SaleCreate(BaseModel):
     items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
@@ -75,17 +86,23 @@ async def financial_summary(location_id: Optional[str] = None, current_user: dic
     else:
         loc_match = {}
     donations_result = await db.donations.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    expenses_result = await db.expenses.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    # Only count approved expenses (exclude pending/rejected requests)
+    exp_match = {**loc_match, "date": {"$regex": f"^{month_start}"}, "status": {"$in": ["approved", None]}}
+    expenses_result = await db.expenses.aggregate([{"$match": exp_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     sales_result = await db.sales.aggregate([{"$match": {**loc_match, "created_at": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     monthly_donations = donations_result[0]["total"] if donations_result else 0
     monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
     monthly_sales = sales_result[0]["total"] if sales_result else 0
     all_donations = await db.donations.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    all_expenses = await db.expenses.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    all_expenses = await db.expenses.aggregate([{"$match": {**loc_match, "status": {"$in": ["approved", None]}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
     all_sales = await db.sales.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     total_in = (all_donations[0]["total"] if all_donations else 0) + (all_sales[0]["total"] if all_sales else 0)
     total_out = all_expenses[0]["total"] if all_expenses else 0
-    return {"monthly_donations": monthly_donations, "monthly_expenses": monthly_expenses, "monthly_sales": monthly_sales, "cashflow_in": total_in, "cashflow_out": total_out, "net_balance": total_in - total_out}
+    # Pending (awaiting approval) — surfaced separately for UI
+    pending_exp = await db.expenses.aggregate([{"$match": {**loc_match, "status": "pending"}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(1)
+    pending_expenses_total = pending_exp[0]["total"] if pending_exp else 0
+    pending_expenses_count = pending_exp[0]["count"] if pending_exp else 0
+    return {"monthly_donations": monthly_donations, "monthly_expenses": monthly_expenses, "monthly_sales": monthly_sales, "cashflow_in": total_in, "cashflow_out": total_out, "net_balance": total_in - total_out, "pending_expenses_total": pending_expenses_total, "pending_expenses_count": pending_expenses_count}
 
 
 @router.post("/financial/distribute-funds")
@@ -171,6 +188,110 @@ async def delete_expense(expense_id: str, current_user: dict = Depends(require_a
     return {"message": "Expense deleted"}
 
 
+@router.post("/financial/import-sheet")
+async def import_google_sheet_financial(data: dict, current_user: dict = Depends(require_manager)):
+    """Bulk-import expenses (or donations) from a Google-Sheet-style CSV/JSON.
+    Body: { type: 'expense'|'donation', rows: [{date, vendor, purpose, receipt_number, account, department, budget_category, amount_ugx, usd}], location_id?, default_status?: 'pending'|'approved' }
+    """
+    entry_type = (data.get("type") or "expense").lower()
+    rows = data.get("rows") or []
+    default_status = data.get("default_status") or "pending"
+    target_loc = data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if not rows:
+        raise HTTPException(status_code=400, detail="No rows provided")
+    created = 0
+    skipped = 0
+    errors = []
+    for i, row in enumerate(rows):
+        try:
+            # Normalize keys — accept spreadsheet column names too
+            date_val = (row.get("date") or row.get("Date") or "").strip()
+            # Support DD/MM or DD/MM/YY or DD/MM/YYYY — normalize to YYYY-MM-DD
+            if date_val:
+                parts = date_val.replace("-", "/").split("/")
+                try:
+                    if len(parts) == 3:
+                        d, m, y = parts
+                        if len(y) == 2:
+                            y = "20" + y
+                        date_val = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+                    elif len(parts) == 2:
+                        d, m = parts
+                        y = str(datetime.now(timezone.utc).year)
+                        date_val = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+                except Exception:
+                    pass
+            amount_raw = row.get("amount") or row.get("Amount") or row.get("TOTAL UGX") or row.get("total_ugx") or 0
+            if isinstance(amount_raw, str):
+                amount_raw = amount_raw.replace("UGX", "").replace(",", "").replace(" ", "").strip() or "0"
+            amount = float(amount_raw)
+            if amount <= 0:
+                skipped += 1
+                continue
+            vendor = (row.get("vendor") or row.get("Vendor") or row.get("Donor") or row.get("donor_name") or "").strip()
+            purpose = (row.get("purpose") or row.get("Purpose/Beneficiary/Notes") or row.get("notes") or row.get("Notes") or "").strip()
+            receipt_number = (row.get("receipt_number") or row.get("Reff./ Reciept#") or row.get("Reff./Receipt#") or row.get("Receipt#") or "").strip()
+            account = (row.get("account") or row.get("ACCOUNT") or "").strip()
+            department = (row.get("department") or row.get("Department") or "").strip()
+            budget = (row.get("budget_category") or row.get("Budget") or row.get("category") or row.get("Category") or "general").strip()
+            usd_raw = row.get("usd_equivalent") or row.get("USD") or row.get("usd") or None
+            usd_val = None
+            if usd_raw:
+                try:
+                    usd_val = float(str(usd_raw).replace("$", "").replace(",", "").strip())
+                except Exception:
+                    usd_val = None
+            title = purpose or vendor or f"Imported row {i+1}"
+            if entry_type == "expense":
+                doc = {
+                    "id": f"exp_{uuid.uuid4().hex[:8]}",
+                    "title": title,
+                    "amount": amount,
+                    "currency": row.get("currency") or "UGX",
+                    "category": budget or "general",
+                    "date": date_val or datetime.now(timezone.utc).isoformat()[:10],
+                    "notes": purpose,
+                    "vendor": vendor,
+                    "purpose": purpose,
+                    "receipt_number": receipt_number,
+                    "account": account,
+                    "department": department,
+                    "budget_category": budget,
+                    "usd_equivalent": usd_val,
+                    "location_id": target_loc,
+                    "status": default_status,
+                    "source": "sheet_import",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_by": current_user["id"],
+                }
+                await db.expenses.insert_one(doc)
+            else:
+                # donation
+                doc = {
+                    "id": f"don_{uuid.uuid4().hex[:8]}",
+                    "donor_name": vendor or "Anonymous",
+                    "amount": amount,
+                    "currency": row.get("currency") or "UGX",
+                    "type": budget or "donation",
+                    "category": budget,
+                    "department": department,
+                    "date": date_val or datetime.now(timezone.utc).isoformat()[:10],
+                    "notes": purpose,
+                    "receipt_number": receipt_number,
+                    "location_id": target_loc,
+                    "source": "sheet_import",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_by": current_user["id"],
+                }
+                await db.donations.insert_one(doc)
+            created += 1
+        except Exception as e:
+            errors.append(f"Row {i+1}: {str(e)[:100]}")
+            skipped += 1
+    await _audit(current_user["id"], "create", "sheet_import", f"{entry_type}_{created}")
+    return {"created": created, "skipped": skipped, "errors": errors[:20], "type": entry_type}
+
+
 @router.put("/financial/donations/{donation_id}")
 async def update_donation(donation_id: str, data: dict, current_user: dict = Depends(require_admin)):
     """Admin edit a donation entry"""
@@ -242,6 +363,9 @@ async def create_product(data: ProductCreate, current_user: dict = Depends(get_c
 @router.put("/products/{product_id}")
 async def update_product(product_id: str, data: ProductUpdate, current_user: dict = Depends(get_current_user)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    # If product has variants, main stock is derived from variant totals
+    if update_data.get("has_variants") and update_data.get("variants"):
+        update_data["stock"] = sum(int(v.get("stock", 0) or 0) for v in update_data["variants"])
     await db.products.update_one({"id": product_id}, {"$set": update_data})
     return await db.products.find_one({"id": product_id}, {"_id": 0})
 
@@ -259,24 +383,104 @@ async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depen
 
 @router.post("/sales")
 async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current_user)):
-    sale_id = f"inv_{str(uuid.uuid4())[:8].upper()}"
-    doc = {"id": sale_id, **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown")}
+    # Traceable, human-readable receipt number: INV-YYYYMMDD-####
+    now = datetime.now(timezone.utc)
+    date_tag = now.strftime("%Y%m%d")
+    # Count today's sales to compute sequential number
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_count = await db.sales.count_documents({"created_at": {"$gte": today_start}})
+    seq = today_count + 1
+    receipt_number = f"INV-{date_tag}-{seq:04d}"
+    sale_id = receipt_number  # id equals receipt number for traceability
+    doc = {"id": sale_id, "receipt_number": receipt_number, **data.model_dump(), "created_at": now.isoformat(), "created_by": current_user["id"], "cashier": current_user.get("name", "Unknown"), "cashier_id": current_user.get("id")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.sales.insert_one(doc)
     for item in data.items:
         if item.get("product_id"):
-            await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+            # If the item has a variant, decrement that specific variant's stock instead of main stock
+            if item.get("variant_id"):
+                await db.products.update_one(
+                    {"id": item["product_id"], "variants.id": item["variant_id"]},
+                    {"$inc": {"variants.$.stock": -item.get("qty", 1), "stock": -item.get("qty", 1)}}
+                )
+            else:
+                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
     # Update customer account totals if linked
     customer_id = doc.get("customer_id")
     if customer_id:
         await db.customer_accounts.update_one(
             {"id": customer_id},
-            {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)}}
+            {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)},
+             "$push": {"receipt_history": {"receipt_number": receipt_number, "total": doc.get("total", 0), "date": doc.get("created_at")}}}
         )
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "sale", sale_id)
     return doc
+
+
+# ========== DRAFT / PARKED SALES ==========
+
+@router.get("/sales/drafts")
+async def list_draft_sales(current_user: dict = Depends(get_current_user)):
+    """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""
+    loc_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    query = {"status": "draft"}
+    if loc_id:
+        query["location_id"] = loc_id
+    drafts = await db.sale_drafts.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return drafts
+
+
+@router.post("/sales/drafts")
+async def create_draft_sale(data: dict, current_user: dict = Depends(get_current_user)):
+    """Park/save an in-progress sale so it can be reopened later (by anyone at the same campus)."""
+    draft_id = f"draft_{uuid.uuid4().hex[:8]}"
+    loc_id = data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    doc = {
+        "id": draft_id,
+        "status": "draft",
+        "items": data.get("items", []),
+        "customer_name": data.get("customer_name", "Walk-in Customer"),
+        "customer_id": data.get("customer_id"),
+        "customer_phone": data.get("customer_phone"),
+        "payment_method": data.get("payment_method", "cash"),
+        "total": float(data.get("total", 0)),
+        "notes": data.get("notes", ""),
+        "location_id": loc_id,
+        "parked_by": current_user["id"],
+        "parked_by_name": current_user.get("name", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.sale_drafts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/sales/drafts/{draft_id}")
+async def delete_draft_sale(draft_id: str, current_user: dict = Depends(get_current_user)):
+    """Discard a parked draft sale."""
+    await db.sale_drafts.delete_one({"id": draft_id})
+    return {"message": "Draft discarded"}
+
+
+@router.get("/sales/by-receipt/{receipt_number}")
+async def get_sale_by_receipt(receipt_number: str):
+    """Public — look up a sale by its receipt number (used for QR code tracing)."""
+    sale = await db.sales.find_one({"$or": [{"receipt_number": receipt_number}, {"id": receipt_number}]}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    # Return minimal, non-sensitive fields
+    return {
+        "receipt_number": sale.get("receipt_number", sale.get("id")),
+        "created_at": sale.get("created_at"),
+        "total": sale.get("total"),
+        "customer_name": sale.get("customer_name"),
+        "cashier": sale.get("cashier"),
+        "items": [{"name": i.get("name"), "qty": i.get("qty"), "unit_price": i.get("unit_price")} for i in (sale.get("items") or [])],
+        "payment_method": sale.get("payment_method"),
+        "location_id": sale.get("location_id"),
+    }
 
 
 # ========== CASHFLOW & BALANCE ==========
@@ -328,6 +532,9 @@ async def get_store_settings(location_id: str, current_user: dict = Depends(get_
         "mobile_money_providers": [],
         "tax_rate": 0,
         "receipt_footer": "",
+        "receipt_paper_size": "80mm",  # 58mm / 80mm / A4 / A5
+        "receipt_show_logo": True,
+        "receipt_show_qr": True,
         "api_integrations": [],
         "currency": "UGX",
     }
@@ -842,23 +1049,42 @@ async def list_sublocation_accounts(campus_id: Optional[str] = None, current_use
         {"$or": [{"parent_id": target_campus}, {"id": target_campus}]},
         {"_id": 0, "id": 1, "name": 1, "type": 1}
     ).to_list(50)
-    sub_ids = [s["id"] for s in subs]
+    # Ensure a financial_account record exists for each sub (auto-create on demand)
     accounts = []
     campus_total_in = 0
     campus_total_out = 0
     for sub in subs:
         sid = sub["id"]
+        # Get/create the financial_account record for this sub-location
+        acct = await db.financial_accounts.find_one({"campus_id": target_campus, "location_id": sid}, {"_id": 0})
+        if not acct:
+            acct = {
+                "id": f"acct_{uuid.uuid4().hex[:8]}",
+                "campus_id": target_campus,
+                "location_id": sid,
+                "name": sub.get("name", ""),
+                "type": "operational",
+                "starting_balance": 0,
+                "currency": "UGX",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.financial_accounts.insert_one(acct)
+            acct.pop("_id", None)
         donations = await db.donations.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-        expenses = await db.expenses.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+        # Only count approved expenses in the totals
+        expenses = await db.expenses.aggregate([{"$match": {"location_id": sid, "status": {"$in": ["approved", None]}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
         sales = await db.sales.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
         total_in = (donations[0]["total"] if donations else 0) + (sales[0]["total"] if sales else 0)
         total_out = expenses[0]["total"] if expenses else 0
         campus_total_in += total_in
         campus_total_out += total_out
         accounts.append({
+            "id": acct["id"],
             "location_id": sid,
             "location_name": sub.get("name", ""),
             "location_type": sub.get("type", ""),
+            "starting_balance": acct.get("starting_balance", 0),
+            "currency": acct.get("currency", "UGX"),
             "total_income": total_in,
             "total_expenses": total_out,
             "balance": total_in - total_out,

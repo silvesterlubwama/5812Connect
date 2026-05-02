@@ -1,6 +1,6 @@
 import { secureStorage } from '../services/secureStorage';
 import React, { useState, useEffect } from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, Upload, RefreshCw } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, Upload, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -11,6 +11,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { financialApi, financialExtrasApi, exportApi, locationsApi } from '../services/api';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -89,6 +90,11 @@ export default function FinancialPage() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
+  // Sheet import (Google Sheet CSV)
+  const [sheetCsv, setSheetCsv] = useState('');
+  const [sheetType, setSheetType] = useState('expense');
+  const [sheetStatus, setSheetStatus] = useState('pending');
+  const [sheetImporting, setSheetImporting] = useState(false);
   // Replace prompt() with dialogs
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferForm, setTransferForm] = useState({ from_account_id: '', to_account_id: '', amount: '', currency: 'UGX', notes: '' });
@@ -105,7 +111,10 @@ export default function FinancialPage() {
   const currentCurrency = locationFilter ? (allLocations.find(l => l.id === locationFilter)?.currency || 'UGX') : 'USD';
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
-  const [expenseForm, setExpenseForm] = useState(() => ({ title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
+  const [expenseForm, setExpenseForm] = useState(() => ({
+    title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '',
+    vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '',
+  }));
 
   // Default non-admin users to their campus
   useEffect(() => {
@@ -260,6 +269,43 @@ export default function FinancialPage() {
     finally { setImportingData(false); }
   };
 
+  const handleSheetImport = async () => {
+    if (!sheetCsv.trim()) return;
+    setSheetImporting(true);
+    try {
+      // Parse CSV (simple parser — handles quoted cells)
+      const lines = sheetCsv.trim().split('\n').filter(l => l.trim());
+      if (lines.length < 2) { toast.error('Need at least a header + one data row'); setSheetImporting(false); return; }
+      const parseLine = (line) => {
+        const cells = []; let cur = ''; let inQ = false;
+        for (const ch of line) {
+          if (ch === '"') { inQ = !inQ; continue; }
+          if (ch === ',' && !inQ) { cells.push(cur); cur = ''; continue; }
+          cur += ch;
+        }
+        cells.push(cur);
+        return cells.map(c => c.trim());
+      };
+      const header = parseLine(lines[0]);
+      const rows = lines.slice(1).map(line => {
+        const cells = parseLine(line);
+        const row = {};
+        header.forEach((h, i) => { row[h] = cells[i] || ''; });
+        return row;
+      });
+      const res = await api.post('/financial/import-sheet', {
+        type: sheetType,
+        rows,
+        default_status: sheetStatus,
+        location_id: locationFilter || undefined,
+      });
+      toast.success(`Imported ${res.data.created} ${sheetType}(s) · ${res.data.skipped} skipped`);
+      if (res.data.errors?.length) console.warn('Import errors:', res.data.errors);
+      setShowImportExport(false); setSheetCsv(''); fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || err.message || 'Sheet import failed'); }
+    finally { setSheetImporting(false); }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -386,7 +432,7 @@ export default function FinancialPage() {
                           <td className="py-3">
                             <div className="flex gap-1">
                               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name, amount: d.amount, currency: d.currency, type: d.type, date: d.date, notes: d.notes || '' }); }}>Edit</Button>
-                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
                         </tr>
@@ -425,8 +471,12 @@ export default function FinancialPage() {
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {expenses.map(e => (
-                        <tr key={e.id} className="hover:bg-accent/30 transition-colors">
-                          <td className="py-3 font-medium">{e.title}</td>
+                        <tr key={e.id} className={`hover:bg-accent/30 transition-colors ${e.status === 'pending' ? 'bg-amber-50/50 dark:bg-amber-950/10' : e.status === 'rejected' ? 'opacity-50' : ''}`}>
+                          <td className="py-3 font-medium">
+                            {e.title}
+                            {e.status === 'pending' && <Badge variant="outline" className="ml-2 text-[10px] border-amber-300 text-amber-700">Pending approval</Badge>}
+                            {e.status === 'rejected' && <Badge variant="outline" className="ml-2 text-[10px] border-red-300 text-red-700">Rejected</Badge>}
+                          </td>
                           <td className="py-3 text-red-600 font-semibold">{e.currency} {(e.amount||0).toLocaleString()}</td>
                           <td className="py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${expenseCategoryColors[e.category] || 'bg-slate-100 text-slate-700'}`}>{e.category}</span></td>
                           <td className="py-3 text-muted-foreground">{e.date}</td>
@@ -443,7 +493,7 @@ export default function FinancialPage() {
                           <td className="py-3">
                             <div className="flex gap-1">
                               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>
-                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
                         </tr>
@@ -736,6 +786,52 @@ export default function FinancialPage() {
               <Label>Notes *</Label>
               <Input placeholder="Notes (required)" value={expenseForm.notes} onChange={e => setExpenseForm({...expenseForm, notes: e.target.value})} required />
             </div>
+            {/* Extended fields aligned with Google Sheet import schema */}
+            <details className="border border-border rounded-lg p-3">
+              <summary className="text-xs font-semibold cursor-pointer text-muted-foreground">Advanced (Vendor, Account, Department, Budget)</summary>
+              <div className="space-y-3 mt-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1"><Label className="text-xs">Vendor/Payee</Label>
+                    <Input className="h-8 text-xs" placeholder="e.g. Bulunzi Farm Supply" value={expenseForm.vendor} onChange={e => setExpenseForm({...expenseForm, vendor: e.target.value})} data-testid="expense-vendor-input" />
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Receipt #</Label>
+                    <Input className="h-8 text-xs" placeholder="e.g. 1946" value={expenseForm.receipt_number} onChange={e => setExpenseForm({...expenseForm, receipt_number: e.target.value})} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1"><Label className="text-xs">Account (Source)</Label>
+                    <Select value={expenseForm.account || '_none'} onValueChange={v => setExpenseForm({...expenseForm, account: v === '_none' ? '' : v})}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="expense-account-select"><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">—</SelectItem>
+                        <SelectItem value="CASH DRAWER">Cash Drawer</SelectItem>
+                        <SelectItem value="MTN MOMO">MTN Mobile Money</SelectItem>
+                        <SelectItem value="AIRTEL MONEY">Airtel Money</SelectItem>
+                        <SelectItem value="BANK">Bank</SelectItem>
+                        <SelectItem value="OTHER">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Department</Label>
+                    <Select value={expenseForm.department || '_none'} onValueChange={v => setExpenseForm({...expenseForm, department: v === '_none' ? '' : v})}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">—</SelectItem>
+                        {['FARM','SHELTER','OUTREACH','ADMIN/OPS','SECURITY','EDUCATION','MAINTENANCE','MEDIA','HR','FINANCE'].map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1"><Label className="text-xs">Budget Line</Label>
+                    <Input className="h-8 text-xs" placeholder="e.g. Uganda Farm" value={expenseForm.budget_category} onChange={e => setExpenseForm({...expenseForm, budget_category: e.target.value})} />
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">USD Equivalent</Label>
+                    <Input className="h-8 text-xs" type="number" step="0.01" placeholder="e.g. 45.12" value={expenseForm.usd_equivalent} onChange={e => setExpenseForm({...expenseForm, usd_equivalent: e.target.value})} />
+                  </div>
+                </div>
+              </div>
+            </details>
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowExpense(false)}>Cancel</Button>
               <Button type="submit" className="flex-1" disabled={saving} data-testid="save-expense-btn">{saving ? 'Saving...' : 'Save Expense'}</Button>
@@ -797,7 +893,7 @@ export default function FinancialPage() {
 
       {/* Financial Import/Export Modal */}
       <Dialog open={showImportExport} onOpenChange={setShowImportExport}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Financial Data Import / Export</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">
@@ -808,10 +904,40 @@ export default function FinancialPage() {
             </div>
             <div className="border-t border-border pt-4 space-y-2">
               <Label>Import Financial Data (JSON)</Label>
-              <Textarea rows={6} placeholder={'{\n  "donations": [{"donor_name": "John", "amount": 50000, "currency": "UGX", "date": "2026-01-15"}],\n  "expenses": [{"title": "Office Rent", "amount": 200000, "category": "rent", "date": "2026-01-15"}]\n}'}
+              <Textarea rows={5} placeholder={'{\n  "donations": [{"donor_name": "John", "amount": 50000, "currency": "UGX", "date": "2026-01-15"}],\n  "expenses": [{"title": "Office Rent", "amount": 200000, "category": "rent", "date": "2026-01-15"}]\n}'}
                 value={importData} onChange={e => setImportData(e.target.value)} data-testid="financial-import-input" />
               <Button className="w-full gap-2" onClick={handleFinancialImport} disabled={importingData || !importData.trim()} data-testid="financial-import-btn">
                 <Upload size={14} /> {importingData ? 'Importing...' : 'Import Financial Data'}
+              </Button>
+            </div>
+            <div className="border-t border-border pt-4 space-y-2">
+              <Label className="flex items-center gap-2"><FileSpreadsheet size={14} /> Import from Google Sheet (CSV)</Label>
+              <p className="text-xs text-muted-foreground">
+                Paste CSV rows from your Google Sheet. Expected columns:
+                <code className="block mt-1 bg-muted p-1.5 rounded text-[10px]">Date, Vendor, Purpose/Beneficiary/Notes, Reff./Receipt#, ACCOUNT, Department, Budget, TOTAL UGX, USD</code>
+              </p>
+              <div className="flex items-center gap-2">
+                <Label className="text-xs">Type:</Label>
+                <Select value={sheetType} onValueChange={setSheetType}>
+                  <SelectTrigger className="h-8 text-xs w-32"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="expense">Expenses</SelectItem>
+                    <SelectItem value="donation">Income/Donations</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Label className="text-xs ml-3">Status:</Label>
+                <Select value={sheetStatus} onValueChange={setSheetStatus}>
+                  <SelectTrigger className="h-8 text-xs w-32"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="approved">Approved (skip review)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Textarea rows={6} placeholder={'Date,Vendor,Purpose/Beneficiary/Notes,Reff./Receipt#,ACCOUNT,Department,Budget,TOTAL UGX,USD\n01/01,Sr chicken company,400 chicks,190,CASH DRAWER,FARM,Uganda Farm,480000,134.68'}
+                value={sheetCsv} onChange={e => setSheetCsv(e.target.value)} className="text-xs font-mono" data-testid="sheet-import-input" />
+              <Button className="w-full gap-2" onClick={handleSheetImport} disabled={sheetImporting || !sheetCsv.trim()} data-testid="sheet-import-btn">
+                <FileSpreadsheet size={14} /> {sheetImporting ? 'Importing...' : 'Import from Sheet'}
               </Button>
             </div>
           </div>

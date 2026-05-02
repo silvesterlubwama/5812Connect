@@ -11,10 +11,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { productsApi, salesApi, locationsApi, storeSettingsApi } from '../services/api';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import VariantBarcodePrint from '../components/VariantBarcodePrint';
+import ReceiptComponent from '../components/Receipt';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -122,6 +124,41 @@ export default function ProductsPage() {
   const removeFromCart = (productId) => setCart(prev => prev.filter(i => i.product_id !== productId));
   const cartTotal = cart.reduce((sum, i) => sum + i.unit_price * i.qty, 0);
 
+  // Parked / draft sales
+  const [drafts, setDrafts] = useState([]);
+  const [showDrafts, setShowDrafts] = useState(false);
+  const fetchDrafts = async () => {
+    try { const res = await salesApi.drafts(); setDrafts(res.data || []); }
+    catch (e) { console.warn(e.message || e); }
+  };
+  useEffect(() => { fetchDrafts(); }, []);
+
+  const parkSale = async () => {
+    if (cart.length === 0) { toast.error('Cart is empty — nothing to park'); return; }
+    try {
+      const payload = { items: cart, customer_name: customerName, payment_method: paymentMethod, total: cartTotal };
+      if (locationFilter !== 'all') payload.location_id = locationFilter;
+      await salesApi.saveDraft(payload);
+      toast.success('Sale parked — reopen later from "Parked Sales"');
+      setCart([]); setCustomerName('Walk-in Customer');
+      fetchDrafts();
+    } catch { toast.error('Failed to park sale'); }
+  };
+
+  const reopenDraft = (d) => {
+    setCart(d.items || []);
+    setCustomerName(d.customer_name || 'Walk-in Customer');
+    setPaymentMethod(d.payment_method || 'cash');
+    toast.info(`Reopened sale parked by ${d.parked_by_name || 'someone'}`);
+    setShowDrafts(false);
+  };
+
+  const discardDraft = async (id) => {
+    if (!window.confirm('Discard this parked sale?')) return;
+    try { await salesApi.deleteDraft(id); fetchDrafts(); toast.success('Discarded'); }
+    catch { toast.error('Failed'); }
+  };
+
   const handleCheckout = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return; }
     setCheckoutLoading(true);
@@ -130,7 +167,7 @@ export default function ProductsPage() {
       if (locationFilter !== 'all') payload.location_id = locationFilter;
       const res = await salesApi.create(payload);
       setLastReceipt(res.data); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
-      toast.success(`Sale recorded! Invoice: ${res.data.id}`); fetchAll();
+      toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`); fetchAll();
     } catch { toast.error('Checkout failed'); }
     finally { setCheckoutLoading(false); }
   };
@@ -336,6 +373,14 @@ export default function ProductsPage() {
                 <Button className="w-full gap-2" disabled={cart.length === 0 || checkoutLoading} onClick={handleCheckout} data-testid="checkout-btn">
                   <Receipt size={15} />{checkoutLoading ? 'Processing...' : 'Complete Sale'}
                 </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" disabled={cart.length === 0} onClick={parkSale} data-testid="park-sale-btn">
+                    Park Sale
+                  </Button>
+                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" onClick={() => setShowDrafts(true)} data-testid="open-parked-sales-btn">
+                    Parked ({drafts.length})
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -514,28 +559,35 @@ export default function ProductsPage() {
               {productForm.has_variants && (
                 <div className="space-y-2">
                   {(productForm.variants || []).map((v, i) => (
-                    <div key={v.id || i} className="flex items-center gap-2 p-2 rounded bg-muted/50 text-xs">
-                      <span className="flex-1 font-medium">{v.name || v.value}</span>
-                      <span>{(v.price || 0).toLocaleString()}</span>
-                      <span className="text-muted-foreground">x{v.stock || 0}</span>
-                      <span className="text-muted-foreground font-mono text-[10px]">{v.barcode || '-'}</span>
-                      <button type="button" className="text-destructive" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>x</button>
+                    <div key={v.id || i} className="grid grid-cols-[1fr_90px_90px_1fr_24px] gap-2 items-center p-2 rounded bg-muted/50 text-xs">
+                      <Input className="h-7 text-xs" value={v.name || ''} placeholder="Variant name"
+                        onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, name: e.target.value, value: e.target.value } : x) }))} />
+                      <Input className="h-7 text-xs" type="number" min={0} value={v.price || 0} placeholder="Price"
+                        onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, price: parseFloat(e.target.value) || 0 } : x) }))}
+                        data-testid={`variant-price-${i}`} />
+                      <Input className="h-7 text-xs" type="number" min={0} value={v.stock || 0} placeholder="Qty"
+                        onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, stock: parseInt(e.target.value) || 0 } : x) }))}
+                        data-testid={`variant-qty-${i}`} />
+                      <span className="text-muted-foreground font-mono text-[10px] truncate" title={v.barcode}>{v.barcode || '-'}</span>
+                      <button type="button" className="text-destructive text-sm" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>×</button>
                     </div>
                   ))}
-                  <div className="grid grid-cols-4 gap-1">
+                  <div className="grid grid-cols-[1fr_90px_90px_80px] gap-1">
                     <Input className="h-7 text-xs" placeholder="Name (e.g. Large)" id="_vname" />
-                    <Input className="h-7 text-xs" placeholder="Type" id="_vtype" />
                     <Input className="h-7 text-xs" type="number" placeholder="Price" id="_vprice" />
+                    <Input className="h-7 text-xs" type="number" placeholder="Qty" id="_vqty" />
                     <Button type="button" size="sm" className="h-7 text-xs" onClick={() => {
-                      const n = document.getElementById('_vname')?.value; const t = document.getElementById('_vtype')?.value;
+                      const n = document.getElementById('_vname')?.value;
                       const p = parseFloat(document.getElementById('_vprice')?.value) || 0;
+                      const q = parseInt(document.getElementById('_vqty')?.value) || 0;
                       if (!n) return;
-                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, type: t, value: n, price: p, stock: 0, barcode: ''}]}));
+                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, value: n, price: p, stock: q, barcode: ''}]}));
                       if (document.getElementById('_vname')) document.getElementById('_vname').value = '';
                       if (document.getElementById('_vprice')) document.getElementById('_vprice').value = '';
+                      if (document.getElementById('_vqty')) document.getElementById('_vqty').value = '';
                     }}>+ Add</Button>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">Price is per variant. Main product price is ignored when variants exist.</p>
+                  <p className="text-[10px] text-muted-foreground">Total stock = sum of variant quantities. Edit inline.</p>
                 </div>
               )}
             </div>
@@ -549,29 +601,9 @@ export default function ProductsPage() {
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt</DialogTitle></DialogHeader>
-          {lastReceipt && (
-            <div className="space-y-4 font-mono text-sm">
-              <div className="text-center border-b border-border pb-3">
-                <p className="font-bold">58:12 Global Connect</p>
-                <p className="text-xs text-muted-foreground">Invoice: {lastReceipt.id}</p>
-                <p className="text-xs text-muted-foreground">{lastReceipt.created_at?.slice(0, 16).replace('T', ' ')}</p>
-              </div>
-              <div className="space-y-1.5">
-                {(lastReceipt.items || []).map((item, i) => (
-                  <div key={item.id || item.name || i} className="flex justify-between text-xs"><span>{item.name} x{item.qty}</span><span>{fmt(item.unit_price * item.qty)}</span></div>
-                ))}
-              </div>
-              <div className="border-t border-border pt-3 flex justify-between font-bold"><span>TOTAL</span><span className="text-primary">{fmt(lastReceipt.total)}</span></div>
-              <div className="text-xs text-muted-foreground flex justify-between">
-                <span>Customer: {lastReceipt.customer_name}</span>
-                <span className="capitalize">{lastReceipt.payment_method}</span>
-              </div>
-              <div className="text-center text-xs text-muted-foreground border-t border-border pt-3">Thank you for your purchase!</div>
-              <Button className="w-full" onClick={() => { setShowReceipt(false); window.print(); }}>Print Receipt</Button>
-            </div>
-          )}
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt {lastReceipt?.receipt_number || ''}</DialogTitle></DialogHeader>
+          {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={storeSettings || {}} />}
         </DialogContent>
       </Dialog>
 
@@ -615,6 +647,30 @@ export default function ProductsPage() {
             </div>
             <div className="space-y-2"><Label>Receipt Footer</Label>
               <Input placeholder="Thank you for shopping!" value={storeSettings.receipt_footer || ''} onChange={e => setStoreSettings({...storeSettings, receipt_footer: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-3 p-3 bg-muted/30 rounded-lg">
+              <div className="space-y-2"><Label className="text-xs">Receipt Paper Size</Label>
+                <Select value={storeSettings.receipt_paper_size || '80mm'} onValueChange={v => setStoreSettings({...storeSettings, receipt_paper_size: v})}>
+                  <SelectTrigger data-testid="receipt-paper-size-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="58mm">58mm (Thermal POS)</SelectItem>
+                    <SelectItem value="80mm">80mm (Standard POS)</SelectItem>
+                    <SelectItem value="A5">A5 (Half-letter)</SelectItem>
+                    <SelectItem value="A4">A4 (Full page)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">Auto-detected printer size override</p>
+              </div>
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={storeSettings.receipt_show_logo !== false} onChange={e => setStoreSettings({...storeSettings, receipt_show_logo: e.target.checked})} />
+                  Show 58:12 logo
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={storeSettings.receipt_show_qr !== false} onChange={e => setStoreSettings({...storeSettings, receipt_show_qr: e.target.checked})} />
+                  Show tracking QR code
+                </label>
+              </div>
             </div>
             <div className="space-y-2">
               <Label>API Integrations (JSON)</Label>
@@ -662,6 +718,32 @@ export default function ProductsPage() {
         product={barcodePrintProduct}
         currency={barcodePrintProduct?.currency || 'UGX'}
       />
+
+      {/* Parked Sales Dialog */}
+      <Dialog open={showDrafts} onOpenChange={setShowDrafts}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Parked Sales</DialogTitle></DialogHeader>
+          {drafts.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No parked sales</p>
+          ) : (
+            <div className="space-y-2">
+              {drafts.map(d => (
+                <div key={d.id} className="flex items-center justify-between p-3 rounded-lg border border-border" data-testid={`draft-${d.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{d.customer_name || 'Walk-in'}</p>
+                    <p className="text-xs text-muted-foreground">{(d.items || []).length} items · {fmt(d.total, activeCurrency)} · by {d.parked_by_name || 'Unknown'}</p>
+                    <p className="text-[10px] text-muted-foreground">{new Date(d.created_at).toLocaleString()}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reopenDraft(d)} data-testid={`reopen-draft-${d.id}`}>Reopen</Button>
+                    <Button size="sm" variant="ghost" className="h-7 text-destructive" onClick={() => discardDraft(d.id)}><Trash2 size={13} /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

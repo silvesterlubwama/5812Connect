@@ -162,12 +162,12 @@ export default function Layout() {
         const activeId = activeCampus || user?.location_id;
         if (activeId) {
           const loc = locs.find(l => l.id === activeId);
-          if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false });
+          if (loc) setCampusFeatures({ financial_enabled: loc.financial_enabled !== false, marketplace_enabled: loc.marketplace_enabled !== false, financial_apis_enabled: loc.financial_apis_enabled !== false, hr_enabled: loc.hr_enabled !== false });
         } else {
           // "All Locations" — check user's primary campus features
           const userLoc = locs.find(l => l.id === user?.location_id);
           if (userLoc) {
-            setCampusFeatures({ financial_enabled: userLoc.financial_enabled !== false, marketplace_enabled: userLoc.marketplace_enabled !== false, financial_apis_enabled: userLoc.financial_apis_enabled !== false });
+            setCampusFeatures({ financial_enabled: userLoc.financial_enabled !== false, marketplace_enabled: userLoc.marketplace_enabled !== false, financial_apis_enabled: userLoc.financial_apis_enabled !== false, hr_enabled: userLoc.hr_enabled !== false });
           }
         }
       } catch (e) { console.warn(e.message || e); }
