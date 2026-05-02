@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 79 — all 5 task groups verified: (a) MongoDB indexes audit, (h) push notifications, (i) birthday/anniversary scheduler, (l) session manager, (p) server.py router split, (q) MemberForm extraction. Backend: 20/20 pytest PASS. Frontend: Settings Security → active-sessions-card present with 'this device' marker and revoke-other-sessions-btn; /members renders with MemberForm dialog showing all fields; tabs Staff/Families/Children/Guests present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Add Person dialog (MemberForm) — Date of Birth field", "issues": ["Uses browser native date picker (mm/dd/yyyy input type=date) instead of shadcn Calendar component. Consider replacing with <Calendar /> for consistency with the rest of the app."]},
+      {"screen": "UnifiedPeoplePage tabs", "issues": ["'Pending' is combined into 'Guests & Pending' tab rather than a standalone tab — matches UI but task spec mentioned 5 distinct tabs. Informational only."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration79_features.py",
+    "/app/test_reports/pytest/pytest_iter79.xml"
+  ],
+  "action_items": [
+    "(Optional, design) Replace native HTML date picker in MemberForm.jsx with shadcn Calendar component for Date of Birth.",
+    "(Optional) Expose 'Pending' as a standalone tab if task spec requires it, otherwise rename to match current 'Guests & Pending' wording in docs."
+  ],
+  "critical_code_review_comments": [
+    "(a) _ensure_indexes in server.py creates 40+ indexes including unique(users.email), unique(users.id), unique(sessions.jti), TTL on password_resets.expires_at, TTL on sessions.expires_at, TTL on deleted_items.deleted_at (30d), and unique(push_subscriptions.subscription.endpoint). Server logs confirm 'Indexes ensured (idempotent)' on every startup.",
+    "(p) Router split: server.py is ~782 lines with new routers/seed.py, routers/dashboard.py, routers/i18n.py. All extracted endpoints respond correctly: /api/dashboard/stats, /api/dashboard/action-items, /api/people/stats, /api/parent/dashboard, /api/i18n, /api/i18n/en, /api/webcal/{uid}.ics.",
+    "(l) Session manager verified end-to-end: JWT includes jti claim; login calls create_token_with_session (persists user_agent+ip+expires_at). /api/auth/sessions lists sessions with is_current flag. DELETE /api/auth/sessions/{jti} revokes specific session. POST /api/auth/sessions/revoke-others revokes all but current. POST /api/auth/logout revokes current jti. After revoke, /api/auth/me returns 401 with 'Session revoked' detail. deps.get_current_user short-circuits on revoked jti; legacy tokens without jti still accepted.",
+    "(i) _fire_birthday_anniversary_notifications: regex-match on date_of_birth $regex -MM-DD$, inserts notifications with kind='birthday' or 'anniversary', ref_member_id, location_id, target_role=None. Scheduler fires once/day at hour==8 UTC (guarded by last_birthday_check_date). Idempotency is soft — if server restarts after 08:00 on the same day, notifications could duplicate; consider checking notifications collection for existing same-day kind=birthday/ref_member_id before insert.",
+    "(h) Push: /api/push/vapid-key returns publicKey from VAPID_PUBLIC_KEY env. /api/push/subscribe upserts on user_id (good — one subscription per user/device endpoint). /api/push/subscribe DELETE removes all for user. WebSocketContext auto-calls subscribePush() 2s after connect — cannot fully verify in headless Playwright (browser permission blocks).",
+    "(q) MemberForm extracted to /app/frontend/src/components/people/MemberForm.jsx. UnifiedPeoplePage.jsx imports at line 26. Dialog renders with all fields: name, email, phone, ID number, gender, role, group, location, System Admin toggle, date_of_birth (native picker — see design issue), PIN, parent/donor toggles, notes. No regressions.",
+    "Minor: SECRET_KEY default in deps.py ('5812global_secret_key_change_in_production') is hardcoded as fallback — production must set env var.",
+    "Minor: deps.create_token_with_session 'ip' parsing on line 58 has operator precedence ambiguity — `request.headers.get('x-forwarded-for') or request.client.host if request.client else ''` evaluates as `(XFF or host) if request.client else ''`. Works but could be parenthesized for clarity."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration79_features.py"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% (UI markers and dialogs render; session card + revoke button visible with 2+ sessions; MemberForm dialog intact)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Test created 2 extra login sessions during revoke-other tests; all cleaned up via revoke-others endpoint (no residual state). Push subscription TEST_ endpoint inserted then deleted. No persistent seed changes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter79 features working. Full regression pytest at /app/backend/tests/test_iteration79_features.py covers: router split (8 endpoints), session manager (4 tests incl. JWT jti + revoke + logout), push (2 tests), birthday code-path static check, indexes, and iter77/78 regressions. JWTs now include jti; legacy tokens (pre-iter79) without jti still work via deps.get_current_user pass-through. Logout now REVOKES the current token — tests that expected reusable tokens after logout will fail; this is correct behavior. MemberForm extracted — any future fields should be added to /app/frontend/src/components/people/MemberForm.jsx not UnifiedPeoplePage.jsx."
+}

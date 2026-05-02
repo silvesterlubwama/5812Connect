@@ -1,6 +1,6 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
-from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, hash_password, verify_password, create_token, logger
+from fastapi import APIRouter, Depends, HTTPException, Request
+from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -88,7 +88,7 @@ async def visitor_register(data: dict) -> dict:
 
 
 @router.post("/auth/login")
-async def login(data: UserLogin) -> dict:
+async def login(data: UserLogin, request: Request) -> dict:
     identifier = data.identifier.strip()
     identifier_lower = identifier.lower()
     # Build flexible lookup — exact match on email, phone (with normalization), national_id
@@ -128,7 +128,7 @@ async def login(data: UserLogin) -> dict:
     if user_loc:
         await db.users.update_one({"id": user["id"]}, {"$set": {"active_campus_id": user_loc}})
         user["active_campus_id"] = user_loc
-    token = create_token(user["id"])
+    token = await create_token_with_session(user["id"], request)
     user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
     return {"token": token, "user": user_out}
 
@@ -144,8 +144,80 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
 
 
 @router.post("/auth/logout")
-async def logout() -> dict:
+async def logout(request: Request, current_user: dict = Depends(get_current_user)) -> dict:
+    """Revoke the current session's jti so the token cannot be reused."""
+    try:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            from jose import jwt
+            import os
+            token = auth.split(" ", 1)[1]
+            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            jti = payload.get("jti")
+            if jti:
+                await db.sessions.update_one({"jti": jti}, {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()}})
+    except Exception as e:
+        logger.warning(f"Logout session revoke: {e}")
     return {"message": "Logged out successfully"}
+
+
+@router.get("/auth/sessions")
+async def list_sessions(request: Request, current_user: dict = Depends(get_current_user)) -> dict:
+    """List all active sessions for the current user; flag the current session."""
+    current_jti = None
+    try:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            from jose import jwt
+            import os
+            token = auth.split(" ", 1)[1]
+            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            current_jti = payload.get("jti")
+    except Exception:
+        pass
+    now = datetime.now(timezone.utc)
+    sessions = await db.sessions.find(
+        {"user_id": current_user["id"], "revoked": {"$ne": True}, "expires_at": {"$gt": now}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    for s in sessions:
+        s["is_current"] = (s.get("jti") == current_jti)
+        if isinstance(s.get("expires_at"), datetime):
+            s["expires_at"] = s["expires_at"].isoformat()
+    return {"sessions": sessions, "current_jti": current_jti}
+
+
+@router.delete("/auth/sessions/{jti}")
+async def revoke_session(jti: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """Revoke a specific session (must belong to the current user)."""
+    result = await db.sessions.update_one(
+        {"jti": jti, "user_id": current_user["id"]},
+        {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message": "Session revoked"}
+
+
+@router.post("/auth/sessions/revoke-others")
+async def revoke_other_sessions(request: Request, current_user: dict = Depends(get_current_user)) -> dict:
+    """Revoke all sessions for the current user EXCEPT the current one."""
+    current_jti = None
+    try:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            from jose import jwt
+            import os
+            token = auth.split(" ", 1)[1]
+            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            current_jti = payload.get("jti")
+    except Exception:
+        pass
+    query = {"user_id": current_user["id"], "revoked": {"$ne": True}}
+    if current_jti:
+        query["jti"] = {"$ne": current_jti}
+    result = await db.sessions.update_many(query, {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()}})
+    return {"revoked": result.modified_count}
 
 
 

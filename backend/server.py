@@ -119,248 +119,6 @@ class NotificationCreate(BaseModel):
     link: Optional[str] = None
 
 
-# ========== SEED ENDPOINTS ==========
-
-@api_router.post("/seed")
-async def seed_data():
-    existing_admin = await db.users.find_one({"email": "admin@5812global.org"})
-    if not existing_admin:
-        admin = {
-            "id": str(uuid.uuid4()), "name": "Admin User", "email": "admin@5812global.org",
-            "phone": "+256 800 5812", "password_hash": hash_password("Admin@1234"),
-            "role": "admin", "status": "active", "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.users.insert_one(admin)
-
-    member_count = await db.members.count_documents({})
-    if member_count == 0:
-        members = [
-            {"id": "mem_001", "name": "Alice Namukasa", "email": "alice@example.com", "phone": "+256 700 123456", "national_id": "CM900001000XXXX", "role": "Member", "status": "active", "join_date": "2024-01-15", "group": "Youth", "gender": "female", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_002", "name": "Brian Ssekitto", "email": "brian@example.com", "phone": "+256 752 234567", "national_id": "CM850002000XXXX", "role": "Staff", "status": "active", "join_date": "2023-06-10", "group": "Leadership", "gender": "male", "pin": "1234", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_003", "name": "Catherine Nakato", "email": "catherine@example.com", "phone": "+256 781 345678", "national_id": "CM920003000XXXX", "role": "Member", "status": "active", "join_date": "2024-03-20", "group": "Women", "gender": "female", "pin": "5678", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_004", "name": "David Kiggundu", "email": "david@example.com", "phone": "+256 706 456789", "national_id": "CM880004000XXXX", "role": "Volunteer", "status": "active", "join_date": "2023-11-05", "group": "Volunteers", "gender": "male", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_005", "name": "Esther Namirembe", "email": "esther@example.com", "phone": "+256 773 567890", "national_id": "CM950005000XXXX", "role": "Member", "status": "inactive", "join_date": "2022-08-30", "group": "Youth", "gender": "female", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_006", "name": "Francis Tumwesigye", "email": "francis@example.com", "phone": "+256 712 678901", "national_id": "CM780006000XXXX", "role": "Leader", "status": "active", "join_date": "2021-05-12", "group": "Leadership", "gender": "male", "is_donor": True, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_007", "name": "Grace Akello", "email": "grace@example.com", "phone": "+256 756 789012", "national_id": "CM960007000XXXX", "role": "Member", "status": "active", "join_date": "2024-07-01", "group": "Youth", "gender": "female", "is_parent": True, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_008", "name": "Henry Wasswa", "email": "henry@example.com", "phone": "+256 701 890123", "national_id": "CM820008000XXXX", "role": "Staff", "status": "active", "join_date": "2023-01-18", "group": "Admin", "gender": "male", "pin": "9012", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_009", "name": "Irene Nabatanzi", "email": "irene@example.com", "phone": "+256 784 901234", "national_id": "CM990009000XXXX", "role": "Member", "status": "active", "join_date": "2025-01-10", "group": "Women", "gender": "female", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "mem_010", "name": "Joseph Muwanguzi", "email": "joseph@example.com", "phone": "+256 715 012345", "national_id": "CM870010000XXXX", "role": "Volunteer", "status": "inactive", "join_date": "2022-04-22", "group": "Volunteers", "gender": "male", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.members.insert_many(members)
-
-    event_count = await db.events.count_documents({})
-    if event_count == 0:
-        events = [
-            {"id": "evt_001", "title": "Sunday Service", "type": "service", "status": "upcoming", "date": "2026-04-06", "time": "09:00", "end_time": "11:30", "location": "58:12 Global Centre", "capacity": 300, "registered": 212, "description": "Weekly Sunday worship service.", "is_public": True, "is_free": True, "visibility": "external", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_002", "title": "Youth Leadership Summit", "type": "conference", "status": "upcoming", "date": "2026-04-12", "time": "10:00", "end_time": "17:00", "location": "Kampala Conference Hall", "capacity": 100, "registered": 87, "description": "Annual leadership development summit.", "is_public": True, "is_free": False, "price": 25000, "visibility": "external", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_003", "title": "Community Outreach", "type": "community", "status": "upcoming", "date": "2026-04-19", "time": "08:00", "end_time": "14:00", "location": "Nakawa Market Area", "capacity": 50, "registered": 34, "description": "Community service outreach.", "is_public": False, "is_free": True, "visibility": "internal", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_004", "title": "Women in Faith Conference", "type": "conference", "status": "upcoming", "date": "2026-04-26", "time": "09:00", "end_time": "16:00", "location": "58:12 Global Centre", "capacity": 150, "registered": 102, "description": "Annual conference empowering women.", "is_public": True, "is_free": False, "price": 15000, "visibility": "external", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_005", "title": "Staff Meeting", "type": "meeting", "status": "upcoming", "date": "2026-04-02", "time": "14:00", "end_time": "16:00", "location": "Admin Block", "capacity": 20, "registered": 15, "description": "Monthly all-staff meeting.", "is_public": False, "is_free": True, "visibility": "internal", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_006", "title": "Easter Sunday Service", "type": "service", "status": "completed", "date": "2026-03-31", "time": "07:00", "end_time": "11:00", "location": "58:12 Global Centre", "capacity": 500, "registered": 487, "description": "Easter Sunday special service.", "is_public": True, "is_free": True, "visibility": "external", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "evt_007", "title": "QR Test Event", "type": "meeting", "status": "upcoming", "date": "2026-04-01", "time": "10:00", "end_time": "12:00", "location": "Tech Lab", "capacity": 100, "registered": 11, "description": "Event for testing QR code check-in.", "is_public": True, "is_free": True, "visibility": "external", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.events.insert_many(events)
-
-    task_count = await db.tasks.count_documents({})
-    if task_count == 0:
-        tasks = [
-            {"id": "task_001", "title": "Prepare Easter sermon notes", "description": "Compile sermon notes", "status": "done", "priority": "high", "assignee": "Brian Ssekitto", "due_date": "2026-03-30", "tags": ["sermon"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_002", "title": "Send membership renewal reminders", "description": "Email members expiring in April", "status": "in-progress", "priority": "high", "assignee": "Henry Wasswa", "due_date": "2026-04-05", "tags": ["membership"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_003", "title": "Set up Youth Summit registration", "description": "Configure online registration", "status": "in-progress", "priority": "medium", "assignee": "Alice Namukasa", "due_date": "2026-04-08", "tags": ["events"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_004", "title": "Update website event listings", "description": "Add April events to website", "status": "todo", "priority": "medium", "assignee": "Grace Akello", "due_date": "2026-04-10", "tags": ["website"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_005", "title": "Volunteer coordination for outreach", "description": "Assign volunteers to stations", "status": "todo", "priority": "high", "assignee": "David Kiggundu", "due_date": "2026-04-15", "tags": ["volunteers"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_006", "title": "Purchase office supplies", "description": "Order printer cartridges and stationery", "status": "todo", "priority": "low", "assignee": "Irene Nabatanzi", "due_date": "2026-04-20", "tags": ["admin"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_007", "title": "Finalize Women Conference speakers", "description": "Confirm all 5 speakers", "status": "in-progress", "priority": "high", "assignee": "Catherine Nakato", "due_date": "2026-04-12", "tags": ["events"], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "task_008", "title": "Monthly financial report", "description": "Compile March financial report", "status": "done", "priority": "high", "assignee": "Francis Tumwesigye", "due_date": "2026-04-05", "tags": ["finance"], "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.tasks.insert_many(tasks)
-
-    venue_count = await db.venues.count_documents({})
-    if venue_count == 0:
-        venues = [
-            {"id": "ven_001", "name": "Main Auditorium", "capacity": 500, "type": "auditorium", "available": True, "hourly_rate": None, "description": "Main worship hall with full AV system.", "location_id": "loc_001", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "ven_002", "name": "Conference Room A", "capacity": 40, "type": "conference", "available": True, "hourly_rate": 20000, "description": "Small conference room with projector.", "location_id": "loc_001", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "ven_003", "name": "Youth Hall", "capacity": 150, "type": "hall", "available": False, "hourly_rate": 50000, "description": "Large multipurpose hall.", "location_id": "loc_001", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "ven_004", "name": "Prayer Garden", "capacity": 30, "type": "outdoor", "available": True, "hourly_rate": None, "description": "Peaceful outdoor garden space.", "location_id": "loc_001", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.venues.insert_many(venues)
-
-    checkin_count = await db.checkins.count_documents({})
-    if checkin_count == 0:
-        checkins = [
-            {"id": "ci_001", "member_id": "mem_001", "member_name": "Alice Namukasa", "type": "member", "event_id": "evt_006", "event_name": "Easter Sunday Service", "method": "qr", "check_in_time": "2026-03-31T08:45:00Z", "source": "kiosk"},
-            {"id": "ci_002", "member_id": "mem_002", "member_name": "Brian Ssekitto", "type": "staff", "event_id": "evt_006", "event_name": "Easter Sunday Service", "method": "manual", "check_in_time": "2026-03-31T07:30:00Z", "source": "manual"},
-            {"id": "ci_003", "member_id": None, "member_name": "Visitor - John Doe", "type": "visitor", "event_id": "evt_006", "event_name": "Easter Sunday Service", "method": "manual", "check_in_time": "2026-03-31T09:05:00Z", "source": "kiosk"},
-            {"id": "ci_004", "member_id": "mem_003", "member_name": "Catherine Nakato", "type": "member", "event_id": "evt_006", "event_name": "Easter Sunday Service", "method": "id", "check_in_time": "2026-03-31T09:10:00Z", "source": "kiosk"},
-        ]
-        await db.checkins.insert_many(checkins)
-
-    return {"message": "Database seeded successfully", "admin_email": "admin@5812global.org", "admin_password": "Admin@1234"}
-
-
-@api_router.post("/seed-extended")
-async def seed_extended():
-    product_count = await db.products.count_documents({})
-    if product_count == 0:
-        products = [
-            {"id": "prod_001", "name": "4 Week Broiler Chicken", "price": 10000, "currency": "UGX", "stock": 198, "category": "Farm", "reorder_level": 20, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "prod_002", "name": "Coffee", "price": 20000, "currency": "UGX", "stock": 0, "category": "Beverages", "reorder_level": 10, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "prod_003", "name": "Eggs (Tray)", "price": 10000, "currency": "UGX", "stock": 0, "category": "Farm", "reorder_level": 15, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "prod_004", "name": "Local Chicken", "price": 40000, "currency": "UGX", "stock": 20, "category": "Farm", "reorder_level": 5, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "prod_005", "name": "2 Month Old Chicken", "price": 20000, "currency": "UGX", "stock": 20, "category": "Farm", "reorder_level": 10, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "prod_006", "name": "Tea T-Shirt", "price": 25000, "currency": "UGX", "stock": 100, "category": "Merchandise", "reorder_level": 15, "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.products.insert_many(products)
-    family_count = await db.families.count_documents({})
-    if family_count == 0:
-        families = [
-            {"id": "fam_001", "family_name": "Nakato Family", "primary_contact_name": "Sarah Nakato", "primary_contact_email": "parent1@example.com", "primary_contact_phone": "+256 700 111001", "address": "Kampala", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "fam_002", "family_name": "Ssekitto Family", "primary_contact_name": "James Ssekitto", "primary_contact_email": "james@example.com", "primary_contact_phone": "+256 700 222002", "address": "Entebbe", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "fam_003", "family_name": "Kiggundu Family", "primary_contact_name": "Mary Kiggundu", "primary_contact_email": "mary@example.com", "primary_contact_phone": "+256 700 333003", "address": "Jinja", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.families.insert_many(families)
-    child_count = await db.children.count_documents({})
-    if child_count == 0:
-        children = [
-            {"id": "chd_001", "name": "Emma Nakato", "date_of_birth": "2016-03-15", "gender": "female", "family_id": "fam_001", "class_group": "Primary 4", "medical_notes": "Nut allergy - carry epipen", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "chd_002", "name": "Daniel Nakato", "date_of_birth": "2018-07-22", "gender": "male", "family_id": "fam_001", "class_group": "Primary 2", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "chd_003", "name": "Peter Ssekitto", "date_of_birth": "2015-11-08", "gender": "male", "family_id": "fam_002", "class_group": "Primary 5", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "chd_004", "name": "Grace Kiggundu", "date_of_birth": "2019-04-30", "gender": "female", "family_id": "fam_003", "class_group": "Nursery", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.children.insert_many(children)
-    donation_count = await db.donations.count_documents({})
-    if donation_count == 0:
-        donations = [
-            {"id": "don_001", "donor_name": "Alice Namukasa", "amount": 50000, "currency": "UGX", "type": "tithe", "date": "2026-04-01", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "don_002", "donor_name": "Brian Ssekitto", "amount": 30000, "currency": "UGX", "type": "offering", "date": "2026-04-01", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "don_003", "donor_name": "Anonymous", "amount": 100000, "currency": "UGX", "type": "donation", "date": "2026-04-06", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "don_004", "donor_name": "Francis Tumwesigye", "amount": 75000, "currency": "UGX", "type": "tithe", "date": "2026-03-25", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.donations.insert_many(donations)
-    expense_count = await db.expenses.count_documents({})
-    if expense_count == 0:
-        expenses = [
-            {"id": "exp_001", "title": "Electricity Bill", "amount": 85000, "currency": "UGX", "category": "utilities", "date": "2026-04-02", "status": "approved", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "exp_002", "title": "Caretaker Salary", "amount": 150000, "currency": "UGX", "category": "salaries", "date": "2026-04-01", "status": "approved", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "exp_003", "title": "Office Supplies", "amount": 25000, "currency": "UGX", "category": "supplies", "date": "2026-03-28", "status": "pending", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.expenses.insert_many(expenses)
-    return {"message": "Extended seed data added"}
-
-
-# ========== DASHBOARD ==========
-
-@api_router.get("/dashboard/stats")
-async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    now = datetime.now(timezone.utc)
-    month_start_str = now.replace(day=1).isoformat()[:7]
-    # System admins can override with a specific campus_id; non-admins always use their own
-    if campus_id and is_system_admin(current_user):
-        campus = {"location_id": campus_id}
-    else:
-        campus = await get_campus_filter(current_user)
-    total_members = await db.members.count_documents({**campus})
-    active_members = await db.members.count_documents({"status": "active", **campus})
-    total_families = await db.families.count_documents({**campus})
-    total_children = await db.children.count_documents({**campus})
-    events_this_month = await db.events.count_documents({"date": {"$regex": f"^{month_start_str}"}, **campus})
-    upcoming_events = await db.events.count_documents({"status": "upcoming", **campus})
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}, **campus})
-    now_str = now.isoformat()[:10]
-    tasks_overdue = await db.tasks.count_documents({"status": {"$nin": ["done"]}, "due_date": {"$lt": now_str, "$ne": ""}})
-    new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}, **campus})
-    sales_result = await db.sales.aggregate([{"$match": {"created_at": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
-    monthly_sales = sales_result[0]["total"] if sales_result else 0
-    donations_result = await db.donations.aggregate([{"$match": {"date": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    monthly_donations = donations_result[0]["total"] if donations_result else 0
-    low_stock = await db.products.count_documents({"$expr": {"$lte": ["$stock", "$reorder_level"]}, **campus})
-    recent_checkins = await db.checkins.find({**campus}, {"_id": 0}).sort("check_in_time", -1).limit(3).to_list(3)
-    recent_members = await db.members.find({**campus}, {"_id": 0}).sort("created_at", -1).limit(2).to_list(2)
-    activity = []
-    for ci in recent_checkins:
-        activity.append({"type": "checkin", "message": f"{ci.get('member_name')} checked in" + (f" to {ci.get('event_name', '')}" if ci.get('event_name') else ""), "time": ci.get("check_in_time", "")})
-    for m in recent_members:
-        activity.append({"type": "member", "message": f"New member: {m.get('name')} registered", "time": m.get("created_at", "")})
-    activity.sort(key=lambda x: x.get("time", ""), reverse=True)
-    expenses_result = await db.expenses.aggregate([{"$match": {"date": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
-    return {
-        "total_members": total_members, "active_members": active_members, "total_families": total_families,
-        "total_children": total_children, "events_this_month": events_this_month, "upcoming_events": upcoming_events,
-        "checkins_today": checkins_today, "tasks_overdue": tasks_overdue, "new_members_this_month": new_members_this_month,
-        "monthly_sales": monthly_sales, "monthly_donations": monthly_donations, "low_stock_count": low_stock,
-        "monthly_expenses": monthly_expenses, "recent_activity": activity[:5],
-    }
-
-
-
-@api_router.get("/dashboard/action-items")
-async def get_action_items(campus_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    """Return counts of items needing attention for dashboard widgets."""
-    now = datetime.now(timezone.utc)
-    now_str = now.isoformat()[:10]
-    if campus_id and is_system_admin(current_user):
-        campus = {"location_id": campus_id}
-    else:
-        campus = await get_campus_filter(current_user)
-
-    # Overdue tasks (past due_date, not done)
-    overdue_tasks = await db.tasks.count_documents({
-        "status": {"$nin": ["done"]},
-        "due_date": {"$lt": now_str, "$ne": "", "$exists": True},
-        "is_archived": {"$ne": True},
-    })
-
-    # Pending member approvals
-    pending_approvals = await db.users.count_documents({"status": "pending", **campus})
-
-    # Expiring guest passes (within next 7 days)
-    from datetime import timedelta
-    week_from_now = (now + timedelta(days=7)).isoformat()[:10]
-    expiring_passes = await db.wallet_badges.count_documents({}) if False else 0  # Placeholder
-    try:
-        expiring_passes = await db.guests.count_documents({
-            "expires_at": {"$lte": week_from_now, "$gte": now_str, "$exists": True, "$ne": ""},
-            **campus,
-        })
-        # Also check access guest passes
-        expiring_access = await db.access_guest_passes.count_documents({
-            "valid_until": {"$lte": week_from_now, "$gte": now_str},
-            "status": "active",
-        })
-        expiring_passes += expiring_access
-    except Exception:
-        pass
-
-    # Unassigned tasks (no assignees)
-    unassigned_tasks = await db.tasks.count_documents({
-        "status": {"$nin": ["done"]},
-        "is_archived": {"$ne": True},
-        "$or": [{"assignees": {"$size": 0}}, {"assignees": {"$exists": False}}],
-    })
-
-    return {
-        "overdue_tasks": overdue_tasks,
-        "pending_approvals": pending_approvals,
-        "expiring_passes": expiring_passes,
-        "unassigned_tasks": unassigned_tasks,
-    }
-
-
-@api_router.get("/people/stats")
-async def people_stats(current_user: dict = Depends(get_current_user)):
-    campus = await get_campus_filter(current_user)
-    return {
-        "total_members": await db.members.count_documents({**campus}),
-        "active_members": await db.members.count_documents({"status": "active", **campus}),
-        "total_families": await db.families.count_documents({**campus}),
-        "total_children": await db.children.count_documents({**campus}),
-        "total_guests": await db.guests.count_documents({**campus}),
-        "pending_approvals": await db.users.count_documents({"status": "pending", **campus}),
-    }
-
-
 # ========== CAMPUS SWITCHER ==========
 
 @api_router.put("/user/active-campus")
@@ -524,26 +282,6 @@ async def scan_nfc(data: dict):
     return {"member": member, "tag_id": tag["id"]}
 
 
-# ========== PARENT DASHBOARD ==========
-
-@api_router.get("/parent/children")
-async def get_parent_children(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]; user_email = current_user.get("email", "")
-    children = await db.children.find({"$or": [{"parent_id": user_id}, {"parent_email": user_email}]}, {"_id": 0}).to_list(50)
-    enriched = []
-    for child in children:
-        last_checkin = await db.checkins.find_one({"member_id": child.get("id", ""), "member_name": child.get("name", "")}, {"_id": 0, "check_in_time": 1, "event_name": 1}, sort=[("check_in_time", -1)])
-        enriched.append({**child, "last_checkin": last_checkin})
-    return enriched
-
-@api_router.get("/parent/dashboard")
-async def parent_dashboard(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]; user_email = current_user.get("email", "")
-    children = await db.children.find({"$or": [{"parent_id": user_id}, {"parent_email": user_email}]}, {"_id": 0}).to_list(50)
-    upcoming_events = await db.events.find({"status": "upcoming", "is_public": True}, {"_id": 0, "id": 1, "title": 1, "date": 1, "time": 1, "location": 1, "type": 1}).sort("date", 1).limit(5).to_list(5)
-    return {"children": children, "children_count": len(children), "checked_in_count": 0, "upcoming_events": upcoming_events}
-
-
 # ========== APP SETTINGS (extracted to routers/settings.py) ==========
 
 
@@ -649,119 +387,7 @@ async def disable_2fa(current_user: dict = Depends(get_current_user)):
 # ========== GDPR, INVENTORY, FINANCIAL APIs (extracted to routers/settings.py) ==========
 
 
-# ========== WEBCAL SUBSCRIPTION ==========
-
-@api_router.get("/webcal/{user_id}.ics")
-async def webcal_feed(user_id: str):
-    """Public webcal feed URL for a user's events."""
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "location_id": 1})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    query = {"$or": [{"is_public": True}, {"created_by": user_id}]}
-    if user.get("location_id"):
-        query["$or"].append({"location_id": user["location_id"]})
-    events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(200)
-    ical = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//58:12 Global Connect//CRM//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
-    for ev in events:
-        date_str = (ev.get("date") or "").replace("-", "")
-        time_str = (ev.get("time") or "0000").replace(":", "")
-        dtstart = f"{date_str}T{time_str}00" if time_str else date_str
-        ical += f"BEGIN:VEVENT\r\nUID:{ev['id']}@5812global\r\nDTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}\r\nDTSTART:{dtstart}\r\nSUMMARY:{ev.get('title','')}\r\nDESCRIPTION:{ev.get('description','')}\r\nLOCATION:{ev.get('location','')}\r\nEND:VEVENT\r\n"
-    ical += "END:VCALENDAR\r\n"
-    from starlette.responses import Response
-    return Response(content=ical, media_type="text/calendar", headers={"Content-Disposition": "attachment; filename=5812global-events.ics"})
-
-
 # ========== FINANCIAL API MANAGEMENT (extracted to routers/settings.py) ==========
-
-
-# ========== I18N / TRANSLATIONS ==========
-
-TRANSLATIONS = {
-    "en": {"dashboard": "Dashboard", "people": "People", "events": "Events", "calendar": "Calendar", "tasks": "Tasks", "checkins": "Check-Ins", "outreach": "Outreach", "communications": "Communications", "resources": "Resources", "access": "Access Control", "financial": "Financial", "sales": "Sales & Products", "analytics": "Analytics", "reports": "Reports", "settings": "Settings", "logout": "Logout", "search": "Search", "save": "Save", "cancel": "Cancel", "delete": "Delete", "edit": "Edit", "add": "Add", "close": "Close", "welcome": "Welcome", "members": "Members", "volunteers": "Volunteers", "shifts": "Shifts", "templates": "Email Templates"},
-    "fr": {"dashboard": "Tableau de bord", "people": "Personnes", "events": "Evenements", "calendar": "Calendrier", "tasks": "Taches", "checkins": "Enregistrements", "outreach": "Sensibilisation", "communications": "Communications", "resources": "Ressources", "access": "Controle d'acces", "financial": "Finances", "sales": "Ventes et Produits", "analytics": "Analyses", "reports": "Rapports", "settings": "Parametres", "logout": "Deconnexion", "search": "Rechercher", "save": "Enregistrer", "cancel": "Annuler", "delete": "Supprimer", "edit": "Modifier", "add": "Ajouter", "close": "Fermer", "welcome": "Bienvenue", "members": "Membres", "volunteers": "Benevoles", "shifts": "Quarts", "templates": "Modeles d'email"},
-    "sw": {"dashboard": "Dashibodi", "people": "Watu", "events": "Matukio", "calendar": "Kalenda", "tasks": "Kazi", "checkins": "Kuingia", "outreach": "Kufikia", "communications": "Mawasiliano", "resources": "Rasilimali", "access": "Udhibiti wa Ufikiaji", "financial": "Fedha", "sales": "Mauzo na Bidhaa", "analytics": "Uchambuzi", "reports": "Ripoti", "settings": "Mipangilio", "logout": "Ondoka", "search": "Tafuta", "save": "Hifadhi", "cancel": "Ghairi", "delete": "Futa", "edit": "Hariri", "add": "Ongeza", "close": "Funga", "welcome": "Karibu", "members": "Wanachama", "volunteers": "Watu wa kujitolea", "shifts": "Zamu", "templates": "Violezo vya barua pepe"},
-    "lg": {"dashboard": "Dashiboodi", "people": "Abantu", "events": "Ebikozesebwa", "calendar": "Kalenda", "tasks": "Emirimu", "checkins": "Okwingira", "outreach": "Okubuulira", "communications": "Amawulire", "resources": "Ebyetaagisa", "access": "Okufuna Emikisa", "financial": "Ensimbi", "sales": "Okutunda", "analytics": "Okusengejja", "reports": "Lipoota", "settings": "Entegeka", "logout": "Fuluma", "search": "Noonya", "save": "Tereka", "cancel": "Sazaamu", "delete": "Sangula", "edit": "Kyusa", "add": "Gatta", "close": "Ggalawo", "welcome": "Tukusanyukidde", "members": "Bameemba", "volunteers": "Abayizi", "shifts": "Emirembe", "templates": "Ekifaananyi"},
-    "th": {"dashboard": "แดชบอร์ด", "people": "ผู้คน", "events": "กิจกรรม", "calendar": "ปฏิทิน", "tasks": "งาน", "checkins": "เช็คอิน", "outreach": "การเผยแพร่", "communications": "การสื่อสาร", "resources": "ทรัพยากร", "access": "การควบคุมการเข้าถึง", "financial": "การเงิน", "sales": "การขายและสินค้า", "analytics": "การวิเคราะห์", "reports": "รายงาน", "settings": "การตั้งค่า", "logout": "ออกจากระบบ", "search": "ค้นหา", "save": "บันทึก", "cancel": "ยกเลิก", "delete": "ลบ", "edit": "แก้ไข", "add": "เพิ่ม", "close": "ปิด", "welcome": "ยินดีต้อนรับ", "members": "สมาชิก", "volunteers": "อาสาสมัคร", "shifts": "กะ", "templates": "เทมเพลตอีเมล"},
-}
-
-
-@api_router.get("/i18n/{lang}")
-async def get_translations(lang: str = "en"):
-    return TRANSLATIONS.get(lang, TRANSLATIONS["en"])
-
-
-@api_router.get("/i18n")
-async def get_all_translations():
-    return {"languages": [{"code": "en", "name": "English"}, {"code": "fr", "name": "Francais"}, {"code": "sw", "name": "Kiswahili"}, {"code": "lg", "name": "Luganda"}, {"code": "th", "name": "ไทย (Thai)"}], "translations": TRANSLATIONS}
-
-
-# ========== SEED LOCATIONS & ALL ==========
-
-@api_router.post("/seed-locations")
-async def seed_locations_and_notifications():
-    loc_count = await db.locations.count_documents({})
-    if loc_count == 0:
-        locations = [
-            {"id": "loc_001", "name": "58:12 Global (Central)", "code": "MAIN", "type": "main", "parent_id": None, "address": "Plot 12, Kampala Road, Kampala", "country": "Uganda", "currency": "UGX", "contact_name": "Admin User", "contact_phone": "+256 800 5812", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Administration", "Finance", "Operations"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "loc_002", "name": "Entebbe Campus", "code": "ETB", "type": "campus", "parent_id": "loc_001", "address": "15 Airport Road, Entebbe", "country": "Uganda", "currency": "UGX", "contact_name": "Francis Tumwesigye", "contact_phone": "+256 712 678901", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Youth", "Education"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "loc_003", "name": "Jinja Campus", "code": "JNJ", "type": "campus", "parent_id": "loc_001", "address": "8 Owen Falls Road, Jinja", "country": "Uganda", "currency": "UGX", "contact_name": "Grace Akello", "contact_phone": "+256 756 789012", "active": True, "member_count": 0, "is_venue": False, "is_bookable": False, "is_restricted": False, "departments": ["Community", "Sports"], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "loc_004", "name": "Kampala East", "code": "KPE", "type": "sub-location", "parent_id": "loc_001", "address": "Nakawa Division, Kampala", "country": "Uganda", "currency": "UGX", "contact_name": "David Kiggundu", "contact_phone": "+256 706 456789", "active": True, "member_count": 0, "is_venue": True, "is_bookable": True, "is_restricted": False, "departments": [], "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.locations.insert_many(locations)
-    notif_count = await db.notifications.count_documents({})
-    if notif_count == 0:
-        notifications = [
-            {"id": "notif_001", "title": "New Member Approval", "message": "3 new member registrations are pending approval.", "type": "warning", "target_role": "admin", "link": "/members", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "notif_002", "title": "Low Stock Alert", "message": "Coffee and Eggs (Tray) are out of stock. Please reorder.", "type": "error", "target_role": None, "link": "/sales", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "notif_003", "title": "Event Reminder", "message": "Youth Leadership Summit is in 5 days. 13 spots remaining.", "type": "info", "target_role": None, "link": "/events", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "notif_004", "title": "Tasks Overdue", "message": "2 high priority tasks are past due. Review task board.", "type": "warning", "target_role": None, "link": "/tasks", "read_by": [], "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.notifications.insert_many(notifications)
-    return {"message": "Locations and notifications seeded"}
-
-
-@api_router.post("/seed-all")
-async def seed_all_data():
-    seeded = []
-    if await db.outreach_programs.count_documents({}) == 0:
-        programs = [
-            {"id": "op_001", "name": "Community Health Drive", "description": "Free medical check-ups and health education in Kampala slums.", "category": "health", "status": "active", "location": "Katwe, Kampala", "start_date": "2026-01-15", "target": 500, "sessions_count": 3, "total_reached": 142, "is_recurring": True, "recurrence_pattern": "saturday", "recurrence_day": 2, "recurrence_time": "09:00", "recurrence_end_time": "14:00", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "op_002", "name": "School Outreach Program", "description": "Bible studies and character formation in local schools.", "category": "education", "status": "active", "location": "Entebbe Municipality", "start_date": "2025-09-01", "target": 200, "sessions_count": 8, "total_reached": 316, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "op_003", "name": "Widows & Orphans Support", "description": "Monthly food distribution and counselling for vulnerable families.", "category": "welfare", "status": "active", "location": "Multiple Locations", "start_date": "2025-06-01", "target": 100, "sessions_count": 5, "total_reached": 89, "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.outreach_programs.insert_many(programs)
-        sessions = [
-            {"id": "os_001", "program_id": "op_001", "date": "2026-03-10", "time": "09:00", "location": "Katwe Health Centre", "attendees": 47, "notes": "Distributed 47 medicine packs.", "led_by": "Dr. Auma Florence", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "os_002", "program_id": "op_002", "date": "2026-03-14", "time": "14:00", "location": "Entebbe Primary School", "attendees": 85, "notes": "Session on integrity and purpose.", "led_by": "Pastor Amos", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.outreach_sessions.insert_many(sessions)
-        seeded.append("outreach")
-    if await db.resources.count_documents({}) == 0:
-        resources = [
-            {"id": "res_001", "name": "Main Auditorium", "type": "auditorium", "capacity": 400, "description": "Main worship hall with stage, PA system, and projectors.", "location_id": "loc_001", "hourly_rate": 50000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "res_002", "name": "Conference Room A", "type": "conference", "capacity": 30, "description": "Air-conditioned with whiteboard and AV equipment.", "location_id": "loc_001", "hourly_rate": 20000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "res_003", "name": "Youth Hall", "type": "hall", "capacity": 150, "description": "Multi-purpose hall for youth programs and events.", "location_id": "loc_001", "hourly_rate": 30000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "res_004", "name": "PA System (Mobile)", "type": "equipment", "capacity": None, "description": "Portable PA system with 2 wireless microphones.", "location_id": "loc_001", "hourly_rate": 15000, "available": True, "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.resources.insert_many(resources)
-        seeded.append("resources")
-    if await db.announcements.count_documents({}) == 0:
-        announcements = [
-            {"id": "ann_001", "title": "Welcome to March 2026!", "content": "This month we launch our Community Health Drive.", "type": "general", "target_role": None, "pinned": True, "author_name": "System Administrator", "author_role": "admin", "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "ann_002", "title": "Staff Meeting - This Friday", "content": "Mandatory all-staff meeting this Friday at 3 PM.", "type": "urgent", "target_role": "admin", "pinned": False, "author_name": "System Administrator", "author_role": "admin", "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.announcements.insert_many(announcements)
-        seeded.append("announcements")
-    if await db.badges.count_documents({}) == 0:
-        badges = [
-            {"id": "bdg_001", "name": "Faithful Servant", "description": "Awarded for 1+ year of consistent volunteering.", "color": "#f59e0b", "icon": "star", "criteria": "12+ months active service", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "bdg_002", "name": "Prayer Warrior", "description": "Regular participant in prayer meetings.", "color": "#6366f1", "icon": "heart", "criteria": "30+ prayer sessions attended", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-            {"id": "bdg_003", "name": "Outreach Champion", "description": "Led or participated in 5+ outreach sessions.", "color": "#10b981", "icon": "award", "criteria": "5+ outreach sessions", "issued_count": 0, "created_at": datetime.now(timezone.utc).isoformat()},
-        ]
-        await db.badges.insert_many(badges)
-        seeded.append("badges")
-    return {"seeded": seeded, "message": "Seed complete"}
 
 
 # ========== INCLUDE ALL ROUTERS ==========
@@ -828,6 +454,12 @@ try:
     app.include_router(wave_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
+    from routers.seed import router as seed_router
+    from routers.dashboard import router as dashboard_router
+    from routers.i18n import router as i18n_router
+    app.include_router(seed_router)
+    app.include_router(dashboard_router)
+    app.include_router(i18n_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -865,14 +497,16 @@ async def _send_push_to_user(user_id: str, title: str, body: str, url: str = "/t
 
 
 async def _run_due_date_reminder_scheduler():
-    """Hourly background task: notify assignees when their task is due tomorrow or today."""
+    """Hourly background task: notify assignees when their task is due tomorrow or today.
+    Also fires a daily birthday/anniversary check at ~08:00 local UTC."""
     from datetime import date
     await asyncio.sleep(30)  # short initial delay to let startup finish
+    last_birthday_check_date = None
     while True:
         try:
             tomorrow = (date.today() + timedelta(days=1)).isoformat()
             today_str = date.today().isoformat()
-            
+
             # Tasks due tomorrow
             due_tasks = await db.tasks.find({
                 "due_date": tomorrow,
@@ -886,7 +520,7 @@ async def _run_due_date_reminder_scheduler():
                     assignees.append(task["assignee"])
                 for uid in assignees:
                     await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', "/tasks")
-            
+
             # Tasks due today
             today_tasks = await db.tasks.find({
                 "due_date": today_str,
@@ -904,9 +538,88 @@ async def _run_due_date_reminder_scheduler():
             total = len(due_tasks) + len(today_tasks)
             if total:
                 logger.info(f"Sent due-date reminders for {total} tasks ({len(today_tasks)} today, {len(due_tasks)} tomorrow)")
+
+            # Daily birthday & anniversary check (once per day, during 08:00-09:00 UTC hour)
+            now = datetime.now(timezone.utc)
+            if last_birthday_check_date != date.today() and now.hour == 8:
+                await _fire_birthday_anniversary_notifications()
+                last_birthday_check_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
+
+
+async def _fire_birthday_anniversary_notifications():
+    """Create in-app notifications for today's birthdays + work anniversaries across all members.
+    Safe + idempotent per day (scheduler only calls once per day)."""
+    from datetime import date
+    try:
+        today = date.today()
+        mm_dd = f"-{today.month:02d}-{today.day:02d}"
+        # Birthdays: match any date_of_birth ending with -MM-DD
+        birthday_people = await db.members.find(
+            {"date_of_birth": {"$regex": f"{mm_dd}$"}, "status": "active"},
+            {"_id": 0, "id": 1, "name": 1, "location_id": 1, "date_of_birth": 1}
+        ).to_list(500)
+        # Work anniversaries: match join_date ending with -MM-DD
+        anniversary_people = await db.members.find(
+            {"join_date": {"$regex": f"{mm_dd}$"}, "status": "active"},
+            {"_id": 0, "id": 1, "name": 1, "location_id": 1, "join_date": 1, "role": 1}
+        ).to_list(500)
+
+        fired = 0
+        for m in birthday_people:
+            # Skip if birthday is also today's date (i.e., born today — avoid 0-year "anniversary")
+            try:
+                years = today.year - int((m.get("date_of_birth") or "0000")[:4])
+            except Exception:
+                years = 0
+            if years <= 0:
+                continue
+            msg = f"🎂 {m.get('name', 'Someone')} turns {years} today!"
+            await db.notifications.insert_one({
+                "id": f"notif_{uuid.uuid4().hex[:10]}",
+                "title": "Birthday today",
+                "message": msg,
+                "type": "info",
+                "target_role": None,
+                "link": "/members",
+                "read_by": [],
+                "location_id": m.get("location_id"),
+                "kind": "birthday",
+                "ref_member_id": m.get("id"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            fired += 1
+
+        for m in anniversary_people:
+            try:
+                years = today.year - int((m.get("join_date") or "0000")[:4])
+            except Exception:
+                years = 0
+            if years <= 0:
+                continue
+            title = "Work anniversary" if (m.get("role") or "").lower() in {"staff", "manager", "director", "leader", "coordinator", "admin", "hr"} else "Member anniversary"
+            msg = f"🎉 {m.get('name', 'Someone')} — {years} year{'s' if years > 1 else ''} with us today!"
+            await db.notifications.insert_one({
+                "id": f"notif_{uuid.uuid4().hex[:10]}",
+                "title": title,
+                "message": msg,
+                "type": "info",
+                "target_role": None,
+                "link": "/members",
+                "read_by": [],
+                "location_id": m.get("location_id"),
+                "kind": "anniversary",
+                "ref_member_id": m.get("id"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            fired += 1
+
+        if fired:
+            logger.info(f"Fired {fired} birthday/anniversary notifications ({len(birthday_people)} birthdays, {len(anniversary_people)} anniversaries)")
+    except Exception as e:
+        logger.error(f"Birthday/anniversary fire error: {e}")
 
 
 @app.on_event("startup")
@@ -922,8 +635,85 @@ async def startup():
     asyncio.create_task(_seed_initial_data())
 
 
+async def _ensure_indexes():
+    """Idempotent index creation. Runs on every startup. Safe to call repeatedly."""
+    try:
+        # Users: lookups by email, id, role, location, status
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.users.create_index([("role", 1), ("status", 1)])
+        await db.users.create_index([("location_id", 1), ("status", 1)])
+        await db.users.create_index("location_ids")
+        # Members
+        await db.members.create_index("id", unique=True)
+        await db.members.create_index("email")
+        await db.members.create_index("pin")
+        await db.members.create_index([("location_id", 1), ("status", 1)])
+        await db.members.create_index("user_id")
+        await db.members.create_index("date_of_birth")
+        # Events — date-range queries are hot
+        await db.events.create_index("id", unique=True)
+        await db.events.create_index([("date", 1), ("status", 1)])
+        await db.events.create_index([("location_id", 1), ("date", 1)])
+        # Tasks / Boards
+        await db.tasks.create_index("id", unique=True)
+        await db.tasks.create_index([("board_id", 1), ("list_id", 1), ("position", 1)])
+        await db.tasks.create_index([("assignees", 1), ("due_date", 1)])
+        await db.tasks.create_index([("due_date", 1), ("is_archived", 1), ("status", 1)])
+        await db.boards.create_index("id", unique=True)
+        await db.boards.create_index([("location_id", 1), ("is_global", 1)])
+        # Check-ins
+        await db.checkins.create_index("id", unique=True)
+        await db.checkins.create_index([("event_id", 1), ("check_in_time", -1)])
+        await db.checkins.create_index([("date", 1), ("location_id", 1)])
+        # Chat
+        await db.chat_messages.create_index("conversation_id")
+        await db.chat_messages.create_index([("conversation_id", 1), ("created_at", -1)])
+        await db.chat_messages.create_index("thread_id")
+        await db.conversations.create_index("participants")
+        await db.conversations.create_index([("participants", 1), ("updated_at", -1)])
+        # Notifications
+        await db.notifications.create_index([("target_role", 1), ("created_at", -1)])
+        await db.notifications.create_index("read_by")
+        # Access / Residents
+        await db.guest_requests.create_index([("location_id", 1), ("status", 1)])
+        await db.access_logs.create_index([("location_id", 1), ("timestamp", -1)])
+        await db.residents.create_index([("member_id", 1), ("status", 1)])
+        await db.residents.create_index([("location_id", 1), ("status", 1)])
+        # Files / Documents
+        await db.files.create_index([("member_id", 1), ("is_deleted", 1)])
+        # Auth
+        await db.password_resets.create_index("token")
+        await db.password_resets.create_index("expires_at", expireAfterSeconds=0)
+        await db.sessions.create_index("user_id")
+        await db.sessions.create_index("jti", unique=True)
+        await db.sessions.create_index("expires_at", expireAfterSeconds=0)
+        # Financial
+        await db.financial.create_index([("location_id", 1), ("date", -1)])
+        await db.financial.create_index([("type", 1), ("date", -1)])
+        # Locations
+        await db.locations.create_index("id", unique=True)
+        await db.locations.create_index([("parent_id", 1), ("type", 1)])
+        # Push
+        await db.push_subscriptions.create_index("user_id")
+        await db.push_subscriptions.create_index("subscription.endpoint", unique=True)
+        # Audit
+        await db.audit_log.create_index([("user_id", 1), ("timestamp", -1)])
+        await db.audit_log.create_index("timestamp")
+        # Wallet
+        await db.wallet_badges.create_index("token", unique=True)
+        await db.wallet_badges.create_index("member_id")
+        # Deleted items (recycle bin) — TTL cleanup after 30 days
+        await db.deleted_items.create_index("deleted_at", expireAfterSeconds=2592000)
+        logger.info("Indexes ensured (idempotent)")
+    except Exception as e:
+        logger.warning(f"Index ensure: {e}")
+
+
 async def _seed_initial_data():
     """Background-seed default admin, locations, notifications without blocking startup/readiness."""
+    # Always ensure indexes (fast + idempotent)
+    await _ensure_indexes()
     try:
         user_count = await db.users.count_documents({})
     except Exception as e:
@@ -931,25 +721,6 @@ async def _seed_initial_data():
         return
     if user_count == 0:
         logger.info("Seeding initial data...")
-        try:
-            await db.users.create_index("email", unique=True)
-            await db.users.create_index("id", unique=True)
-            await db.members.create_index("id", unique=True)
-            await db.members.create_index("email")
-            await db.members.create_index("pin")
-            await db.events.create_index("id", unique=True)
-            await db.tasks.create_index("id", unique=True)
-            await db.checkins.create_index("id", unique=True)
-            await db.chat_messages.create_index("conversation_id")
-            await db.chat_messages.create_index([("conversation_id", 1), ("created_at", -1)])
-            await db.notifications.create_index([("target_role", 1), ("created_at", -1)])
-            await db.guest_requests.create_index([("location_id", 1), ("status", 1)])
-            await db.access_logs.create_index([("location_id", 1), ("timestamp", -1)])
-            await db.files.create_index([("member_id", 1), ("is_deleted", 1)])
-            await db.password_resets.create_index("token")
-            await db.password_resets.create_index("expires_at")
-        except Exception as e:
-            logger.warning(f"Index creation: {e}")
         admin = {"id": str(uuid.uuid4()), "name": "Admin User", "email": "admin@5812global.org", "phone": "+256 800 5812", "password_hash": hash_password("Admin@1234"), "role": "admin", "status": "active", "created_at": datetime.now(timezone.utc).isoformat()}
         admin2 = {"id": str(uuid.uuid4()), "name": "Admin", "email": "admin@5812uganda.org", "phone": "+256 800 5813", "password_hash": hash_password("Admin@5812"), "role": "admin", "status": "active", "created_at": datetime.now(timezone.utc).isoformat()}
         try:

@@ -98,7 +98,11 @@ export const WebSocketProvider = ({ children }) => {
   }, [user?.id]);
 
   useEffect(() => {
-    if (user?.id) connect();
+    if (user?.id) {
+      connect();
+      // Auto-subscribe to push notifications (user is prompted once, then silent)
+      setTimeout(() => subscribePush().catch(() => {}), 2000);
+    }
     return () => {
       clearTimeout(reconnectTimer.current);
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }

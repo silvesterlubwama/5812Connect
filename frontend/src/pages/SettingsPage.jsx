@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint, Smartphone } from 'lucide-react';
+import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint, Smartphone, Monitor } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -45,6 +45,55 @@ export default function SettingsPage() {
   const [passkeys, setPasskeys] = useState([]);
   const [passkeysLoading, setPasskeysLoading] = useState(false);
   const [registeringPasskey, setRegisteringPasskey] = useState(false);
+
+  // Active sessions
+  const [sessions, setSessions] = useState([]);
+  const [currentJti, setCurrentJti] = useState(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+
+  const fetchSessions = useCallback(async () => {
+    setSessionsLoading(true);
+    try {
+      const res = await authApi.sessions();
+      setSessions(res.data?.sessions || []);
+      setCurrentJti(res.data?.current_jti || null);
+    } catch (e) { /* non-critical */ } finally { setSessionsLoading(false); }
+  }, []);
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  const revokeSession = async (jti) => {
+    if (!window.confirm('Sign out this device?')) return;
+    try {
+      await authApi.revokeSession(jti);
+      toast.success('Session revoked');
+      fetchSessions();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const revokeOtherSessions = async () => {
+    if (!window.confirm('Sign out all OTHER devices? You will stay signed in here.')) return;
+    try {
+      const res = await authApi.revokeOtherSessions();
+      toast.success(`${res.data.revoked} other session${res.data.revoked === 1 ? '' : 's'} revoked`);
+      fetchSessions();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const deviceLabel = (ua) => {
+    if (!ua) return 'Unknown device';
+    const u = ua.toLowerCase();
+    let device = 'Desktop';
+    if (u.includes('iphone')) device = 'iPhone';
+    else if (u.includes('android')) device = 'Android';
+    else if (u.includes('ipad')) device = 'iPad';
+    else if (u.includes('mobile')) device = 'Mobile';
+    let browser = 'Browser';
+    if (u.includes('firefox')) browser = 'Firefox';
+    else if (u.includes('edg/')) browser = 'Edge';
+    else if (u.includes('chrome')) browser = 'Chrome';
+    else if (u.includes('safari')) browser = 'Safari';
+    return `${device} · ${browser}`;
+  };
 
   const fetchPasskeys = useCallback(async () => {
     setPasskeysLoading(true);
@@ -573,6 +622,48 @@ export default function SettingsPage() {
                   <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg">
                     Passkeys require a modern browser (Chrome 67+, Safari 16+, Edge 18+) with platform authenticator support.
                   </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Active Sessions */}
+            <Card className="shadow-soft rounded-xl" data-testid="active-sessions-card">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-base flex items-center gap-2"><Monitor size={16} /> Active Sessions</CardTitle>
+                <CardDescription>Devices currently signed in to your account. Revoke any you don't recognize.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">{sessions.length} active session{sessions.length === 1 ? '' : 's'}</p>
+                  {sessions.filter(s => !s.is_current).length > 0 && (
+                    <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={revokeOtherSessions} data-testid="revoke-other-sessions-btn">
+                      <Shield size={13} /> Sign out other devices
+                    </Button>
+                  )}
+                </div>
+                {sessionsLoading ? (
+                  <div className="h-12 animate-pulse bg-muted rounded-lg" />
+                ) : sessions.length === 0 ? (
+                  <div className="p-4 rounded-lg border border-dashed border-border text-center text-sm text-muted-foreground">No active sessions found</div>
+                ) : (
+                  <div className="space-y-2">
+                    {sessions.map(s => (
+                      <div key={s.jti} data-testid={`session-${s.jti.slice(0,8)}`} className={`flex items-center justify-between p-3 rounded-lg border ${s.is_current ? 'border-primary/40 bg-primary/5' : 'border-border'}`}>
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <Monitor size={14} className={s.is_current ? 'text-primary' : 'text-muted-foreground'} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{deviceLabel(s.user_agent)} {s.is_current && <span className="ml-1 text-xs text-primary">(this device)</span>}</p>
+                            <p className="text-xs text-muted-foreground truncate">{s.ip || 'Unknown IP'} · Started {new Date(s.created_at).toLocaleString()}</p>
+                          </div>
+                        </div>
+                        {!s.is_current && (
+                          <Button size="sm" variant="ghost" className="h-7 text-destructive hover:text-destructive" onClick={() => revokeSession(s.jti)} data-testid={`revoke-session-${s.jti.slice(0,8)}`}>
+                            <Trash2 size={13} />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>

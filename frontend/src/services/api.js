@@ -34,6 +34,10 @@ export const authApi = {
   logout: () => api.post('/auth/logout'),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   resetPassword: (token, new_password) => api.post('/auth/reset-password', { token, new_password }),
+  // Session management
+  sessions: () => api.get('/auth/sessions'),
+  revokeSession: (jti) => api.delete(`/auth/sessions/${jti}`),
+  revokeOtherSessions: () => api.post('/auth/sessions/revoke-others'),
 };
 
 // ---- MEMBERS ----

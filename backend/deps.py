@@ -41,7 +41,39 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(user_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-    return jwt.encode({"sub": user_id, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    jti = uuid.uuid4().hex
+    return jwt.encode({"sub": user_id, "exp": expire, "jti": jti}, SECRET_KEY, algorithm=ALGORITHM)
+
+
+async def create_token_with_session(user_id: str, request=None) -> str:
+    """Create a JWT with a jti AND persist a session record for the user.
+    Sessions power the 'active sessions / revoke other sessions' admin feature."""
+    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    jti = uuid.uuid4().hex
+    token = jwt.encode({"sub": user_id, "exp": expire, "jti": jti}, SECRET_KEY, algorithm=ALGORITHM)
+    ua, ip = "", ""
+    try:
+        if request is not None:
+            ua = (request.headers.get("user-agent") or "")[:300]
+            ip = (request.headers.get("x-forwarded-for") or request.client.host if request.client else "") or ""
+            ip = ip.split(",")[0].strip()[:64]
+    except Exception:
+        pass
+    try:
+        await db.sessions.insert_one({
+            "jti": jti,
+            "user_id": user_id,
+            "user_agent": ua,
+            "ip": ip,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "expires_at": expire,
+            "revoked": False,
+        })
+    except Exception as e:
+        logger.warning(f"Session insert failed: {e}")
+    return token
+
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials:
@@ -49,10 +81,22 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
+        jti = payload.get("jti")
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    # If this token has a jti, verify the session hasn't been revoked.
+    # Tokens without jti (legacy) are still accepted.
+    if jti:
+        try:
+            session = await db.sessions.find_one({"jti": jti}, {"_id": 0, "revoked": 1})
+            if session and session.get("revoked"):
+                raise HTTPException(status_code=401, detail="Session revoked")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # DB issue — don't block auth
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
