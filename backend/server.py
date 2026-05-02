@@ -58,6 +58,20 @@ async def root_health_check():
     return {"status": "healthy", "service": "58:12 Global Connect CRM"}
 
 
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe — verifies MongoDB round-trip. Returns 503 if DB unreachable."""
+    started = time.time()
+    try:
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)
+        return {"status": "ready", "db_latency_ms": round((time.time() - started) * 1000, 1)}
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "db_error": str(e)[:200], "db_latency_ms": round((time.time() - started) * 1000, 1)},
+        )
+
+
 # Rate limiting middleware
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, requests_per_minute: int = 120):
