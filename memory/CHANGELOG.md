@@ -1,5 +1,16 @@
 # 58:12 Connect — Changelog
 
+## Iteration 79 (May 1, 2026) — Performance + Admin + Refactor
+- **MongoDB indexes audit**: `_ensure_indexes()` runs on every startup (idempotent). Adds 40+ indexes including `sessions.jti` (unique), TTL on `password_resets.expires_at`, `sessions.expires_at`, and `deleted_items.deleted_at` (30d auto-cleanup). Unique `push_subscriptions.subscription.endpoint`.
+- **Session manager**: JWTs now include `jti`. Login persists a session record (user_agent, ip, expires_at) in `db.sessions`. New endpoints: `GET /api/auth/sessions` (list + `is_current` flag), `DELETE /api/auth/sessions/{jti}`, `POST /api/auth/sessions/revoke-others`. Logout now revokes the current jti. Settings → Security page has an "Active Sessions" card with "Sign out other devices" button.
+- **Push notifications wired up**: `WebSocketContext.js` auto-calls `subscribePush()` 2s after WebSocket connect. VAPID keys already configured.
+- **Birthday / anniversary reminders**: Daily scheduler (08:00 UTC) inserts in-app notifications for members whose `date_of_birth` or `join_date` matches today's MM-DD. Idempotent (skips if already fired today). Staff accounts get "Work anniversary"; others get "Member anniversary".
+- **`server.py` split**: 1151 → 782 lines (-32%). New routers:
+  - `routers/seed.py` (4 seed endpoints)
+  - `routers/dashboard.py` (dashboard + people stats + parent portal)
+  - `routers/i18n.py` (translations + webcal feed)
+- **`UnifiedPeoplePage.jsx` extraction**: `MemberForm` (~90 lines) moved to `components/people/MemberForm.jsx` — now reusable.
+
 ## Iteration 78 (May 1, 2026) — Continuation: HR + UI Polish + PWA
 - **HR auto-payday payslip**: `POST /api/hr/payslips/generate-payday` — finds campuses with `pay_day` matching today, generates missing payslips for current period. Idempotent. "Run Payday Now" button added to HR → Payslips tab.
 - **Multi-campus user creation**: `POST /api/admin/users` now accepts `location_ids` array; mirrors to member record; auto-expands with parent campuses via `resolve_parent_campus`.

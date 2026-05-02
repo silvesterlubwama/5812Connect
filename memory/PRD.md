@@ -6,6 +6,16 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 79 (May 1, 2026) — Performance + Admin + Refactor
+Verified 20/20 backend tests PASS + frontend 100%.
+
+- ✅ **MongoDB indexes audit** (40+ indexes, idempotent) — `sessions.jti` unique, TTL on password_resets/sessions/deleted_items (30d auto-cleanup)
+- ✅ **Session manager** — JWT jti + `GET/DELETE /api/auth/sessions`, "Active Sessions" card on Settings → Security
+- ✅ **Push notifications** — auto-subscribe 2s after WebSocket connect
+- ✅ **Birthday/anniversary reminders** — daily 08:00 UTC scheduler, idempotent (skips if already fired today)
+- ✅ **server.py split** — 1151 → 782 lines; new `routers/{seed,dashboard,i18n}.py`
+- ✅ **MemberForm extracted** — `components/people/MemberForm.jsx`
+
 ## Recently Resolved — Iteration 78 (May 1, 2026)
 
 ### Part B — P1 + Selected P2 (verified 5/5 backend PASS)

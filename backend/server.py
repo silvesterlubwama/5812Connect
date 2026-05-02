@@ -569,12 +569,19 @@ async def _fire_birthday_anniversary_notifications():
 
         fired = 0
         for m in birthday_people:
-            # Skip if birthday is also today's date (i.e., born today — avoid 0-year "anniversary")
             try:
                 years = today.year - int((m.get("date_of_birth") or "0000")[:4])
             except Exception:
                 years = 0
             if years <= 0:
+                continue
+            # Idempotency: skip if a birthday notification for this member was already fired today
+            existing = await db.notifications.find_one({
+                "kind": "birthday",
+                "ref_member_id": m.get("id"),
+                "created_at": {"$gte": today.isoformat()},
+            })
+            if existing:
                 continue
             msg = f"🎂 {m.get('name', 'Someone')} turns {years} today!"
             await db.notifications.insert_one({
@@ -598,6 +605,13 @@ async def _fire_birthday_anniversary_notifications():
             except Exception:
                 years = 0
             if years <= 0:
+                continue
+            existing = await db.notifications.find_one({
+                "kind": "anniversary",
+                "ref_member_id": m.get("id"),
+                "created_at": {"$gte": today.isoformat()},
+            })
+            if existing:
                 continue
             title = "Work anniversary" if (m.get("role") or "").lower() in {"staff", "manager", "director", "leader", "coordinator", "admin", "hr"} else "Member anniversary"
             msg = f"🎉 {m.get('name', 'Someone')} — {years} year{'s' if years > 1 else ''} with us today!"
