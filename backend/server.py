@@ -460,12 +460,14 @@ try:
     from routers.products import router as products_router
     from routers.sales import router as sales_router
     from routers.sheet_import import router as sheet_import_router
+    from routers.invoices import router as invoices_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
     app.include_router(products_router)
     app.include_router(sales_router)
     app.include_router(sheet_import_router)
+    app.include_router(invoices_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

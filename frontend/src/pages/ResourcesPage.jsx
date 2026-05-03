@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle, CalendarDays, Settings } from 'lucide-react';
+import { Package, Plus, Trash2, Edit2, Search, Filter, BookOpen, CheckCircle, CalendarDays, Settings, Barcode, Printer } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -13,6 +13,7 @@ import { Textarea } from '../components/ui/textarea';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { locationsApi, bookingsApi, resourcesApi } from '../services/api';
+import BarcodeLabelDialog from '../components/BarcodeLabelDialog';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
@@ -45,6 +46,7 @@ export default function ResourcesPage() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [showBooking, setShowBooking] = useState(false);
   const [bookingResource, setBookingResource] = useState(null);
+  const [barcodeResource, setBarcodeResource] = useState(null);
   const [bookingForm, setBookingForm] = useState({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
   const [bookings, setBookings] = useState([]);
   const [mainTab, setMainTab] = useState('resources');
@@ -214,6 +216,25 @@ export default function ResourcesPage() {
                   {!r.is_bookable && <Badge variant="outline" className="text-xs bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300">Not Bookable</Badge>}
                   {r.is_consumable && <Badge variant="outline" className="text-xs">Consumable</Badge>}
                 </div>
+                {r.serial_number && (
+                  <div className="flex items-center justify-between gap-2 mb-2 p-1.5 rounded bg-muted/50">
+                    <code className="font-mono text-[10px] truncate flex-1" title={r.serial_number}>{r.serial_number}</code>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] gap-1" title="Print barcode label" onClick={() => setBarcodeResource(r)} data-testid={`print-resource-barcode-${r.id}`}>
+                      <Barcode size={10} /> Label
+                    </Button>
+                  </div>
+                )}
+                {!r.serial_number && (
+                  <Button size="sm" variant="outline" className="h-6 text-[10px] w-full mb-2 gap-1" onClick={async () => {
+                    try {
+                      const res = await resourcesApi.generateSerial(r.id);
+                      toast.success(`Serial issued: ${res.data.serial_number}`);
+                      fetchResources();
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                  }} data-testid={`generate-serial-${r.id}`}>
+                    <Barcode size={10} /> Issue 58:12 Serial Number
+                  </Button>
+                )}
                 {r.description && <p className="text-xs text-muted-foreground line-clamp-2">{r.description}</p>}
                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                   {r.quantity > 1 && <span>Qty: {r.quantity}</span>}
@@ -271,7 +292,16 @@ export default function ResourcesPage() {
               <Textarea rows={2} placeholder="Describe this resource" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Serial Number</Label><Input placeholder="SN-12345" value={form.serial_number || ''} onChange={e => setForm({...form, serial_number: e.target.value})} /></div>
+              <div className="space-y-2">
+                <Label>Serial Number / Barcode</Label>
+                <div className="flex gap-1">
+                  <Input className="font-mono text-xs" placeholder="Auto-issued if empty" value={form.serial_number || ''} onChange={e => setForm({...form, serial_number: e.target.value})} data-testid="resource-serial-input" />
+                  {!form.serial_number && (
+                    <span className="text-[10px] text-muted-foreground self-center px-1" title="Will auto-generate 5812-XXX serial">auto</span>
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground">Format: <span className="font-mono">5812-{`<COUNTRY><LOC>-<DDMMYY>-<NNNN>`}</span></p>
+              </div>
               <div className="space-y-2"><Label>MAC Address</Label><Input placeholder="AA:BB:CC:DD:EE:FF" value={form.mac_address || ''} onChange={e => setForm({...form, mac_address: e.target.value})} /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -367,6 +397,13 @@ export default function ResourcesPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Barcode label dialog */}
+      <BarcodeLabelDialog
+        resource={barcodeResource ? { ...barcodeResource, location_name: getLocationName(barcodeResource.location_id) } : null}
+        open={!!barcodeResource}
+        onOpenChange={(o) => { if (!o) setBarcodeResource(null); }}
+      />
     </div>
   );
 }

@@ -64,6 +64,7 @@ import CallInterface from './components/CallInterface';
 import IncomingCallModal from './components/IncomingCallModal';
 import WalletBadgePage from './pages/WalletBadgePage';
 import ReceiptViewPage from './pages/ReceiptViewPage';
+import ResourceViewPage from './pages/ResourceViewPage';
 import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -97,6 +98,7 @@ function AppRoutes() {
       <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
       <Route path="/badge/:token" element={<WalletBadgePage />} />
       <Route path="/receipt/:receiptNumber" element={<ReceiptViewPage />} />
+      <Route path="/resource/:serial" element={<ResourceViewPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />

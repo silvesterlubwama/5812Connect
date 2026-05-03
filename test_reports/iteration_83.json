@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 86 testing complete — Backend: all 14 pytest cases passed (100%) covering invoice CRUD, convert-to-sale, stock decrement, convert-twice rejection, resource auto-serial, custom serial, regenerate, public by-serial lookup, and 404 handling. Frontend: Invoices tab/editor/total computation all working. Public /resource/{serial} page renders without auth and shows all expected fields. Found ONE frontend bug: clicking 'Issue 58:12 Serial Number' button on a resource card shows 'Failed' toast despite backend returning 200 — caused by calling undefined `fetchResources()` (actual function name is `fetchData`).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ResourcesPage.jsx",
+        "issue": "Clicking 'Issue 58:12 Serial Number' button shows 'Failed' toast even though backend returns 200 OK and serial is persisted. Root cause: line 232 calls `fetchResources()` which is undefined — actual fetch function is named `fetchData` (defined at line 57). The ReferenceError triggers the catch block. Same bug in BulkActionBar onBulkDelete handler at line 191.",
+        "selector": "[data-testid^=\"generate-serial-\"]",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Invoice editor dialog", "issues": ["Due Date uses browser native date input (mm/dd/yyyy) instead of shadcn calendar — inconsistent with rest of app. Dialog missing aria-describedby (a11y warning in console)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration86_invoices_serials.py", "/app/test_reports/pytest/iter86.xml"],
+  "action_items": [
+    "Fix /app/frontend/src/pages/ResourcesPage.jsx line 232: rename `fetchResources()` → `fetchData()` (or rename the useState fetch function). Apply same fix on line 191 (BulkActionBar onBulkDelete).",
+    "Consider replacing native date picker in InvoicesTab editor with shadcn DatePicker for UI consistency.",
+    "Add DialogDescription / aria-describedby to New Invoice dialog to silence a11y warning."
+  ],
+  "critical_code_review_comments": [
+    "invoices.py uses invoice_number as the document id (id = invoice_number). That's fine but be aware: PUT/GET endpoints use id OR invoice_number lookup — slight redundancy.",
+    "Convert endpoint decrements stock via $inc without checking if sufficient stock exists — could go negative. Consider adding a stock check or atomic guarded update.",
+    "Convert endpoint does not reverse stock if sale insert fails midway — no transaction. Minor risk in concurrent scenarios.",
+    "Serial format prefix `5812-` is duplicated across country+abbr string; `loc_419f5d5e` does not exist in DB (actual Uganda location id is loc_001 with country='USA' based on actual data), so test environment uses US not UG — not a code bug but a data/doc mismatch that the problem statement should clarify.",
+    "ResourcesPage.jsx: undefined function call `fetchResources()` — ESLint/react-hooks would catch this if enabled with no-undef."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration86_invoices_serials.py"],
+  "success_rate": {"backend": "100%", "frontend": "~85% (core flows work; generate-serial UI has a JS error)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Auto-generated serial on res_002 (Conference Room A): 5812-USCEN-030526-0001. Created+deleted TEST_ invoices and resources via tests.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "One-line fix in ResourcesPage.jsx (fetchResources→fetchData or rename). Backend router /api/invoices and /api/resources/by-serial are fully functional. Locations seeded in DB have country='USA' (loc_001) not Uganda, so serial prefix comes out as 5812-USCEN-* not 5812-UGUGA-* as the problem statement suggested — confirm expected behavior with user if that's a concern.",
+  "rca of the issue": "Frontend 'Failed' toast bug: In /app/frontend/src/pages/ResourcesPage.jsx, the generate-serial button's onClick handler (line 228-233) awaits resourcesApi.generateSerial() successfully (backend returns 200 + correct payload), then calls `fetchResources()` in the try block to refresh state. However, the fetch function is declared as `fetchData` at line 57 — `fetchResources` is not defined in scope, causing a ReferenceError that is swallowed by the surrounding catch block which shows the generic 'Failed' toast. Reproduction: navigate to /resources → click 'Issue 58:12 Serial Number' on any card without serial → observe 'Failed' toast. Expected: success toast + card updates to show serial+Label button. Fix: rename the function call (one-line change)."
+}

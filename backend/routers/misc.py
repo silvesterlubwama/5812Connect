@@ -106,25 +106,142 @@ async def list_resources(current_user: dict = Depends(get_current_user)):
         query = {}
     return await db.resources.find(query, {"_id": 0}).sort("name", 1).to_list(200)
 
-@router.get("/resource-types")
-async def list_resource_types(current_user: dict = Depends(get_current_user)):
-    """Return distinct resource types for the type dropdown."""
+
+# ---------- Serial / barcode helpers ----------
+
+COUNTRY_TO_CODE = {
+    "uganda": "UG", "kenya": "KE", "usa": "US", "united states": "US",
+    "haiti": "HT", "thailand": "TH",
+}
+
+
+def _country_code(country: str) -> str:
+    if not country:
+        return "XX"
+    return COUNTRY_TO_CODE.get(country.strip().lower(), country[:2].upper())
+
+
+def _abbr(name: str) -> str:
+    """Derive a 3-letter abbreviation from a name (e.g. 'Holmes County' → 'HCO')."""
+    if not name:
+        return "XXX"
+    words = [w for w in name.replace(":", " ").replace("/", " ").split() if w and not w.isdigit()]
+    if not words:
+        return "XXX"
+    if len(words) == 1:
+        return words[0][:3].upper()
+    return ("".join(w[0] for w in words[:3]) + words[-1][:1]).upper()[:3] or "XXX"
+
+
+async def _generate_resource_serial(location_id: str = "") -> str:
+    """Generate a 58:12 serial: 5812-{CCABBR}-{DDMMYY}-{NNNN}.
+    Country code from location.country, abbr from location.code or derived from name.
+    Sequence is per (loc_id, date) and stored in db.counters."""
+    loc = None
+    if location_id:
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "country": 1, "code": 1, "name": 1})
+    country_code = _country_code(loc.get("country") if loc else "")
+    if loc and loc.get("code"):
+        abbr = _abbr(loc["code"])
+    elif loc and loc.get("name"):
+        abbr = _abbr(loc["name"])
+    else:
+        abbr = "XXX"
+    today = datetime.now(timezone.utc)
+    date_tag = today.strftime("%d%m%y")
+    counter_key = f"resource_serial_{location_id or 'NOLOC'}_{date_tag}"
+    counter = await db.counters.find_one_and_update(
+        {"_id": counter_key},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = (counter or {}).get("seq", 1)
+    return f"5812-{country_code}{abbr}-{date_tag}-{seq:04d}"
+
+
+@router.get("/resource-types-distinct")
+async def list_resource_types_distinct(current_user: dict = Depends(get_current_user)):
+    """Return distinct resource types from existing resources (legacy autocomplete)."""
     types = await db.resources.distinct("type")
     return [t for t in types if t]
+
 
 @router.post("/resources")
 async def create_resource(data: ResourceCreate, current_user: dict = Depends(get_current_user)):
     doc = {"id": f"res_{str(uuid.uuid4())[:8]}", **data.model_dump(), "available": True, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    # Auto-issue serial number / barcode if not provided
+    if not doc.get("serial_number"):
+        doc["serial_number"] = await _generate_resource_serial(doc.get("location_id", ""))
+        doc["serial_auto_generated"] = True
+    doc["barcode"] = doc["serial_number"]
     await db.resources.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "resource", doc["id"])
     return doc
 
+
 @router.put("/resources/{res_id}")
 async def update_resource(res_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    allowed = {"name", "type", "category", "capacity", "quantity", "description", "location_id", "hourly_rate", "is_bookable", "staff_only", "is_consumable", "available"}
+    allowed = {"name", "type", "category", "capacity", "quantity", "description", "location_id",
+               "hourly_rate", "is_bookable", "staff_only", "is_consumable", "available",
+               "serial_number", "barcode", "purchase_date", "purchase_value", "condition", "owner"}
     update = {k: v for k, v in data.items() if k in allowed}
+    # If serial number is being set/changed, mirror to barcode
+    if "serial_number" in update and update["serial_number"]:
+        update["barcode"] = update["serial_number"]
+        update["serial_auto_generated"] = False
     await db.resources.update_one({"id": res_id}, {"$set": update})
     return await db.resources.find_one({"id": res_id}, {"_id": 0})
+
+
+@router.post("/resources/{res_id}/generate-serial")
+async def generate_resource_serial(res_id: str, current_user: dict = Depends(get_current_user)):
+    """Issue a fresh 58:12 serial / barcode for a resource that doesn't have one."""
+    res = await db.resources.find_one({"id": res_id}, {"_id": 0})
+    if not res:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    serial = await _generate_resource_serial(res.get("location_id", ""))
+    await db.resources.update_one(
+        {"id": res_id},
+        {"$set": {"serial_number": serial, "barcode": serial, "serial_auto_generated": True,
+                  "serial_issued_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"serial_number": serial, "barcode": serial}
+
+
+@router.get("/resources/by-serial/{serial}")
+async def get_resource_by_serial(serial: str):
+    """Public lookup — used for barcode scanners. Returns resource details (sanitized)."""
+    res = await db.resources.find_one(
+        {"$or": [{"serial_number": serial}, {"barcode": serial}, {"id": serial}]},
+        {"_id": 0}
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    loc = None
+    if res.get("location_id"):
+        loc = await db.locations.find_one(
+            {"id": res["location_id"]},
+            {"_id": 0, "name": 1, "country": 1, "code": 1}
+        )
+    return {
+        "id": res.get("id"),
+        "serial_number": res.get("serial_number"),
+        "barcode": res.get("barcode"),
+        "name": res.get("name"),
+        "type": res.get("type"),
+        "category": res.get("category"),
+        "description": res.get("description"),
+        "quantity": res.get("quantity"),
+        "available": res.get("available", True),
+        "condition": res.get("condition"),
+        "owner": res.get("owner"),
+        "purchase_date": res.get("purchase_date"),
+        "purchase_value": res.get("purchase_value"),
+        "location": loc,
+        "created_at": res.get("created_at"),
+    }
+
 
 @router.delete("/resources/{res_id}")
 async def delete_resource(res_id: str, current_user: dict = Depends(get_current_user)):

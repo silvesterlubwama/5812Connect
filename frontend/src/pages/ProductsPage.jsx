@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import VariantBarcodePrint from '../components/VariantBarcodePrint';
 import ReceiptComponent from '../components/Receipt';
+import InvoicesTab from '../components/sales/InvoicesTab';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -300,6 +301,7 @@ export default function ProductsPage() {
         <TabsList>
           <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
+          <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
           <TabsTrigger value="history" data-testid="tab-history">Sales History</TabsTrigger>
           <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
         </TabsList>
@@ -436,6 +438,11 @@ export default function ProductsPage() {
               {filteredProducts.length === 0 && <div className="col-span-4 text-center py-16 text-sm text-muted-foreground">No products added yet.</div>}
             </div>
           )}
+        </TabsContent>
+
+        {/* INVOICES TAB */}
+        <TabsContent value="invoices" className="mt-4">
+          <InvoicesTab products={products} onConverted={() => fetchAll()} />
         </TabsContent>
 
         {/* HISTORY TAB */}

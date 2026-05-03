@@ -205,6 +205,16 @@ export const salesApi = {
   setPaymentStatus: (id, payment_status, payment_reference) => api.put(`/sales/${id}/payment-status`, { payment_status, payment_reference }),
 };
 
+// ---- INVOICES (editable, printable, convertible to sale) ----
+export const invoicesApi = {
+  list: (params) => api.get('/invoices', { params }),
+  get: (id) => api.get(`/invoices/${id}`),
+  create: (data) => api.post('/invoices', data),
+  update: (id, data) => api.put(`/invoices/${id}`, data),
+  delete: (id) => api.delete(`/invoices/${id}`),
+  convert: (id, overrides) => api.post(`/invoices/${id}/convert`, overrides || {}),
+};
+
 export const customersApi = {
   list: (params) => api.get('/customers', { params }),
   get: (id) => api.get(`/customers/${id}`),
@@ -330,6 +340,7 @@ export const outreachApi = {
 // ---- RESOURCES ----
 export const resourcesApi = {
   list: () => api.get('/resources'),
+  get: (id) => api.get(`/resources/${id}`),
   create: (data) => api.post('/resources', data),
   update: (id, data) => api.put(`/resources/${id}`, data),
   delete: (id) => api.delete(`/resources/${id}`),
@@ -340,6 +351,9 @@ export const resourcesApi = {
   createType: (data) => api.post('/resource-types', data),
   updateType: (id, data) => api.put(`/resource-types/${id}`, data),
   deleteType: (id) => api.delete(`/resource-types/${id}`),
+  // Serial / barcode
+  generateSerial: (id) => api.post(`/resources/${id}/generate-serial`),
+  lookupBySerial: (serial) => api.get(`/resources/by-serial/${encodeURIComponent(serial)}`),
 };
 
 // ---- ANNOUNCEMENTS ----
