@@ -1,6 +1,31 @@
 # 58:12 Connect — Changelog
 
-## Iteration 83 (May 2, 2026) — 58:12 Brand Theme Applied
+## Iteration 86 (May 3, 2026) — Marketplace Invoices + Resource Barcodes
+**Verified 14/14 backend tests PASS + frontend fix applied.**
+
+### Marketplace Editable Invoices
+- New `routers/invoices.py` — CRUD + atomic counter for `INV-DRAFT-YYYYMMDD-NNNN`
+- Workflow: `draft` → `sent` → `converted` (linked to sale receipt) / `cancelled`
+- `POST /api/invoices/{id}/convert` — creates real sale, decrements stock, assigns receipt `INV-YYYYMMDD-NNNN`, links `sale.from_invoice`; body overrides supported for last-minute adjustments
+- New "Invoices" tab on `/sales` with full CRUD UI
+- `InvoicePrintable` component — A4 or 80mm thermal, 58:12 logo header, status stamp, WhatsApp share
+
+### Resource Tracking with 58:12 Barcodes
+- Auto-issued serial format: `5812-{COUNTRY}{LOC_ABBR}-{DDMMYY}-{NNNN}` (e.g. `5812-UGUGA-030526-0001`)
+- COUNTRY from `location.country`, LOC_ABBR from `location.code`/auto-derived, NNNN from atomic counter
+- `POST /api/resources/{id}/generate-serial` — issue on demand
+- Custom serials preserved; barcode mirrors serial_number (CODE128)
+- Public `GET /api/resources/by-serial/{serial}` — no-auth scanner endpoint
+- Public `/resource/:serial` page — shows name, location, condition, owner on scan
+- `BarcodeLabelDialog` component — printable 60mm×30mm thermal labels
+
+## Iteration 85 / 84 / 83 (May 2-3, 2026) — Net P&L on Balance Sheet / Favicon / 58:12 Brand Theme
+- Net Profit/Loss card on Balance Sheet (hero placement, green/red with margin %)
+- Accounts Receivable split out, Net Worth incl. assets
+- Official 58:12 favicon set (favicon.ico + logo192/512 + apple-touch-icon)
+- Brand teal `#48a9c5` + deep navy `#1a1a2e` applied app-wide via CSS variables
+
+## Iteration 82 (May 2, 2026) — Mark-as-Paid + Boards Admin Filter
 - **Primary color**: teal `#48a9c5` (hsl 193 51% 53%) — exact match with 5812-global.org site
 - **Foreground / text**: deep navy `#1a1a2e` (hsl 240 24% 14%) — from the "58:12" logo text
 - Full light + dark theme palettes updated in `src/index.css`
