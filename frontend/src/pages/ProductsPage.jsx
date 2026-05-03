@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload, Printer } from 'lucide-react';
+import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload, Printer, Barcode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -18,6 +18,7 @@ import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkAc
 import VariantBarcodePrint from '../components/VariantBarcodePrint';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
+import BarcodeScanDialog from '../components/BarcodeScanDialog';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -121,23 +122,70 @@ export default function ProductsPage() {
   })();
 
   // Cart operations
-  const addToCart = (product) => {
-    if (product.stock === 0) { toast.error('Product is out of stock'); return; }
+  const addToCart = (product, variant = null) => {
+    const effectivePrice = variant?.price ?? product.price;
+    const effectiveStock = variant ? (variant.stock || 0) : (product.stock || 0);
+    if (effectiveStock <= 0) { toast.error(`${product.name}${variant ? ` (${variant.name})` : ''} is out of stock`); return; }
+    const key = variant ? `${product.id}:${variant.id}` : product.id;
     setCart(prev => {
-      const existing = prev.find(i => i.product_id === product.id);
+      const existing = prev.find(i => (i.variant_id ? `${i.product_id}:${i.variant_id}` : i.product_id) === key);
       if (existing) {
-        if (existing.qty >= product.stock) { toast.error('Not enough stock'); return prev; }
-        return prev.map(i => i.product_id === product.id ? { ...i, qty: i.qty + 1 } : i);
+        if (existing.qty >= effectiveStock) { toast.error('Not enough stock'); return prev; }
+        return prev.map(i => (i.variant_id ? `${i.product_id}:${i.variant_id}` : i.product_id) === key ? { ...i, qty: i.qty + 1 } : i);
       }
-      return [...prev, { product_id: product.id, name: product.name, unit_price: product.price, qty: 1 }];
+      return [...prev, {
+        product_id: product.id,
+        name: product.name + (variant ? ` — ${variant.name}` : ''),
+        variant_id: variant?.id || null,
+        variant_name: variant?.name || null,
+        unit_price: effectivePrice,
+        qty: 1,
+      }];
     });
+    toast.success(`Added ${product.name}${variant ? ` (${variant.name})` : ''}`);
   };
 
-  const updateQty = (productId, delta) => {
-    setCart(prev => prev.map(i => i.product_id === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter(i => i.qty > 0));
+  // Barcode scan dialog
+  const [scanOpen, setScanOpen] = useState(false);
+
+  const handleBarcodeScan = (scanned) => {
+    const code = (scanned || '').trim();
+    if (!code) return;
+    // 1) Match against variant barcodes
+    for (const p of products) {
+      for (const v of (p.variants || [])) {
+        if ((v.barcode || v.id) === code || v.sku === code) {
+          addToCart(p, v);
+          return;
+        }
+      }
+    }
+    // 2) Match against product-level barcode / id / sku
+    const prod = products.find(p => p.barcode === code || p.id === code || p.sku === code);
+    if (prod) {
+      addToCart(prod);
+      return;
+    }
+    // 3) Resource serials start with 5812- — open the public resource page in a new tab
+    if (/^5812-/i.test(code)) {
+      window.open(`/resource/${encodeURIComponent(code)}`, '_blank');
+      toast.info('Resource lookup opened in new tab');
+      return;
+    }
+    toast.error(`Unknown code: ${code}`);
   };
 
-  const removeFromCart = (productId) => setCart(prev => prev.filter(i => i.product_id !== productId));
+  const _cartKey = (i) => i.variant_id ? `${i.product_id}:${i.variant_id}` : i.product_id;
+
+  const updateQty = (item, delta) => {
+    const key = _cartKey(item);
+    setCart(prev => prev.map(i => _cartKey(i) === key ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter(i => i.qty > 0));
+  };
+
+  const removeFromCart = (item) => {
+    const key = _cartKey(item);
+    setCart(prev => prev.filter(i => _cartKey(i) !== key));
+  };
   const cartTotal = cart.reduce((sum, i) => sum + i.unit_price * i.qty, 0);
 
   // Parked / draft sales
@@ -310,9 +358,14 @@ export default function ProductsPage() {
         <TabsContent value="pos" className="mt-4">
           <div className="grid lg:grid-cols-3 gap-5 h-[calc(100vh-320px)] min-h-[500px]">
             <div className="lg:col-span-2 flex flex-col gap-4">
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search products..." value={productSearch} onChange={e => setProductSearch(e.target.value)} data-testid="pos-search" />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input className="pl-9" placeholder="Search products..." value={productSearch} onChange={e => setProductSearch(e.target.value)} data-testid="pos-search" />
+                </div>
+                <Button variant="outline" size="default" className="gap-1.5" onClick={() => setScanOpen(true)} data-testid="pos-scan-btn" title="Scan barcode (camera or USB scanner)">
+                  <Barcode size={14} /> Scan
+                </Button>
               </div>
               <div className="overflow-y-auto flex-1">
                 {loading ? (
@@ -364,12 +417,12 @@ export default function ProductsPage() {
                       <p className="text-xs text-muted-foreground">{fmt(item.unit_price, activeCurrency)} each</p>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item.product_id, -1)}><Minus size={10} /></button>
+                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, -1)}><Minus size={10} /></button>
                       <span className="text-xs font-semibold w-5 text-center">{item.qty}</span>
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item.product_id, 1)}><Plus size={10} /></button>
+                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, 1)}><Plus size={10} /></button>
                     </div>
                     <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(item.unit_price * item.qty, activeCurrency)}</span>
-                    <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item.product_id)}><X size={12} /></button>
+                    <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item)}><X size={12} /></button>
                   </div>
                 ))}
               </div>
@@ -772,6 +825,14 @@ export default function ProductsPage() {
         onOpenChange={(open) => { if (!open) setBarcodePrintProduct(null); }}
         product={barcodePrintProduct}
         currency={barcodePrintProduct?.currency || 'UGX'}
+      />
+
+      {/* POS Barcode Scan Dialog */}
+      <BarcodeScanDialog
+        open={scanOpen}
+        onOpenChange={setScanOpen}
+        onScan={handleBarcodeScan}
+        title="Scan product barcode"
       />
 
       {/* Parked Sales Dialog */}
