@@ -553,11 +553,42 @@ export default function FinancialPage() {
             <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}</div>
           ) : balanceSheet ? (
             <div className="space-y-4">
-              <div className="grid sm:grid-cols-4 gap-4">
-                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-green-600">{fmt(balanceSheet.total_income)}</p><p className="text-xs text-muted-foreground mt-1">Total Income ({balanceSheet.donation_count} donations)</p></CardContent></Card>
-                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-blue-600">{fmt(balanceSheet.total_sales)}</p><p className="text-xs text-muted-foreground mt-1">Sales Revenue ({balanceSheet.sale_count} sales)</p></CardContent></Card>
-                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-red-600">{fmt(balanceSheet.total_expenses)}</p><p className="text-xs text-muted-foreground mt-1">Total Expenses ({balanceSheet.expense_count})</p></CardContent></Card>
-                <Card className="rounded-xl border-2 border-primary/20"><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${balanceSheet.net_balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(balanceSheet.net_balance)}</p><p className="text-xs text-muted-foreground mt-1">Net Balance</p></CardContent></Card>
+              {/* Hero P&L Card — primary result of the balance sheet */}
+              <Card className={`rounded-xl border-2 ${balanceSheet.is_profit ? 'border-green-300 bg-green-50/50 dark:bg-green-950/10' : 'border-red-300 bg-red-50/50 dark:bg-red-950/10'}`} data-testid="net-pnl-card">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">{balanceSheet.is_profit ? 'Net Profit' : 'Net Loss'}</p>
+                      <p className={`text-4xl font-bold mt-1 ${balanceSheet.is_profit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`} data-testid="net-pnl-amount">
+                        {balanceSheet.is_profit ? '' : '-'}{fmt(Math.abs(balanceSheet.net_profit_loss ?? balanceSheet.net_balance))}
+                      </p>
+                      <p className="text-sm text-muted-foreground mt-2">
+                        Revenue {fmt(balanceSheet.total_revenue ?? (balanceSheet.total_income + balanceSheet.total_sales))} − Expenses {fmt(balanceSheet.total_expenses)}
+                        {balanceSheet.profit_margin_pct != null && <span className="ml-2 text-xs">· margin {balanceSheet.profit_margin_pct}%</span>}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs space-y-1 min-w-[180px]">
+                      {balanceSheet.accounts_receivable > 0 && (
+                        <div className="text-amber-700 dark:text-amber-400 bg-amber-100/50 dark:bg-amber-950/20 rounded px-2 py-1">
+                          + {fmt(balanceSheet.accounts_receivable)} receivable
+                          <span className="block text-[10px] opacity-75">{balanceSheet.pending_sales_count} pending sale{balanceSheet.pending_sales_count === 1 ? '' : 's'}</span>
+                        </div>
+                      )}
+                      {balanceSheet.assets_total > 0 && (
+                        <div className="text-blue-700 dark:text-blue-400">
+                          Net Worth: <strong>{fmt(balanceSheet.net_worth)}</strong>
+                          <span className="block text-[10px] opacity-75">incl. {fmt(balanceSheet.assets_total)} in assets</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="grid sm:grid-cols-3 gap-4">
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-green-600">{fmt(balanceSheet.total_income)}</p><p className="text-xs text-muted-foreground mt-1">Donations Income ({balanceSheet.donation_count})</p></CardContent></Card>
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-blue-600">{fmt(balanceSheet.total_sales)}</p><p className="text-xs text-muted-foreground mt-1">Sales Revenue ({balanceSheet.sale_count} paid)</p></CardContent></Card>
+                <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-red-600">{fmt(balanceSheet.total_expenses)}</p><p className="text-xs text-muted-foreground mt-1">Expenses ({balanceSheet.expense_count})</p></CardContent></Card>
               </div>
               <div className="grid sm:grid-cols-2 gap-4">
                 <Card className="rounded-xl"><CardContent className="p-4"><h3 className="font-semibold text-sm mb-3">Income Breakdown</h3>

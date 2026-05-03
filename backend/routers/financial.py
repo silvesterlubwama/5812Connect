@@ -395,7 +395,7 @@ async def import_financial_data(data: dict, current_user: dict = Depends(require
 
 @router.get("/financial/balance-sheet")
 async def get_balance_sheet(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(require_manager)):
-    """Generate a balance sheet (income vs expenses) for a campus"""
+    """Generate a balance sheet (income vs expenses) for a campus + Net Profit/Loss + Net Worth (with assets)."""
     campus = await _financial_campus_filter(current_user)
     query = {**campus}
     if location_id:
@@ -419,8 +419,8 @@ async def get_balance_sheet(location_id: Optional[str] = None, date_from: Option
         t = d.get("type", "general")
         income_by_type[t] = income_by_type.get(t, 0) + d.get("amount", 0)
 
-    # Expenses
-    exp_query["status"] = {"$ne": "rejected"}
+    # Expenses (only count approved + legacy unstatused; pending/rejected excluded)
+    exp_query["status"] = {"$nin": ["pending", "rejected"]}
     expenses = await db.expenses.find(exp_query, {"_id": 0}).to_list(2000)
     total_expenses = sum(e.get("amount", 0) for e in expenses)
     expense_by_category = {}
@@ -428,24 +428,45 @@ async def get_balance_sheet(location_id: Optional[str] = None, date_from: Option
         c = e.get("category", "general")
         expense_by_category[c] = expense_by_category.get(c, 0) + e.get("amount", 0)
 
-    # Sales income
+    # Sales income — only count paid sales as realized revenue (pending non-cash is receivable, not income yet)
     sale_query = {**query}
     if date_q: sale_query["date"] = date_q
-    sales = await db.sales.find(sale_query, {"_id": 0}).to_list(2000)
-    total_sales = sum(s.get("total", 0) for s in sales)
+    all_sales = await db.sales.find(sale_query, {"_id": 0}).to_list(2000)
+    paid_sales = [s for s in all_sales if s.get("payment_status", "paid") != "pending"]
+    pending_sales = [s for s in all_sales if s.get("payment_status") == "pending"]
+    total_sales = sum(s.get("total", 0) for s in paid_sales)
+    accounts_receivable = sum(s.get("total", 0) for s in pending_sales)
 
-    net = total_income + total_sales - total_expenses
+    total_revenue = total_income + total_sales
+    net_profit_loss = total_revenue - total_expenses
+    is_profit = net_profit_loss >= 0
+
+    # Net Worth: include assets (current value) — assets_total - net_loss is informative
+    asset_query = {**campus}
+    if location_id: asset_query["location_id"] = location_id
+    assets = await db.financial_assets.find(asset_query, {"_id": 0, "current_value": 1, "purchase_value": 1}).to_list(500)
+    assets_total = sum(float(a.get("current_value") or a.get("purchase_value") or 0) for a in assets)
+    net_worth = assets_total + net_profit_loss
 
     return {
         "total_income": total_income,
         "total_expenses": total_expenses,
         "total_sales": total_sales,
-        "net_balance": net,
+        "total_revenue": total_revenue,
+        "net_balance": net_profit_loss,        # legacy alias — same value
+        "net_profit_loss": net_profit_loss,
+        "is_profit": is_profit,
+        "profit_margin_pct": round((net_profit_loss / total_revenue * 100), 2) if total_revenue else 0,
+        "accounts_receivable": accounts_receivable,
+        "pending_sales_count": len(pending_sales),
+        "assets_total": assets_total,
+        "asset_count": len(assets),
+        "net_worth": net_worth,
         "income_by_type": income_by_type,
         "expense_by_category": expense_by_category,
         "donation_count": len(donations),
         "expense_count": len(expenses),
-        "sale_count": len(sales),
+        "sale_count": len(paid_sales),
         "period": {"from": date_from, "to": date_to},
         "location_id": location_id,
     }
