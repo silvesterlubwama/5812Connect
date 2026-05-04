@@ -71,6 +71,8 @@ export default function ProductsPage() {
   const [customerProfile, setCustomerProfile] = useState(null);
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
+  // Admin/Director/Manager can issue & edit product barcodes manually
+  const canIssueProductBarcodes = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager', 'Leader', 'Coordinator'].includes(user?.role);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -667,7 +669,7 @@ export default function ProductsPage() {
               {productForm.has_variants && (
                 <div className="space-y-2">
                   {(productForm.variants || []).map((v, i) => (
-                    <div key={v.id || i} className="grid grid-cols-[1fr_90px_90px_1fr_24px] gap-2 items-center p-2 rounded bg-muted/50 text-xs">
+                    <div key={v.id || i} className="grid grid-cols-[1fr_70px_70px_1.5fr_24px] gap-2 items-center p-2 rounded bg-muted/50 text-xs">
                       <Input className="h-7 text-xs" value={v.name || ''} placeholder="Variant name"
                         onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, name: e.target.value, value: e.target.value } : x) }))} />
                       <Input className="h-7 text-xs" type="number" min={0} value={v.price || 0} placeholder="Price"
@@ -676,26 +678,35 @@ export default function ProductsPage() {
                       <Input className="h-7 text-xs" type="number" min={0} value={v.stock || 0} placeholder="Qty"
                         onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, stock: parseInt(e.target.value) || 0 } : x) }))}
                         data-testid={`variant-qty-${i}`} />
-                      <span className="text-muted-foreground font-mono text-[10px] truncate" title={v.barcode}>{v.barcode || '-'}</span>
+                      {canIssueProductBarcodes ? (
+                        <Input className="h-7 text-[10px] font-mono" value={v.barcode || ''} placeholder="Auto-generated on save"
+                          onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, barcode: e.target.value, barcode_auto_generated: false } : x) }))}
+                          data-testid={`variant-barcode-${i}`} />
+                      ) : (
+                        <span className="font-mono text-[10px] truncate" title={v.barcode}>{v.barcode || 'Pending'}</span>
+                      )}
                       <button type="button" className="text-destructive text-sm" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>×</button>
                     </div>
                   ))}
-                  <div className="grid grid-cols-[1fr_90px_90px_80px] gap-1">
+                  <div className="grid grid-cols-[1fr_70px_70px_1.5fr_60px] gap-1">
                     <Input className="h-7 text-xs" placeholder="Name (e.g. Large)" id="_vname" />
                     <Input className="h-7 text-xs" type="number" placeholder="Price" id="_vprice" />
                     <Input className="h-7 text-xs" type="number" placeholder="Qty" id="_vqty" />
+                    <Input className="h-7 text-[10px] font-mono" placeholder={canIssueProductBarcodes ? 'Barcode (optional)' : 'auto'} id="_vbarcode" disabled={!canIssueProductBarcodes} />
                     <Button type="button" size="sm" className="h-7 text-xs" onClick={() => {
                       const n = document.getElementById('_vname')?.value;
                       const p = parseFloat(document.getElementById('_vprice')?.value) || 0;
                       const q = parseInt(document.getElementById('_vqty')?.value) || 0;
+                      const b = canIssueProductBarcodes ? (document.getElementById('_vbarcode')?.value || '').trim() : '';
                       if (!n) return;
-                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, value: n, price: p, stock: q, barcode: ''}]}));
-                      if (document.getElementById('_vname')) document.getElementById('_vname').value = '';
-                      if (document.getElementById('_vprice')) document.getElementById('_vprice').value = '';
-                      if (document.getElementById('_vqty')) document.getElementById('_vqty').value = '';
+                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, value: n, price: p, stock: q, barcode: b, barcode_auto_generated: !b}]}));
+                      ['_vname','_vprice','_vqty','_vbarcode'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
                     }}>+ Add</Button>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">Total stock = sum of variant quantities. Edit inline.</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Total stock = sum of variant quantities. Empty barcodes auto-generate as <span className="font-mono">5812-{`{COUNTRY}{ABBR}-{DDMMYY}-V{NN}-{NNNN}`}</span> on save.
+                    {!canIssueProductBarcodes && <span className="block text-amber-700">Only admins, directors, and managers can edit barcodes manually.</span>}
+                  </p>
                 </div>
               )}
             </div>
