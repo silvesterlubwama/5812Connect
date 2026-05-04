@@ -67,10 +67,10 @@ async def delete_event_type(type_id: str, current_user: dict = Depends(require_a
 @router.get("/events")
 async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)) -> list:
     campus = await get_campus_filter(current_user)
-    query = {}
-    if campus:
-        # Non-admin: see campus events + public events
-        query["$or"] = [{**campus}, {"is_public": True}]
+    query = {**campus} if campus else {}
+    # NOTE: is_public events used to bypass campus filter — that caused public events
+    # from one campus to leak into another. is_public now controls public-page visibility
+    # only, NOT cross-campus visibility. Use /public/events for the truly-public endpoint.
     if search:
         query["title"] = {"$regex": search, "$options": "i"}
     if type and type != "all":

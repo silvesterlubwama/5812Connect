@@ -33,6 +33,10 @@ const emptyForm = {
 
 export default function ResourcesPage() {
   const { user } = useAuth();
+  const canIssueBarcodes = (() => {
+    const r = (user?.role || '').toLowerCase();
+    return ['admin', 'system_admin', 'executive director', 'director', 'adviser'].includes(r);
+  })();
   const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
   const [resources, setResources] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -224,8 +228,12 @@ export default function ResourcesPage() {
                     </Button>
                   </div>
                 )}
-                {!r.serial_number && (
+                {!r.serial_number && canIssueBarcodes && (
                   <Button size="sm" variant="outline" className="h-6 text-[10px] w-full mb-2 gap-1" onClick={async () => {
+                    if (!r.location_id) {
+                      toast.error('Set a location on this resource first — the barcode prefix derives from its campus, not yours.');
+                      return;
+                    }
                     try {
                       const res = await resourcesApi.generateSerial(r.id);
                       toast.success(`Serial issued: ${res.data.serial_number}`);
@@ -234,6 +242,9 @@ export default function ResourcesPage() {
                   }} data-testid={`generate-serial-${r.id}`}>
                     <Barcode size={10} /> Issue 58:12 Serial Number
                   </Button>
+                )}
+                {!r.serial_number && !canIssueBarcodes && (
+                  <p className="text-[10px] text-muted-foreground italic mb-2">No barcode — admin/director can issue one</p>
                 )}
                 {r.description && <p className="text-xs text-muted-foreground line-clamp-2">{r.description}</p>}
                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
@@ -267,14 +278,19 @@ export default function ResourcesPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>Location</Label>
-                <Select value={form.location_id || '_none'} onValueChange={v => setForm({...form, location_id: v === '_none' ? '' : v})}>
-                  <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
+              <div className="space-y-2">
+                <Label>Location <span className="text-destructive">*</span></Label>
+                <Select value={form.location_id || ''} onValueChange={v => setForm({...form, location_id: v})}>
+                  <SelectTrigger data-testid="resource-location-select"><SelectValue placeholder="Required — picks barcode prefix" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="_none">Unassigned</SelectItem>
-                    {locations.filter(l => !activeCampus || l.id === activeCampus || l.parent_id === activeCampus).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {form.location_id && (() => {
+                  const loc = locations.find(l => l.id === form.location_id);
+                  if (!loc) return null;
+                  return <p className="text-[10px] text-muted-foreground">Barcode prefix will derive from <span className="font-mono">{loc.name} ({loc.country || '—'})</span></p>;
+                })()}
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3">

@@ -10,6 +10,14 @@ import uuid, csv, io
 router = APIRouter(prefix="/api", tags=["misc"])
 
 
+def _can_issue_barcodes(user: dict) -> bool:
+    """Only admins and directors can issue barcodes / serial numbers."""
+    if is_system_admin(user):
+        return True
+    role = (user.get("role") or "").lower()
+    return role in {"admin", "system_admin", "executive director", "director", "adviser"}
+
+
 # ========== RESOURCE TYPES ==========
 
 @router.get("/resource-types")
@@ -169,12 +177,18 @@ async def list_resource_types_distinct(current_user: dict = Depends(get_current_
 
 @router.post("/resources")
 async def create_resource(data: ResourceCreate, current_user: dict = Depends(get_current_user)):
+    # Only admins/directors may issue barcodes — but anyone can create a resource without one.
+    user_can_issue = _can_issue_barcodes(current_user)
     doc = {"id": f"res_{str(uuid.uuid4())[:8]}", **data.model_dump(), "available": True, "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
-    # Auto-issue serial number / barcode if not provided
+    # Auto-issue serial number / barcode ONLY if the user is allowed to AND a location is set.
     if not doc.get("serial_number"):
-        doc["serial_number"] = await _generate_resource_serial(doc.get("location_id", ""))
-        doc["serial_auto_generated"] = True
-    doc["barcode"] = doc["serial_number"]
+        if user_can_issue and doc.get("location_id"):
+            doc["serial_number"] = await _generate_resource_serial(doc["location_id"])
+            doc["serial_auto_generated"] = True
+            doc["barcode"] = doc["serial_number"]
+        # else: leave serial blank — admin/director can issue later via /generate-serial
+    else:
+        doc["barcode"] = doc["serial_number"]
     await db.resources.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "resource", doc["id"])
     return doc
@@ -186,7 +200,10 @@ async def update_resource(res_id: str, data: dict, current_user: dict = Depends(
                "hourly_rate", "is_bookable", "staff_only", "is_consumable", "available",
                "serial_number", "barcode", "purchase_date", "purchase_value", "condition", "owner"}
     update = {k: v for k, v in data.items() if k in allowed}
-    # If serial number is being set/changed, mirror to barcode
+    # Only admins/directors can change the serial number after creation
+    if "serial_number" in update or "barcode" in update:
+        if not _can_issue_barcodes(current_user):
+            raise HTTPException(status_code=403, detail="Only admins and directors can issue or change resource serial numbers / barcodes")
     if "serial_number" in update and update["serial_number"]:
         update["barcode"] = update["serial_number"]
         update["serial_auto_generated"] = False
@@ -196,17 +213,28 @@ async def update_resource(res_id: str, data: dict, current_user: dict = Depends(
 
 @router.post("/resources/{res_id}/generate-serial")
 async def generate_resource_serial(res_id: str, current_user: dict = Depends(get_current_user)):
-    """Issue a fresh 58:12 serial / barcode for a resource that doesn't have one."""
+    """Issue a fresh 58:12 serial / barcode for a resource — admins & directors only.
+    The serial uses the RESOURCE'S location (NOT the issuing user's campus)."""
+    if not _can_issue_barcodes(current_user):
+        raise HTTPException(status_code=403, detail="Only admins and directors can issue resource serial numbers")
     res = await db.resources.find_one({"id": res_id}, {"_id": 0})
     if not res:
         raise HTTPException(status_code=404, detail="Resource not found")
-    serial = await _generate_resource_serial(res.get("location_id", ""))
+    res_loc = res.get("location_id") or ""
+    if not res_loc:
+        raise HTTPException(
+            status_code=400,
+            detail="Set the resource's location/campus before issuing a serial — the barcode prefix derives from the resource's campus, not yours."
+        )
+    serial = await _generate_resource_serial(res_loc)
     await db.resources.update_one(
         {"id": res_id},
         {"$set": {"serial_number": serial, "barcode": serial, "serial_auto_generated": True,
-                  "serial_issued_at": datetime.now(timezone.utc).isoformat()}}
+                  "serial_issued_at": datetime.now(timezone.utc).isoformat(),
+                  "serial_issued_by": current_user["id"]}}
     )
-    return {"serial_number": serial, "barcode": serial}
+    await _audit(current_user["id"], "issue", "resource_serial", f"{res_id}:{serial}")
+    return {"serial_number": serial, "barcode": serial, "location_id": res_loc}
 
 
 @router.get("/resources/by-serial/{serial}")

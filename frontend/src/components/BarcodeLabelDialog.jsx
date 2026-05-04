@@ -4,51 +4,84 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
 
-function BarcodeCanvas({ value, height = 80, width = 2 }) {
+function BarcodeCanvas({ value, height = 50, width = 1.4, fontSize = 9 }) {
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current && value) {
       try {
         JsBarcode(ref.current, String(value), {
-          format: 'CODE128', width, height, displayValue: true, fontSize: 11, margin: 4,
+          format: 'CODE128', width, height, displayValue: true, fontSize,
+          margin: 2, textMargin: 1, font: 'monospace', textAlign: 'center',
         });
       } catch (e) {
         const ctx = ref.current.getContext('2d');
-        ctx.font = '12px monospace';
-        ctx.fillText(String(value), 4, 20);
+        ctx.font = '10px monospace';
+        ctx.fillText(String(value), 4, 14);
       }
     }
-  }, [value, height, width]);
-  return <canvas ref={ref} />;
+  }, [value, height, width, fontSize]);
+  return <canvas ref={ref} style={{ display: 'block', maxWidth: '100%' }} />;
 }
 
 /**
- * BarcodeLabelDialog — printable resource label with name, serial, barcode, location.
- * Optimized for small thermal labels (54mm x 30mm) but can also print on A4 grid.
+ * BarcodeLabelDialog — printable resource label.
+ * Default size 70mm x 35mm (fits typical thermal label printers + lets longer 5812-* serials fit).
+ * Auto-shrinks bar width based on serial length to ensure full barcode prints.
  */
 export default function BarcodeLabelDialog({ resource, open, onOpenChange }) {
-  const handlePrint = () => {
-    const area = document.getElementById('barcode-print-area')?.innerHTML;
-    if (!area) return;
-    const w = window.open('', '_blank', 'width=400,height=400');
-    w.document.write(`
-      <html><head><title>Label ${resource?.serial_number || ''}</title>
-        <style>
-          @page { size: 60mm 30mm; margin: 0; }
-          body { margin: 0; padding: 2mm; font-family: 'Arial', sans-serif; }
-          .label { width: 56mm; height: 26mm; padding: 1mm; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1mm; }
-          .label canvas { max-width: 56mm; }
-          .name { font-size: 8px; font-weight: 600; text-align: center; max-width: 56mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-          .loc { font-size: 6px; color: #666; }
-        </style>
-      </head><body>${area}</body></html>
-    `);
-    w.document.close();
-    setTimeout(() => { w.focus(); w.print(); }, 400);
-  };
-
   if (!resource) return null;
   const code = resource.serial_number || resource.barcode || resource.id;
+  // Auto-tune barcode width for the serial length so it fits 70mm
+  const len = (code || '').length;
+  const barWidth = len > 22 ? 1.0 : len > 18 ? 1.2 : len > 14 ? 1.4 : 1.6;
+
+  const handlePrint = () => {
+    const w = window.open('', '_blank', 'width=400,height=400');
+    // Render an isolated print page — generate barcode SVG inline so it always shows
+    w.document.write(`
+      <html><head><title>Label ${code}</title>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.12.3/dist/JsBarcode.all.min.js"></script>
+        <style>
+          @page { size: 70mm 35mm; margin: 0; }
+          html, body { margin: 0; padding: 0; }
+          body { font-family: 'Arial', sans-serif; }
+          .label {
+            width: 66mm; height: 31mm;
+            margin: 2mm; padding: 1.5mm;
+            box-sizing: border-box;
+            display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+          }
+          .label .name { font-size: 8px; font-weight: 700; text-align: center; max-width: 66mm; line-height: 1.1; overflow: hidden; }
+          .label svg { width: 64mm; height: 16mm; display: block; }
+          .label .loc { font-size: 6px; color: #444; text-align: center; line-height: 1.1; }
+        </style>
+      </head><body>
+        <div class="label">
+          <div class="name">${(resource.name || '').replace(/[<>&]/g, '')}</div>
+          <svg id="bc"></svg>
+          <div class="loc">58:12 Global · ${(resource.location_name || '').replace(/[<>&]/g, '') || ''}</div>
+        </div>
+        <script>
+          try {
+            JsBarcode("#bc", ${JSON.stringify(String(code || ''))}, {
+              format: "CODE128",
+              width: ${barWidth},
+              height: 50,
+              displayValue: true,
+              fontSize: 8,
+              textMargin: 1,
+              margin: 0,
+              font: "monospace"
+            });
+            setTimeout(() => { window.focus(); window.print(); }, 300);
+          } catch (e) {
+            document.body.innerHTML += '<p style="color:red">Barcode error: ' + e.message + '</p>';
+          }
+        </script>
+      </body></html>
+    `);
+    w.document.close();
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -56,14 +89,15 @@ export default function BarcodeLabelDialog({ resource, open, onOpenChange }) {
         <DialogHeader><DialogTitle className="flex items-center gap-2">
           <Printer size={16} /> Barcode Label — {resource.name}
         </DialogTitle></DialogHeader>
-        <div id="barcode-print-area" className="bg-white">
-          <div className="label" style={{ width: '56mm', minHeight: '30mm', padding: '2mm', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2mm', border: '1px dashed #ccc', margin: '0 auto' }}>
-            <div className="name" style={{ fontSize: 9, fontWeight: 600, textAlign: 'center', maxWidth: '56mm' }}>{resource.name}</div>
-            <BarcodeCanvas value={code} height={50} width={1.6} />
-            <div className="loc" style={{ fontSize: 7, color: '#666' }}>58:12 Global · Property of {resource.location_name || resource.location_id || ''}</div>
-          </div>
+        <div className="bg-white border border-dashed border-border rounded-md p-3 flex flex-col items-center justify-center gap-2 min-h-[160px]" data-testid="barcode-label-preview">
+          <p className="text-[11px] font-bold text-center max-w-[66mm] leading-tight">{resource.name}</p>
+          <BarcodeCanvas value={code} height={48} width={barWidth} fontSize={9} />
+          <p className="text-[9px] text-muted-foreground text-center">58:12 Global · {resource.location_name || resource.location_id || ''}</p>
         </div>
-        <div className="flex gap-2 pt-3 border-t border-border">
+        <p className="text-[10px] text-muted-foreground text-center -mt-1">
+          {len} chars · auto bar width <span className="font-mono">{barWidth}</span> · prints on 70mm × 35mm thermal label
+        </p>
+        <div className="flex gap-2 pt-2 border-t border-border">
           <Button onClick={handlePrint} className="flex-1 gap-1.5" data-testid="print-barcode-label-btn">
             <Printer size={14} /> Print Label
           </Button>
