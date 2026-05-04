@@ -56,16 +56,22 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     await db.sales.insert_one(doc)
+    # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
     for item in data.items:
         if item.get("product_id"):
-            # If the item has a variant, decrement that specific variant's stock instead of main stock
+            qty = item.get("qty", 1)
+            units_per_pack = int(item.get("units_per_pack", 1) or 1)
+            base_units = qty * max(1, units_per_pack)
             if item.get("variant_id"):
                 await db.products.update_one(
                     {"id": item["product_id"], "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": -item.get("qty", 1), "stock": -item.get("qty", 1)}}
+                    {"$inc": {"variants.$.stock": -qty, "stock": -base_units}}
                 )
             else:
-                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+                await db.products.update_one(
+                    {"id": item["product_id"]},
+                    {"$inc": {"stock": -base_units}}
+                )
     # Update customer account totals if linked
     customer_id = doc.get("customer_id")
     if customer_id:

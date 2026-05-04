@@ -19,6 +19,7 @@ import VariantBarcodePrint from '../components/VariantBarcodePrint';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
+import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -135,6 +136,7 @@ export default function ProductsPage() {
         if (existing.qty >= effectiveStock) { toast.error('Not enough stock'); return prev; }
         return prev.map(i => (i.variant_id ? `${i.product_id}:${i.variant_id}` : i.product_id) === key ? { ...i, qty: i.qty + 1 } : i);
       }
+      const packCost = Number(variant?.packaging_cost || 0);
       return [...prev, {
         product_id: product.id,
         name: product.name + (variant ? ` — ${variant.name}` : ''),
@@ -142,9 +144,18 @@ export default function ProductsPage() {
         variant_name: variant?.name || null,
         unit_price: effectivePrice,
         qty: 1,
+        units_per_pack: Number(variant?.units_per_pack || 1),
+        packaging_cost: packCost,
+        packaging_label: variant?.packaging_label || '',
+        include_packaging: packCost > 0,  // default include if there's a cost
       }];
     });
     toast.success(`Added ${product.name}${variant ? ` (${variant.name})` : ''}`);
+  };
+
+  const togglePackaging = (item) => {
+    const key = _cartKey(item);
+    setCart(prev => prev.map(i => _cartKey(i) === key ? { ...i, include_packaging: !i.include_packaging } : i));
   };
 
   // Barcode scan dialog
@@ -188,7 +199,11 @@ export default function ProductsPage() {
     const key = _cartKey(item);
     setCart(prev => prev.filter(i => _cartKey(i) !== key));
   };
-  const cartTotal = cart.reduce((sum, i) => sum + i.unit_price * i.qty, 0);
+
+  // Cart totals — applies per-product tier discounts + packaging cost
+  const productsById = Object.fromEntries((products || []).map(p => [p.id, p]));
+  const cartTotals = calcCart(cart, productsById);
+  const cartTotal = cartTotals.total;
 
   // Parked / draft sales
   const [drafts, setDrafts] = useState([]);
@@ -242,7 +257,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [] });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20 });
     setShowProductModal(true);
   };
 
@@ -412,22 +427,50 @@ export default function ProductsPage() {
               <div className="flex-1 overflow-y-auto p-3 space-y-2">
                 {cart.length === 0 ? (
                   <div className="text-center py-8 text-xs text-muted-foreground"><ShoppingCart size={24} className="mx-auto mb-2 opacity-30" />Tap products to add them</div>
-                ) : cart.map(item => (
-                  <div key={item.product_id} className="flex items-center gap-2 p-2.5 rounded-lg bg-secondary/40 hover:bg-secondary/60 transition-colors">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{item.name}</p>
-                      <p className="text-xs text-muted-foreground">{fmt(item.unit_price, activeCurrency)} each</p>
+                ) : cart.map(item => {
+                  const product = productsById[item.product_id] || null;
+                  const lineCalc = calcLine(item, cart, product);
+                  return (
+                  <div key={_cartKey(item)} className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-secondary/40 hover:bg-secondary/60 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{item.name}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {fmt(item.unit_price, activeCurrency)} each
+                          {item.units_per_pack > 1 && <span className="ml-1 opacity-70">· {item.units_per_pack} units/pack</span>}
+                          {lineCalc.discount_pct > 0 && <span className="ml-1 px-1 rounded bg-green-100 text-green-700 font-semibold">-{lineCalc.discount_pct}%</span>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, -1)}><Minus size={10} /></button>
+                        <span className="text-xs font-semibold w-5 text-center">{item.qty}</span>
+                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, 1)}><Plus size={10} /></button>
+                      </div>
+                      <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(lineCalc.line_total, activeCurrency)}</span>
+                      <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item)}><X size={12} /></button>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, -1)}><Minus size={10} /></button>
-                      <span className="text-xs font-semibold w-5 text-center">{item.qty}</span>
-                      <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, 1)}><Plus size={10} /></button>
-                    </div>
-                    <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(item.unit_price * item.qty, activeCurrency)}</span>
-                    <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item)}><X size={12} /></button>
+                    {item.packaging_cost > 0 && (
+                      <label className="flex items-center gap-1.5 text-[10px] cursor-pointer pl-1" data-testid={`packaging-toggle-${_cartKey(item)}`}>
+                        <input type="checkbox" className="accent-primary" checked={item.include_packaging !== false} onChange={() => togglePackaging(item)} />
+                        <span>{item.packaging_label || 'Packaging'} (+{fmt(item.packaging_cost, activeCurrency)} × {item.qty})</span>
+                        {item.include_packaging !== false && <span className="ml-auto text-muted-foreground">+{fmt(lineCalc.packaging_total, activeCurrency)}</span>}
+                      </label>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
+              {cart.length > 0 && (cartTotals.discount_total > 0 || cartTotals.packaging_total > 0) && (
+                <div className="px-4 py-2 border-t border-border text-xs space-y-0.5 bg-muted/30">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(cartTotals.subtotal, activeCurrency)}</span></div>
+                  {cartTotals.packaging_total > 0 && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">Packaging</span><span>+{fmt(cartTotals.packaging_total, activeCurrency)}</span></div>
+                  )}
+                  {cartTotals.discount_total > 0 && (
+                    <div className="flex justify-between text-green-700"><span>Bulk discount</span><span>-{fmt(cartTotals.discount_total, activeCurrency)}</span></div>
+                  )}
+                </div>
+              )}
               <div className="p-4 border-t border-border space-y-3 bg-card">
                 <div className="space-y-2">
                   <Input placeholder="Customer name" value={customerName} onChange={e => setCustomerName(e.target.value)} className="text-sm h-8" data-testid="customer-name-input" />
@@ -686,6 +729,31 @@ export default function ProductsPage() {
                         <span className="font-mono text-[10px] truncate" title={v.barcode}>{v.barcode || 'Pending'}</span>
                       )}
                       <button type="button" className="text-destructive text-sm" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>×</button>
+                      {/* Pack & packaging row — collapsed by default */}
+                      <details className="col-span-5 -mt-1">
+                        <summary className="text-[10px] text-muted-foreground cursor-pointer">Pack size & packaging cost</summary>
+                        <div className="grid grid-cols-3 gap-2 mt-1.5">
+                          <div>
+                            <Label className="text-[10px]">Units / pack</Label>
+                            <Input className="h-7 text-xs" type="number" min={1} value={v.units_per_pack || 1}
+                              onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, units_per_pack: parseInt(e.target.value) || 1 } : x) }))}
+                              data-testid={`variant-units-per-pack-${i}`} />
+                            <p className="text-[9px] text-muted-foreground">e.g. tray of 30 → 30</p>
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Packaging cost</Label>
+                            <Input className="h-7 text-xs" type="number" min={0} value={v.packaging_cost || 0}
+                              onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, packaging_cost: parseFloat(e.target.value) || 0 } : x) }))}
+                              data-testid={`variant-packaging-cost-${i}`} />
+                            <p className="text-[9px] text-muted-foreground">added if buyer doesn't bring own</p>
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Packaging label</Label>
+                            <Input className="h-7 text-xs" value={v.packaging_label || ''} placeholder="e.g. Plastic tray"
+                              onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, packaging_label: e.target.value } : x) }))} />
+                          </div>
+                        </div>
+                      </details>
                     </div>
                   ))}
                   <div className="grid grid-cols-[1fr_70px_70px_1.5fr_60px] gap-1">
@@ -699,17 +767,52 @@ export default function ProductsPage() {
                       const q = parseInt(document.getElementById('_vqty')?.value) || 0;
                       const b = canIssueProductBarcodes ? (document.getElementById('_vbarcode')?.value || '').trim() : '';
                       if (!n) return;
-                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, value: n, price: p, stock: q, barcode: b, barcode_auto_generated: !b}]}));
+                      setProductForm(prev => ({...prev, variants: [...(prev.variants || []), {id: `var_${Date.now()}`, name: n, value: n, price: p, stock: q, barcode: b, barcode_auto_generated: !b, units_per_pack: 1, packaging_cost: 0, packaging_label: ''}]}));
                       ['_vname','_vprice','_vqty','_vbarcode'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
                     }}>+ Add</Button>
                   </div>
                   <p className="text-[10px] text-muted-foreground">
-                    Total stock = sum of variant quantities. Empty barcodes auto-generate as <span className="font-mono">5812-{`{COUNTRY}{ABBR}-{DDMMYY}-V{NN}-{NNNN}`}</span> on save.
+                    Total stock = sum of (variant qty × units/pack). Empty barcodes auto-generate as <span className="font-mono">5812-{`{COUNTRY}{ABBR}-{DDMMYY}-V{NN}-{NNNN}`}</span> on save.
                     {!canIssueProductBarcodes && <span className="block text-amber-700">Only admins, directors, and managers can edit barcodes manually.</span>}
                   </p>
                 </div>
               )}
             </div>
+            {/* Bulk discount tiers */}
+            {productForm.has_variants && (
+              <div className="border-t pt-3 space-y-2">
+                <Label className="text-sm font-semibold">Bulk Discount Tiers (optional)</Label>
+                <p className="text-[10px] text-muted-foreground">Auto-applied at POS based on total quantity of this product. Capped at the max %.</p>
+                {(productForm.qty_discount_tiers || []).map((t, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_1fr_24px] gap-2 items-center">
+                    <div>
+                      <Label className="text-[10px]">Min qty</Label>
+                      <Input className="h-7 text-xs" type="number" min={1} value={t.min_qty || 0}
+                        onChange={e => setProductForm(prev => ({ ...prev, qty_discount_tiers: (prev.qty_discount_tiers || []).map((x, j) => j === i ? { ...x, min_qty: parseInt(e.target.value) || 0 } : x) }))}
+                        data-testid={`tier-min-qty-${i}`} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Discount %</Label>
+                      <Input className="h-7 text-xs" type="number" min={0} max={100} value={t.discount_pct || 0}
+                        onChange={e => setProductForm(prev => ({ ...prev, qty_discount_tiers: (prev.qty_discount_tiers || []).map((x, j) => j === i ? { ...x, discount_pct: parseFloat(e.target.value) || 0 } : x) }))}
+                        data-testid={`tier-discount-pct-${i}`} />
+                    </div>
+                    <button type="button" className="text-destructive self-end text-sm h-7" onClick={() => setProductForm(prev => ({ ...prev, qty_discount_tiers: (prev.qty_discount_tiers || []).filter((_, j) => j !== i) }))}>×</button>
+                  </div>
+                ))}
+                <div className="flex gap-2 items-end">
+                  <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setProductForm(prev => ({ ...prev, qty_discount_tiers: [...(prev.qty_discount_tiers || []), { min_qty: 5, discount_pct: 5 }] }))} data-testid="add-tier-btn">
+                    <Plus size={11} /> Add tier
+                  </Button>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Label className="text-[10px]">Max discount %</Label>
+                    <Input className="h-7 text-xs w-20" type="number" min={0} max={100} value={productForm.max_discount_pct ?? 20}
+                      onChange={e => setProductForm({ ...productForm, max_discount_pct: parseFloat(e.target.value) || 0 })}
+                      data-testid="max-discount-pct-input" />
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowProductModal(false)}>Cancel</Button>
               <Button type="submit" className="flex-1" disabled={saving} data-testid="save-product-btn">{saving ? 'Saving...' : editingProduct ? 'Update' : 'Add Product'}</Button>

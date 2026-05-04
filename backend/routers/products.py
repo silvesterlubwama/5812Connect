@@ -76,6 +76,9 @@ class ProductCreate(BaseModel):
     name: str; description: Optional[str] = None; price: float = 0; currency: str = "UGX"; stock: int = 0
     category: Optional[str] = None; sku: Optional[str] = None; reorder_level: int = 5; location_id: Optional[str] = None
     has_variants: bool = False; product_type: Optional[str] = None; variants: Optional[List[dict]] = None
+    # Bulk discount tiers — list of {min_qty, discount_pct} sorted by min_qty asc
+    qty_discount_tiers: Optional[List[dict]] = None
+    max_discount_pct: Optional[float] = 20
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -83,6 +86,8 @@ class ProductUpdate(BaseModel):
     stock: Optional[int] = None; category: Optional[str] = None; reorder_level: Optional[int] = None; location_id: Optional[str] = None
     has_variants: Optional[bool] = None; product_type: Optional[str] = None
     variants: Optional[List[dict]] = None
+    qty_discount_tiers: Optional[List[dict]] = None
+    max_discount_pct: Optional[float] = None
 
 # ========== PRODUCTS ==========
 
@@ -140,6 +145,11 @@ async def add_product_variant(product_id: str, data: dict, current_user: dict = 
         "sku": data.get("sku", ""),
         "barcode": barcode,
         "barcode_auto_generated": not bool(manual_barcode),
+        # Pack conversion: 1 variant = N base units (e.g. 1 tray of 30 eggs)
+        "units_per_pack": int(data.get("units_per_pack", 1)) or 1,
+        # Optional packaging cost (e.g. physical egg tray = UGX 500)
+        "packaging_cost": float(data.get("packaging_cost", 0) or 0),
+        "packaging_label": data.get("packaging_label", "") or "",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.products.update_one({"id": product_id}, {
@@ -151,8 +161,9 @@ async def add_product_variant(product_id: str, data: dict, current_user: dict = 
 
 @router.put("/products/{product_id}/variants/{variant_id}")
 async def update_product_variant(product_id: str, variant_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """Update a variant's price, stock, barcode, etc. Barcode changes require admin/director/manager."""
-    allowed = {"name", "type", "value", "price", "stock", "sku", "barcode"}
+    """Update a variant. Barcode changes require admin/director/manager."""
+    allowed = {"name", "type", "value", "price", "stock", "sku", "barcode",
+               "units_per_pack", "packaging_cost", "packaging_label"}
     if "barcode" in data and not _can_issue_barcodes(current_user):
         raise HTTPException(status_code=403, detail="Only admins, directors, and managers can change product barcodes")
     update_fields = {f"variants.$.{k}": v for k, v in data.items() if k in allowed}
