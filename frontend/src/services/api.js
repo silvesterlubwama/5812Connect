@@ -209,7 +209,7 @@ export const salesApi = {
 export const invoicesApi = {
   list: (params) => api.get('/invoices', { params }),
   get: (id) => api.get(`/invoices/${id}`),
-  create: (data) => api.post('/invoices', data),
+  create: (data, status = 'draft') => api.post('/invoices', data, { params: { status } }),
   update: (id, data) => api.put(`/invoices/${id}`, data),
   delete: (id) => api.delete(`/invoices/${id}`),
   convert: (id, overrides) => api.post(`/invoices/${id}/convert`, overrides || {}),

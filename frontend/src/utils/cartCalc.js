@@ -49,7 +49,10 @@ export function calcLine(item, cart = [], product = null) {
   const maxPct = product?.max_discount_pct ?? 100;
   // Tier eligibility uses TOTAL product qty across all variants in cart
   const totalProductQty = product ? productQty(cart, product.id) : qty;
-  const discountPct = pickTierDiscount(tiers, totalProductQty, maxPct);
+  const tierPct = pickTierDiscount(tiers, totalProductQty, maxPct);
+  // Optional per-line cashier override (admin/manager). Use the larger of tier vs override.
+  const manualPct = Math.min(100, Math.max(0, Number(item.manual_discount_pct || 0)));
+  const discountPct = Math.max(tierPct, manualPct);
   // Discount applies to the variant subtotal (NOT packaging — the tray itself is at-cost)
   const discountAmount = subtotal * (discountPct / 100);
   const lineTotal = subtotal + packagingTotal - discountAmount;
@@ -61,6 +64,8 @@ export function calcLine(item, cart = [], product = null) {
     subtotal,
     packaging_total: packagingTotal,
     discount_pct: discountPct,
+    tier_pct: tierPct,
+    manual_pct: manualPct,
     discount_amount: discountAmount,
     line_total: lineTotal,
   };

@@ -45,17 +45,19 @@ def _calc_total(items, discount=0, tax_amount=0):
     return max(0, subtotal - (discount or 0) + (tax_amount or 0))
 
 
-async def _next_invoice_number():
+async def _next_invoice_number(is_quote: bool = False):
     today = datetime.now(timezone.utc)
     date_tag = today.strftime("%Y%m%d")
+    counter_key = f"quotes_{date_tag}" if is_quote else f"invoices_{date_tag}"
     counter = await db.counters.find_one_and_update(
-        {"_id": f"invoices_{date_tag}"},
+        {"_id": counter_key},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=True,
     )
     seq = (counter or {}).get("seq", 1)
-    return f"INV-DRAFT-{date_tag}-{seq:04d}"
+    prefix = "QUOTE" if is_quote else "INV-DRAFT"
+    return f"{prefix}-{date_tag}-{seq:04d}"
 
 
 @router.get("/invoices")
@@ -69,13 +71,16 @@ async def list_invoices(status: Optional[str] = None, current_user: dict = Depen
 
 
 @router.post("/invoices")
-async def create_invoice(data: InvoiceCreate, current_user: dict = Depends(require_staff)):
+async def create_invoice(data: InvoiceCreate, status: Optional[str] = "draft", current_user: dict = Depends(require_staff)):
+    """Create an invoice. status='quote' issues a QUOTE-* number for estimate mode."""
+    is_quote = (status or "").lower() == "quote"
     items = [i.model_dump() for i in data.items]
-    invoice_number = await _next_invoice_number()
+    invoice_number = await _next_invoice_number(is_quote=is_quote)
     doc = {
         "id": invoice_number,
         "invoice_number": invoice_number,
-        "status": "draft",
+        "status": "quote" if is_quote else "draft",
+        "is_quote": is_quote,
         "customer_name": data.customer_name,
         "customer_phone": data.customer_phone,
         "customer_email": data.customer_email,
@@ -119,8 +124,8 @@ async def update_invoice(invoice_id: str, data: dict, current_user: dict = Depen
     allowed = {"customer_name", "customer_phone", "customer_email", "customer_id",
                "items", "notes", "due_date", "payment_method", "discount", "tax_amount", "status"}
     update = {k: v for k, v in data.items() if k in allowed}
-    if "status" in update and update["status"] not in {"draft", "sent", "cancelled"}:
-        raise HTTPException(status_code=400, detail="Status must be draft / sent / cancelled (use convert endpoint for sale)")
+    if "status" in update and update["status"] not in {"draft", "sent", "cancelled", "quote"}:
+        raise HTTPException(status_code=400, detail="Status must be draft / sent / quote / cancelled (use convert endpoint for sale)")
     if "items" in update:
         update["subtotal"] = sum((i.get("qty", 0) or 0) * (i.get("unit_price", 0) or 0) for i in update["items"])
         update["total"] = _calc_total(update["items"], update.get("discount", inv.get("discount", 0)), update.get("tax_amount", inv.get("tax_amount", 0)))
@@ -165,6 +170,27 @@ async def convert_invoice_to_sale(invoice_id: str, data: dict = None, current_us
     customer_name = overrides.get("customer_name", inv.get("customer_name", "Walk-in Customer"))
     total = _calc_total(items, discount, tax_amount)
 
+    # Stock guard — atomically pre-check that every item has enough stock before we commit
+    insufficient = []
+    for item in items:
+        if not item.get("product_id"):
+            continue
+        qty = item.get("qty", 0)
+        units_per_pack = int(item.get("units_per_pack", 1) or 1)
+        base_units = qty * max(1, units_per_pack)
+        prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "stock": 1, "variants": 1, "name": 1})
+        if not prod:
+            continue
+        if item.get("variant_id"):
+            v = next((v for v in (prod.get("variants") or []) if v.get("id") == item["variant_id"]), None)
+            if v and (v.get("stock", 0) or 0) < qty:
+                insufficient.append(f"{prod.get('name')} ({item.get('name')}): need {qty}, have {v.get('stock', 0)}")
+        else:
+            if (prod.get("stock", 0) or 0) < base_units:
+                insufficient.append(f"{prod.get('name')}: need {base_units}, have {prod.get('stock', 0)}")
+    if insufficient:
+        raise HTTPException(status_code=409, detail={"error": "Insufficient stock", "items": insufficient})
+
     # Generate sale receipt number atomically
     now = datetime.now(timezone.utc)
     date_tag = now.strftime("%Y%m%d")
@@ -201,16 +227,19 @@ async def convert_invoice_to_sale(invoice_id: str, data: dict = None, current_us
     }
     await db.sales.insert_one(sale)
 
-    # Decrement stock for each item
+    # Decrement stock for each item (uses units_per_pack)
     for item in items:
         if item.get("product_id"):
+            qty = item.get("qty", 1)
+            units_per_pack = int(item.get("units_per_pack", 1) or 1)
+            base_units = qty * max(1, units_per_pack)
             if item.get("variant_id"):
                 await db.products.update_one(
                     {"id": item["product_id"], "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": -item.get("qty", 1), "stock": -item.get("qty", 1)}}
+                    {"$inc": {"variants.$.stock": -qty, "stock": -base_units}}
                 )
             else:
-                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -item.get("qty", 1)}})
+                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": -base_units}})
 
     # Mark invoice as converted
     await db.invoices.update_one(

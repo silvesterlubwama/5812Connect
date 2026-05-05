@@ -14,8 +14,13 @@ export default function InvoicePrintable({ invoice, mode = 'a4', orgName = '58:1
   if (!invoice) return null;
   const total = invoice.total || 0;
   const subtotal = invoice.subtotal != null ? invoice.subtotal : (invoice.items || []).reduce((s, i) => s + (i.qty || 0) * (i.unit_price || 0), 0);
+  // Total customer savings — sum of per-line bulk discounts; falls back to invoice-level discount
+  const perLineSavings = (invoice.items || []).reduce((s, i) => s + (Number(i.discount_amount) || 0), 0);
+  const totalSavings = perLineSavings > 0 ? perLineSavings : Number(invoice.discount) || 0;
+  const savingsPct = subtotal > 0 ? Math.round((totalSavings / subtotal) * 100) : 0;
   const isDraft = invoice.status === 'draft';
   const isSent = invoice.status === 'sent';
+  const isQuote = invoice.status === 'quote' || invoice.is_quote;
   const isConverted = invoice.status === 'converted';
   const currency = invoice.items?.[0]?.currency || 'UGX';
 
@@ -45,7 +50,11 @@ export default function InvoicePrintable({ invoice, mode = 'a4', orgName = '58:1
             .stamp { display: inline-block; padding: 4px 12px; border: 2px solid; border-radius: 4px; font-weight: 700; text-transform: uppercase; }
             .stamp.draft { color: #b45309; border-color: #b45309; }
             .stamp.sent { color: #2563eb; border-color: #2563eb; }
+            .stamp.quote { color: #6b21a8; border-color: #6b21a8; }
             .stamp.converted { color: #047857; border-color: #047857; }
+            .savings-banner { background: linear-gradient(135deg, #fef3c7, #fde68a); border: 2px solid #f59e0b; border-radius: 6px; padding: 8px 12px; margin: 10px 0; text-align: center; }
+            .savings-banner .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #92400e; }
+            .savings-banner .amount { font-size: 18px; font-weight: 800; color: #78350f; margin: 2px 0; }
           </style>
         </head>
         <body>${area}</body>
@@ -65,12 +74,21 @@ export default function InvoicePrintable({ invoice, mode = 'a4', orgName = '58:1
             <p className="text-xs mt-2 text-muted-foreground">{orgName}</p>
           </div>
           <div className="text-right">
-            <h1 className="m-0">INVOICE</h1>
+            <h1 className="m-0">{isQuote ? 'QUOTE' : 'INVOICE'}</h1>
             <p className="font-mono text-sm mt-1" style={{ color: '#48a9c5' }}>{invoice.invoice_number}</p>
             <span className={`stamp ${invoice.status}`}>{invoice.status}</span>
             {invoice.receipt_number && <p className="text-xs mt-2">→ Receipt {invoice.receipt_number}</p>}
           </div>
         </div>
+
+        {/* Savings banner — quotes only */}
+        {isQuote && totalSavings > 0 && (
+          <div className="savings-banner" style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)', border: '2px solid #f59e0b', borderRadius: 6, padding: '8px 12px', margin: '10px 0', textAlign: 'center' }}>
+            <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#92400e' }}>You save</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#78350f', margin: '2px 0' }}>{fmt(totalSavings, currency)} ({savingsPct}% off)</div>
+            <div style={{ fontSize: 10, color: '#92400e' }}>Bulk pricing applied — accept this quote to lock in the discount.</div>
+          </div>
+        )}
 
         {/* Customer + meta */}
         <div className="grid grid-cols-2 gap-4 mt-4">

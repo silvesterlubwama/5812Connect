@@ -107,17 +107,37 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             </tr>
           </thead>
           <tbody>
-            {(sale.items || []).map((item, i) => (
-              <tr key={i} style={{ fontSize: 10 }}>
-                <td style={{ padding: '2px 0' }}>
-                  {item.name}
-                  {item.variant_name && <div style={{ fontSize: 8, color: '#555' }}>{item.variant_name}</div>}
-                </td>
-                <td style={{ textAlign: 'right', padding: '2px 0' }}>{item.qty}</td>
-                <td style={{ textAlign: 'right', padding: '2px 0' }}>{(item.unit_price || 0).toLocaleString()}</td>
-                <td style={{ textAlign: 'right', padding: '2px 0' }}>{((item.unit_price || 0) * (item.qty || 0)).toLocaleString()}</td>
-              </tr>
-            ))}
+            {(sale.items || []).map((item, i) => {
+              const lineSubtotal = (item.unit_price || 0) * (item.qty || 0);
+              const lineDiscount = item.discount_amount || 0;
+              const linePackaging = item.packaging_applied || 0;
+              const lineTotal = item.line_total != null ? item.line_total : lineSubtotal;
+              return (
+                <React.Fragment key={i}>
+                  <tr style={{ fontSize: 10 }}>
+                    <td style={{ padding: '2px 0' }}>
+                      {item.name}
+                      {item.variant_name && <div style={{ fontSize: 8, color: '#555' }}>{item.variant_name}</div>}
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{item.qty}</td>
+                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{(item.unit_price || 0).toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{lineSubtotal.toLocaleString()}</td>
+                  </tr>
+                  {linePackaging > 0 && (
+                    <tr style={{ fontSize: 9, color: '#555' }}>
+                      <td colSpan={3} style={{ paddingLeft: 8 }}>+ {item.packaging_label || 'Packaging'}</td>
+                      <td style={{ textAlign: 'right' }}>+{linePackaging.toLocaleString()}</td>
+                    </tr>
+                  )}
+                  {lineDiscount > 0 && (
+                    <tr style={{ fontSize: 9, color: '#047857' }}>
+                      <td colSpan={3} style={{ paddingLeft: 8 }}>− {item.discount_pct}% bulk discount</td>
+                      <td style={{ textAlign: 'right' }}>−{lineDiscount.toLocaleString()}</td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
         <hr />
@@ -127,6 +147,12 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             <span>{fmt(sale.subtotal, currency)}</span>
           </div>
         )}
+        {sale.packaging_total > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+            <span>Packaging</span>
+            <span>+{fmt(sale.packaging_total, currency)}</span>
+          </div>
+        )}
         {sale.tax_amount > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
             <span>Tax</span>
@@ -134,7 +160,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           </div>
         )}
         {sale.discount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#047857' }}>
             <span>Discount</span>
             <span>-{fmt(sale.discount, currency)}</span>
           </div>

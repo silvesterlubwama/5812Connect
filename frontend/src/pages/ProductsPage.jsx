@@ -70,6 +70,8 @@ export default function ProductsPage() {
   const [barcodePrintProduct, setBarcodePrintProduct] = useState(null);
   // Customer profile drawer (receipt history)
   const [customerProfile, setCustomerProfile] = useState(null);
+  // Active tab (controlled — needed for USB scanner focus capture scope)
+  const [activeTab, setActiveTab] = useState('pos');
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
   // Admin/Director/Manager can issue & edit product barcodes manually
@@ -188,6 +190,39 @@ export default function ProductsPage() {
     toast.error(`Unknown code: ${code}`);
   };
 
+  // Desktop USB scanner focus capture: buffer rapid keystrokes ending with Enter, route to scan handler.
+  // Active only on the POS tab; ignored when typing into inputs/textareas.
+  useEffect(() => {
+    if (activeTab !== 'pos') return;
+    let buffer = '';
+    let lastKeyTime = 0;
+    const SCAN_THRESHOLD_MS = 30;        // human typing > 50ms; USB scanners < 20ms between keys
+    const MIN_SCAN_LENGTH = 4;
+    const onKeyDown = (e) => {
+      // Skip when user is in a text input
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const now = Date.now();
+      if (e.key === 'Enter') {
+        if (buffer.length >= MIN_SCAN_LENGTH) {
+          handleBarcodeScan(buffer);
+          buffer = '';
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      // Reset buffer if user typed slowly (probably human)
+      if (now - lastKeyTime > 250) buffer = '';
+      lastKeyTime = now;
+      // Only collect printable chars
+      if (e.key.length === 1) buffer += e.key;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, products]);
+
   const _cartKey = (i) => i.variant_id ? `${i.product_id}:${i.variant_id}` : i.product_id;
 
   const updateQty = (item, delta) => {
@@ -244,12 +279,33 @@ export default function ProductsPage() {
     if (cart.length === 0) { toast.error('Cart is empty'); return; }
     setCheckoutLoading(true);
     try {
-      const payload = { items: cart, customer_name: customerName, payment_method: paymentMethod, total: cartTotal };
+      // Enrich cart items with computed line totals (so receipt + sale record match what was charged)
+      const enrichedItems = cart.map(item => {
+        const product = productsById[item.product_id] || null;
+        const calc = calcLine(item, cart, product);
+        return {
+          ...item,
+          subtotal: calc.subtotal,
+          packaging_applied: item.include_packaging !== false ? calc.packaging_total : 0,
+          discount_pct: calc.discount_pct,
+          discount_amount: calc.discount_amount,
+          line_total: calc.line_total,
+        };
+      });
+      const payload = {
+        items: enrichedItems,
+        customer_name: customerName,
+        payment_method: paymentMethod,
+        total: cartTotals.total,
+        subtotal: cartTotals.subtotal,
+        packaging_total: cartTotals.packaging_total,
+        discount: cartTotals.discount_total,
+      };
       if (locationFilter !== 'all') payload.location_id = locationFilter;
       const res = await salesApi.create(payload);
       setLastReceipt(res.data); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
       toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`); fetchAll();
-    } catch { toast.error('Checkout failed'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Checkout failed'); }
     finally { setCheckoutLoading(false); }
   };
 
@@ -362,7 +418,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="pos">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
@@ -455,6 +511,29 @@ export default function ProductsPage() {
                         <span>{item.packaging_label || 'Packaging'} (+{fmt(item.packaging_cost, activeCurrency)} × {item.qty})</span>
                         {item.include_packaging !== false && <span className="ml-auto text-muted-foreground">+{fmt(lineCalc.packaging_total, activeCurrency)}</span>}
                       </label>
+                    )}
+                    {canIssueProductBarcodes && (
+                      <div className="flex items-center gap-1.5 text-[10px] pl-1">
+                        <span className="text-muted-foreground">Override discount %</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={item.manual_discount_pct || 0}
+                          onChange={(e) => {
+                            const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                            setCart(prev => prev.map(i => _cartKey(i) === _cartKey(item) ? { ...i, manual_discount_pct: pct } : i));
+                          }}
+                          className="h-6 w-14 px-1 text-[10px] rounded border border-border bg-background text-center"
+                          data-testid={`manual-discount-${_cartKey(item)}`}
+                        />
+                        {lineCalc.manual_pct > 0 && lineCalc.manual_pct > lineCalc.tier_pct && (
+                          <span className="text-[9px] text-blue-600">cashier override</span>
+                        )}
+                        {lineCalc.tier_pct > 0 && lineCalc.discount_pct === lineCalc.tier_pct && (
+                          <span className="text-[9px] text-green-600">tier {lineCalc.tier_pct}%</span>
+                        )}
+                      </div>
                     )}
                   </div>
                   );

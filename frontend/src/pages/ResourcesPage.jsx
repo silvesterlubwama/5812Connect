@@ -14,6 +14,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { locationsApi, bookingsApi, resourcesApi } from '../services/api';
 import BarcodeLabelDialog from '../components/BarcodeLabelDialog';
+import BulkBarcodeLabelDialog from '../components/BulkBarcodeLabelDialog';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 
@@ -51,6 +52,7 @@ export default function ResourcesPage() {
   const [showBooking, setShowBooking] = useState(false);
   const [bookingResource, setBookingResource] = useState(null);
   const [barcodeResource, setBarcodeResource] = useState(null);
+  const [bulkBarcodeOpen, setBulkBarcodeOpen] = useState(false);
   const [bookingForm, setBookingForm] = useState({ title: '', date: '', start_time: '09:00', end_time: '10:00', notes: '' });
   const [bookings, setBookings] = useState([]);
   const [mainTab, setMainTab] = useState('resources');
@@ -192,7 +194,12 @@ export default function ResourcesPage() {
         </div>
       ) : (
         <div>
-          {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(filtered.filter(r => selectedIds.has(r.id)), 'resources-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} resources?`)) return; for (const id of selectedIds) { try { await resourcesApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelectedIds(new Set()); fetchData(); toast.success('Deleted'); }} /></div>}
+          {selectedIds.size > 0 && <div className="mb-3 flex items-center gap-2 flex-wrap">
+            <BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(filtered.filter(r => selectedIds.has(r.id)), 'resources-export.csv')} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} resources?`)) return; for (const id of selectedIds) { try { await resourcesApi.delete(id); } catch (e) { console.warn(e.message || e); } } setSelectedIds(new Set()); fetchData(); toast.success('Deleted'); }} />
+            <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={() => setBulkBarcodeOpen(true)} data-testid="bulk-barcode-print-btn">
+              <Barcode size={13} /> Print Barcodes ({Array.from(selectedIds).filter(id => filtered.find(r => r.id === id)?.serial_number).length})
+            </Button>
+          </div>}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(r => (
             <Card key={r.id} className={`shadow-soft rounded-xl hover:shadow-md transition-shadow ${selectedIds.has(r.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid="resource-card">
@@ -419,6 +426,17 @@ export default function ResourcesPage() {
         resource={barcodeResource ? { ...barcodeResource, location_name: getLocationName(barcodeResource.location_id) } : null}
         open={!!barcodeResource}
         onOpenChange={(o) => { if (!o) setBarcodeResource(null); }}
+      />
+
+      {/* Bulk barcode print dialog */}
+      <BulkBarcodeLabelDialog
+        open={bulkBarcodeOpen}
+        onOpenChange={setBulkBarcodeOpen}
+        title="Print Resource Barcodes"
+        items={Array.from(selectedIds)
+          .map(id => filtered.find(r => r.id === id))
+          .filter(r => r && r.serial_number)
+          .map(r => ({ name: r.name, code: r.serial_number, location_name: getLocationName(r.location_id) }))}
       />
     </div>
   );

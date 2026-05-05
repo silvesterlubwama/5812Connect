@@ -17,6 +17,7 @@ const fmt = (n, c = 'UGX') => `${c} ${(Number(n) || 0).toLocaleString()}`;
 const STATUS_BADGE = {
   draft: 'bg-amber-100 text-amber-700 hover:bg-amber-200',
   sent: 'bg-blue-100 text-blue-700 hover:bg-blue-200',
+  quote: 'bg-purple-100 text-purple-700 hover:bg-purple-200',
   converted: 'bg-green-100 text-green-700 hover:bg-green-200',
   cancelled: 'bg-slate-200 text-slate-700 hover:bg-slate-300',
 };
@@ -75,7 +76,7 @@ export default function InvoicesTab({ products = [], onConverted }) {
     setShowEditor(true);
   };
 
-  const save = async () => {
+  const save = async (asQuote = false) => {
     if (!form.customer_name?.trim()) { toast.error('Customer name required'); return; }
     if (!(form.items || []).filter(i => i.name && i.qty > 0).length) { toast.error('At least one item required'); return; }
     const payload = {
@@ -94,8 +95,8 @@ export default function InvoicesTab({ products = [], onConverted }) {
         await invoicesApi.update(editingId, payload);
         toast.success('Invoice updated');
       } else {
-        const res = await invoicesApi.create(payload);
-        toast.success(`Invoice ${res.data.invoice_number} created`);
+        const res = await invoicesApi.create(payload, asQuote ? 'quote' : 'draft');
+        toast.success(`${asQuote ? 'Quote' : 'Invoice'} ${res.data.invoice_number} created`);
       }
       setShowEditor(false);
       fetchInvoices();
@@ -145,6 +146,7 @@ export default function InvoicesTab({ products = [], onConverted }) {
           <SelectContent>
             <SelectItem value="all">All ({invoices.length})</SelectItem>
             <SelectItem value="draft">Draft ({counts.draft || 0})</SelectItem>
+            <SelectItem value="quote">Quote ({counts.quote || 0})</SelectItem>
             <SelectItem value="sent">Sent ({counts.sent || 0})</SelectItem>
             <SelectItem value="converted">Converted ({counts.converted || 0})</SelectItem>
             <SelectItem value="cancelled">Cancelled ({counts.cancelled || 0})</SelectItem>
@@ -286,7 +288,12 @@ export default function InvoicesTab({ products = [], onConverted }) {
 
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowEditor(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={save} data-testid="invoice-save-btn">{editingId ? 'Update Invoice' : 'Create Invoice'}</Button>
+              {!editingId && (
+                <Button variant="outline" className="flex-1 gap-1" onClick={() => save(true)} data-testid="invoice-save-quote-btn">
+                  Save as Quote
+                </Button>
+              )}
+              <Button className="flex-1" onClick={() => save(false)} data-testid="invoice-save-btn">{editingId ? 'Update' : 'Create Invoice'}</Button>
             </div>
           </div>
         </DialogContent>
