@@ -16,6 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import VariantBarcodePrint from '../components/VariantBarcodePrint';
+import VariantPickerDialog from '../components/VariantPickerDialog';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
@@ -70,6 +71,8 @@ export default function ProductsPage() {
   const [barcodePrintProduct, setBarcodePrintProduct] = useState(null);
   // Customer profile drawer (receipt history)
   const [customerProfile, setCustomerProfile] = useState(null);
+  // Variant picker (when clicking a product with variants on POS)
+  const [variantPickerProduct, setVariantPickerProduct] = useState(null);
   // Active tab (controlled — needed for USB scanner focus capture scope)
   const [activeTab, setActiveTab] = useState('pos');
 
@@ -450,7 +453,13 @@ export default function ProductsPage() {
                     {filteredProducts.map(p => (
                       <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>
                         <div className="absolute top-2 left-2 z-10"><input type="checkbox" className="accent-primary" checked={selectedIds.has(p.id)} onChange={() => setSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} onClick={e => e.stopPropagation()} /></div>
-                      <button data-testid={`product-card-${p.id}`} onClick={() => addToCart(p)} disabled={(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0}
+                      <button data-testid={`product-card-${p.id}`} onClick={() => {
+                        if (p.has_variants && (p.variants || []).length > 0) {
+                          setVariantPickerProduct(p);
+                        } else {
+                          addToCart(p);
+                        }
+                      }} disabled={(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0}
                         className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
                         <div className="flex items-start justify-between mb-2">
                           <div className="p-2 rounded-lg bg-secondary"><Package size={16} className="text-muted-foreground" /></div>
@@ -1026,6 +1035,15 @@ export default function ProductsPage() {
         onOpenChange={setScanOpen}
         onScan={handleBarcodeScan}
         title="Scan product barcode"
+      />
+
+      {/* Variant Picker Dialog (when a product with variants is clicked at POS) */}
+      <VariantPickerDialog
+        product={variantPickerProduct}
+        open={!!variantPickerProduct}
+        onOpenChange={(o) => { if (!o) setVariantPickerProduct(null); }}
+        onPick={(variant) => addToCart(variantPickerProduct, variant)}
+        currency={variantPickerProduct?.currency || activeCurrency}
       />
 
       {/* Parked Sales Dialog */}

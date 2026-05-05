@@ -39,6 +39,8 @@ export default function InvoicesTab({ products = [], onConverted }) {
   const [form, setForm] = useState(blankForm());
   const [printInvoice, setPrintInvoice] = useState(null);
   const [printMode, setPrintMode] = useState('a4');
+  const [showProductPicker, setShowProductPicker] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState('');
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -110,6 +112,23 @@ export default function InvoicesTab({ products = [], onConverted }) {
       setInvoices(prev => prev.filter(i => i.id !== inv.id));
       toast.success('Deleted');
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  // Add product (or variant) to invoice items from the inventory picker
+  const addFromProduct = (product, variant = null) => {
+    const item = {
+      product_id: product.id,
+      variant_id: variant?.id || null,
+      name: product.name + (variant ? ` — ${variant.name}` : ''),
+      qty: 1,
+      unit_price: variant?.price ?? product.price ?? 0,
+      discount: 0,
+      units_per_pack: variant?.units_per_pack ?? 1,
+      packaging_cost: variant?.packaging_cost ?? 0,
+      packaging_label: variant?.packaging_label ?? '',
+    };
+    setForm(prev => ({ ...prev, items: [...(prev.items || []).filter(i => i.name), item] }));
+    toast.success(`Added ${item.name}`);
   };
 
   const convert = async (inv) => {
@@ -225,15 +244,17 @@ export default function InvoicesTab({ products = [], onConverted }) {
             </div>
 
             <div className="space-y-2 border border-border rounded-lg p-3">
-              <Label className="text-xs font-semibold">Items</Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">Items</Label>
+                <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setShowProductPicker(true)} data-testid="invoice-pick-product-btn">
+                  <Plus size={11} /> Pick from inventory
+                </Button>
+              </div>
               {(form.items || []).map((item, i) => (
                 <div key={i} className="grid grid-cols-[1fr_70px_90px_70px_28px] gap-2 items-center">
                   <Input className="h-8 text-xs" placeholder="Item name" value={item.name} onChange={e => {
                     const items = [...form.items]; items[i] = { ...items[i], name: e.target.value }; setForm({ ...form, items });
-                  }} list={`prods-${i}`} />
-                  <datalist id={`prods-${i}`}>
-                    {(products || []).map(p => <option key={p.id} value={p.name} />)}
-                  </datalist>
+                  }} />
                   <Input className="h-8 text-xs" type="number" step="0.5" placeholder="Qty" value={item.qty} onChange={e => {
                     const items = [...form.items]; items[i] = { ...items[i], qty: Number(e.target.value) || 0 }; setForm({ ...form, items });
                   }} />
@@ -248,8 +269,8 @@ export default function InvoicesTab({ products = [], onConverted }) {
                   }}>×</button>
                 </div>
               ))}
-              <Button type="button" size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setForm({ ...form, items: [...form.items, blankItem()] })} data-testid="invoice-add-item">
-                <Plus size={11} /> Add item
+              <Button type="button" size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setForm({ ...form, items: [...form.items, blankItem()] })} data-testid="invoice-add-item">
+                <Plus size={11} /> Add custom item
               </Button>
             </div>
 
@@ -313,6 +334,62 @@ export default function InvoicesTab({ products = [], onConverted }) {
             </Select>
           </DialogTitle></DialogHeader>
           {printInvoice && <InvoicePrintable invoice={printInvoice} mode={printMode} />}
+        </DialogContent>
+      </Dialog>
+
+      {/* Inventory picker — products + variants */}
+      <Dialog open={showProductPicker} onOpenChange={setShowProductPicker}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Pick from inventory</DialogTitle></DialogHeader>
+          <Input
+            autoFocus
+            placeholder="Search by name or barcode..."
+            value={pickerSearch}
+            onChange={(e) => setPickerSearch(e.target.value)}
+            data-testid="invoice-picker-search"
+          />
+          <div className="space-y-1 max-h-[55vh] overflow-y-auto" data-testid="invoice-picker-list">
+            {(products || []).filter(p => {
+              if (!pickerSearch) return true;
+              const s = pickerSearch.toLowerCase();
+              if (p.name?.toLowerCase().includes(s)) return true;
+              if ((p.variants || []).some(v => (v.name || '').toLowerCase().includes(s) || (v.barcode || '').toLowerCase().includes(s))) return true;
+              return false;
+            }).map(p => (
+              <div key={p.id} className="border border-border rounded-md p-2">
+                {!p.has_variants ? (
+                  <button type="button" onClick={() => addFromProduct(p)}
+                    className="w-full text-left p-2 rounded hover:bg-accent transition-colors flex items-center justify-between gap-3"
+                    data-testid={`invoice-pick-product-${p.id}`}>
+                    <div>
+                      <p className="text-sm font-medium">{p.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{p.category} · stock {p.stock}</p>
+                    </div>
+                    <span className="text-sm font-bold text-primary">{p.currency || 'UGX'} {(p.price || 0).toLocaleString()}</span>
+                  </button>
+                ) : (
+                  <div>
+                    <p className="text-xs font-semibold px-2 mb-1">{p.name} <span className="text-[10px] font-normal text-muted-foreground">· {(p.variants || []).length} variants</span></p>
+                    <div className="space-y-0.5">
+                      {(p.variants || []).map(v => (
+                        <button key={v.id} type="button" onClick={() => addFromProduct(p, v)}
+                          className="w-full text-left p-1.5 rounded hover:bg-accent transition-colors flex items-center justify-between gap-3 text-xs"
+                          data-testid={`invoice-pick-variant-${v.id}`}>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium">{v.name}{v.units_per_pack > 1 ? ` (${v.units_per_pack} units)` : ''}</p>
+                            <p className="text-[9px] text-muted-foreground font-mono truncate">{v.barcode || '—'}</p>
+                          </div>
+                          <span className="text-xs text-muted-foreground">stock {v.stock || 0}</span>
+                          <span className="font-bold text-primary">{p.currency || 'UGX'} {(v.price || 0).toLocaleString()}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {(products || []).length === 0 && <p className="text-center text-sm text-muted-foreground py-6">No products in inventory.</p>}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
