@@ -1,12 +1,31 @@
 """Sales / POS / draft (parked) sales / receipt lookup — extracted from financial.py"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_manager, _audit, get_campus_filter, get_role_level
+from deps import db, get_current_user, require_manager, _audit, get_campus_filter, get_role_level, is_system_admin
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
 router = APIRouter(prefix="/api", tags=["sales"])
+
+
+def _can_edit_sale(user: dict, sale: dict) -> bool:
+    """Admins, EDs, Advisers, and Directors can edit a sale.
+    Directors are restricted to sales in their assigned location_ids/active_campus."""
+    if is_system_admin(user):
+        return True
+    role = (user.get("role") or "").lower()
+    if role in {"admin", "system_admin", "executive director", "adviser"}:
+        return True
+    if role == "director":
+        user_locs = set(user.get("location_ids") or [])
+        if user.get("location_id"):
+            user_locs.add(user["location_id"])
+        if user.get("active_campus_id"):
+            user_locs.add(user["active_campus_id"])
+        sale_loc = sale.get("location_id", "")
+        return sale_loc in user_locs
+    return False
 
 
 class SaleCreate(BaseModel):
@@ -54,7 +73,14 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         "cashier_id": current_user.get("id"),
     }
     if not doc.get("location_id"):
-        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+        # Fall back: use the user's primary store location, NOT their active_campus
+        # (active_campus may be a parent campus while sales happen at a specific sub-location)
+        doc["location_id"] = current_user.get("location_id") or current_user.get("active_campus_id") or ""
+    # Capture store name on the sale for the receipt header
+    if doc.get("location_id"):
+        loc = await db.locations.find_one({"id": doc["location_id"]}, {"_id": 0, "name": 1, "code": 1})
+        if loc:
+            doc["store_name"] = loc.get("name") or loc.get("code") or ""
     await db.sales.insert_one(doc)
     # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
     for item in data.items:
@@ -123,6 +149,32 @@ async def update_sale_payment_status(sale_id: str, data: dict, current_user: dic
     return {**sale, **update}
 
 
+@router.put("/sales/{sale_id}")
+async def update_sale(sale_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Edit a completed sale's metadata (cashier / location / customer).
+    Restricted to admin / Executive Director / Adviser / Director (own campus)."""
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if not _can_edit_sale(current_user, sale):
+        raise HTTPException(status_code=403, detail="Only admins, EDs, advisers, and the campus director can edit completed sales")
+    allowed = {"cashier", "cashier_id", "location_id", "customer_name", "customer_phone", "customer_id", "notes"}
+    update = {k: v for k, v in (data or {}).items() if k in allowed}
+    if not update:
+        raise HTTPException(status_code=400, detail="No editable fields provided")
+    # If location is changing, refresh the captured store_name
+    if "location_id" in update and update["location_id"]:
+        loc = await db.locations.find_one({"id": update["location_id"]}, {"_id": 0, "name": 1, "code": 1})
+        if loc:
+            update["store_name"] = loc.get("name") or loc.get("code") or ""
+    update["edited_at"] = datetime.now(timezone.utc).isoformat()
+    update["edited_by"] = current_user["id"]
+    update["edited_by_name"] = current_user.get("name", "")
+    await db.sales.update_one({"id": sale_id}, {"$set": update})
+    await _audit(current_user["id"], "update", "sale_meta", sale_id, {"changed_keys": list(update.keys())})
+    return await db.sales.find_one({"id": sale_id}, {"_id": 0})
+
+
 # ========== DRAFT / PARKED SALES ==========
 
 @router.get("/sales/drafts")
@@ -185,6 +237,7 @@ async def get_sale_by_receipt(receipt_number: str):
         "payment_method": sale.get("payment_method"),
         "payment_status": sale.get("payment_status", "paid"),
         "location_id": sale.get("location_id"),
+        "store_name": sale.get("store_name"),
     }
 
 @router.delete("/sales/{sale_id}")

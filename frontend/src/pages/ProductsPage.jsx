@@ -55,6 +55,7 @@ export default function ProductsPage() {
   const [productForm, setProductForm] = useState(emptyProduct);
   const [productSearch, setProductSearch] = useState('');
   const [lastReceipt, setLastReceipt] = useState(null);
+  const [lastStoreSettings, setLastStoreSettings] = useState(null);
   const [showReceipt, setShowReceipt] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [locationFilter, setLocationFilter] = useState('all');
@@ -75,6 +76,22 @@ export default function ProductsPage() {
   const [variantPickerProduct, setVariantPickerProduct] = useState(null);
   // Active tab (controlled — needed for USB scanner focus capture scope)
   const [activeTab, setActiveTab] = useState('pos');
+  // Sale Counter location (defaults to user's primary store, NOT active_campus)
+  const [saleLocationId, setSaleLocationId] = useState(user?.location_id || '');
+  // Receipt paper size (set before completing sale)
+  const [receiptPaperSize, setReceiptPaperSize] = useState('auto');
+  // Editing a completed sale (admin/director)
+  const [editingSale, setEditingSale] = useState(null);
+  const [editSaleForm, setEditSaleForm] = useState({ cashier: '', location_id: '', customer_name: '' });
+  useEffect(() => {
+    if (editingSale) {
+      setEditSaleForm({
+        cashier: editingSale.cashier || '',
+        location_id: editingSale.location_id || '',
+        customer_name: editingSale.customer_name || '',
+      });
+    }
+  }, [editingSale]);
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'].includes(user?.role);
   // Admin/Director/Manager can issue & edit product barcodes manually
@@ -304,9 +321,16 @@ export default function ProductsPage() {
         packaging_total: cartTotals.packaging_total,
         discount: cartTotals.discount_total,
       };
-      if (locationFilter !== 'all') payload.location_id = locationFilter;
+      // Sale gets tagged with the explicit Sale Counter location (the actual store/sub-location)
+      if (saleLocationId) {
+        payload.location_id = saleLocationId;
+      } else if (locationFilter !== 'all') {
+        payload.location_id = locationFilter;
+      }
       const res = await salesApi.create(payload);
-      setLastReceipt(res.data); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
+      // Auto-set paper size override on receipt if user picked one (otherwise use store default)
+      const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
+      setLastReceipt(res.data); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
       toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`); fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Checkout failed'); }
     finally { setCheckoutLoading(false); }
@@ -568,6 +592,24 @@ export default function ProductsPage() {
                       {getPaymentMethods().map(m => <SelectItem key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  {/* Sale Counter / Store location — what gets recorded on the sale */}
+                  <Select value={saleLocationId || ''} onValueChange={setSaleLocationId}>
+                    <SelectTrigger className="h-8 text-sm" data-testid="sale-location-select"><SelectValue placeholder="Sale counter / store" /></SelectTrigger>
+                    <SelectContent>
+                      {locations.filter(l => l.id).map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {/* Receipt paper size — chosen before completing sale */}
+                  <Select value={receiptPaperSize} onValueChange={setReceiptPaperSize}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="receipt-paper-size-pre"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Auto-detect paper size</SelectItem>
+                      <SelectItem value="58mm">58mm thermal</SelectItem>
+                      <SelectItem value="80mm">80mm thermal</SelectItem>
+                      <SelectItem value="A5">A5</SelectItem>
+                      <SelectItem value="A4">A4</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Total</span>
@@ -681,8 +723,14 @@ export default function ProductsPage() {
                           <td className="py-3 text-xs text-muted-foreground">{sale.location_id ? locName(sale.location_id) : '--'}</td>
                           <td className="py-3 text-muted-foreground text-xs">{sale.created_at?.slice(0, 16).replace('T', ' ')}</td>
                           <td className="py-3 text-muted-foreground">{sale.cashier || '--'}</td>
-                          {isAdmin && <td className="py-3 flex gap-1">
-                            {!isPending && isAdmin && (
+                          {isAdmin && <td className="py-3 flex gap-1 flex-wrap">
+                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs gap-1" data-testid={`reprint-${sale.id}`} onClick={() => { setLastReceipt(sale); setLastStoreSettings(null); setShowReceipt(true); }} title="Reprint receipt">
+                              <Receipt size={11} />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs gap-1 text-blue-600" data-testid={`edit-sale-${sale.id}`} onClick={() => setEditingSale(sale)} title="Edit (cashier / location)">
+                              <Edit2 size={11} />
+                            </Button>
+                            {!isPending && (
                               <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-600" data-testid={`mark-pending-${sale.id}`} onClick={async () => {
                                 if (!window.confirm('Revert this sale to pending payment?')) return;
                                 try {
@@ -913,7 +961,7 @@ export default function ProductsPage() {
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt {lastReceipt?.receipt_number || ''}</DialogTitle></DialogHeader>
-          {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={storeSettings || {}} />}
+          {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={lastStoreSettings || storeSettings || {}} />}
         </DialogContent>
       </Dialog>
 
@@ -1045,6 +1093,44 @@ export default function ProductsPage() {
         onPick={(variant) => addToCart(variantPickerProduct, variant)}
         currency={variantPickerProduct?.currency || activeCurrency}
       />
+
+      {/* Edit Completed Sale (admin/director) */}
+      <Dialog open={!!editingSale} onOpenChange={(o) => { if (!o) setEditingSale(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit Sale {editingSale?.receipt_number || editingSale?.id}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Director / admin only — edits are audit-logged.</p>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Salesperson / Cashier</Label>
+              <Input value={editSaleForm.cashier} onChange={e => setEditSaleForm({ ...editSaleForm, cashier: e.target.value })} data-testid="edit-sale-cashier" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Sale Location / Store</Label>
+              <Select value={editSaleForm.location_id || ''} onValueChange={v => setEditSaleForm({ ...editSaleForm, location_id: v })}>
+                <SelectTrigger data-testid="edit-sale-location"><SelectValue placeholder="Select store" /></SelectTrigger>
+                <SelectContent>
+                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Customer Name</Label>
+              <Input value={editSaleForm.customer_name} onChange={e => setEditSaleForm({ ...editSaleForm, customer_name: e.target.value })} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditingSale(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="edit-sale-save" onClick={async () => {
+                try {
+                  const res = await salesApi.update(editingSale.id, editSaleForm);
+                  setSales(prev => prev.map(s => s.id === editingSale.id ? res.data : s));
+                  toast.success('Sale updated');
+                  setEditingSale(null);
+                } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Save Changes</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Parked Sales Dialog */}
       <Dialog open={showDrafts} onOpenChange={setShowDrafts}>

@@ -49,13 +49,16 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
   const currency = sale.items?.[0]?.currency || storeSettings.currency || 'UGX';
 
   const handlePrint = () => {
-    const area = printRef.current?.innerHTML;
-    if (!area) return;
+    if (!printRef.current) return;
+    // Build the print HTML manually so we can re-generate the QR via a CDN script
+    // (canvas/SVG inside printRef won't transfer reliably to a new window)
     const w = window.open('', '_blank', 'width=400,height=700');
+    const headerHtml = printRef.current.querySelector('.receipt-content')?.innerHTML || '';
     w.document.write(`
       <html>
         <head>
           <title>Receipt ${receiptNumber}</title>
+          <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
           <style>
             @page { size: ${paperWidth} auto; margin: 4mm; }
             body { margin: 0; padding: 2mm; font-family: monospace, 'Courier New', Courier; font-size: 11px; width: ${paperWidth}; box-sizing: border-box; }
@@ -65,26 +68,41 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             table { width: 100%; border-collapse: collapse; }
             td { padding: 2px 0; font-size: 10px; }
             .logo { max-width: 60%; height: auto; margin: 0 auto 4px; display: block; }
-            .qr { margin: 4px auto; text-align: center; }
-            .qr img, .qr canvas { max-width: 60mm; }
+            .qr-print { margin: 6px auto; text-align: center; }
+            #qrCanvas { display: block; margin: 0 auto; }
             .total-row { font-size: 13px; font-weight: 700; }
           </style>
         </head>
-        <body>${area}</body>
+        <body>
+          ${headerHtml}
+          ${showQR ? `<div class="qr-print"><canvas id="qrCanvas"></canvas><div style="font-size:8px;margin-top:2px;color:#555">Scan to verify</div></div>` : ''}
+          <hr/>
+          <div class="center" style="font-size: 9px">${(storeSettings.receipt_footer || 'Thank you for your purchase!').replace(/[<>&]/g, '')}</div>
+          <div class="center" style="font-size: 8px; color: #888; margin-top: 4px">${receiptNumber} · 58:12 Global</div>
+          <script>
+            window.addEventListener('load', () => {
+              if (window.QRCode && document.getElementById('qrCanvas')) {
+                QRCode.toCanvas(document.getElementById('qrCanvas'), ${JSON.stringify(trackingUrl)}, { width: 120, margin: 1 }, function(err){ if(!err) setTimeout(()=>{window.focus(); window.print();}, 200); else setTimeout(()=>{window.focus(); window.print();}, 100); });
+              } else {
+                setTimeout(() => { window.focus(); window.print(); }, 200);
+              }
+            });
+          </script>
+        </body>
       </html>
     `);
     w.document.close();
-    setTimeout(() => { w.focus(); w.print(); }, 400);
   };
 
   return (
     <div className="space-y-3" data-testid="receipt">
       <div ref={printRef} className="receipt-body space-y-2" style={{ fontFamily: 'monospace, Courier New, Courier', fontSize: 12, maxWidth: paperWidth, margin: '0 auto', padding: '4px 6px', background: '#fff', color: '#000' }}>
+        <div className="receipt-content">
         {showLogo && (
           <img src={LOGO_URL} alt="58:12 Global" className="logo" style={{ maxWidth: '60%', height: 'auto', margin: '0 auto 4px', display: 'block' }} onError={(e) => { e.target.style.display = 'none'; }} />
         )}
         <div className="center" style={{ textAlign: 'center' }}>
-          <div className="bold" style={{ fontWeight: 700, fontSize: 13 }}>{storeSettings.store_name || storeName}</div>
+          <div className="bold" style={{ fontWeight: 700, fontSize: 13 }}>{sale.store_name || storeSettings.store_name || storeName}</div>
           {storeSettings.store_address && <div style={{ fontSize: 9 }}>{storeSettings.store_address}</div>}
           {storeSettings.store_phone && <div style={{ fontSize: 9 }}>{storeSettings.store_phone}</div>}
         </div>
@@ -176,6 +194,8 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             {sale.payment_status === 'pending' && <strong style={{ marginLeft: 6, color: '#b45309' }}>· UNPAID</strong>}
           </span>
         </div>
+        </div>
+        {/* /.receipt-content — body that gets duplicated to print window */}
         {showQR && receiptNumber && (
           <div className="qr" style={{ margin: '6px auto', textAlign: 'center' }}>
             <QRCodeLogo value={trackingUrl} size={120} logoImage={LOGO_URL} logoWidth={22} ecLevel="M" quietZone={4} />
@@ -187,7 +207,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           {storeSettings.receipt_footer || 'Thank you for your purchase!'}
         </div>
         <div className="center" style={{ textAlign: 'center', fontSize: 8, color: '#888', marginTop: 4 }}>
-          {receiptNumber} · 58:12 Global Connect CRM
+          {receiptNumber} · 58:12 Global
         </div>
       </div>
 
