@@ -379,6 +379,15 @@ export default function ProductsPage() {
     setShowStoreSettings(true);
   };
 
+  // When the Sale Counter location changes on POS, auto-load that store's settings
+  // so the receipt header/footer/paper-size match the actual selling location.
+  useEffect(() => {
+    if (!saleLocationId) return;
+    storeSettingsApi.get(saleLocationId)
+      .then(res => setStoreSettings(res.data || {}))
+      .catch(() => setStoreSettings({}));
+  }, [saleLocationId]);
+
   const saveStoreSettings = async () => {
     setSavingStore(true);
     try {
@@ -969,8 +978,23 @@ export default function ProductsPage() {
       <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Settings size={16} /> Store Settings</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">{locName(storeSettingsLoc)}</p>
           <div className="space-y-4 mt-2">
+            <div className="space-y-2 pb-2 border-b border-border">
+              <Label>Configuring store</Label>
+              <Select value={storeSettingsLoc || ''} onValueChange={async (v) => {
+                setStoreSettingsLoc(v);
+                try {
+                  const res = await storeSettingsApi.get(v);
+                  setStoreSettings(res.data || {});
+                } catch { setStoreSettings({}); }
+              }}>
+                <SelectTrigger data-testid="store-settings-location-select"><SelectValue placeholder="Pick a campus or sub-location" /></SelectTrigger>
+                <SelectContent>
+                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.type === 'sub-location' ? `   ↳ ${l.name}` : l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">Each campus or sub-location has its own store settings. The receipt header uses the store name set here for the sale's location.</p>
+            </div>
             <div className="space-y-2"><Label>Store Name</Label>
               <Input placeholder="Store display name" value={storeSettings.store_name || ''} onChange={e => setStoreSettings({...storeSettings, store_name: e.target.value})} data-testid="store-name-input" />
             </div>

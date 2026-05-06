@@ -132,16 +132,34 @@ async def set_active_campus(data: dict, current_user: dict = Depends(get_current
     if has_campus_switcher(current_user) or is_system_admin(current_user):
         pass  # Can switch to any campus
     else:
-        # Regular users: must have this campus in their location_ids (or be its sub-location parent)
+        # Build the set of allowed locations: user's own + their sub-locations' parent campuses
         user_locs = set(current_user.get("location_ids") or [])
         if current_user.get("location_id"):
             user_locs.add(current_user["location_id"])
+        # Add parent campuses (if user is in a sub-location, they belong to its campus)
+        if user_locs:
+            parents = await db.locations.find(
+                {"id": {"$in": list(user_locs)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+                {"_id": 0, "parent_id": 1}
+            ).to_list(50)
+            for p in parents:
+                if p.get("parent_id"):
+                    user_locs.add(p["parent_id"])
+        # Add sub-locations under user's campuses (so they can switch INTO a sub)
+        if user_locs:
+            subs = await db.locations.find(
+                {"parent_id": {"$in": list(user_locs)}},
+                {"_id": 0, "id": 1, "is_restricted": 1}
+            ).to_list(200)
+            for s in subs:
+                # Only auto-include non-restricted; restricted ones must be explicit
+                if not s.get("is_restricted") or s["id"] in user_locs:
+                    user_locs.add(s["id"])
         if campus_id not in user_locs:
-            # Also allow if the campus is the parent of one of the user's sub-locations
             loc = await db.locations.find_one({"id": campus_id}, {"_id": 0, "type": 1})
             if not loc:
                 raise HTTPException(status_code=404, detail="Campus not found")
-            raise HTTPException(status_code=403, detail="You are not assigned to this campus")
+            raise HTTPException(status_code=403, detail="You are not assigned to this campus or its sub-locations")
     await db.users.update_one({"id": current_user["id"]}, {"$set": {"active_campus_id": campus_id}})
     return {"active_campus_id": campus_id}
 

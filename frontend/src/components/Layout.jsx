@@ -304,18 +304,46 @@ export default function Layout() {
               </SelectTrigger>
               <SelectContent>
                 {isGlobalAdmin && <SelectItem value="__all__">All Locations</SelectItem>}
-                {(isGlobalAdmin
-                  ? campuses.filter(c => c.type !== 'sub-location')
-                  : campuses.filter(c => {
-                      const userLocs = user?.location_ids || [];
-                      if (userLocs.includes(c.id)) return true;
-                      // Also show sub-locations under user's campuses
-                      if (c.parent_id && userLocs.includes(c.parent_id)) return true;
-                      return false;
-                    })
-                ).map(c => (
-                  <SelectItem key={c.id} value={c.id}>{c.type === 'sub-location' ? `  ${c.name}` : c.name}</SelectItem>
-                ))}
+                {(() => {
+                  // Build a sorted list: top-level campuses first, then their sub-locations indented underneath
+                  const userLocs = user?.location_ids || [];
+                  const userPrimaryLoc = user?.location_id;
+                  const isVisible = (c) => {
+                    if (isGlobalAdmin) return true;
+                    if (userLocs.includes(c.id) || c.id === userPrimaryLoc) return true;
+                    // Show sub-locations under user's campuses
+                    if (c.parent_id && (userLocs.includes(c.parent_id) || c.parent_id === userPrimaryLoc)) return true;
+                    // Show parent campus when user is in a sub-location
+                    const userInSub = campuses.find(s => s.parent_id === c.id && (userLocs.includes(s.id) || s.id === userPrimaryLoc));
+                    if (userInSub) return true;
+                    return false;
+                  };
+                  const visible = campuses.filter(isVisible);
+                  // Group by parent
+                  const tops = visible.filter(c => c.type !== 'sub-location' || !c.parent_id);
+                  const subsByParent = {};
+                  visible.forEach(c => {
+                    if (c.parent_id && c.type === 'sub-location') {
+                      (subsByParent[c.parent_id] = subsByParent[c.parent_id] || []).push(c);
+                    }
+                  });
+                  const ordered = [];
+                  tops.forEach(top => {
+                    ordered.push(top);
+                    (subsByParent[top.id] || []).forEach(sub => ordered.push(sub));
+                  });
+                  // Append any orphan sub-locations whose parent isn't visible
+                  visible.forEach(c => {
+                    if (c.type === 'sub-location' && c.parent_id && !tops.find(t => t.id === c.parent_id)) {
+                      if (!ordered.find(x => x.id === c.id)) ordered.push(c);
+                    }
+                  });
+                  return ordered.map(c => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.type === 'sub-location' ? `   ↳ ${c.name}` : c.name}
+                    </SelectItem>
+                  ));
+                })()}
               </SelectContent>
             </Select>
           </div>

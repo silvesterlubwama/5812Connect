@@ -169,6 +169,16 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     user_loc_ids = set(user.get("location_ids") or [])
     if user.get("location_id"):
         user_loc_ids.add(user.get("location_id"))
+    # If user is tagged in a sub-location, they also belong to the parent campus.
+    # This ensures sub-location users have full campus-level access for features/settings.
+    if user_loc_ids:
+        parents = await db.locations.find(
+            {"id": {"$in": list(user_loc_ids)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+            {"_id": 0, "parent_id": 1}
+        ).to_list(50)
+        for p in parents:
+            if p.get("parent_id"):
+                user_loc_ids.add(p["parent_id"])
     _is_admin = is_system_admin(user)
     if _is_admin or has_campus_switcher(user):
         active = user.get("active_campus_id")

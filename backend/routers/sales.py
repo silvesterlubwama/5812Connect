@@ -76,11 +76,16 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         # Fall back: use the user's primary store location, NOT their active_campus
         # (active_campus may be a parent campus while sales happen at a specific sub-location)
         doc["location_id"] = current_user.get("location_id") or current_user.get("active_campus_id") or ""
-    # Capture store name on the sale for the receipt header
+    # Capture store name on the sale for the receipt header.
+    # Priority: store_settings.store_name (custom branded name) → location.name → blank.
     if doc.get("location_id"):
-        loc = await db.locations.find_one({"id": doc["location_id"]}, {"_id": 0, "name": 1, "code": 1})
-        if loc:
-            doc["store_name"] = loc.get("name") or loc.get("code") or ""
+        store_setting = await db.store_settings.find_one({"location_id": doc["location_id"]}, {"_id": 0, "store_name": 1})
+        if store_setting and store_setting.get("store_name"):
+            doc["store_name"] = store_setting["store_name"]
+        else:
+            loc = await db.locations.find_one({"id": doc["location_id"]}, {"_id": 0, "name": 1, "code": 1})
+            if loc:
+                doc["store_name"] = loc.get("name") or loc.get("code") or ""
     await db.sales.insert_one(doc)
     # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
     for item in data.items:
@@ -162,11 +167,15 @@ async def update_sale(sale_id: str, data: dict, current_user: dict = Depends(get
     update = {k: v for k, v in (data or {}).items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No editable fields provided")
-    # If location is changing, refresh the captured store_name
+    # If location is changing, refresh the captured store_name (custom store_settings name → location name)
     if "location_id" in update and update["location_id"]:
-        loc = await db.locations.find_one({"id": update["location_id"]}, {"_id": 0, "name": 1, "code": 1})
-        if loc:
-            update["store_name"] = loc.get("name") or loc.get("code") or ""
+        store_setting = await db.store_settings.find_one({"location_id": update["location_id"]}, {"_id": 0, "store_name": 1})
+        if store_setting and store_setting.get("store_name"):
+            update["store_name"] = store_setting["store_name"]
+        else:
+            loc = await db.locations.find_one({"id": update["location_id"]}, {"_id": 0, "name": 1, "code": 1})
+            if loc:
+                update["store_name"] = loc.get("name") or loc.get("code") or ""
     update["edited_at"] = datetime.now(timezone.utc).isoformat()
     update["edited_by"] = current_user["id"]
     update["edited_by_name"] = current_user.get("name", "")
