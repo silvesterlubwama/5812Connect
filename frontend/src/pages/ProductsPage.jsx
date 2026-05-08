@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload, Printer, Barcode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -994,7 +995,9 @@ export default function ProductsPage() {
       {/* Store Settings Modal */}
       <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><Settings size={16} /> Store Settings</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><Settings size={16} /> Store Settings</span>
+            <Link to="/pos-setup" className="text-xs text-primary hover:underline" data-testid="pos-setup-link">POS Kiosk Setup →</Link>
+          </DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2 pb-2 border-b border-border">
               <Label>Configuring store</Label>

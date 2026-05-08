@@ -81,14 +81,16 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
     Restricted/private boards additionally require explicit tagging."""
     user_id = current_user["id"]
 
-    # Resolve the set of locations this user can see boards in
-    user_locs = set(current_user.get("location_ids") or [])
-    if current_user.get("location_id"):
-        user_locs.add(current_user["location_id"])
-    # Admins & EDs/Advisers with an active_campus — treat active campus as their scope
+    # Resolve the set of locations this user can see boards in.
+    # When active_campus_id is set, narrow STRICTLY to that campus (admin chose this scope).
+    # Otherwise use the union of user's assigned locations.
     active = current_user.get("active_campus_id")
     if active:
-        user_locs.add(active)
+        user_locs = {active}
+    else:
+        user_locs = set(current_user.get("location_ids") or [])
+        if current_user.get("location_id"):
+            user_locs.add(current_user["location_id"])
     # Expand to include sub-locations
     if user_locs:
         sub_locs = await db.locations.find(
@@ -108,17 +110,23 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
     })
     task_board_ids = [bid for bid in task_board_ids if bid]
 
-    or_clauses = [
-        {"tagged_members": user_id},
-        {"created_by": user_id},
-    ]
-    if task_board_ids:
-        or_clauses.append({"id": {"$in": task_board_ids}})
-    if user_locs_list:
-        or_clauses.append({"location_id": {"$in": user_locs_list}})
-
-    # Global boards — visible to everyone UNLESS restricted/private
-    or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
+    or_clauses = []
+    # When narrowing by active campus, ONLY include boards in that campus.
+    # Otherwise also include boards user is tagged on / created / has tasks on / global.
+    if active:
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        else:
+            return []
+    else:
+        or_clauses.append({"tagged_members": user_id})
+        or_clauses.append({"created_by": user_id})
+        if task_board_ids:
+            or_clauses.append({"id": {"$in": task_board_ids}})
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        # Global boards — visible to everyone UNLESS restricted/private
+        or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
 
     candidate_boards = await db.boards.find(
         {"$or": or_clauses},

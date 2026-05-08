@@ -66,6 +66,7 @@ import WalletBadgePage from './pages/WalletBadgePage';
 import ReceiptViewPage from './pages/ReceiptViewPage';
 import ResourceViewPage from './pages/ResourceViewPage';
 import PosKioskPage from './pages/PosKioskPage';
+import PosKioskSetupPage from './pages/PosKioskSetupPage';
 import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -114,6 +115,7 @@ function AppRoutes() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="financial" element={<FinancialPage />} />
         <Route path="sales" element={<ProductsPage />} />
+        <Route path="pos-setup" element={<PosKioskSetupPage />} />
         <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="locations" element={<LocationsPage />} />

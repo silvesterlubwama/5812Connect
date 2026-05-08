@@ -49,6 +49,67 @@ async def list_tasks(
         query["board_id"] = board_id
     if list_id:
         query["list_id"] = list_id
+
+    # Scope tasks to boards the user has access to (same rules as /api/boards).
+    # When active_campus_id is set, narrow to JUST that campus (admin/director switched).
+    # Otherwise use the union of user's assigned locations.
+    user_id = current_user["id"]
+    active_campus = current_user.get("active_campus_id")
+    if active_campus:
+        # Strict scope — admin explicitly chose a campus
+        user_locs = {active_campus}
+    else:
+        user_locs = set(current_user.get("location_ids") or [])
+        if current_user.get("location_id"):
+            user_locs.add(current_user["location_id"])
+    if user_locs:
+        sub_locs = await db.locations.find(
+            {"parent_id": {"$in": list(user_locs)}, "type": "sub-location"},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(500)
+        for s in sub_locs:
+            if not s.get("is_restricted") or s["id"] in user_locs:
+                user_locs.add(s["id"])
+    user_locs_list = list(user_locs)
+
+    # Boards on which user has a task assigned — include even if otherwise out of scope
+    task_board_ids = await db.tasks.distinct("board_id", {
+        "$or": [{"assignees": user_id}, {"assignee": user_id}],
+        "is_archived": {"$ne": True},
+    })
+
+    or_clauses = []
+    if active_campus:
+        # STRICT scope — only boards in this campus; escapes are disabled
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        else:
+            return []
+    else:
+        or_clauses.append({"tagged_members": user_id})
+        or_clauses.append({"created_by": user_id})
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
+    candidate_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0, "id": 1, "tagged_members": 1, "created_by": 1, "is_restricted": 1, "is_private": 1}).to_list(500)
+    allowed_board_ids = set()
+    for b in candidate_boards:
+        if b.get("is_restricted") or b.get("is_private"):
+            if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by"):
+                allowed_board_ids.add(b["id"])
+        else:
+            allowed_board_ids.add(b["id"])
+    # Add boards user has tasks on (only when NOT narrowing by active campus)
+    if not active_campus:
+        for bid in task_board_ids:
+            if bid:
+                allowed_board_ids.add(bid)
+    # Apply the board scope to the task query (only if user requested no specific board)
+    if not board_id:
+        if not allowed_board_ids:
+            return []
+        query["board_id"] = {"$in": list(allowed_board_ids)}
+
     return await db.tasks.find(query, {"_id": 0}).sort("position", 1).to_list(1000)
 
 
