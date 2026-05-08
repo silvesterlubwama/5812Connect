@@ -65,6 +65,7 @@ import IncomingCallModal from './components/IncomingCallModal';
 import WalletBadgePage from './pages/WalletBadgePage';
 import ReceiptViewPage from './pages/ReceiptViewPage';
 import ResourceViewPage from './pages/ResourceViewPage';
+import PosKioskPage from './pages/PosKioskPage';
 import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -99,6 +100,7 @@ function AppRoutes() {
       <Route path="/badge/:token" element={<WalletBadgePage />} />
       <Route path="/receipt/:receiptNumber" element={<ReceiptViewPage />} />
       <Route path="/resource/:serial" element={<ResourceViewPage />} />
+      <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />

@@ -76,10 +76,25 @@ export default function ProductsPage() {
   const [variantPickerProduct, setVariantPickerProduct] = useState(null);
   // Active tab (controlled — needed for USB scanner focus capture scope)
   const [activeTab, setActiveTab] = useState('pos');
-  // Sale Counter location (defaults to user's primary store, NOT active_campus)
-  const [saleLocationId, setSaleLocationId] = useState(user?.location_id || '');
+  // Sale Counter location: bound at kiosk-config time (NOT picked per-sale).
+  // Resolution order: URL param (/pos/:storeId) → localStorage → user's primary location_id.
+  const [saleLocationId, setSaleLocationId] = useState(() =>
+    localStorage.getItem('5812_pos_store_id') || user?.location_id || ''
+  );
   // Receipt paper size (set before completing sale)
   const [receiptPaperSize, setReceiptPaperSize] = useState('auto');
+  // Persist the POS store binding so the kiosk stays locked to its store across refreshes
+  useEffect(() => {
+    if (saleLocationId) localStorage.setItem('5812_pos_store_id', saleLocationId);
+  }, [saleLocationId]);
+  // Friendly label for the bound store (custom store_name → location name → fallback)
+  const posBoundStoreLabel = (() => {
+    if (!saleLocationId) return 'No store assigned — set in Store Settings';
+    const loc = (locations || []).find(l => l.id === saleLocationId);
+    return (storeSettings.location_id === saleLocationId && storeSettings.store_name) || loc?.name || saleLocationId;
+  })();
+  // Whether this device is a dedicated POS kiosk (URL was /pos/:storeId)
+  const isPosKiosk = typeof window !== 'undefined' && localStorage.getItem('5812_pos_kiosk') === 'true';
   // Editing a completed sale (admin/director)
   const [editingSale, setEditingSale] = useState(null);
   const [editSaleForm, setEditSaleForm] = useState({ cashier: '', location_id: '', customer_name: '' });
@@ -601,13 +616,15 @@ export default function ProductsPage() {
                       {getPaymentMethods().map(m => <SelectItem key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  {/* Sale Counter / Store location — what gets recorded on the sale */}
-                  <Select value={saleLocationId || ''} onValueChange={setSaleLocationId}>
-                    <SelectTrigger className="h-8 text-sm" data-testid="sale-location-select"><SelectValue placeholder="Sale counter / store" /></SelectTrigger>
-                    <SelectContent>
-                      {locations.filter(l => l.id).map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {/* Sale store is set by admin in Store Settings — not picked per-sale.
+                      Show the bound store name + a small "change" button (admin/director only). */}
+                  <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-border bg-muted/30 text-xs">
+                    <MapPin size={12} className="text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate" data-testid="pos-bound-store">{posBoundStoreLabel}</span>
+                    {canIssueProductBarcodes && !isPosKiosk && (
+                      <button type="button" onClick={() => openStoreSettings(saleLocationId || user?.location_id || '')} className="text-[10px] text-primary hover:underline" data-testid="pos-change-store-btn">change</button>
+                    )}
+                  </div>
                   {/* Receipt paper size — chosen before completing sale */}
                   <Select value={receiptPaperSize} onValueChange={setReceiptPaperSize}>
                     <SelectTrigger className="h-8 text-xs" data-testid="receipt-paper-size-pre"><SelectValue /></SelectTrigger>
@@ -990,7 +1007,7 @@ export default function ProductsPage() {
               }}>
                 <SelectTrigger data-testid="store-settings-location-select"><SelectValue placeholder="Pick a campus or sub-location" /></SelectTrigger>
                 <SelectContent>
-                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.type === 'sub-location' ? `   ↳ ${l.name}` : l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
+                  {locations.filter(l => l.marketplace_enabled !== false).map(l => <SelectItem key={l.id} value={l.id}>{l.type === 'sub-location' ? `   ↳ ${l.name}` : l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
                 </SelectContent>
               </Select>
               <p className="text-[10px] text-muted-foreground">Each campus or sub-location has its own store settings. The receipt header uses the store name set here for the sale's location.</p>
@@ -1133,7 +1150,7 @@ export default function ProductsPage() {
               <Select value={editSaleForm.location_id || ''} onValueChange={v => setEditSaleForm({ ...editSaleForm, location_id: v })}>
                 <SelectTrigger data-testid="edit-sale-location"><SelectValue placeholder="Select store" /></SelectTrigger>
                 <SelectContent>
-                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
+                  {locations.filter(l => l.marketplace_enabled !== false).map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.country ? ` (${l.country})` : ''}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
