@@ -38,6 +38,8 @@ export const authApi = {
   sessions: () => api.get('/auth/sessions'),
   revokeSession: (jti) => api.delete(`/auth/sessions/${jti}`),
   revokeOtherSessions: () => api.post('/auth/sessions/revoke-others'),
+  // PIN-based cashier / kiosk login
+  pinLogin: (pin, store_id) => api.post('/auth/pin-login', { pin, store_id }),
 };
 
 // ---- MEMBERS ----
@@ -204,6 +206,8 @@ export const salesApi = {
   lookupByReceipt: (receiptNumber) => api.get(`/sales/by-receipt/${encodeURIComponent(receiptNumber)}`),
   // Payment status (paid/pending) toggle for non-cash sales
   setPaymentStatus: (id, payment_status, payment_reference) => api.put(`/sales/${id}/payment-status`, { payment_status, payment_reference }),
+  // Quick-undo last sale (60s window)
+  undo: (id) => api.post(`/sales/${id}/undo`),
 };
 
 // ---- INVOICES (editable, printable, convertible to sale) ----

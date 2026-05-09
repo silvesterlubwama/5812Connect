@@ -1,11 +1,61 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
-from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger
+from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
 
 router = APIRouter(prefix="/api", tags=["auth"])
+
+
+@router.post("/auth/pin-login")
+async def pin_login(data: dict, request: Request) -> dict:
+    """Cashier / Kiosk PIN sign-in. Used on POS to switch cashiers without typing email+password.
+    Body: {pin: "1234", store_id?: "loc_xxx"}
+    Returns a short-lived staff token (8h) + cashier info.
+    Requires the user to have an `active` status and a non-empty `pin` field.
+    Optionally restricts to staff at the given store/sub-location's parent campus."""
+    pin = (data.get("pin") or "").strip()
+    if not pin or len(pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
+    user = await db.users.find_one({"pin": pin, "status": "active"}, {"_id": 0, "password_hash": 0})
+    if not user:
+        # Also try matching members.pin (for checkin-only members) — but only return staff users here
+        raise HTTPException(status_code=401, detail="Invalid PIN")
+    # Optional store restriction: cashier must be at this store, its parent campus, or its sub-locations
+    store_id = (data.get("store_id") or "").strip()
+    if store_id:
+        user_locs = set(user.get("location_ids") or [])
+        if user.get("location_id"):
+            user_locs.add(user["location_id"])
+        # Add parent campus and sibling sub-locations
+        if user_locs:
+            parents = await db.locations.find(
+                {"id": {"$in": list(user_locs)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+                {"_id": 0, "parent_id": 1}
+            ).to_list(50)
+            for p in parents:
+                if p.get("parent_id"):
+                    user_locs.add(p["parent_id"])
+            subs = await db.locations.find(
+                {"parent_id": {"$in": list(user_locs)}},
+                {"_id": 0, "id": 1}
+            ).to_list(200)
+            for s in subs:
+                user_locs.add(s["id"])
+        if store_id not in user_locs and not is_system_admin(user):
+            raise HTTPException(status_code=403, detail=f"This PIN is not assigned to {store_id}")
+    token = await create_token_with_session(user["id"], request)
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "name": user.get("name", ""),
+            "role": user.get("role", ""),
+            "email": user.get("email", ""),
+            "location_id": user.get("location_id"),
+        },
+    }
 
 
 @router.post("/auth/register")

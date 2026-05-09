@@ -184,6 +184,57 @@ async def update_sale(sale_id: str, data: dict, current_user: dict = Depends(get
     return await db.sales.find_one({"id": sale_id}, {"_id": 0})
 
 
+@router.post("/sales/{sale_id}/undo")
+async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Quick-undo a sale within 60 seconds of creation — typical "oops" flow at the till.
+    Reverses stock decrements + marks sale as voided. After 60s, requires admin/director edit instead."""
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if sale.get("voided"):
+        raise HTTPException(status_code=400, detail="Sale already voided")
+    # Time window check — the cashier who made the sale can undo within 60s
+    try:
+        created = datetime.fromisoformat(sale.get("created_at", "").replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Sale has invalid created_at")
+    age_s = (datetime.now(timezone.utc) - created).total_seconds()
+    is_owner = sale.get("created_by") == current_user["id"] or sale.get("cashier_id") == current_user["id"]
+    can_force = _can_edit_sale(current_user, sale)
+    if age_s > 60 and not can_force:
+        raise HTTPException(status_code=403, detail="Undo window (60s) has passed. Ask a director to edit/refund.")
+    if age_s <= 60 and not is_owner and not can_force:
+        raise HTTPException(status_code=403, detail="Only the cashier who made this sale can undo it")
+    # Reverse stock
+    for item in (sale.get("items") or []):
+        if item.get("product_id"):
+            qty = item.get("qty", 1)
+            units_per_pack = int(item.get("units_per_pack", 1) or 1)
+            base_units = qty * max(1, units_per_pack)
+            if item.get("variant_id"):
+                await db.products.update_one(
+                    {"id": item["product_id"], "variants.id": item["variant_id"]},
+                    {"$inc": {"variants.$.stock": qty, "stock": base_units}}
+                )
+            else:
+                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": base_units}})
+    # Reverse customer accounts totals
+    if sale.get("customer_id"):
+        await db.customer_accounts.update_one(
+            {"id": sale["customer_id"]},
+            {"$inc": {"total_purchases": -1, "total_spent": -(sale.get("total", 0))}}
+        )
+    # Mark voided rather than delete (audit trail)
+    await db.sales.update_one({"id": sale_id}, {"$set": {
+        "voided": True,
+        "voided_at": datetime.now(timezone.utc).isoformat(),
+        "voided_by": current_user["id"],
+        "voided_by_name": current_user.get("name", ""),
+    }})
+    await _audit(current_user["id"], "void", "sale", sale_id, {"reason": "undo"})
+    return {"message": "Sale voided and stock restored", "sale_id": sale_id}
+
+
 # ========== DRAFT / PARKED SALES ==========
 
 @router.get("/sales/drafts")

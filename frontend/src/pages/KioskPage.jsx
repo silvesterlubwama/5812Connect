@@ -10,6 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi } from '../services/api';
+import PinNumpad from '../components/PinNumpad';
+import { enterKioskFullscreen } from '../utils/kioskMode';
 import api from '../services/api';
 import { toast } from 'sonner';
 
@@ -71,10 +73,50 @@ export default function KioskPage() {
   const [unlockPassword, setUnlockPassword] = useState('');
   const [lockToScan, setLockToScan] = useState(() => localStorage.getItem('5812_kiosk_lock_to_scan') === 'true'); // Lock to scan-only mode
   const [lockLocationId, setLockLocationId] = useState(() => localStorage.getItem('5812_kiosk_lock_location') || ''); // Lock to specific restricted location
+  // PIN login state (kiosk staff sign-in via numpad)
+  const [showStaffPin, setShowStaffPin] = useState(false);
+  const [pinError, setPinError] = useState('');
+  const [pinSubmitting, setPinSubmitting] = useState(false);
+
   // Persist lock state so refresh / power-cycle doesn't unlock
   useEffect(() => { localStorage.setItem('5812_kiosk_locked', lockMode ? 'true' : 'false'); }, [lockMode]);
   useEffect(() => { localStorage.setItem('5812_kiosk_lock_to_scan', lockToScan ? 'true' : 'false'); }, [lockToScan]);
   useEffect(() => { localStorage.setItem('5812_kiosk_lock_location', lockLocationId || ''); }, [lockLocationId]);
+
+  // Fullscreen + wake-lock on first touch when locked
+  useEffect(() => {
+    if (!lockMode) return undefined;
+    let cleanup = null;
+    const onFirst = async () => {
+      cleanup = await enterKioskFullscreen();
+      window.removeEventListener('click', onFirst);
+      window.removeEventListener('touchstart', onFirst);
+    };
+    window.addEventListener('click', onFirst, { once: true });
+    window.addEventListener('touchstart', onFirst, { once: true });
+    return () => {
+      window.removeEventListener('click', onFirst);
+      window.removeEventListener('touchstart', onFirst);
+      if (cleanup) cleanup();
+    };
+  }, [lockMode]);
+
+  const handlePinStaffLogin = async (pin) => {
+    setPinError('');
+    setPinSubmitting(true);
+    try {
+      const res = await authApi.pinLogin(pin);
+      setToken(res.data.token);
+      setStaffUser(res.data.user);
+      setAuthenticated(true);
+      api.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
+      setShowStaffPin(false);
+      setView('dashboard');
+      toast.success(`Welcome, ${res.data.user.name}`);
+    } catch (e) {
+      setPinError(e.response?.data?.detail || 'Invalid PIN');
+    } finally { setPinSubmitting(false); }
+  };
   const [showSignup, setShowSignup] = useState(false);
   const [signupForm, setSignupForm] = useState({ name: '', phone: '', email: '', role: 'Guest' });
 
@@ -986,6 +1028,10 @@ export default function KioskPage() {
                 <Button type="submit" className="w-full h-14 text-lg" disabled={loading} data-testid="kiosk-login-btn">{loading ? 'Signing in...' : 'Sign In'}</Button>
               </form>
 
+              <Button type="button" variant="outline" className="w-full h-14 text-base gap-2" onClick={() => { setShowStaffPin(true); setPinError(''); }} data-testid="kiosk-pin-signin-btn">
+                Sign in with PIN
+              </Button>
+
               <div className="relative my-3">
                 <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
                 <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">or</span></div>
@@ -1009,6 +1055,20 @@ export default function KioskPage() {
           )}
         </CardContent>
       </Card>
+      {/* Staff PIN sign-in overlay */}
+      <Dialog open={showStaffPin} onOpenChange={setShowStaffPin}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle className="text-center">Staff PIN Sign-In</DialogTitle></DialogHeader>
+          <PinNumpad
+            title="Enter your PIN"
+            subtitle="No password needed — quick sign-in"
+            onSubmit={handlePinStaffLogin}
+            error={pinError}
+            loading={pinSubmitting}
+          />
+          <Button variant="ghost" className="w-full mt-2" onClick={() => setShowStaffPin(false)}>Cancel</Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

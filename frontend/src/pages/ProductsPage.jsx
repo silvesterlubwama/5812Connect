@@ -22,6 +22,9 @@ import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
+import PinNumpad from '../components/PinNumpad';
+import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
+import { authApi } from '../services/api';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -96,6 +99,48 @@ export default function ProductsPage() {
   })();
   // Whether this device is a dedicated POS kiosk (URL was /pos/:storeId)
   const isPosKiosk = typeof window !== 'undefined' && localStorage.getItem('5812_pos_kiosk') === 'true';
+
+  // Cashier shift — independent of platform login. Set by PIN, cleared on idle/switch.
+  const [activeCashier, setActiveCashier] = useState(null); // { id, name, role }
+  const [pinError, setPinError] = useState('');
+  const [pinSubmitting, setPinSubmitting] = useState(false);
+
+  // Idle auto-return: 3 min of inactivity → clear cashier so PIN is required again
+  useIdleTimeout(
+    () => { if (isPosKiosk && activeCashier) setActiveCashier(null); },
+    180000,
+    isPosKiosk && !!activeCashier
+  );
+
+  // Fullscreen + wake-lock on first interaction (browsers require user gesture for these)
+  useEffect(() => {
+    if (!isPosKiosk) return undefined;
+    let cleanup = null;
+    const onFirstInteract = async () => {
+      cleanup = await enterKioskFullscreen();
+      window.removeEventListener('click', onFirstInteract);
+      window.removeEventListener('touchstart', onFirstInteract);
+    };
+    window.addEventListener('click', onFirstInteract, { once: true });
+    window.addEventListener('touchstart', onFirstInteract, { once: true });
+    return () => {
+      window.removeEventListener('click', onFirstInteract);
+      window.removeEventListener('touchstart', onFirstInteract);
+      if (cleanup) cleanup();
+    };
+  }, [isPosKiosk]);
+
+  const handlePinLogin = async (pin) => {
+    setPinError('');
+    setPinSubmitting(true);
+    try {
+      const res = await authApi.pinLogin(pin, saleLocationId);
+      setActiveCashier(res.data.user);
+      toast.success(`Welcome, ${res.data.user.name}`);
+    } catch (e) {
+      setPinError(e.response?.data?.detail || 'Invalid PIN');
+    } finally { setPinSubmitting(false); }
+  };
   // Editing a completed sale (admin/director)
   const [editingSale, setEditingSale] = useState(null);
   const [editSaleForm, setEditSaleForm] = useState({ cashier: '', location_id: '', customer_name: '' });
@@ -337,6 +382,11 @@ export default function ProductsPage() {
         packaging_total: cartTotals.packaging_total,
         discount: cartTotals.discount_total,
       };
+      // Active cashier (PIN-authed shift) → recorded on the sale's receipt
+      if (activeCashier) {
+        payload.cashier = activeCashier.name;
+        payload.cashier_id = activeCashier.id;
+      }
       // Sale gets tagged with the explicit Sale Counter location (the actual store/sub-location)
       if (saleLocationId) {
         payload.location_id = saleLocationId;
@@ -450,6 +500,27 @@ export default function ProductsPage() {
     return ['cash', 'mobile_money', 'card'];
   };
 
+  // PIN gate for dedicated POS kiosks — block all UI until cashier authenticates
+  if (isPosKiosk && !activeCashier) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-background to-secondary/30 p-4" data-testid="pos-kiosk-pin-gate">
+        <div className="w-full max-w-sm bg-card rounded-xl shadow-lg p-6 space-y-5 border border-border">
+          <div className="text-center">
+            <p className="text-xs uppercase tracking-wider text-muted-foreground">{posBoundStoreLabel}</p>
+          </div>
+          <PinNumpad
+            title="Cashier sign-in"
+            subtitle="Enter your 4-6 digit PIN"
+            onSubmit={handlePinLogin}
+            error={pinError}
+            loading={pinSubmitting}
+          />
+          <p className="text-[10px] text-muted-foreground text-center">PIN auto-clears after 3 minutes of no activity.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -458,6 +529,13 @@ export default function ProductsPage() {
           <p className="text-sm text-muted-foreground mt-0.5">{products.length} products &middot; {sales.length} sales recorded</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Active cashier badge + Switch Cashier (kiosk mode) */}
+          {isPosKiosk && activeCashier && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20">
+              <span className="text-xs font-medium">Cashier: <span className="font-bold">{activeCashier.name}</span></span>
+              <Button variant="ghost" size="sm" className="h-7 text-[10px]" onClick={() => setActiveCashier(null)} data-testid="switch-cashier-btn">Switch</Button>
+            </div>
+          )}
           {isAdmin && (
             <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => openStoreSettings(locationFilter)} data-testid="store-settings-btn">
               <Settings size={12} /> Store
@@ -989,6 +1067,24 @@ export default function ProductsPage() {
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt {lastReceipt?.receipt_number || ''}</DialogTitle></DialogHeader>
           {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={lastStoreSettings || storeSettings || {}} />}
+          {/* 60-second Undo button — quick revert of an oops sale */}
+          {lastReceipt && !lastReceipt.voided && (() => {
+            const created = new Date(lastReceipt.created_at).getTime();
+            const ageS = (Date.now() - created) / 1000;
+            return ageS <= 60 ? (
+              <Button variant="outline" className="w-full mt-2 border-amber-300 text-amber-700 hover:bg-amber-50 gap-1.5" data-testid="undo-sale-btn" onClick={async () => {
+                if (!window.confirm('Void this sale and restore stock? (Cannot be undone after 60s)')) return;
+                try {
+                  await salesApi.undo(lastReceipt.id);
+                  setLastReceipt({ ...lastReceipt, voided: true });
+                  setSales(prev => prev.map(s => s.id === lastReceipt.id ? { ...s, voided: true } : s));
+                  toast.success('Sale voided — stock restored');
+                  setShowReceipt(false);
+                  fetchAll();
+                } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>↶ Undo this sale ({Math.max(0, Math.ceil(60 - ageS))}s left)</Button>
+            ) : null;
+          })()}
         </DialogContent>
       </Dialog>
 
