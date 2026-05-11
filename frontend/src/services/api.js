@@ -210,6 +210,12 @@ export const salesApi = {
   undo: (id) => api.post(`/sales/${id}/undo`),
 };
 
+export const cashDropsApi = {
+  list: (params) => api.get('/cash-drops', { params }),
+  create: (data) => api.post('/cash-drops', data),
+  balance: (locId) => api.get(`/cash-drops/balance/${locId}`),
+};
+
 // ---- INVOICES (editable, printable, convertible to sale) ----
 export const invoicesApi = {
   list: (params) => api.get('/invoices', { params }),

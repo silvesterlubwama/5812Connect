@@ -248,6 +248,75 @@ async def list_draft_sales(current_user: dict = Depends(get_current_user)):
     return drafts
 
 
+# ========== CASH MANAGEMENT (drawer transfers to safe / bank) ==========
+
+@router.post("/cash-drops")
+async def create_cash_drop(data: dict, current_user: dict = Depends(get_current_user)):
+    """Record a cash transfer from a POS drawer to a safe / bank / central account.
+    Body: { amount, currency, location_id (drawer), destination ('safe' | 'bank' | account_id),
+            notes?, attachments? }
+    Creates an audit-loggable record + (optional) financial transfer if a target account_id is given."""
+    amount = float(data.get("amount") or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be > 0")
+    loc_id = data.get("location_id") or current_user.get("location_id") or current_user.get("active_campus_id") or ""
+    dest = (data.get("destination") or "safe").strip()
+    drop_id = f"drop_{uuid.uuid4().hex[:8]}"
+    doc = {
+        "id": drop_id,
+        "amount": amount,
+        "currency": data.get("currency") or "UGX",
+        "location_id": loc_id,
+        "destination": dest,
+        "destination_account_id": data.get("destination_account_id"),
+        "notes": data.get("notes", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    await db.cash_drops.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "cash_drop", drop_id, {"amount": amount, "destination": dest})
+    return doc
+
+
+@router.get("/cash-drops")
+async def list_cash_drops(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List recent cash drops for the user's campus or a specific location."""
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        loc = current_user.get("location_id") or current_user.get("active_campus_id")
+        if loc:
+            query["location_id"] = loc
+    return await db.cash_drops.find(query, {"_id": 0}).sort("created_at", -1).limit(200).to_list(200)
+
+
+@router.get("/cash-drops/balance/{location_id}")
+async def cash_drawer_balance(location_id: str, current_user: dict = Depends(get_current_user)):
+    """Compute current cash-on-hand at a location: sum(cash sales) − sum(cash drops)."""
+    # Sum of paid cash sales (not voided) at this location
+    sales_agg = await db.sales.aggregate([
+        {"$match": {"location_id": location_id, "payment_method": "cash", "voided": {"$ne": True}}},
+        {"$group": {"_id": None, "total": {"$sum": "$total"}}}
+    ]).to_list(1)
+    total_in = sales_agg[0]["total"] if sales_agg else 0
+
+    drops_agg = await db.cash_drops.aggregate([
+        {"$match": {"location_id": location_id}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]).to_list(1)
+    total_out = drops_agg[0]["total"] if drops_agg else 0
+
+    return {
+        "location_id": location_id,
+        "cash_in": total_in,
+        "cash_dropped": total_out,
+        "cash_on_hand": total_in - total_out,
+    }
+
+
 @router.post("/sales/drafts")
 async def create_draft_sale(data: dict, current_user: dict = Depends(get_current_user)):
     """Park/save an in-progress sale so it can be reopened later (by anyone at the same campus)."""

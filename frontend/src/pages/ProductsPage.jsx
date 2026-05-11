@@ -24,7 +24,10 @@ import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
-import { authApi } from '../services/api';
+import { authApi, cashDropsApi } from '../services/api';
+import ChangeCalculator from '../components/ChangeCalculator';
+import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
+import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer } from '../utils/posPeripherals';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -251,6 +254,8 @@ export default function ProductsPage() {
     for (const p of products) {
       for (const v of (p.variants || [])) {
         if ((v.barcode || v.id) === code || v.sku === code) {
+          SOUNDS.scanSuccess();
+          haptic(20);
           addToCart(p, v);
           return;
         }
@@ -259,15 +264,20 @@ export default function ProductsPage() {
     // 2) Match against product-level barcode / id / sku
     const prod = products.find(p => p.barcode === code || p.id === code || p.sku === code);
     if (prod) {
+      SOUNDS.scanSuccess();
+      haptic(20);
       addToCart(prod);
       return;
     }
     // 3) Resource serials start with 5812- — open the public resource page in a new tab
     if (/^5812-/i.test(code)) {
+      SOUNDS.scanSuccess();
       window.open(`/resource/${encodeURIComponent(code)}`, '_blank');
       toast.info('Resource lookup opened in new tab');
       return;
     }
+    SOUNDS.scanFail();
+    haptic([60, 30, 60]);
     toast.error(`Unknown code: ${code}`);
   };
 
@@ -356,8 +366,29 @@ export default function ProductsPage() {
     catch { toast.error('Failed'); }
   };
 
+  // Change calculator (cash sales)
+  const [changeOpen, setChangeOpen] = useState(false);
+  // Peripheral status
+  const [drawerConnected, setDrawerConnected] = useState(false);
+  // Cash drop dialog
+  const [cashDropOpen, setCashDropOpen] = useState(false);
+  const [cashDropForm, setCashDropForm] = useState({ amount: '', destination: 'safe', destination_account_id: '', notes: '' });
+
+  // Resolve country / currency for change breakdown
+  const activeLocation = (locations || []).find(l => l.id === saleLocationId);
+  const activeCurrency2 = activeLocation?.currency || COUNTRY_TO_CURRENCY[activeLocation?.country] || 'UGX';
+
   const handleCheckout = async () => {
-    if (cart.length === 0) { toast.error('Cart is empty'); return; }
+    if (cart.length === 0) { toast.error('Cart is empty'); SOUNDS.saleError(); return; }
+    // For cash payments, open the change calculator first
+    if (paymentMethod === 'cash') {
+      setChangeOpen(true);
+      return;
+    }
+    await actuallyCheckout();
+  };
+
+  const actuallyCheckout = async (cashInfo = null) => {
     setCheckoutLoading(true);
     try {
       // Enrich cart items with computed line totals (so receipt + sale record match what was charged)
@@ -387,6 +418,11 @@ export default function ProductsPage() {
         payload.cashier = activeCashier.name;
         payload.cashier_id = activeCashier.id;
       }
+      // Cash details if provided
+      if (cashInfo) {
+        payload.amount_given = cashInfo.amount_given;
+        payload.change_due = cashInfo.change_due;
+      }
       // Sale gets tagged with the explicit Sale Counter location (the actual store/sub-location)
       if (saleLocationId) {
         payload.location_id = saleLocationId;
@@ -397,9 +433,18 @@ export default function ProductsPage() {
       // Auto-set paper size override on receipt if user picked one (otherwise use store default)
       const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
       setLastReceipt(res.data); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
-      toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`); fetchAll();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Checkout failed'); }
-    finally { setCheckoutLoading(false); }
+      SOUNDS.saleComplete();
+      haptic([30, 50, 30]);
+      // Kick the cash drawer if connected (cash sales only)
+      if (paymentMethod === 'cash' && drawerConnected) {
+        kickCashDrawer().catch(() => {});
+      }
+      toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`);
+      fetchAll();
+    } catch (e) {
+      SOUNDS.saleError();
+      toast.error(e.response?.data?.detail || 'Checkout failed');
+    } finally { setCheckoutLoading(false); }
   };
 
   // Product CRUD
@@ -543,6 +588,25 @@ export default function ProductsPage() {
           )}
           <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowImportExport(true)} data-testid="import-export-btn">
             <Download size={12} /> Import/Export
+          </Button>
+          {/* Peripheral: Cash Drawer connect */}
+          {isWebSerialSupported() && (
+            <Button variant="outline" size="sm" className={`h-8 text-xs gap-1 ${drawerConnected ? 'border-green-300 text-green-700' : ''}`} data-testid="connect-drawer-btn"
+              onClick={async () => {
+                try {
+                  await requestSerialPort();
+                  setDrawerConnected(true);
+                  toast.success('Cash drawer / printer connected');
+                  SOUNDS.drawerOpen();
+                } catch (e) { toast.error(e.message || 'Connection cancelled'); }
+              }} title="Connect cash drawer (via thermal printer's RJ12 jack)">
+              <span className={`w-1.5 h-1.5 rounded-full ${drawerConnected ? 'bg-green-500' : 'bg-muted-foreground'}`} />
+              {drawerConnected ? 'Drawer Connected' : 'Connect Drawer'}
+            </Button>
+          )}
+          {/* Cash Drop button */}
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1" data-testid="cash-drop-btn" onClick={() => setCashDropOpen(true)}>
+            <Download size={12} /> Drop Cash
           </Button>
           <Button variant="outline" size="icon" className="h-8 w-8" onClick={fetchAll} data-testid="sales-refresh"><RefreshCw size={14} /></Button>
         </div>
@@ -1225,7 +1289,61 @@ export default function ProductsPage() {
         title="Scan product barcode"
       />
 
-      {/* Variant Picker Dialog (when a product with variants is clicked at POS) */}
+      {/* Change Calculator (cash sales) */}
+      <ChangeCalculator
+        open={changeOpen}
+        onOpenChange={setChangeOpen}
+        total={cartTotals.total}
+        currency={activeCurrency2 || activeCurrency}
+        onAccept={(cashInfo) => actuallyCheckout(cashInfo)}
+      />
+
+      {/* Cash Drop dialog */}
+      <Dialog open={cashDropOpen} onOpenChange={setCashDropOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Drop Cash to Safe / Bank</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Records a transfer of cash out of this POS drawer (e.g. to the safe, the bank, or a finance account).</p>
+            <div className="space-y-1">
+              <Label className="text-xs">Amount</Label>
+              <Input type="number" min={0} value={cashDropForm.amount} onChange={e => setCashDropForm({...cashDropForm, amount: e.target.value})} className="h-12 text-xl text-center" data-testid="cash-drop-amount" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Destination</Label>
+              <Select value={cashDropForm.destination} onValueChange={v => setCashDropForm({...cashDropForm, destination: v})}>
+                <SelectTrigger data-testid="cash-drop-destination"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="safe">On-site Safe</SelectItem>
+                  <SelectItem value="bank">Bank Deposit</SelectItem>
+                  <SelectItem value="finance">Central Finance Account</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Input placeholder="e.g. Slip #1234, deposited Mon 9am" value={cashDropForm.notes} onChange={e => setCashDropForm({...cashDropForm, notes: e.target.value})} />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setCashDropOpen(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="cash-drop-save" disabled={!cashDropForm.amount} onClick={async () => {
+                try {
+                  await cashDropsApi.create({
+                    amount: parseFloat(cashDropForm.amount),
+                    currency: activeCurrency2 || activeCurrency,
+                    location_id: saleLocationId,
+                    destination: cashDropForm.destination,
+                    notes: cashDropForm.notes,
+                  });
+                  toast.success(`Recorded cash drop: ${activeCurrency2} ${cashDropForm.amount}`);
+                  setCashDropOpen(false);
+                  setCashDropForm({ amount: '', destination: 'safe', destination_account_id: '', notes: '' });
+                } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Record</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <VariantPickerDialog
         product={variantPickerProduct}
         open={!!variantPickerProduct}
