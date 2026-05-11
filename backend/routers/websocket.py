@@ -124,9 +124,6 @@ class ConnectionManager:
             if uid != exclude_user:
                 await self.send_to_user(uid, message)
 
-    def get_online_users(self) -> List[str]:
-        return list(self.active_connections.keys())
-
     def get_board_viewers(self, board_id: str) -> List[str]:
         return list(board_rooms.get(board_id, set()))
 

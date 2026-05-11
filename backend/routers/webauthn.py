@@ -4,6 +4,7 @@ from deps import db, get_current_user, create_token, logger
 from datetime import datetime, timezone, timedelta
 import json
 import uuid
+from typing import Optional
 
 from webauthn import (
     generate_registration_options,
@@ -48,8 +49,9 @@ def _get_rp_id(request: Request, body_rp_id: str = None) -> str:
 # ===== REGISTRATION =====
 
 @router.post("/register/begin")
-async def webauthn_register_begin(request: Request, body: dict = {}, current_user: dict = Depends(get_current_user)):
+async def webauthn_register_begin(request: Request, body: Optional[dict] = None, current_user: dict = Depends(get_current_user)):
     """Start passkey registration for the authenticated user"""
+    body = body or {}
     rp_id = _get_rp_id(request, body.get("rpId"))
     user_id = current_user["id"]
 

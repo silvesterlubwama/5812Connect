@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
 import { Printer } from 'lucide-react';
-import { useState } from 'react';
+import { escapeHtml as e } from '../utils/htmlEscape';
 
 const LAYOUTS = [
   { value: 'grid_3x8', label: '3×8 grid (24/page) — 70mm × 35mm labels', cols: 3, rows: 8 },
@@ -44,12 +44,12 @@ export default function BulkBarcodeLabelDialog({ items, open, onOpenChange, titl
     const cellsHtml = pages.map(pageItems => {
       const cells = pageItems.map(it => {
         const code = String(it.code || '');
-        const safeName = (it.name || '').replace(/[<>&]/g, '');
-        const loc = (it.location_name || '').replace(/[<>&]/g, '');
+        const safeName = e(it.name || '');
+        const loc = e(it.location_name || '');
         return `
           <div class="cell">
             ${showName ? `<div class="name">${safeName}</div>` : ''}
-            <svg class="bc" data-code="${code.replace(/"/g, '&quot;')}"></svg>
+            <svg class="bc" data-code="${e(code)}"></svg>
             ${showLoc && loc ? `<div class="loc">58:12 · ${loc}</div>` : ''}
           </div>`;
       }).join('');
@@ -57,7 +57,7 @@ export default function BulkBarcodeLabelDialog({ items, open, onOpenChange, titl
     }).join('');
 
     w.document.write(`
-      <html><head><title>${title}</title>
+      <html><head><title>${e(title)}</title>
         <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.12.3/dist/JsBarcode.all.min.js"></script>
         <style>
           @page { size: A4; margin: 6mm; }

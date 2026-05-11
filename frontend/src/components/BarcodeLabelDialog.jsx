@@ -3,6 +3,7 @@ import JsBarcode from 'jsbarcode';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
+import { escapeHtml as e } from '../utils/htmlEscape';
 
 function BarcodeCanvas({ value, height = 50, width = 1.4, fontSize = 9 }) {
   const ref = useRef(null);
@@ -39,7 +40,7 @@ export default function BarcodeLabelDialog({ resource, open, onOpenChange }) {
     const w = window.open('', '_blank', 'width=400,height=400');
     // Render an isolated print page — generate barcode SVG inline so it always shows
     w.document.write(`
-      <html><head><title>Label ${code}</title>
+      <html><head><title>Label ${e(code)}</title>
         <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.12.3/dist/JsBarcode.all.min.js"></script>
         <style>
           @page { size: 70mm 35mm; margin: 0; }
@@ -57,9 +58,9 @@ export default function BarcodeLabelDialog({ resource, open, onOpenChange }) {
         </style>
       </head><body>
         <div class="label">
-          <div class="name">${(resource.name || '').replace(/[<>&]/g, '')}</div>
+          <div class="name">${e(resource.name || '')}</div>
           <svg id="bc"></svg>
-          <div class="loc">58:12 Global · ${(resource.location_name || '').replace(/[<>&]/g, '') || ''}</div>
+          <div class="loc">58:12 Global · ${e(resource.location_name || '')}</div>
         </div>
         <script>
           try {
@@ -75,7 +76,7 @@ export default function BarcodeLabelDialog({ resource, open, onOpenChange }) {
             });
             setTimeout(() => { window.focus(); window.print(); }, 300);
           } catch (e) {
-            document.body.innerHTML += '<p style="color:red">Barcode error: ' + e.message + '</p>';
+            document.body.innerHTML += '<p style="color:red">Barcode error: ' + (e && e.message ? e.message : '') + '</p>';
           }
         </script>
       </body></html>

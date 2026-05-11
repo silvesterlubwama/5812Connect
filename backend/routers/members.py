@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from deps import (
     db, get_current_user, _audit, require_staff, require_manager, require_coordinator, require_admin, require_director,
-    normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter
+    normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter, hash_password
 )
 from models import MemberCreate, MemberUpdate, FamilyCreate, ChildCreate, GuestCreate
 from datetime import datetime, timezone
@@ -1559,8 +1559,8 @@ async def reactivate_badge(badge_id: str, current_user: dict = Depends(require_a
 
 
 @router.get("/badges/list")
-async def list_badges(current_user: dict = Depends(require_staff)) -> list:
-    """List all issued badges."""
+async def list_wallet_badges(current_user: dict = Depends(require_staff)) -> list:
+    """List all issued wallet badges (different from /badges which lists badge types)."""
     campus = await get_campus_filter(current_user)
     query = {}
     if campus:

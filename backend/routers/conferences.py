@@ -241,12 +241,14 @@ async def delete_conference(
 @router.post("/{conference_id}/invite")
 async def invite_to_conference(
     conference_id: str,
-    user_ids: List[str] = [],
-    external_invites: List[ExternalInvite] = [],
+    user_ids: Optional[List[str]] = None,
+    external_invites: Optional[List[ExternalInvite]] = None,
     user_id: str = Query(...),
     db=Depends(get_db)
 ):
     """Add invites to conference"""
+    user_ids = user_ids or []
+    external_invites = external_invites or []
     conf = await db.conferences.find_one({"id": conference_id})
     if not conf:
         raise HTTPException(404, "Conference not found")

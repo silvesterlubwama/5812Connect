@@ -125,7 +125,7 @@ class NotificationCreate(BaseModel):
 async def set_active_campus(data: dict, current_user: dict = Depends(get_current_user)):
     """Set active campus for data filtering. Admins/EDs/Advisers can switch to any campus.
     Multi-campus users can switch among their assigned campuses."""
-    from deps import has_campus_switcher, is_system_admin
+    from deps import has_campus_switcher
     campus_id = data.get("campus_id")
     if not campus_id:
         raise HTTPException(status_code=400, detail="campus_id is required")

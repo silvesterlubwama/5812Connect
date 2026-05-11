@@ -6,6 +6,7 @@ import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Printer } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
+import { escapeHtml as e } from '../utils/htmlEscape';
 
 const LAYOUTS = [
   { value: 'grid_4x6', label: '4 × 6 grid (24/page, Avery-style)', cols: 4, rows: 6 },

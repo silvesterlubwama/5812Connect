@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
+import { escapeHtml as e } from '../utils/htmlEscape';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -57,7 +58,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
     w.document.write(`
       <html>
         <head>
-          <title>Receipt ${receiptNumber}</title>
+          <title>Receipt ${e(receiptNumber)}</title>
           <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
           <style>
             @page { size: ${paperWidth} auto; margin: 4mm; }
@@ -77,8 +78,8 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           ${headerHtml}
           ${showQR ? `<div class="qr-print"><canvas id="qrCanvas"></canvas><div style="font-size:8px;margin-top:2px;color:#555">Scan to verify</div></div>` : ''}
           <hr/>
-          <div class="center" style="font-size: 9px">${(storeSettings.receipt_footer || 'Thank you for your purchase!').replace(/[<>&]/g, '')}</div>
-          <div class="center" style="font-size: 8px; color: #888; margin-top: 4px">${receiptNumber} · 58:12 Global</div>
+          <div class="center" style="font-size: 9px">${e(storeSettings.receipt_footer || 'Thank you for your purchase!')}</div>
+          <div class="center" style="font-size: 8px; color: #888; margin-top: 4px">${e(receiptNumber)} · 58:12 Global</div>
           <script>
             window.addEventListener('load', () => {
               if (window.QRCode && document.getElementById('qrCanvas')) {
