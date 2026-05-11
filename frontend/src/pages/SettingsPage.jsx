@@ -332,7 +332,6 @@ export default function SettingsPage() {
       <Tabs defaultValue="organization">
         <TabsList className="w-full sm:w-auto grid grid-cols-5 sm:flex">
           <TabsTrigger value="organization" className="gap-1.5 text-xs sm:text-sm"><Building size={13} />Organization</TabsTrigger>
-          <TabsTrigger value="venues" className="gap-1.5 text-xs sm:text-sm"><Building size={13} />Venues</TabsTrigger>
           <TabsTrigger value="notifications" className="gap-1.5 text-xs sm:text-sm"><Bell size={13} />Notifications</TabsTrigger>
           <TabsTrigger value="security" className="gap-1.5 text-xs sm:text-sm"><Shield size={13} />Security</TabsTrigger>
           {isAdmin && <TabsTrigger value="admin" className="gap-1.5 text-xs sm:text-sm"><Wrench size={13} />Admin</TabsTrigger>}

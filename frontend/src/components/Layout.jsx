@@ -474,7 +474,7 @@ export default function Layout() {
             <DropdownMenuContent align="end" className="w-48">
               <div className="px-2 py-1.5"><p className="text-sm font-medium">{user?.name}</p><p className="text-xs text-muted-foreground capitalize">{user?.role}</p></div>
               <DropdownMenuSeparator />
-              <DropdownMenuItem asChild><NavLink to="/settings" className="flex items-center gap-2 cursor-pointer"><Settings size={14} /> Settings</NavLink></DropdownMenuItem>
+              <DropdownMenuItem asChild><NavLink to="/profile" className="flex items-center gap-2 cursor-pointer" data-testid="profile-menu-my-profile"><Settings size={14} /> My Profile &amp; Family</NavLink></DropdownMenuItem>
               <DropdownMenuItem asChild><a href="/kiosk" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 cursor-pointer"><ExternalLink size={14} /> Open Kiosk</a></DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive cursor-pointer"><LogOut size={14} className="mr-2" /> Sign Out</DropdownMenuItem>

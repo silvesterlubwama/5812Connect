@@ -216,6 +216,14 @@ export const cashDropsApi = {
   balance: (locId) => api.get(`/cash-drops/balance/${locId}`),
 };
 
+// ---- CASHIER SHIFTS (open / close with variance report) ----
+export const shiftsApi = {
+  current: (params) => api.get('/shifts/current', { params }),
+  list: (params) => api.get('/shifts', { params }),
+  open: (data) => api.post('/shifts/open', data),
+  close: (id, data) => api.post(`/shifts/${id}/close`, data),
+};
+
 // ---- INVOICES (editable, printable, convertible to sale) ----
 export const invoicesApi = {
   list: (params) => api.get('/invoices', { params }),

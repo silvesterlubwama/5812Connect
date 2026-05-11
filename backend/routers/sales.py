@@ -248,6 +248,120 @@ async def list_draft_sales(current_user: dict = Depends(get_current_user)):
     return drafts
 
 
+# ========== CASHIER SHIFTS (open / close with cash counts + variance report) ==========
+
+@router.get("/shifts/current")
+async def get_current_shift(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Return the current OPEN shift for this user at this location (or None)."""
+    loc_id = location_id or current_user.get("location_id") or current_user.get("active_campus_id") or ""
+    query = {"cashier_id": current_user["id"], "status": "open"}
+    if loc_id:
+        query["location_id"] = loc_id
+    return await db.shifts.find_one(query, {"_id": 0})
+
+
+@router.post("/shifts/open")
+async def open_shift(data: dict, current_user: dict = Depends(get_current_user)):
+    """Open a cashier shift with declared starting cash count.
+    One open shift per (cashier, location). Auto-prevents double-opens."""
+    loc_id = data.get("location_id") or current_user.get("location_id") or current_user.get("active_campus_id") or ""
+    existing = await db.shifts.find_one({"cashier_id": current_user["id"], "location_id": loc_id, "status": "open"})
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have an open shift at this location. Close it first.")
+    shift_id = f"shift_{uuid.uuid4().hex[:8]}"
+    doc = {
+        "id": shift_id,
+        "cashier_id": current_user["id"],
+        "cashier_name": current_user.get("name", "Unknown"),
+        "location_id": loc_id,
+        "currency": data.get("currency", "UGX"),
+        "opening_cash": float(data.get("opening_cash") or 0),
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "status": "open",
+        "notes": data.get("notes", ""),
+    }
+    await db.shifts.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "open", "shift", shift_id, {"opening_cash": doc["opening_cash"]})
+    return doc
+
+
+@router.post("/shifts/{shift_id}/close")
+async def close_shift(shift_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Close a shift: enter declared closing cash → system computes variance vs expected cash."""
+    shift = await db.shifts.find_one({"id": shift_id}, {"_id": 0})
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    if shift.get("status") != "open":
+        raise HTTPException(status_code=400, detail="Shift already closed")
+    if shift.get("cashier_id") != current_user["id"] and not _can_edit_sale(current_user, shift):
+        raise HTTPException(status_code=403, detail="Only the cashier or an admin/director can close this shift")
+    closing_cash = float(data.get("closing_cash") or 0)
+    # Compute cash sales during this shift
+    opened_at = shift.get("opened_at")
+    closed_at = datetime.now(timezone.utc).isoformat()
+    sales_in_shift = await db.sales.aggregate([{"$match": {
+        "cashier_id": shift["cashier_id"],
+        "location_id": shift["location_id"],
+        "payment_method": "cash",
+        "created_at": {"$gte": opened_at, "$lte": closed_at},
+        "voided": {"$ne": True},
+    }}, {"$group": {"_id": None, "total": {"$sum": "$total"}, "count": {"$sum": 1}}}]).to_list(1)
+    cash_sales_total = sales_in_shift[0]["total"] if sales_in_shift else 0
+    cash_sales_count = sales_in_shift[0]["count"] if sales_in_shift else 0
+    # Cash drops during shift
+    drops_in_shift = await db.cash_drops.aggregate([{"$match": {
+        "location_id": shift["location_id"],
+        "created_by": shift["cashier_id"],
+        "created_at": {"$gte": opened_at, "$lte": closed_at},
+    }}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
+    cash_drops_total = drops_in_shift[0]["total"] if drops_in_shift else 0
+    expected_cash = shift.get("opening_cash", 0) + cash_sales_total - cash_drops_total
+    variance = closing_cash - expected_cash
+    update = {
+        "status": "closed",
+        "closing_cash": closing_cash,
+        "closed_at": closed_at,
+        "closed_by": current_user["id"],
+        "cash_sales_total": cash_sales_total,
+        "cash_sales_count": cash_sales_count,
+        "cash_drops_total": cash_drops_total,
+        "expected_cash": expected_cash,
+        "variance": variance,
+        "variance_notes": data.get("variance_notes", ""),
+    }
+    await db.shifts.update_one({"id": shift_id}, {"$set": update})
+    await _audit(current_user["id"], "close", "shift", shift_id, {"variance": variance})
+    return {**shift, **update}
+
+
+@router.get("/shifts")
+async def list_shifts(
+    location_id: Optional[str] = None,
+    cashier_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """List shifts. Cashiers see their own only; admins/directors see all in their scope."""
+    query = {}
+    if location_id:
+        query["location_id"] = location_id
+    if status:
+        query["status"] = status
+    if cashier_id:
+        query["cashier_id"] = cashier_id
+    elif not (is_system_admin(current_user) or (current_user.get("role") or "").lower() in {"admin", "director", "executive director", "adviser", "manager"}):
+        query["cashier_id"] = current_user["id"]
+    return await db.shifts.find(query, {"_id": 0}).sort("opened_at", -1).limit(200).to_list(200)
+    """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""
+    loc_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    query = {"status": "draft"}
+    if loc_id:
+        query["location_id"] = loc_id
+    drafts = await db.sale_drafts.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return drafts
+
+
 # ========== CASH MANAGEMENT (drawer transfers to safe / bank) ==========
 
 @router.post("/cash-drops")

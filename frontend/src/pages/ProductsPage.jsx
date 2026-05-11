@@ -24,7 +24,7 @@ import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
-import { authApi, cashDropsApi } from '../services/api';
+import { authApi, cashDropsApi, shiftsApi } from '../services/api';
 import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer } from '../utils/posPeripherals';
@@ -373,6 +373,20 @@ export default function ProductsPage() {
   // Cash drop dialog
   const [cashDropOpen, setCashDropOpen] = useState(false);
   const [cashDropForm, setCashDropForm] = useState({ amount: '', destination: 'safe', destination_account_id: '', notes: '' });
+  // Cashier shift
+  const [currentShift, setCurrentShift] = useState(null);
+  const [openShiftDlg, setOpenShiftDlg] = useState(false);
+  const [closeShiftDlg, setCloseShiftDlg] = useState(false);
+  const [shiftForm, setShiftForm] = useState({ opening_cash: '', closing_cash: '', notes: '' });
+  const [shiftResult, setShiftResult] = useState(null);
+
+  // Fetch current shift when location or cashier changes
+  useEffect(() => {
+    if (!saleLocationId) return;
+    shiftsApi.current({ location_id: saleLocationId })
+      .then(r => setCurrentShift(r.data || null))
+      .catch(() => setCurrentShift(null));
+  }, [saleLocationId, activeCashier]);
 
   // Resolve country / currency for change breakdown
   const activeLocation = (locations || []).find(l => l.id === saleLocationId);
@@ -608,6 +622,16 @@ export default function ProductsPage() {
           <Button variant="outline" size="sm" className="h-8 text-xs gap-1" data-testid="cash-drop-btn" onClick={() => setCashDropOpen(true)}>
             <Download size={12} /> Drop Cash
           </Button>
+          {/* Cashier Shift status / open / close */}
+          {currentShift ? (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1 border-green-300 text-green-700" data-testid="close-shift-btn" onClick={() => { setShiftForm({...shiftForm, closing_cash: ''}); setCloseShiftDlg(true); }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Shift Open · End Shift
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1" data-testid="open-shift-btn" onClick={() => { setShiftForm({opening_cash: '', closing_cash: '', notes: ''}); setOpenShiftDlg(true); }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" /> Open Shift
+            </Button>
+          )}
           <Button variant="outline" size="icon" className="h-8 w-8" onClick={fetchAll} data-testid="sales-refresh"><RefreshCw size={14} /></Button>
         </div>
       </div>
@@ -1297,6 +1321,80 @@ export default function ProductsPage() {
         currency={activeCurrency2 || activeCurrency}
         onAccept={(cashInfo) => actuallyCheckout(cashInfo)}
       />
+
+      {/* Open Shift Dialog */}
+      <Dialog open={openShiftDlg} onOpenChange={setOpenShiftDlg}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Open Shift</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Count the cash in the drawer right now and enter the starting amount. This becomes your shift's "opening cash".</p>
+            <div className="space-y-1">
+              <Label className="text-xs">Opening cash ({activeCurrency2 || 'UGX'})</Label>
+              <Input type="number" min={0} value={shiftForm.opening_cash} onChange={e => setShiftForm({...shiftForm, opening_cash: e.target.value})} className="h-12 text-xl text-center" autoFocus data-testid="open-shift-cash" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Input value={shiftForm.notes} onChange={e => setShiftForm({...shiftForm, notes: e.target.value})} placeholder="e.g. morning shift" />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setOpenShiftDlg(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="open-shift-save" disabled={!shiftForm.opening_cash} onClick={async () => {
+                try {
+                  const res = await shiftsApi.open({ opening_cash: parseFloat(shiftForm.opening_cash), location_id: saleLocationId, currency: activeCurrency2 || 'UGX', notes: shiftForm.notes });
+                  setCurrentShift(res.data);
+                  toast.success('Shift opened');
+                  setOpenShiftDlg(false);
+                } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}>Open Shift</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Close Shift Dialog */}
+      <Dialog open={closeShiftDlg} onOpenChange={(o) => { if (!o) { setCloseShiftDlg(false); setShiftResult(null); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{shiftResult ? 'Shift Closed' : 'Close Shift'}</DialogTitle></DialogHeader>
+          {!shiftResult ? (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">Count the cash in the drawer NOW and enter the closing total. We'll compare to expected cash + report any variance.</p>
+              <div className="space-y-1">
+                <Label className="text-xs">Closing cash ({currentShift?.currency || activeCurrency2 || 'UGX'})</Label>
+                <Input type="number" min={0} value={shiftForm.closing_cash} onChange={e => setShiftForm({...shiftForm, closing_cash: e.target.value})} className="h-12 text-xl text-center" autoFocus data-testid="close-shift-cash" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Variance notes (optional)</Label>
+                <Input value={shiftForm.notes} onChange={e => setShiftForm({...shiftForm, notes: e.target.value})} placeholder="e.g. customer overpaid, kept tip" />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button variant="outline" className="flex-1" onClick={() => setCloseShiftDlg(false)}>Cancel</Button>
+                <Button className="flex-1" data-testid="close-shift-save" disabled={!shiftForm.closing_cash || !currentShift} onClick={async () => {
+                  try {
+                    const res = await shiftsApi.close(currentShift.id, { closing_cash: parseFloat(shiftForm.closing_cash), variance_notes: shiftForm.notes });
+                    setShiftResult(res.data);
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                }}>Close Shift</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3" data-testid="shift-variance-report">
+              <div className="space-y-1.5 text-sm bg-muted/30 rounded-lg p-3">
+                <div className="flex justify-between"><span className="text-muted-foreground">Opening cash</span><span>{shiftResult.opening_cash?.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">+ Cash sales ({shiftResult.cash_sales_count})</span><span>+{shiftResult.cash_sales_total?.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">− Cash drops</span><span>-{shiftResult.cash_drops_total?.toLocaleString()}</span></div>
+                <div className="flex justify-between border-t pt-1.5 font-semibold"><span>Expected cash</span><span>{shiftResult.expected_cash?.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>Counted cash</span><span>{shiftResult.closing_cash?.toLocaleString()}</span></div>
+                <div className={`flex justify-between border-t pt-1.5 font-bold text-base ${Math.abs(shiftResult.variance) < 1 ? 'text-green-700' : shiftResult.variance > 0 ? 'text-amber-700' : 'text-red-700'}`}>
+                  <span>Variance</span>
+                  <span>{shiftResult.variance > 0 ? '+' : ''}{shiftResult.variance?.toLocaleString()}</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">{Math.abs(shiftResult.variance) < 1 ? '✓ Balanced — no discrepancy' : shiftResult.variance > 0 ? '↑ Over: drawer has more than expected' : '↓ Short: missing cash'}</p>
+              <Button className="w-full" onClick={() => { setCurrentShift(null); setShiftResult(null); setCloseShiftDlg(false); }}>Done</Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Cash Drop dialog */}
       <Dialog open={cashDropOpen} onOpenChange={setCashDropOpen}>

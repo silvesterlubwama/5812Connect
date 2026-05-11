@@ -116,6 +116,7 @@ function AppRoutes() {
         <Route path="financial" element={<FinancialPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
+        <Route path="profile" element={<PortalProfile />} />
         <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="locations" element={<LocationsPage />} />
