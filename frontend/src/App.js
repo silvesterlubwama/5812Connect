@@ -67,6 +67,9 @@ import ReceiptViewPage from './pages/ReceiptViewPage';
 import ResourceViewPage from './pages/ResourceViewPage';
 import PosKioskPage from './pages/PosKioskPage';
 import PosKioskSetupPage from './pages/PosKioskSetupPage';
+import QuoteAcceptPage from './pages/QuoteAcceptPage';
+import AccountsReceivablePage from './pages/AccountsReceivablePage';
+import BarcodeReissuePage from './pages/BarcodeReissuePage';
 import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -101,6 +104,7 @@ function AppRoutes() {
       <Route path="/badge/:token" element={<WalletBadgePage />} />
       <Route path="/receipt/:receiptNumber" element={<ReceiptViewPage />} />
       <Route path="/resource/:serial" element={<ResourceViewPage />} />
+      <Route path="/quote/:quoteNumber/accept" element={<QuoteAcceptPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
@@ -116,6 +120,8 @@ function AppRoutes() {
         <Route path="financial" element={<FinancialPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
+        <Route path="accounts-receivable" element={<AccountsReceivablePage />} />
+        <Route path="barcode-reissue" element={<BarcodeReissuePage />} />
         <Route path="profile" element={<PortalProfile />} />
         <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />

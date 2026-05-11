@@ -1180,7 +1180,11 @@ export default function ProductsPage() {
       <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><Settings size={16} /> Store Settings</span>
-            <Link to="/pos-setup" className="text-xs text-primary hover:underline" data-testid="pos-setup-link">POS Kiosk Setup →</Link>
+            <div className="flex gap-2 text-xs">
+              <Link to="/pos-setup" className="text-primary hover:underline" data-testid="pos-setup-link">POS Kiosk Setup →</Link>
+              <Link to="/accounts-receivable" className="text-primary hover:underline" data-testid="ar-link">Accounts Receivable →</Link>
+              <Link to="/barcode-reissue" className="text-primary hover:underline" data-testid="reissue-link">Re-issue Barcodes →</Link>
+            </div>
           </DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2 pb-2 border-b border-border">

@@ -8,7 +8,7 @@ Workflow:
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, _audit, get_campus_filter
+from deps import db, get_current_user, require_staff, _audit, get_campus_filter, is_system_admin
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -257,3 +257,197 @@ async def convert_invoice_to_sale(invoice_id: str, data: dict = None, current_us
     sale.pop("_id", None)
     await _audit(current_user["id"], "convert", "invoice_to_sale", f"{invoice_id}→{receipt_number}")
     return {"invoice_id": invoice_id, "sale": sale, "receipt_number": receipt_number}
+
+
+# ========== PUBLIC QUOTE LOOKUP + ACCEPTANCE ==========
+
+# ========== ACCOUNTS RECEIVABLE (pending non-cash sales per customer) ==========
+
+@router.get("/accounts-receivable")
+async def accounts_receivable(
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Aggregate pending non-cash sales by customer for AR / collections.
+    Returns: { total_outstanding, by_customer: [{name, phone, sales_count, total, oldest_date, latest_date, sales:[...]}] }"""
+    query = {"payment_status": "pending", "voided": {"$ne": True}}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        scope = current_user.get("location_id") or current_user.get("active_campus_id")
+        if scope:
+            query["location_id"] = scope
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    by_customer = {}
+    total_out = 0
+    for s in sales:
+        key = (s.get("customer_id") or s.get("customer_phone") or s.get("customer_name") or "Walk-in").strip().lower()
+        if key not in by_customer:
+            by_customer[key] = {
+                "customer_id": s.get("customer_id"),
+                "customer_name": s.get("customer_name") or "Walk-in",
+                "customer_phone": s.get("customer_phone"),
+                "sales_count": 0,
+                "total": 0,
+                "oldest_date": s.get("created_at"),
+                "latest_date": s.get("created_at"),
+                "sales": [],
+            }
+        c = by_customer[key]
+        c["sales_count"] += 1
+        c["total"] += float(s.get("total") or 0)
+        c["sales"].append({
+            "id": s.get("id"),
+            "receipt_number": s.get("receipt_number") or s.get("id"),
+            "total": s.get("total"),
+            "created_at": s.get("created_at"),
+            "payment_method": s.get("payment_method"),
+        })
+        if s.get("created_at") < c["oldest_date"]:
+            c["oldest_date"] = s.get("created_at")
+        if s.get("created_at") > c["latest_date"]:
+            c["latest_date"] = s.get("created_at")
+        total_out += float(s.get("total") or 0)
+    rows = sorted(by_customer.values(), key=lambda x: -x["total"])
+    return {
+        "total_outstanding": total_out,
+        "customer_count": len(rows),
+        "by_customer": rows,
+    }
+
+
+# ========== BULK BARCODE RE-ISSUE ==========
+
+@router.post("/admin/reissue-barcodes")
+async def reissue_legacy_barcodes(data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Migrate any non-5812-prefixed variant barcodes to the new 5812-* format.
+    Admin/director only. Logs old↔new mapping in db.barcode_migrations for audit.
+    Body: { dry_run?: bool, location_id?: str (filter scope) }"""
+    role = (current_user.get("role") or "").lower()
+    if role not in {"admin", "system_admin", "executive director", "adviser", "director", "manager"} and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin/director/manager can re-issue barcodes")
+    dry_run = bool((data or {}).get("dry_run"))
+    loc_filter = (data or {}).get("location_id")
+    # Find all products with at least one variant whose barcode doesn't start with 5812-
+    query = {"variants": {"$elemMatch": {"barcode": {"$not": {"$regex": "^5812-"}}}}}
+    if loc_filter:
+        query["location_id"] = loc_filter
+    products = await db.products.find(query, {"_id": 0}).to_list(2000)
+    mappings = []
+    updated_count = 0
+    # Local import to avoid circulars at top
+    from routers.products import _generate_variant_barcode
+    for p in products:
+        if not p.get("location_id"):
+            continue
+        for i, v in enumerate(p.get("variants") or []):
+            old = v.get("barcode") or ""
+            if old.startswith("5812-"):
+                continue
+            new_barcode = await _generate_variant_barcode(p["location_id"], i + 1)
+            mappings.append({"product_id": p["id"], "variant_id": v.get("id"), "old": old, "new": new_barcode, "product_name": p.get("name")})
+            if not dry_run:
+                await db.products.update_one(
+                    {"id": p["id"], "variants.id": v["id"]},
+                    {"$set": {"variants.$.barcode": new_barcode, "variants.$.barcode_auto_generated": True}}
+                )
+                updated_count += 1
+    if not dry_run and mappings:
+        await db.barcode_migrations.insert_one({
+            "id": f"bcmig_{uuid.uuid4().hex[:8]}",
+            "performed_by": current_user["id"],
+            "performed_by_name": current_user.get("name", ""),
+            "performed_at": datetime.now(timezone.utc).isoformat(),
+            "mapping_count": len(mappings),
+            "mappings": mappings,
+        })
+    return {"updated": updated_count, "candidates": len(mappings), "dry_run": dry_run, "mappings": mappings[:50]}
+
+
+@router.get("/public/quotes/{quote_number}")
+async def public_quote_lookup(quote_number: str):
+    """Public lookup — used by the customer-facing quote-acceptance page.
+    No auth required, but verify=phone OR email is needed before accept."""
+    inv = await db.invoices.find_one(
+        {"$or": [{"id": quote_number}, {"invoice_number": quote_number}], "is_quote": True},
+        {"_id": 0}
+    )
+    if not inv:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    # Return sanitised public view (hide internal IDs / staff info)
+    return {
+        "invoice_number": inv.get("invoice_number"),
+        "status": inv.get("status"),
+        "customer_name": inv.get("customer_name"),
+        "customer_phone": inv.get("customer_phone"),
+        "customer_email": inv.get("customer_email"),
+        "items": inv.get("items") or [],
+        "subtotal": inv.get("subtotal"),
+        "total": inv.get("total"),
+        "discount": inv.get("discount"),
+        "tax_amount": inv.get("tax_amount"),
+        "due_date": inv.get("due_date"),
+        "notes": inv.get("notes"),
+        "issued_by_name": inv.get("issued_by_name"),
+        "created_at": inv.get("created_at"),
+        "accepted_at": inv.get("accepted_at"),
+        "receipt_number": inv.get("receipt_number"),
+    }
+
+
+@router.post("/public/quotes/{quote_number}/accept")
+async def public_accept_quote(quote_number: str, data: dict):
+    """Customer-initiated quote acceptance (public, no auth).
+    Verifies customer identity via phone OR email match against the original quote,
+    then flips the quote to status='accepted' and creates a draft invoice ready for staff to convert.
+    Body: { verification: <phone-last-4 OR email> }
+    """
+    inv = await db.invoices.find_one(
+        {"$or": [{"id": quote_number}, {"invoice_number": quote_number}], "is_quote": True},
+        {"_id": 0}
+    )
+    if not inv:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    if inv.get("status") == "accepted":
+        return {"message": "Already accepted", "accepted_at": inv.get("accepted_at")}
+    if inv.get("status") == "converted":
+        raise HTTPException(status_code=400, detail="Quote was already converted to a sale")
+    if inv.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Quote was cancelled and cannot be accepted")
+    verification = (data or {}).get("verification", "").strip().lower()
+    if not verification:
+        raise HTTPException(status_code=400, detail="Verification required (your phone last 4 or email)")
+    matches = False
+    inv_phone = (inv.get("customer_phone") or "").replace(" ", "").replace("-", "").replace("+", "")
+    inv_email = (inv.get("customer_email") or "").lower()
+    if inv_email and verification == inv_email:
+        matches = True
+    elif inv_phone and (verification == inv_phone or inv_phone.endswith(verification.lstrip("+").replace(" ", "").replace("-", ""))):
+        matches = True
+    if not matches:
+        raise HTTPException(status_code=403, detail="Verification did not match this quote's customer")
+    now = datetime.now(timezone.utc)
+    # Flip to accepted and convert to a draft invoice (staff still needs to finalise into a sale)
+    new_inv_number = inv.get("invoice_number", "").replace("QUOTE-", "INV-DRAFT-") + "-A"
+    await db.invoices.update_one(
+        {"id": inv["id"]},
+        {"$set": {
+            "status": "accepted",
+            "accepted_at": now.isoformat(),
+            "linked_invoice_number": new_inv_number,
+            "updated_at": now.isoformat(),
+        }}
+    )
+    # Spawn a follow-on draft invoice ready for staff
+    draft = {
+        **{k: v for k, v in inv.items() if k not in ("id", "status", "is_quote", "_id")},
+        "id": new_inv_number,
+        "invoice_number": new_inv_number,
+        "status": "draft",
+        "is_quote": False,
+        "spawned_from_quote": inv.get("invoice_number"),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    await db.invoices.insert_one(draft)
+    return {"message": "Quote accepted", "accepted_at": now.isoformat(), "draft_invoice_number": new_inv_number}
