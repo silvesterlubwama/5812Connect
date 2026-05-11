@@ -262,3 +262,95 @@ async def schedule_statements(data: dict, current_user: dict = Depends(require_s
 @router.get("/customer-statements/schedule/list")
 async def list_statement_schedules(current_user: dict = Depends(require_staff)):
     return await db.statement_schedules.find({"active": True}, {"_id": 0}).to_list(500)
+
+
+# ========== PAYMENT REMINDER AUTOMATION ==========
+
+@router.post("/payment-reminders/send")
+async def send_payment_reminder(data: dict, current_user: dict = Depends(require_staff)):
+    """Send a payment-reminder email with the latest statement attached.
+    Body: { customer_id_or_name, to_email? } — uses customer record otherwise.
+    Idempotency: skips if a reminder was sent in the last 7 days unless `force=true`."""
+    cust_id = data.get("customer_id_or_name") or data.get("customer_id") or data.get("customer_name")
+    if not cust_id:
+        raise HTTPException(status_code=400, detail="customer_id_or_name required")
+    force = bool(data.get("force"))
+    if not force:
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        recent = await db.payment_reminders.find_one({
+            "customer_key": cust_id,
+            "sent_at": {"$gte": seven_days_ago},
+        })
+        if recent:
+            raise HTTPException(status_code=400, detail="A reminder was sent in the last 7 days. Pass force=true to override.")
+    # Build statement for outstanding period
+    period_from = data.get("period_from") or (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    period_to = data.get("period_to") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    customer = await db.customer_accounts.find_one(
+        {"$or": [{"id": cust_id}, {"name": cust_id}]},
+        {"_id": 0}
+    ) or {}
+    sale_q = {
+        "$or": [{"customer_id": cust_id}, {"customer_name": customer.get("name") or cust_id}],
+        "voided": {"$ne": True},
+        "created_at": {"$gte": period_from + "T00:00:00", "$lte": period_to + "T23:59:59.999"},
+    }
+    sales = await db.sales.find(sale_q, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    outstanding = [s for s in sales if s.get("payment_status") == "pending"]
+    if not outstanding:
+        raise HTTPException(status_code=400, detail="No outstanding sales for this customer")
+    total_outstanding = sum(float(s.get("total") or 0) for s in outstanding)
+    to_email = (data.get("to_email") or "").strip() or customer.get("email") or (sales[0].get("customer_email") if sales else None)
+    if not to_email:
+        raise HTTPException(status_code=400, detail="No email on file — supply to_email or use WhatsApp deep-link from AR page")
+    html = _render_statement_html(customer, sales, period_from, period_to)
+    pdf = _html_to_pdf(html)
+    try:
+        import resend
+        resend.api_key = os.environ.get("RESEND_API_KEY", "")
+        sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
+        if not resend.api_key:
+            raise HTTPException(status_code=500, detail="RESEND_API_KEY not configured")
+        oldest_days = max(((datetime.now(timezone.utc) - datetime.fromisoformat(o["created_at"].replace("Z", "+00:00"))).days) for o in outstanding) if outstanding else 0
+        currency = outstanding[0].get("items", [{}])[0].get("currency") if outstanding[0].get("items") else "UGX"
+        body = f"""<div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+            <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' style='height: 40px; margin-bottom: 20px;' />
+            <p>Hi {customer.get('name') or cust_id},</p>
+            <p>This is a gentle reminder that you have <strong>{len(outstanding)} outstanding payment(s)</strong> totalling <strong style='color: #b45309;'>{currency} {total_outstanding:,.2f}</strong>.</p>
+            <p>The oldest is <strong>{oldest_days} days</strong> ago. A full statement is attached for your reference.</p>
+            <p>If you have already paid, please disregard. Otherwise, kindly settle at your earliest convenience.</p>
+            <p>Thank you,<br/>58:12 Global</p>
+        </div>"""
+        resend.Emails.send({
+            "from": sender,
+            "to": to_email,
+            "subject": f"Friendly reminder: Outstanding balance — {currency} {total_outstanding:,.2f}",
+            "html": body,
+            "attachments": [{"filename": f"statement-{period_from}-{period_to}.pdf", "content": list(pdf)}],
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Payment reminder send failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Email failed: {e}")
+    # Record send for idempotency + audit
+    await db.payment_reminders.insert_one({
+        "id": f"rem_{uuid.uuid4().hex[:8]}",
+        "customer_key": cust_id,
+        "customer_name": customer.get("name") or cust_id,
+        "to_email": to_email,
+        "outstanding_total": total_outstanding,
+        "outstanding_count": len(outstanding),
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "sent_by": current_user["id"],
+        "auto_triggered": bool(data.get("auto_triggered")),
+    })
+    return {"sent_to": to_email, "outstanding_total": total_outstanding, "outstanding_count": len(outstanding)}
+
+
+@router.get("/payment-reminders/history")
+async def reminder_history(customer_id_or_name: Optional[str] = None, current_user: dict = Depends(require_staff)):
+    query = {}
+    if customer_id_or_name:
+        query["customer_key"] = customer_id_or_name
+    return await db.payment_reminders.find(query, {"_id": 0}).sort("sent_at", -1).limit(200).to_list(200)

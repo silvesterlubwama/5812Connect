@@ -81,6 +81,19 @@ export default function PortalDashboard() {
         <StatCard title="Messages" value={d.unread_messages || 0} sub="unread" icon={MessageSquare} color="bg-purple-500" onClick={() => navigate('/portal/chat')} />
       </div>
 
+      {/* Quick action: download my account statement */}
+      <Card className="shadow-soft rounded-xl" data-testid="portal-statement-quick-action">
+        <CardContent className="p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-semibold">📄 My Account Statement</p>
+            <p className="text-xs text-muted-foreground">Download a PDF of your purchases & outstanding balance</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => navigate('/portal/profile')} data-testid="portal-go-statement">Open</Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Recent Check-ins */}
       <Card className="shadow-soft rounded-xl">
         <CardHeader className="pb-3 flex flex-row items-center justify-between">

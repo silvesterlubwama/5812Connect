@@ -572,6 +572,7 @@ async def _run_due_date_reminder_scheduler():
             if last_birthday_check_date != date.today() and now.hour == 8:
                 await _fire_birthday_anniversary_notifications()
                 await _fire_scheduled_customer_statements()
+                await _fire_overdue_payment_reminders()
                 last_birthday_check_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
@@ -642,6 +643,94 @@ async def _fire_scheduled_customer_statements():
                 logger.error(f"Auto-statement send for customer {s.get('customer_id')}: {e}")
     except Exception as e:
         logger.error(f"Scheduled statements error: {e}")
+
+
+async def _fire_overdue_payment_reminders():
+    """Daily 08:00 UTC: find customers with pending sales >= 14 days old and send a reminder email.
+    Idempotent — only 1 reminder per customer per 7 days."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        # Aggregate by customer
+        pending = await db.sales.find({
+            "payment_status": "pending",
+            "voided": {"$ne": True},
+            "created_at": {"$lte": cutoff},
+        }, {"_id": 0}).to_list(2000)
+        if not pending:
+            return
+        by_customer = {}
+        for s in pending:
+            key = s.get("customer_id") or s.get("customer_name") or "unknown"
+            if key == "unknown" or key.lower().startswith("walk-in"):
+                continue
+            by_customer.setdefault(key, []).append(s)
+        sent_count = 0
+        for cust_key, sales in by_customer.items():
+            # Skip if reminder sent in last 7 days
+            recent = await db.payment_reminders.find_one({
+                "customer_key": cust_key,
+                "sent_at": {"$gte": recent_cutoff},
+            })
+            if recent:
+                continue
+            try:
+                from routers.statements import _render_statement_html, _html_to_pdf
+                customer = await db.customer_accounts.find_one(
+                    {"$or": [{"id": cust_key}, {"name": cust_key}]},
+                    {"_id": 0}
+                ) or {}
+                to_email = customer.get("email") or (sales[0].get("customer_email") if sales else None)
+                if not to_email:
+                    continue
+                period_from = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+                period_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                total_outstanding = sum(float(s.get("total") or 0) for s in sales)
+                # Render PDF
+                full_sales = await db.sales.find({
+                    "$or": [{"customer_id": cust_key}, {"customer_name": customer.get("name") or cust_key}],
+                    "voided": {"$ne": True},
+                    "created_at": {"$gte": period_from + "T00:00:00", "$lte": period_to + "T23:59:59.999"},
+                }, {"_id": 0}).sort("created_at", 1).to_list(2000)
+                html = _render_statement_html(customer, full_sales, period_from, period_to)
+                pdf = _html_to_pdf(html)
+                import resend
+                resend.api_key = os.environ.get("RESEND_API_KEY", "")
+                sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
+                if not resend.api_key:
+                    continue
+                oldest_days = max(((datetime.now(timezone.utc) - datetime.fromisoformat(o["created_at"].replace("Z", "+00:00"))).days) for o in sales)
+                currency = sales[0].get("items", [{}])[0].get("currency") if sales[0].get("items") else "UGX"
+                body = f"""<div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
+                    <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' style='height: 40px; margin-bottom: 20px;' />
+                    <p>Hi {customer.get('name') or cust_key},</p>
+                    <p>This is a friendly reminder of <strong>{len(sales)} outstanding payment(s)</strong> totalling <strong style='color:#b45309;'>{currency} {total_outstanding:,.2f}</strong>.</p>
+                    <p>The oldest is <strong>{oldest_days} days</strong> old. A full statement is attached.</p>
+                    <p>If you have already paid, please disregard. Otherwise, kindly settle at your earliest convenience.</p>
+                    <p>Thank you,<br/>58:12 Global</p></div>"""
+                resend.Emails.send({
+                    "from": sender, "to": to_email,
+                    "subject": f"Friendly reminder: Outstanding balance — {currency} {total_outstanding:,.2f}",
+                    "html": body,
+                    "attachments": [{"filename": f"statement-{period_from}-{period_to}.pdf", "content": list(pdf)}],
+                })
+                await db.payment_reminders.insert_one({
+                    "id": f"rem_{uuid.uuid4().hex[:8]}",
+                    "customer_key": cust_key,
+                    "customer_name": customer.get("name") or cust_key,
+                    "to_email": to_email,
+                    "outstanding_total": total_outstanding,
+                    "outstanding_count": len(sales),
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "auto_triggered": True,
+                })
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Auto payment-reminder for {cust_key}: {e}")
+        if sent_count:
+            logger.info(f"Auto-sent {sent_count} payment reminders")
+    except Exception as e:
+        logger.error(f"Overdue payment reminders error: {e}")
 
 
 async def _fire_birthday_anniversary_notifications():

@@ -126,9 +126,27 @@ export default function AccountsReceivablePage() {
                   <div className="flex gap-2 pt-2 border-t">
                     {c.customer_phone && (
                       <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs flex-1" onClick={() => sendWhatsApp(c)} data-testid={`ar-whatsapp-${i}`}>
-                        <MessageSquare size={12} /> WhatsApp Reminder
+                        <MessageSquare size={12} /> WhatsApp
                       </Button>
                     )}
+                    <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs flex-1" onClick={async () => {
+                      try {
+                        const cust_key = c.customer_id || c.customer_name;
+                        const res = await api.post('/payment-reminders/send', { customer_id_or_name: cust_key });
+                        toast.success(`Reminder sent to ${res.data.sent_to}`);
+                      } catch (e) {
+                        if ((e.response?.data?.detail || '').includes('last 7 days')) {
+                          if (!window.confirm('A reminder was sent in the last 7 days. Send anyway?')) return;
+                          try {
+                            const cust_key = c.customer_id || c.customer_name;
+                            const res = await api.post('/payment-reminders/send', { customer_id_or_name: cust_key, force: true });
+                            toast.success(`Reminder sent to ${res.data.sent_to}`);
+                          } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                        } else { toast.error(e.response?.data?.detail || 'No email on file'); }
+                      }
+                    }} data-testid={`ar-email-${i}`}>
+                      <Mail size={12} /> Email Reminder
+                    </Button>
                     {c.customer_phone && (
                       <a href={`tel:${c.customer_phone}`} className="inline-flex">
                         <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs">
