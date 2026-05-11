@@ -479,6 +479,7 @@ try:
     from routers.sales import router as sales_router
     from routers.sheet_import import router as sheet_import_router
     from routers.invoices import router as invoices_router
+    from routers.statements import router as statements_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -486,6 +487,7 @@ try:
     app.include_router(sales_router)
     app.include_router(sheet_import_router)
     app.include_router(invoices_router)
+    app.include_router(statements_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -569,10 +571,77 @@ async def _run_due_date_reminder_scheduler():
             now = datetime.now(timezone.utc)
             if last_birthday_check_date != date.today() and now.hour == 8:
                 await _fire_birthday_anniversary_notifications()
+                await _fire_scheduled_customer_statements()
                 last_birthday_check_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
+
+
+async def _fire_scheduled_customer_statements():
+    """Daily 08:00 UTC: check scheduled statements due today (weekly/monthly) and auto-email them."""
+    try:
+        today = datetime.now(timezone.utc)
+        weekday = today.weekday()  # 0=Mon
+        dom = today.day
+        scheds = await db.statement_schedules.find({"active": True}, {"_id": 0}).to_list(1000)
+        for s in scheds:
+            cadence = s.get("cadence")
+            due = False
+            if cadence == "weekly" and (s.get("day_of_week") or 0) == weekday:
+                due = True
+            elif cadence == "monthly" and (s.get("day_of_month") or 1) == dom:
+                due = True
+            if not due:
+                continue
+            try:
+                from routers.statements import _render_statement_html, _html_to_pdf
+                # Compute period: weekly = last 7 days, monthly = last month
+                if cadence == "weekly":
+                    pf = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+                else:
+                    pf = (today.replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")
+                pt = today.strftime("%Y-%m-%d")
+                customer = await db.customer_accounts.find_one({"id": s.get("customer_id")}, {"_id": 0}) or {}
+                sale_q = {
+                    "$or": [{"customer_id": s.get("customer_id")}, {"customer_name": customer.get("name", "")}],
+                    "voided": {"$ne": True},
+                    "created_at": {"$gte": pf + "T00:00:00", "$lte": pt + "T23:59:59.999"},
+                }
+                sales = await db.sales.find(sale_q, {"_id": 0}).to_list(2000)
+                if not sales:
+                    continue  # skip empty statements
+                to_email = s.get("email_override") or customer.get("email")
+                if not to_email:
+                    continue
+                html = _render_statement_html(customer, sales, pf, pt)
+                pdf = _html_to_pdf(html)
+                import resend
+                resend.api_key = os.environ.get("RESEND_API_KEY", "")
+                sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
+                if not resend.api_key:
+                    continue
+                resend.Emails.send({
+                    "from": sender, "to": to_email,
+                    "subject": f"Your 58:12 {cadence} statement ({pf} → {pt})",
+                    "html": f"<p>Hi {customer.get('name', '')},</p><p>Your {cadence} statement is attached.</p><p>— 58:12 Global</p>",
+                    "attachments": [{"filename": f"statement-{pf}-{pt}.pdf", "content": list(pdf)}],
+                })
+                await db.statement_emails.insert_one({
+                    "id": f"stmt_{uuid.uuid4().hex[:8]}",
+                    "customer_id": s.get("customer_id"),
+                    "customer_name": customer.get("name"),
+                    "to_email": to_email,
+                    "period_from": pf, "period_to": pt,
+                    "sales_count": len(sales),
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "auto_scheduled": True,
+                    "cadence": cadence,
+                })
+            except Exception as e:
+                logger.error(f"Auto-statement send for customer {s.get('customer_id')}: {e}")
+    except Exception as e:
+        logger.error(f"Scheduled statements error: {e}")
 
 
 async def _fire_birthday_anniversary_notifications():

@@ -8,6 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { portalApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import api from '../services/api';
 
 export default function PortalProfile() {
   const { user } = useAuth();
@@ -174,6 +175,38 @@ export default function PortalProfile() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Statement download for purchasing customers */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">📄 My Account Statement</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-muted-foreground">Download a PDF statement of your purchases.</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="outline" size="sm" onClick={async () => {
+              try {
+                const today = new Date();
+                const first = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+                const last = today.toISOString().slice(0, 10);
+                const res = await api.get(`/customer-statements/${encodeURIComponent(user?.id || user?.name)}`, { params: { period_from: first, period_to: last }, responseType: 'blob' });
+                const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+                const a = document.createElement('a'); a.href = url; a.download = `statement-${first}-${last}.pdf`; a.click(); URL.revokeObjectURL(url);
+              } catch (e) { toast.error('Statement unavailable'); }
+            }} data-testid="my-statement-month">This Month</Button>
+            <Button variant="outline" size="sm" onClick={async () => {
+              try {
+                const today = new Date();
+                const start = new Date(today.getTime() - 90 * 86400000).toISOString().slice(0, 10);
+                const end = today.toISOString().slice(0, 10);
+                const res = await api.get(`/customer-statements/${encodeURIComponent(user?.id || user?.name)}`, { params: { period_from: start, period_to: end }, responseType: 'blob' });
+                const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+                const a = document.createElement('a'); a.href = url; a.download = `statement-${start}-${end}.pdf`; a.click(); URL.revokeObjectURL(url);
+              } catch (e) { toast.error('Statement unavailable'); }
+            }} data-testid="my-statement-90d">Last 90 Days</Button>
+          </div>
         </CardContent>
       </Card>
     </div>

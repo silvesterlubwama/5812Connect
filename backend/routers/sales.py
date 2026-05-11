@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from deps import db, get_current_user, require_manager, _audit, get_campus_filter, get_role_level, is_system_admin
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
 
@@ -32,6 +32,12 @@ class SaleCreate(BaseModel):
     items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
     customer_id: Optional[str] = None
     total: float; payment_method: str = "cash"; notes: Optional[str] = None; location_id: Optional[str] = None
+    # Optional extras (offline sync, cash details, tier discount breakdown)
+    subtotal: Optional[float] = None; packaging_total: Optional[float] = None; discount: Optional[float] = None
+    amount_given: Optional[float] = None; change_due: Optional[float] = None
+    offline_temp_id: Optional[str] = None; offline_created_at: Optional[str] = None
+    cashier: Optional[str] = None; cashier_id: Optional[str] = None
+    model_config = {"extra": "allow"}
 
 
 # ========== FINANCIAL SUMMARY ==========
@@ -353,6 +359,105 @@ async def list_shifts(
     elif not (is_system_admin(current_user) or (current_user.get("role") or "").lower() in {"admin", "director", "executive director", "adviser", "manager"}):
         query["cashier_id"] = current_user["id"]
     return await db.shifts.find(query, {"_id": 0}).sort("opened_at", -1).limit(200).to_list(200)
+
+
+@router.get("/cash-reconciliation/daily")
+async def daily_cash_reconciliation(
+    date: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Daily cash reconciliation: aggregates all closed shifts at a location on a date.
+    Returns total cash sales, drops, expected, counted, total variance + per-cashier breakdown
+    + flags individuals with repeated negative discrepancies."""
+    if not date:
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = date + "T00:00:00"
+    end = date + "T23:59:59"
+    query = {"opened_at": {"$gte": start, "$lte": end + ".999"}, "status": "closed"}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        scope = current_user.get("location_id") or current_user.get("active_campus_id")
+        if scope:
+            query["location_id"] = scope
+    shifts = await db.shifts.find(query, {"_id": 0}).sort("opened_at", 1).to_list(200)
+    by_cashier = {}
+    totals = {"opening_cash": 0, "cash_sales": 0, "cash_drops": 0, "expected": 0, "counted": 0, "variance": 0, "shifts": 0}
+    for s in shifts:
+        cid = s.get("cashier_id") or "unknown"
+        if cid not in by_cashier:
+            by_cashier[cid] = {"cashier_id": cid, "cashier_name": s.get("cashier_name", ""), "shifts": 0, "opening_cash": 0, "cash_sales": 0, "cash_drops": 0, "expected": 0, "counted": 0, "variance": 0, "shift_ids": []}
+        c = by_cashier[cid]
+        c["shifts"] += 1
+        c["opening_cash"] += s.get("opening_cash", 0)
+        c["cash_sales"] += s.get("cash_sales_total", 0)
+        c["cash_drops"] += s.get("cash_drops_total", 0)
+        c["expected"] += s.get("expected_cash", 0)
+        c["counted"] += s.get("closing_cash", 0)
+        c["variance"] += s.get("variance", 0)
+        c["shift_ids"].append(s.get("id"))
+        for k in ("opening_cash", "cash_sales", "cash_drops", "expected", "counted", "variance"):
+            totals[k] += s.get(k.replace("cash_sales", "cash_sales_total").replace("cash_drops", "cash_drops_total").replace("expected", "expected_cash").replace("counted", "closing_cash") if k in ("cash_sales","cash_drops","expected","counted") else k, 0)
+        totals["shifts"] += 1
+    # Flag cashiers with repeated negative variance — look at last 30 days
+    flagged = []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    for cid, info in by_cashier.items():
+        if info["variance"] < 0:
+            past = await db.shifts.count_documents({
+                "cashier_id": cid,
+                "status": "closed",
+                "variance": {"$lt": 0},
+                "closed_at": {"$gte": cutoff},
+            })
+            if past >= 3:
+                flagged.append({"cashier_id": cid, "cashier_name": info["cashier_name"], "neg_shifts_30d": past})
+    return {
+        "date": date,
+        "location_id": location_id or current_user.get("location_id"),
+        "totals": totals,
+        "by_cashier": list(by_cashier.values()),
+        "flagged_cashiers": flagged,
+    }
+
+
+@router.get("/payroll-reconciliation")
+async def payroll_reconciliation(
+    period: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Payroll reconciliation: compares aggregated payroll expense vs sum of paid payslips.
+    Flags discrepancies for auditors during end-of-month close."""
+    if not period:
+        period = datetime.now(timezone.utc).strftime("%Y-%m")
+    payslip_query = {"period": period, "status": "paid"}
+    expense_query = {"source": "hr_payroll_aggregate", "payroll_period": period}
+    if location_id:
+        payslip_query["location_id"] = location_id
+        expense_query["location_id"] = location_id
+    else:
+        scope = current_user.get("location_id") or current_user.get("active_campus_id")
+        if scope:
+            payslip_query["location_id"] = scope
+            expense_query["location_id"] = scope
+    payslips = await db.hr_payslips.find(payslip_query, {"_id": 0}).to_list(2000)
+    expenses = await db.expenses.find(expense_query, {"_id": 0}).to_list(2000)
+    payslip_total = sum(float(p.get("net_salary") or 0) for p in payslips)
+    expense_total = sum(float(e.get("amount") or 0) for e in expenses)
+    variance = expense_total - payslip_total
+    return {
+        "period": period,
+        "location_id": location_id or current_user.get("location_id"),
+        "paid_payslips_count": len(payslips),
+        "paid_payslips_total": payslip_total,
+        "aggregated_expense_count": len(expenses),
+        "aggregated_expense_total": expense_total,
+        "variance": variance,
+        "is_balanced": abs(variance) < 1,
+        "expense_dates": sorted({e.get("date") for e in expenses}),
+    }
     """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""
     loc_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     query = {"status": "draft"}

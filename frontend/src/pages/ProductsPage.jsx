@@ -28,6 +28,7 @@ import { authApi, cashDropsApi, shiftsApi } from '../services/api';
 import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer } from '../utils/posPeripherals';
+import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
 
@@ -380,6 +381,35 @@ export default function ProductsPage() {
   const [shiftForm, setShiftForm] = useState({ opening_cash: '', closing_cash: '', notes: '' });
   const [shiftResult, setShiftResult] = useState(null);
 
+  // Offline POS — IndexedDB queue for cash sales when network is down
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
+  const refreshOfflineCount = async () => {
+    try { setPendingOfflineCount(await offlineQueueCount()); } catch (e) { /* ignore */ }
+  };
+  useEffect(() => {
+    refreshOfflineCount();
+    const cleanup = onConnectivityChange(
+      async () => {
+        setIsOnline(true);
+        toast.success('Back online — syncing offline sales...');
+        try {
+          const res = await syncOfflineSales(salesApi);
+          if (res.succeeded > 0) toast.success(`Synced ${res.succeeded} offline sale${res.succeeded === 1 ? '' : 's'}`);
+          if (res.failed > 0) toast.error(`${res.failed} sales failed to sync — will retry`);
+          refreshOfflineCount();
+          fetchAll();
+        } catch (e) { /* ignore */ }
+      },
+      () => {
+        setIsOnline(false);
+        toast.warning('Offline — cash sales only until reconnect');
+      }
+    );
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch current shift when location or cashier changes
   useEffect(() => {
     if (!saleLocationId) return;
@@ -403,6 +433,14 @@ export default function ProductsPage() {
   };
 
   const actuallyCheckout = async (cashInfo = null) => {
+    // Offline guard — only cash sales allowed when network is down
+    if (!isOnline) {
+      if (paymentMethod !== 'cash') {
+        toast.error('You are offline. Only CASH sales can be processed until reconnect.');
+        SOUNDS.saleError();
+        return;
+      }
+    }
     setCheckoutLoading(true);
     try {
       // Enrich cart items with computed line totals (so receipt + sale record match what was charged)
@@ -443,6 +481,28 @@ export default function ProductsPage() {
       } else if (locationFilter !== 'all') {
         payload.location_id = locationFilter;
       }
+
+      // OFFLINE PATH: queue locally and return a synthetic receipt
+      if (!isOnline) {
+        const queued = await queueOfflineSale(payload);
+        const receipt = {
+          ...payload,
+          id: queued.temp_id,
+          receipt_number: queued.temp_id,
+          cashier: activeCashier?.name || user?.name || 'Cashier',
+          created_at: queued.created_at,
+          offline: true,
+        };
+        const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
+        setLastReceipt(receipt); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true);
+        setCart([]); setCustomerName('Walk-in Customer');
+        SOUNDS.saleComplete(); haptic([30, 50, 30]);
+        if (drawerConnected) { kickCashDrawer().catch(() => {}); }
+        toast.success(`Sale queued offline (${queued.temp_id}) — will sync when online`);
+        refreshOfflineCount();
+        return;
+      }
+
       const res = await salesApi.create(payload);
       // Auto-set paper size override on receipt if user picked one (otherwise use store default)
       const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
@@ -617,6 +677,22 @@ export default function ProductsPage() {
               <span className={`w-1.5 h-1.5 rounded-full ${drawerConnected ? 'bg-green-500' : 'bg-muted-foreground'}`} />
               {drawerConnected ? 'Drawer Connected' : 'Connect Drawer'}
             </Button>
+          )}
+          {/* Offline status indicator */}
+          {!isOnline && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-amber-50 border border-amber-300 text-xs text-amber-800" data-testid="offline-indicator">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              Offline — cash only
+              {pendingOfflineCount > 0 && <span className="font-bold ml-1">({pendingOfflineCount} queued)</span>}
+            </div>
+          )}
+          {isOnline && pendingOfflineCount > 0 && (
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1 border-blue-300 text-blue-700" data-testid="sync-now-btn" onClick={async () => {
+              const res = await syncOfflineSales(salesApi);
+              toast.success(`Synced ${res.succeeded}, ${res.failed} failed`);
+              refreshOfflineCount();
+              fetchAll();
+            }}>Sync {pendingOfflineCount} queued</Button>
           )}
           {/* Cash Drop button */}
           <Button variant="outline" size="sm" className="h-8 text-xs gap-1" data-testid="cash-drop-btn" onClick={() => setCashDropOpen(true)}>
@@ -1180,9 +1256,11 @@ export default function ProductsPage() {
       <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><Settings size={16} /> Store Settings</span>
-            <div className="flex gap-2 text-xs">
+            <div className="flex gap-2 text-xs flex-wrap">
               <Link to="/pos-setup" className="text-primary hover:underline" data-testid="pos-setup-link">POS Kiosk Setup →</Link>
               <Link to="/accounts-receivable" className="text-primary hover:underline" data-testid="ar-link">Accounts Receivable →</Link>
+              <Link to="/customer-statements" className="text-primary hover:underline" data-testid="statements-link">Statements →</Link>
+              <Link to="/reconciliation" className="text-primary hover:underline" data-testid="reconciliation-link">Reconciliation →</Link>
               <Link to="/barcode-reissue" className="text-primary hover:underline" data-testid="reissue-link">Re-issue Barcodes →</Link>
             </div>
           </DialogTitle></DialogHeader>

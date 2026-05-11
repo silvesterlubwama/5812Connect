@@ -449,29 +449,102 @@ export default function HRPage() {
 
       {/* HR Settings Dialog */}
       <Dialog open={showSettings} onOpenChange={setShowSettings}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>HR Settings</DialogTitle></DialogHeader>
-          <div className="space-y-3 mt-2">
+          <div className="space-y-4 mt-2">
             <div className="flex items-center justify-between">
               <div><p className="text-sm font-medium">HR Module Enabled</p><p className="text-xs text-muted-foreground">Enable HR features for this campus</p></div>
               <Switch checked={settingsForm.hr_enabled} onCheckedChange={v => setSettingsForm({...settingsForm, hr_enabled: v})} data-testid="hr-enabled-toggle" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5"><Label>Pay Frequency</Label>
                 <Select value={settingsForm.pay_frequency} onValueChange={v => setSettingsForm({...settingsForm, pay_frequency: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5"><Label>Pay Day</Label><Input type="number" min={1} max={31} value={settingsForm.pay_day} onChange={e => setSettingsForm({...settingsForm, pay_day: parseInt(e.target.value) || 28})} /></div>
+              <div className="space-y-1.5"><Label>Pay Day (1-31)</Label><Input type="number" min={1} max={31} value={settingsForm.pay_day} onChange={e => setSettingsForm({...settingsForm, pay_day: parseInt(e.target.value) || 28})} /></div>
+              <div className="space-y-1.5"><Label>Next Pay Date</Label><Input type="date" value={settingsForm.next_pay_date || ''} onChange={e => setSettingsForm({...settingsForm, next_pay_date: e.target.value})} data-testid="next-pay-date" /></div>
             </div>
+
+            {/* Country compliance picker */}
+            <div className="border-t pt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-semibold">Compliance (deductions/additions)</Label>
+                <Select value={settingsForm.country || 'Uganda'} onValueChange={v => setSettingsForm({...settingsForm, country: v})}>
+                  <SelectTrigger className="w-32 h-8 text-xs" data-testid="compliance-country"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['Uganda','Kenya','USA','Haiti','Thailand'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {/* Existing lines */}
+              {(settingsForm.compliance_lines || []).map((cl, i) => (
+                <div key={i} className="grid grid-cols-[1fr_90px_90px_90px_24px] gap-2 items-center text-xs">
+                  <Input className="h-8 text-xs" value={cl.name} onChange={e => {
+                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], name: e.target.value}; setSettingsForm({...settingsForm, compliance_lines: next});
+                  }} />
+                  <Select value={cl.type} onValueChange={v => {
+                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], type: v}; setSettingsForm({...settingsForm, compliance_lines: next});
+                  }}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="deduction">Deduction</SelectItem><SelectItem value="addition">Addition</SelectItem></SelectContent>
+                  </Select>
+                  <Input className="h-8 text-xs" type="number" step="0.01" value={cl.amount || 0} onChange={e => {
+                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], amount: parseFloat(e.target.value) || 0}; setSettingsForm({...settingsForm, compliance_lines: next});
+                  }} />
+                  <label className="flex items-center gap-1 text-[10px] cursor-pointer">
+                    <input type="checkbox" checked={!!cl.is_percentage} onChange={e => {
+                      const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], is_percentage: e.target.checked}; setSettingsForm({...settingsForm, compliance_lines: next});
+                    }} /> %
+                  </label>
+                  <button type="button" className="text-destructive" onClick={() => {
+                    setSettingsForm({...settingsForm, compliance_lines: settingsForm.compliance_lines.filter((_, j) => j !== i)});
+                  }}>×</button>
+                </div>
+              ))}
+              {(settingsForm.compliance_lines || []).length === 0 && <p className="text-[10px] text-muted-foreground">No compliance lines yet. Add common ones for your country below.</p>}
+
+              {/* Compliance options dropdown */}
+              <ComplianceOptionsPicker
+                country={settingsForm.country || 'Uganda'}
+                onPick={(opt) => setSettingsForm(prev => ({
+                  ...prev,
+                  compliance_lines: [...(prev.compliance_lines || []), opt]
+                }))}
+              />
+            </div>
+
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowSettings(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleSaveSettings}>Save Settings</Button>
+              <Button className="flex-1" onClick={handleSaveSettings} data-testid="hr-settings-save">Save Settings</Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function ComplianceOptionsPicker({ country, onPick }) {
+  const [options, setOptions] = React.useState([]);
+  React.useEffect(() => {
+    if (!country) return;
+    api.get(`/hr/compliance-options/${encodeURIComponent(country)}`)
+      .then(r => setOptions(r.data?.options || []))
+      .catch(() => setOptions([]));
+  }, [country]);
+  if (options.length === 0) return null;
+  return (
+    <div className="border border-dashed border-border rounded-md p-2 space-y-1">
+      <p className="text-[10px] text-muted-foreground">Common {country} compliance — click to add:</p>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o, i) => (
+          <Button key={i} type="button" size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => onPick(o)} data-testid={`compliance-opt-${i}`}>
+            + {o.name} {o.amount}{o.is_percentage ? '%' : ''}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }
