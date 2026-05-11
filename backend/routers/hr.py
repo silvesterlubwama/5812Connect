@@ -38,12 +38,80 @@ async def get_hr_settings(location_id: str, current_user: dict = Depends(require
 
 @router.put("/settings/{location_id}")
 async def update_hr_settings(location_id: str, data: dict, current_user: dict = Depends(require_director)):
-    allowed = {"hr_enabled", "pay_frequency", "currency", "country", "tax_rules", "benefits", "deduction_types", "pay_day"}
+    allowed = {"hr_enabled", "pay_frequency", "currency", "country", "tax_rules", "benefits",
+               "deduction_types", "pay_day", "next_pay_date", "compliance_lines",
+               "aggregated_payroll_expense", "payslip_message"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
-    update["location_id"] = location_id
     await db.hr_settings.update_one({"location_id": location_id}, {"$set": update}, upsert=True)
     return await db.hr_settings.find_one({"location_id": location_id}, {"_id": 0})
+
+
+# ========== COMPLIANCE OPTIONS (per-country common deductions/additions) ==========
+
+# Researched defaults per country. Admins pick from dropdown then can edit rates.
+COMPLIANCE_OPTIONS = {
+    "Uganda": [
+        {"name": "PAYE (Pay-As-You-Earn)", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Progressive: 0% up to UGX 235k, 10-40% above. Set band per employee or use simplified rate."},
+        {"name": "NSSF Employee", "type": "deduction", "is_percentage": True, "amount": 5,
+         "notes": "5% employee contribution to National Social Security Fund."},
+        {"name": "NSSF Employer", "type": "deduction", "is_percentage": True, "amount": 10,
+         "notes": "10% employer contribution (paid by org, not deducted from staff)."},
+        {"name": "LST (Local Service Tax)", "type": "deduction", "is_percentage": False, "amount": 5000,
+         "notes": "Local Service Tax — annual, varies by income band UGX 5k-100k."},
+    ],
+    "Kenya": [
+        {"name": "PAYE", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Graduated 10-35% per KRA bands."},
+        {"name": "NHIF", "type": "deduction", "is_percentage": False, "amount": 1700,
+         "notes": "Graduated; ~KES 1,700 for KES 100k earner."},
+        {"name": "NSSF", "type": "deduction", "is_percentage": True, "amount": 6,
+         "notes": "6% of pensionable pay (capped)."},
+        {"name": "Affordable Housing Levy", "type": "deduction", "is_percentage": True, "amount": 1.5,
+         "notes": "1.5% of gross pay (since 2024)."},
+    ],
+    "USA": [
+        {"name": "Federal Income Tax Withholding", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Per W-4 + tax tables. Set per employee."},
+        {"name": "Social Security (FICA)", "type": "deduction", "is_percentage": True, "amount": 6.2,
+         "notes": "6.2% up to wage base limit."},
+        {"name": "Medicare (FICA)", "type": "deduction", "is_percentage": True, "amount": 1.45,
+         "notes": "1.45% with no cap; +0.9% over $200k."},
+        {"name": "State Income Tax", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Varies by state (0% in TX, FL, etc.)."},
+    ],
+    "Haiti": [
+        {"name": "Income Tax (Impot sur le Revenu)", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Progressive bands."},
+        {"name": "ONA (Office National d'Assurance Vieillesse)", "type": "deduction", "is_percentage": True, "amount": 3,
+         "notes": "3% employee contribution to pension."},
+        {"name": "OFATMA (Health insurance)", "type": "deduction", "is_percentage": True, "amount": 1,
+         "notes": "1% workers' health & maternity insurance."},
+    ],
+    "Thailand": [
+        {"name": "Personal Income Tax (PIT)", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Progressive 0-35%."},
+        {"name": "Social Security Fund", "type": "deduction", "is_percentage": True, "amount": 5,
+         "notes": "5% of wage, capped at THB 750/month."},
+        {"name": "Provident Fund", "type": "deduction", "is_percentage": True, "amount": 0,
+         "notes": "Optional 2-15% employee contribution."},
+    ],
+}
+
+
+@router.get("/compliance-options/{country}")
+async def get_compliance_options(country: str, current_user: dict = Depends(require_hr)):
+    """Return common compliance deductions / additions for a given country.
+    Admins can pick from this list when configuring a campus's payroll compliance lines."""
+    options = COMPLIANCE_OPTIONS.get(country, [])
+    return {"country": country, "options": options}
+
+
+@router.get("/compliance-options")
+async def list_compliance_country_options(current_user: dict = Depends(require_hr)):
+    """List all countries that have seeded compliance options."""
+    return {"countries": list(COMPLIANCE_OPTIONS.keys())}
 
 
 # ========== SALARY MANAGEMENT ==========
@@ -183,16 +251,20 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
 
 @router.post("/payslips/generate-payday")
 async def generate_payday_payslips(current_user: dict = Depends(require_director)):
-    """Generate payslips for all campuses whose pay_day matches today's day-of-month.
-    Period defaults to current YYYY-MM. Skips already-generated ones. Idempotent."""
+    """Generate payslips for all campuses whose payday matches today.
+    A campus 'is on payday' if either: (a) next_pay_date == today (preferred), or
+    (b) pay_day (legacy day-of-month) equals today's day-of-month. Period defaults to current YYYY-MM."""
     today = datetime.now(timezone.utc)
+    today_iso = today.strftime("%Y-%m-%d")
     today_day = today.day
     period = f"{today.year:04d}-{today.month:02d}"
-    # Find campuses with matching pay_day AND hr_enabled
-    campus_q = {"hr_enabled": True, "pay_day": today_day}
-    settings = await db.hr_settings.find(campus_q, {"_id": 0, "location_id": 1, "pay_day": 1}).to_list(100)
+    campus_q = {"hr_enabled": True, "$or": [
+        {"next_pay_date": today_iso},
+        {"pay_day": today_day},
+    ]}
+    settings = await db.hr_settings.find(campus_q, {"_id": 0, "location_id": 1, "pay_day": 1, "next_pay_date": 1}).to_list(100)
     if not settings:
-        return {"generated": 0, "payslips": [], "message": f"No campuses have pay_day={today_day} today", "period": period}
+        return {"generated": 0, "payslips": [], "message": f"No campuses have payday today ({today_iso} or day-of-month={today_day})", "period": period}
     all_generated = []
     total_count = 0
     for s in settings:
@@ -211,16 +283,106 @@ async def generate_payday_payslips(current_user: dict = Depends(require_director
     }
 
 
+@router.post("/payslips/pay-batch")
+async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_director)):
+    """Mark a batch of approved payslips as PAID in one go (bi-weekly / monthly payday).
+    Body: {payslip_ids: [...] }  OR  {period: 'YYYY-MM', location_id?}
+    Each marked-paid payslip contributes to a single aggregated daily expense line."""
+    ids = data.get("payslip_ids") or []
+    if not ids:
+        # Build from period + optional location
+        period = data.get("period")
+        if not period:
+            raise HTTPException(status_code=400, detail="Provide payslip_ids or period")
+        query = {"period": period, "status": "approved"}
+        if data.get("location_id"):
+            query["location_id"] = data["location_id"]
+        approved = await db.hr_payslips.find(query, {"_id": 0, "id": 1}).to_list(500)
+        ids = [p["id"] for p in approved]
+    if not ids:
+        return {"paid_count": 0, "message": "No approved payslips matched"}
+    paid_count = 0
+    aggregated_total = 0
+    for pid in ids:
+        payslip = await db.hr_payslips.find_one({"id": pid, "status": {"$ne": "paid"}}, {"_id": 0})
+        if not payslip:
+            continue
+        await _aggregate_payroll_expense(payslip, current_user)
+        await db.hr_payslips.update_one({"id": pid}, {"$set": {
+            "status": "paid",
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+            "paid_by": current_user["id"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }})
+        paid_count += 1
+        aggregated_total += float(payslip.get("net_salary") or 0)
+    await _audit(current_user["id"], "pay-batch", "hr_payslips", f"{paid_count} payslips", {"total": aggregated_total})
+    return {"paid_count": paid_count, "total_paid": aggregated_total}
+
+
 @router.put("/payslips/{payslip_id}")
 async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depends(require_director)):
-    allowed = {"status", "notes", "approved_by"}
+    """Update a payslip status / notes / mark-paid. When status becomes 'paid', the system
+    aggregates this payment into a SINGLE daily expense line for the location (NO individual
+    staff names exposed in the financial expense — only the total + count of staff)."""
+    payslip = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    if not payslip:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    allowed = {"status", "notes", "approved_by", "paid_at", "paid_by"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     if data.get("status") == "approved":
         update["approved_by"] = current_user["id"]
         update["approved_at"] = datetime.now(timezone.utc).isoformat()
+    if data.get("status") == "paid":
+        update["paid_by"] = current_user["id"]
+        update["paid_at"] = datetime.now(timezone.utc).isoformat()
+        # Aggregate into a daily payroll expense for the location (no staff names)
+        await _aggregate_payroll_expense(payslip, current_user)
     await db.hr_payslips.update_one({"id": payslip_id}, {"$set": update})
     return await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+
+
+async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
+    """Upsert ONE expense line per (location, date) that totals all paid payslips that day.
+    Notes show "Payroll for N staff, period YYYY-MM" — no individual staff names."""
+    loc_id = payslip.get("location_id") or current_user.get("active_campus_id") or ""
+    if not loc_id:
+        return
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    period = payslip.get("period", "")
+    expense_id = f"payroll_{loc_id}_{today}"
+    net = float(payslip.get("net_salary") or 0)
+    # Check if today's payroll expense already exists
+    existing = await db.expenses.find_one({"id": expense_id})
+    if existing:
+        new_total = float(existing.get("amount", 0)) + net
+        new_count = int(existing.get("payroll_count", 0)) + 1
+        await db.expenses.update_one({"id": expense_id}, {"$set": {
+            "amount": new_total,
+            "payroll_count": new_count,
+            "notes": f"Payroll for {new_count} staff, period {period}",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }})
+    else:
+        await db.expenses.insert_one({
+            "id": expense_id,
+            "title": "Payroll (Wages & Salaries)",
+            "amount": net,
+            "currency": payslip.get("currency") or "UGX",
+            "category": "Wages & Salaries",
+            "department": "HR",
+            "budget_category": "Wages & Salaries",
+            "date": today,
+            "notes": f"Payroll for 1 staff, period {period}",
+            "location_id": loc_id,
+            "status": "approved",
+            "source": "hr_payroll_aggregate",
+            "payroll_count": 1,
+            "payroll_period": period,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        })
 
 
 # ========== CONTRACT TEMPLATES ==========
