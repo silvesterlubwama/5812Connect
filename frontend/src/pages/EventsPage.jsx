@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign } from 'lucide-react';
+import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign, Download } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Switch } from '../components/ui/switch';
 import { eventsApi, checkinsApi, locationsApi, venuesApi, locationVenuesApi } from '../services/api';
+import api from '../services/api';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -36,7 +37,7 @@ export default function EventsPage() {
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeColor, setNewTypeColor] = useState('#6366f1');
   const [editingEvent, setEditingEvent] = useState(null);
-  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '' };
+  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '', ticket_tiers: [], waitlist_enabled: true };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
 
@@ -103,7 +104,7 @@ export default function EventsPage() {
 
   const editEvent = async (event) => {
     setEditingEvent(event);
-    setNewEvent({ title: event.title, type: event.type || 'service', date: event.date || '', time: event.time || '', end_time: event.end_time || '', location: event.location || '', location_id: event.location_id || '', venue_id: event.venue_id || '', capacity: event.capacity || 100, description: event.description || '', is_public: event.is_public ?? true, is_free: event.is_free ?? true, price: event.price || '', visibility: event.visibility || 'external', is_recurring: event.is_recurring ?? false, recurrence_pattern: event.recurrence_pattern || '', recurrence_day: event.recurrence_day || 1, country: event.country || getLocationCountry(event.location_id) });
+    setNewEvent({ title: event.title, type: event.type || 'service', date: event.date || '', time: event.time || '', end_time: event.end_time || '', location: event.location || '', location_id: event.location_id || '', venue_id: event.venue_id || '', capacity: event.capacity || 100, description: event.description || '', is_public: event.is_public ?? true, is_free: event.is_free ?? true, price: event.price || '', visibility: event.visibility || 'external', is_recurring: event.is_recurring ?? false, recurrence_pattern: event.recurrence_pattern || '', recurrence_day: event.recurrence_day || 1, country: event.country || getLocationCountry(event.location_id), ticket_tiers: event.ticket_tiers || [], waitlist_enabled: event.waitlist_enabled ?? true });
     if (event.location_id) await loadVenues(event.location_id);
     setShowAdd(true);
   };
@@ -294,6 +295,43 @@ export default function EventsPage() {
               <Switch checked={newEvent.is_free} onCheckedChange={v => setNewEvent({...newEvent, is_free: v})} />
             </div>
             {!newEvent.is_free && <div className="space-y-2"><Label>Price (UGX)</Label><Input type="number" placeholder="25000" value={newEvent.price} onChange={e => setNewEvent({...newEvent, price: e.target.value})} /></div>}
+
+            {/* Ticket Tiers (Odoo-style multi-tier pricing) */}
+            <div className="space-y-2 p-3 rounded-lg border border-border">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Ticket Tiers <span className="text-xs text-muted-foreground font-normal">(optional — overrides base price)</span></p>
+                  <p className="text-xs text-muted-foreground">e.g. Early Bird, Regular, VIP — each with its own price &amp; capacity</p>
+                </div>
+                <Button type="button" size="sm" variant="outline" onClick={() => setNewEvent({...newEvent, ticket_tiers: [...(newEvent.ticket_tiers || []), { id: `tier_${Date.now().toString(36)}`, name: '', price: 0, capacity: 0, sold: 0, description: '' }]})} data-testid="add-tier-btn">+ Add Tier</Button>
+              </div>
+              {(newEvent.ticket_tiers || []).map((t, idx) => (
+                <div key={t.id || idx} className="grid grid-cols-12 gap-2 items-end pt-2 border-t" data-testid={`tier-row-${idx}`}>
+                  <div className="col-span-4 space-y-1">
+                    <Label className="text-[10px]">Name</Label>
+                    <Input className="h-8 text-xs" placeholder="Early Bird" value={t.name || ''} onChange={e => { const tiers = [...newEvent.ticket_tiers]; tiers[idx] = {...t, name: e.target.value}; setNewEvent({...newEvent, ticket_tiers: tiers}); }} />
+                  </div>
+                  <div className="col-span-3 space-y-1">
+                    <Label className="text-[10px]">Price</Label>
+                    <Input className="h-8 text-xs" type="number" value={t.price ?? 0} onChange={e => { const tiers = [...newEvent.ticket_tiers]; tiers[idx] = {...t, price: parseFloat(e.target.value) || 0}; setNewEvent({...newEvent, ticket_tiers: tiers}); }} />
+                  </div>
+                  <div className="col-span-3 space-y-1">
+                    <Label className="text-[10px]">Capacity</Label>
+                    <Input className="h-8 text-xs" type="number" value={t.capacity ?? 0} onChange={e => { const tiers = [...newEvent.ticket_tiers]; tiers[idx] = {...t, capacity: parseInt(e.target.value) || 0}; setNewEvent({...newEvent, ticket_tiers: tiers}); }} />
+                  </div>
+                  <div className="col-span-1 space-y-1 text-center">
+                    <Label className="text-[10px] block">Sold</Label>
+                    <span className="text-xs font-medium block py-1.5">{t.sold || 0}</span>
+                  </div>
+                  <Button type="button" size="sm" variant="ghost" className="col-span-1 h-8 text-destructive" onClick={() => setNewEvent({...newEvent, ticket_tiers: newEvent.ticket_tiers.filter((_, j) => j !== idx)})} data-testid={`tier-delete-${idx}`}>×</Button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-lg border border-border">
+              <div><p className="text-sm font-medium">Enable Waitlist</p><p className="text-xs text-muted-foreground">Allow signups when sold out (auto-promote when seats open)</p></div>
+              <Switch checked={newEvent.waitlist_enabled ?? true} onCheckedChange={v => setNewEvent({...newEvent, waitlist_enabled: v})} data-testid="waitlist-switch" />
+            </div>
             <div className="flex items-center justify-between p-3 rounded-lg border border-border">
               <div><p className="text-sm font-medium">Recurring Event</p><p className="text-xs text-muted-foreground">Repeats on a schedule</p></div>
               <Switch checked={newEvent.is_recurring} onCheckedChange={v => setNewEvent({...newEvent, is_recurring: v})} />
@@ -365,7 +403,12 @@ export default function EventsPage() {
               </div>
               {eventDetail.description && <div><p className="text-xs text-muted-foreground mb-1">Description</p><p className="text-sm">{eventDetail.description}</p></div>}
               <Tabs defaultValue="checkins">
-                <TabsList><TabsTrigger value="checkins">Check-Ins ({eventDetail.checkins?.length ?? 0})</TabsTrigger><TabsTrigger value="attendees">Registrations ({eventDetail.attendees?.length ?? 0})</TabsTrigger></TabsList>
+                <TabsList>
+                  <TabsTrigger value="checkins">Check-Ins ({eventDetail.checkins?.length ?? 0})</TabsTrigger>
+                  <TabsTrigger value="attendees">Registrations ({eventDetail.attendees?.length ?? 0})</TabsTrigger>
+                  <TabsTrigger value="tiers">Ticket Tiers ({(eventDetail.ticket_tiers || []).length})</TabsTrigger>
+                  <TabsTrigger value="waitlist">Waitlist</TabsTrigger>
+                </TabsList>
                 <TabsContent value="checkins" className="mt-3">
                   {(eventDetail.checkins ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No check-ins</p> : (
                     <div className="space-y-2">{eventDetail.checkins.map((ci, i) => (
@@ -391,6 +434,35 @@ export default function EventsPage() {
                     ))}</div>
                   )}
                 </TabsContent>
+                <TabsContent value="tiers" className="mt-3">
+                  {(eventDetail.ticket_tiers || []).length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6">No ticket tiers — edit the event to add them.</p>
+                  ) : (
+                    <div className="space-y-2" data-testid="tiers-summary">
+                      {eventDetail.ticket_tiers.map((t, i) => {
+                        const pct = t.capacity ? Math.min(100, ((t.sold || 0) / t.capacity) * 100) : 0;
+                        return (
+                          <div key={t.id || i} className="p-3 rounded-lg border border-border">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-medium text-sm">{t.name}</p>
+                                {t.description && <p className="text-xs text-muted-foreground">{t.description}</p>}
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold text-sm">{(t.price || 0).toLocaleString()}</p>
+                                <p className="text-xs text-muted-foreground">{t.sold || 0} / {t.capacity} sold</p>
+                              </div>
+                            </div>
+                            <div className="mt-2 bg-muted rounded-full h-1.5"><div className="bg-primary h-1.5 rounded-full" style={{ width: `${pct}%` }} /></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </TabsContent>
+                <TabsContent value="waitlist" className="mt-3">
+                  <EventWaitlistPanel eventId={eventDetail.id} ticketTiers={eventDetail.ticket_tiers} onPromoted={() => viewEvent(eventDetail)} />
+                </TabsContent>
               </Tabs>
               <div className="flex gap-3 pt-2 border-t border-border flex-wrap">
                 <Select value={eventDetail.status} onValueChange={v => { updateStatus(eventDetail, v); setEventDetail(prev => ({...prev, status: v})); }}>
@@ -399,6 +471,17 @@ export default function EventsPage() {
                 </Select>
                 <Button variant="outline" onClick={() => { editEvent(eventDetail); setSelectedEvent(null); }}>Edit</Button>
                 <Button variant="outline" onClick={() => { duplicateEvent(eventDetail); setSelectedEvent(null); }}><Copy size={14} className="mr-1" />Duplicate</Button>
+                <Button variant="outline" data-testid="export-attendees-csv" onClick={async () => {
+                  try {
+                    const res = await api.get(`/events/${eventDetail.id}/attendees/export`, { responseType: 'blob' });
+                    const url = URL.createObjectURL(res.data);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = `attendees-${eventDetail.id}.csv`;
+                    document.body.appendChild(a); a.click(); a.remove();
+                    URL.revokeObjectURL(url);
+                    toast.success('Attendees exported');
+                  } catch (e) { toast.error('Export failed'); }
+                }}><Download size={14} className="mr-1" />Export CSV</Button>
                 <Button variant="destructive" onClick={() => { deleteEvent(eventDetail); setSelectedEvent(null); }}>Delete</Button>
               </div>
             </div>
@@ -428,3 +511,50 @@ export default function EventsPage() {
     </div>
   );
 }
+
+// ========= Event Waitlist Panel =========
+function EventWaitlistPanel({ eventId, ticketTiers, onPromoted }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/events/${eventId}/waitlist`);
+      setEntries(res.data || []);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [eventId]);
+  useEffect(() => { reload(); }, [reload]);
+  const tierName = (id) => (ticketTiers || []).find(t => t.id === id)?.name || '—';
+  if (loading) return <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>;
+  if (entries.length === 0) return <p className="text-sm text-muted-foreground text-center py-6">No one on the waitlist.</p>;
+  return (
+    <div className="space-y-2" data-testid="waitlist-panel">
+      {entries.map(e => (
+        <div key={e.id} className="flex items-center justify-between p-2 rounded border border-border text-sm" data-testid={`waitlist-${e.id}`}>
+          <div>
+            <p className="font-medium">{e.name} <span className="text-xs text-muted-foreground font-normal">· {e.num_tickets} ticket(s) · {tierName(e.tier_id)}</span></p>
+            <p className="text-xs text-muted-foreground">{e.email} {e.phone ? `· ${e.phone}` : ''} · joined {e.created_at?.slice(0, 10)}</p>
+          </div>
+          <div className="flex gap-1">
+            {e.status === 'waiting' && (
+              <>
+                <Button size="sm" variant="outline" className="h-7 text-xs" data-testid={`waitlist-promote-${e.id}`} onClick={async () => {
+                  try { await api.post(`/events/${eventId}/waitlist/${e.id}/promote`); toast.success('Promoted to booking'); reload(); onPromoted?.(); }
+                  catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                }}>Promote</Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" data-testid={`waitlist-cancel-${e.id}`} onClick={async () => {
+                  if (!window.confirm('Cancel this waitlist entry?')) return;
+                  try { await api.delete(`/events/${eventId}/waitlist/${e.id}`); toast.success('Cancelled'); reload(); }
+                  catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                }}>Cancel</Button>
+              </>
+            )}
+            {e.status !== 'waiting' && <Badge variant="outline" className="text-[10px] capitalize">{e.status}</Badge>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+

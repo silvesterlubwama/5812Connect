@@ -1,6 +1,6 @@
 """Shared Pydantic models for 58:12 Global Connect CRM"""
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 class UserRegister(BaseModel):
@@ -151,6 +151,8 @@ class EventCreate(BaseModel):
     recurrence_week_of_month: Optional[int] = None  # 1st, 2nd, 3rd, 4th, -1=last
     programme_id: Optional[str] = None
     country: Optional[str] = None
+    ticket_tiers: Optional[List[Dict[str, Any]]] = []  # [{id, name, price, capacity, sold, description?}]
+    waitlist_enabled: bool = True
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -172,6 +174,8 @@ class EventUpdate(BaseModel):
     recurrence_pattern: Optional[str] = None
     recurrence_day: Optional[int] = None
     country: Optional[str] = None
+    ticket_tiers: Optional[List[Dict[str, Any]]] = None
+    waitlist_enabled: Optional[bool] = None
 
 class TaskCreate(BaseModel):
     title: str
@@ -262,6 +266,7 @@ class PublicBookingCreate(BaseModel):
     num_tickets: int = 1
     payment_method: Optional[str] = None  # cash, mobile_money_mtn, mobile_money_airtel, venmo, card
     agreed_to_terms: bool = False
+    tier_id: Optional[str] = None  # which ticket tier (if event has multi-tier pricing)
 
 class SpaceBookingCreate(BaseModel):
     name: str

@@ -148,7 +148,7 @@ async def bulk_update_events(data: dict, current_user: dict = Depends(require_st
     updates = data.get("updates", {})
     if not ids or not updates:
         return {"updated": 0}
-    allowed = {"status", "type", "location_id", "is_public", "country", "visibility", "capacity"}
+    allowed = {"status", "type", "location_id", "is_public", "country", "visibility", "capacity", "ticket_tiers", "waitlist_enabled"}
     clean = {k: v for k, v in updates.items() if k in allowed}
     clean["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.events.update_many({"id": {"$in": ids}}, {"$set": clean})
@@ -926,10 +926,33 @@ async def public_book_event(data: PublicBookingCreate):
     event = await db.events.find_one({"id": data.event_id})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    if event.get("registered", 0) >= event.get("capacity", 0):
-        raise HTTPException(status_code=400, detail="Event is fully booked")
-    is_free = event.get("is_free", True)
-    price = event.get("price", 0)
+    # Resolve ticket tier (Odoo-style: multi-tier pricing)
+    tiers = event.get("ticket_tiers") or []
+    tier = None
+    tier_id = getattr(data, "tier_id", None) or (data.model_dump().get("tier_id"))
+    if tiers:
+        if tier_id:
+            tier = next((t for t in tiers if t.get("id") == tier_id), None)
+            if not tier:
+                raise HTTPException(status_code=400, detail="Invalid ticket tier")
+        else:
+            tier = tiers[0]  # backwards-compat: default to first tier
+        tier_capacity = int(tier.get("capacity") or 0)
+        tier_sold = int(tier.get("sold") or 0)
+        if tier_capacity and tier_sold + data.num_tickets > tier_capacity:
+            # Offer waitlist if enabled, else 400
+            if event.get("waitlist_enabled", True):
+                raise HTTPException(status_code=409, detail=f"Tier '{tier.get('name')}' is sold out. Use the waitlist endpoint.")
+            raise HTTPException(status_code=400, detail=f"Tier '{tier.get('name')}' is sold out")
+        is_free = float(tier.get("price") or 0) == 0
+        price = float(tier.get("price") or 0)
+    else:
+        if event.get("registered", 0) >= event.get("capacity", 0):
+            if event.get("waitlist_enabled", True):
+                raise HTTPException(status_code=409, detail="Event is fully booked. Use the waitlist endpoint.")
+            raise HTTPException(status_code=400, detail="Event is fully booked")
+        is_free = event.get("is_free", True)
+        price = event.get("price", 0)
     payment_method = data.payment_method if hasattr(data, 'payment_method') else None
     # Payment rules for paid events
     if not is_free and price > 0:
@@ -962,12 +985,166 @@ async def public_book_event(data: PublicBookingCreate):
         "payment_deadline_days": payment_deadline,
         "status": "confirmed" if is_free else "pending_payment",
         "ticket_ids": [f"TKT-{str(uuid.uuid4())[:4].upper()}" for _ in range(data.num_tickets)],
+        "tier_id": tier.get("id") if tier else None,
+        "tier_name": tier.get("name") if tier else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.public_bookings.insert_one(booking)
-    await db.events.update_one({"id": data.event_id}, {"$inc": {"registered": data.num_tickets}})
+    # Update counts
+    if tier:
+        await db.events.update_one(
+            {"id": data.event_id, "ticket_tiers.id": tier["id"]},
+            {"$inc": {"registered": data.num_tickets, "ticket_tiers.$.sold": data.num_tickets}},
+        )
+    else:
+        await db.events.update_one({"id": data.event_id}, {"$inc": {"registered": data.num_tickets}})
     booking.pop("_id", None)
     return booking
+
+
+# ========== EVENT WAITLIST (Odoo-style auto-promote) ==========
+
+@router.post("/public/events/{event_id}/waitlist")
+async def join_event_waitlist(event_id: str, data: dict):
+    """Add someone to the waitlist when an event/tier is sold out.
+    Body: { name, email, phone?, num_tickets?, tier_id? }"""
+    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if not event.get("waitlist_enabled", True):
+        raise HTTPException(status_code=400, detail="Waitlist disabled for this event")
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="name and email required")
+    # De-dup: same email + tier
+    existing = await db.event_waitlist.find_one({
+        "event_id": event_id,
+        "email": email,
+        "tier_id": data.get("tier_id"),
+        "status": "waiting",
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="You are already on the waitlist for this tier")
+    doc = {
+        "id": f"wl_{uuid.uuid4().hex[:10]}",
+        "event_id": event_id,
+        "event_title": event.get("title"),
+        "name": name,
+        "email": email,
+        "phone": (data.get("phone") or "").strip(),
+        "num_tickets": int(data.get("num_tickets") or 1),
+        "tier_id": data.get("tier_id"),
+        "status": "waiting",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.event_waitlist.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.get("/events/{event_id}/waitlist")
+async def list_event_waitlist(event_id: str, current_user: dict = Depends(require_staff)):
+    return await db.event_waitlist.find({"event_id": event_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+
+
+@router.post("/events/{event_id}/waitlist/{wl_id}/promote")
+async def promote_waitlist_entry(event_id: str, wl_id: str, current_user: dict = Depends(require_staff)):
+    """Manually convert a waitlist entry into a confirmed booking (free; admin chases payment after)."""
+    entry = await db.event_waitlist.find_one({"id": wl_id, "event_id": event_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Waitlist entry not found")
+    if entry.get("status") != "waiting":
+        raise HTTPException(status_code=400, detail="Entry already processed")
+    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    booking_id = f"book_{uuid.uuid4().hex[:12]}"
+    tier = None
+    if entry.get("tier_id") and event.get("ticket_tiers"):
+        tier = next((t for t in event["ticket_tiers"] if t.get("id") == entry["tier_id"]), None)
+    price = float(tier.get("price") or 0) if tier else float(event.get("price") or 0)
+    is_free = price == 0
+    booking = {
+        "id": booking_id,
+        "event_id": event_id,
+        "event_title": event.get("title"),
+        "name": entry["name"],
+        "email": entry["email"],
+        "phone": entry.get("phone"),
+        "num_tickets": entry["num_tickets"],
+        "is_free": is_free,
+        "price": price,
+        "total": price * entry["num_tickets"] if not is_free else 0,
+        "payment_status": "paid" if is_free else "pending",
+        "status": "confirmed" if is_free else "pending_payment",
+        "ticket_ids": [f"TKT-{str(uuid.uuid4())[:4].upper()}" for _ in range(entry["num_tickets"])],
+        "tier_id": entry.get("tier_id"),
+        "tier_name": tier.get("name") if tier else None,
+        "promoted_from_waitlist": wl_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.public_bookings.insert_one(booking)
+    if tier:
+        await db.events.update_one(
+            {"id": event_id, "ticket_tiers.id": tier["id"]},
+            {"$inc": {"registered": entry["num_tickets"], "ticket_tiers.$.sold": entry["num_tickets"]}},
+        )
+    else:
+        await db.events.update_one({"id": event_id}, {"$inc": {"registered": entry["num_tickets"]}})
+    await db.event_waitlist.update_one(
+        {"id": wl_id},
+        {"$set": {"status": "promoted", "promoted_at": booking["created_at"], "booking_id": booking_id}},
+    )
+    booking.pop("_id", None)
+    return booking
+
+
+@router.delete("/events/{event_id}/waitlist/{wl_id}")
+async def cancel_waitlist_entry(event_id: str, wl_id: str, current_user: dict = Depends(require_staff)):
+    res = await db.event_waitlist.update_one(
+        {"id": wl_id, "event_id": event_id, "status": "waiting"},
+        {"$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Not found or already processed")
+    return {"cancelled": 1}
+
+
+@router.get("/events/{event_id}/attendees/export")
+async def export_event_attendees(event_id: str, current_user: dict = Depends(require_staff)):
+    """Export confirmed attendees as CSV."""
+    from starlette.responses import StreamingResponse
+    import io
+    import csv
+    event = await db.events.find_one({"id": event_id}, {"_id": 0, "title": 1})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    bookings = await db.public_bookings.find({"event_id": event_id}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Booking ID", "Name", "Email", "Phone", "Tickets", "Tier", "Status", "Payment Status", "Total", "Created At", "Ticket IDs"])
+    for b in bookings:
+        writer.writerow([
+            b.get("id", ""),
+            b.get("name", ""),
+            b.get("email", ""),
+            b.get("phone", ""),
+            b.get("num_tickets", 1),
+            b.get("tier_name") or "—",
+            b.get("status", ""),
+            b.get("payment_status", ""),
+            b.get("total", 0),
+            b.get("created_at", ""),
+            "; ".join(b.get("ticket_ids") or []),
+        ])
+    buf.seek(0)
+    safe = (event.get("title") or "event").replace(" ", "_")[:40]
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="attendees-{safe}-{event_id}.csv"'},
+    )
 
 
 @router.post("/public/bookings/space")

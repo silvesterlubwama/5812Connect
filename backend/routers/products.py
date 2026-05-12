@@ -240,3 +240,202 @@ async def get_barcode_labels(product_id: str, current_user: dict = Depends(get_c
         except Exception as e:
             labels.append({"variant_id": "main", "name": product["name"], "barcode": code, "error": str(e)})
     return {"product_name": product["name"], "labels": labels}
+
+
+
+# ========== STOCK MOVEMENTS (Odoo-style audit trail) ==========
+
+@router.post("/products/{product_id}/stock-movement")
+async def record_stock_movement(product_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Adjust stock with an audit-trail record.
+    Body: { delta (int, +inbound/-outbound), reason (purchase|sale|adjustment|transfer|return|count|loss),
+            variant_id?, notes?, reference? (e.g. sale_id, PO number) }"""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    try:
+        delta = int(data.get("delta", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="delta must be an integer")
+    if delta == 0:
+        raise HTTPException(status_code=400, detail="delta cannot be 0")
+    reason = (data.get("reason") or "adjustment").strip()
+    if reason not in {"purchase", "sale", "adjustment", "transfer", "return", "count", "loss", "initial"}:
+        raise HTTPException(status_code=400, detail="invalid reason")
+    variant_id = data.get("variant_id")
+    if variant_id:
+        variant = next((v for v in (product.get("variants") or []) if v.get("id") == variant_id), None)
+        if not variant:
+            raise HTTPException(status_code=404, detail="Variant not found")
+        before = int(variant.get("stock", 0) or 0)
+        after = before + delta
+        if after < 0:
+            raise HTTPException(status_code=400, detail=f"Insufficient variant stock ({before} on hand)")
+        await db.products.update_one(
+            {"id": product_id, "variants.id": variant_id},
+            {"$set": {"variants.$.stock": after}},
+        )
+        # Recompute parent product stock from variants
+        product = await db.products.find_one({"id": product_id}, {"_id": 0})
+        new_total = sum(int(v.get("stock", 0) or 0) for v in (product.get("variants") or []))
+        await db.products.update_one({"id": product_id}, {"$set": {"stock": new_total}})
+    else:
+        before = int(product.get("stock", 0) or 0)
+        after = before + delta
+        if after < 0:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock ({before} on hand)")
+        await db.products.update_one({"id": product_id}, {"$set": {"stock": after}})
+    movement = {
+        "id": f"sm_{uuid.uuid4().hex[:10]}",
+        "product_id": product_id,
+        "product_name": product.get("name"),
+        "variant_id": variant_id,
+        "delta": delta,
+        "before": before,
+        "after": after,
+        "reason": reason,
+        "notes": (data.get("notes") or "")[:500],
+        "reference": (data.get("reference") or "")[:120],
+        "location_id": product.get("location_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    await db.stock_movements.insert_one(movement)
+    movement.pop("_id", None)
+    return movement
+
+
+@router.get("/products/{product_id}/stock-movements")
+async def list_stock_movements(product_id: str, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    return await db.stock_movements.find({"product_id": product_id}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 500))
+
+
+@router.get("/stock-movements")
+async def list_all_stock_movements(reason: Optional[str] = None, limit: int = 200, current_user: dict = Depends(get_current_user)):
+    """All recent stock movements across the user's scope (for the warehouse log view)."""
+    campus = await get_campus_filter(current_user)
+    query = {**campus} if campus else {}
+    if reason:
+        query["reason"] = reason
+    return await db.stock_movements.find(query, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 1000))
+
+
+# ========== REORDER ALERTS ==========
+
+@router.get("/products/reorder-alerts")
+async def reorder_alerts(current_user: dict = Depends(get_current_user)):
+    """Products at or below their `reorder_level` (Odoo-style reorder rule)."""
+    campus = await get_campus_filter(current_user)
+    query = {**campus} if campus else {}
+    all_products = await db.products.find(query, {"_id": 0}).to_list(2000)
+    alerts = []
+    for p in all_products:
+        reorder = int(p.get("reorder_level") or 0)
+        if reorder <= 0:
+            continue
+        # Per-variant alerts if has_variants
+        if p.get("has_variants") and p.get("variants"):
+            low_variants = [v for v in p["variants"] if int(v.get("stock", 0) or 0) <= reorder]
+            if low_variants:
+                alerts.append({
+                    "product_id": p["id"],
+                    "product_name": p.get("name"),
+                    "reorder_level": reorder,
+                    "location_id": p.get("location_id"),
+                    "low_variants": [{"variant_id": v["id"], "name": v.get("name"), "stock": v.get("stock", 0)} for v in low_variants],
+                })
+        else:
+            stock = int(p.get("stock", 0) or 0)
+            if stock <= reorder:
+                alerts.append({
+                    "product_id": p["id"],
+                    "product_name": p.get("name"),
+                    "reorder_level": reorder,
+                    "stock": stock,
+                    "location_id": p.get("location_id"),
+                })
+    return alerts
+
+
+# ========== CUSTOMER PRICELISTS (per-customer pricing/discount) ==========
+
+@router.get("/pricelists")
+async def list_pricelists(current_user: dict = Depends(get_current_user)):
+    campus = await get_campus_filter(current_user)
+    query = {**campus} if campus else {}
+    return await db.pricelists.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/pricelists")
+async def create_pricelist(data: dict, current_user: dict = Depends(get_current_user)):
+    """Create a customer pricelist.
+    Body: { name, customer_id? (single), customer_ids? (multi), discount_pct?, product_prices? [{product_id, variant_id?, price}] }"""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    doc = {
+        "id": f"pl_{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "customer_id": data.get("customer_id"),
+        "customer_ids": data.get("customer_ids") or ([data["customer_id"]] if data.get("customer_id") else []),
+        "discount_pct": float(data.get("discount_pct") or 0),
+        "product_prices": data.get("product_prices") or [],
+        "active": True,
+        "location_id": current_user.get("active_campus_id") or current_user.get("location_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.pricelists.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/pricelists/{pricelist_id}")
+async def update_pricelist(pricelist_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    allowed = {"name", "customer_id", "customer_ids", "discount_pct", "product_prices", "active"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.pricelists.update_one({"id": pricelist_id}, {"$set": update})
+    return await db.pricelists.find_one({"id": pricelist_id}, {"_id": 0})
+
+
+@router.delete("/pricelists/{pricelist_id}")
+async def delete_pricelist(pricelist_id: str, current_user: dict = Depends(get_current_user)):
+    await db.pricelists.delete_one({"id": pricelist_id})
+    return {"message": "Pricelist deleted"}
+
+
+@router.get("/pricelists/resolve")
+async def resolve_pricelist(customer_id: str, product_id: str, variant_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Return the effective price for a customer × product (variant optional).
+    Looks up the customer's active pricelist; returns { price, source }."""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    base_price = float(product.get("price") or 0)
+    if variant_id:
+        variant = next((v for v in (product.get("variants") or []) if v.get("id") == variant_id), None)
+        if variant:
+            base_price = float(variant.get("price") or 0) or base_price
+    # Find active pricelist for this customer
+    pl = await db.pricelists.find_one({
+        "$or": [{"customer_id": customer_id}, {"customer_ids": customer_id}],
+        "active": True,
+    }, {"_id": 0})
+    if not pl:
+        return {"price": base_price, "source": "base", "currency": product.get("currency", "UGX")}
+    # 1) Explicit product/variant override
+    for entry in (pl.get("product_prices") or []):
+        if entry.get("product_id") == product_id and (entry.get("variant_id") or None) == (variant_id or None):
+            return {"price": float(entry.get("price") or base_price), "source": "pricelist_override", "pricelist_id": pl["id"], "pricelist_name": pl.get("name")}
+    # 2) Blanket % discount
+    pct = float(pl.get("discount_pct") or 0)
+    if pct > 0:
+        return {
+            "price": round(base_price * (1 - pct / 100.0), 2),
+            "source": "pricelist_discount",
+            "discount_pct": pct,
+            "pricelist_id": pl["id"], "pricelist_name": pl.get("name"),
+        }
+    return {"price": base_price, "source": "base", "currency": product.get("currency", "UGX")}

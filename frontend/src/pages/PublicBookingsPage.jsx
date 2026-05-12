@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { publicApi } from '../services/api';
+import api from '../services/api';
 import { toast } from 'sonner';
 
 const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
@@ -37,7 +38,7 @@ export default function PublicBookingsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedVenue, setSelectedVenue] = useState(null);
-  const [regData, setRegData] = useState({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false });
+  const [regData, setRegData] = useState({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false, tier_id: '' });
   const [spaceData, setSpaceData] = useState({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
   const [statusQuery, setStatusQuery] = useState({ booking_id: '', email: '', phone: '' });
   const [statusResults, setStatusResults] = useState(null);
@@ -134,9 +135,23 @@ export default function PublicBookingsPage() {
         `Booking confirmed! Total: ${res.data.total}. ${res.data.payment_status === 'pending' ? 'Payment pending.' : ''}`;
       toast.success(msg);
       setSelectedEvent(null);
-      setRegData({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false });
+      setRegData({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false, tier_id: '' });
       setEvents(prev => prev.map(ev => ev.id === selectedEvent.id ? { ...ev, registered: (ev.registered || 0) + regData.num_tickets } : ev));
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to register'); }
+    } catch (err) {
+      if (err.response?.status === 409) {
+        const detail = err.response?.data?.detail || 'Sold out';
+        if (selectedEvent?.waitlist_enabled !== false && window.confirm(`${detail}\n\nJoin the waitlist instead?`)) {
+          try {
+            await api.post(`/public/events/${selectedEvent.id}/waitlist`, {
+              name: regData.name, email: regData.email, phone: regData.phone,
+              num_tickets: regData.num_tickets, tier_id: regData.tier_id || null,
+            });
+            toast.success('You\'re on the waitlist — we\'ll email you if a seat opens up.');
+            setSelectedEvent(null);
+          } catch (wlErr) { toast.error(wlErr.response?.data?.detail || 'Failed to join waitlist'); }
+        } else { toast.error(detail); }
+      } else { toast.error(err.response?.data?.detail || 'Failed to register'); }
+    }
     finally { setSubmitting(false); }
   };
 
@@ -423,6 +438,41 @@ export default function PublicBookingsPage() {
               <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={regData.phone} onChange={e => setRegData({...regData, phone: e.target.value})} /></div>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Number of Tickets</Label><Input type="number" min={1} max={10} value={regData.num_tickets} onChange={e => setRegData({...regData, num_tickets: parseInt(e.target.value) || 1})} /></div>
+
+            {/* Ticket Tier picker (if event has multi-tier pricing) */}
+            {(selectedEvent?.ticket_tiers || []).length > 0 && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Ticket Type *</Label>
+                <div className="space-y-1.5">
+                  {selectedEvent.ticket_tiers.map(t => {
+                    const remaining = (t.capacity || 0) - (t.sold || 0);
+                    const isFull = remaining <= 0;
+                    const selected = regData.tier_id === t.id;
+                    return (
+                      <button
+                        type="button"
+                        key={t.id}
+                        disabled={isFull}
+                        onClick={() => setRegData({...regData, tier_id: t.id})}
+                        data-testid={`reg-tier-${t.id}`}
+                        className={`w-full text-left p-3 rounded-lg border transition-all ${selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : isFull ? 'border-border bg-muted/50 opacity-60' : 'border-border hover:border-primary/50'}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium">{t.name}</p>
+                            {t.description && <p className="text-[11px] text-muted-foreground">{t.description}</p>}
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {isFull ? 'Sold out' : `${remaining} of ${t.capacity} remaining`}
+                            </p>
+                          </div>
+                          <p className="text-sm font-bold">{t.price > 0 ? `${(t.price || 0).toLocaleString()} ${selectedEvent.currency || 'UGX'}` : 'Free'}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Payment section for paid events */}
             {selectedEvent && isPaid(selectedEvent) && (
