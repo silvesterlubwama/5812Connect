@@ -6,6 +6,13 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 103 (May 12, 2026)
+**Payment Reminder Email Automation — verified via curl + UI screenshot.**
+- ✅ `POST /api/payment-reminders/send` (manual trigger, 7-day idempotency, `force=true` override)
+- ✅ `GET /api/payment-reminders/history` (audit log)
+- ✅ `_fire_overdue_payment_reminders()` daily scheduler at 08:00 UTC — auto-detects AR ≥14 days old, generates Customer Statement PDF, emails via Resend
+- ✅ AR page "Email Reminder" button + WhatsApp deep-link (gracefully handles "sent in last 7 days" with confirm-to-force prompt)
+
 ## Recently Resolved — Iteration 82 (May 2, 2026)
 **Verified 14/14 backend tests PASS + frontend 100%.**
 - ✅ **Mark-as-Paid toggle** — `PUT /api/sales/{id}/payment-status`; cash auto-paid, non-cash default pending; UI buttons in Sales History; UNPAID shown on receipt/profile/public page; revert clears metadata
