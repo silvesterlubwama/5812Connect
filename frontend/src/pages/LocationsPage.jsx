@@ -9,6 +9,7 @@ import { Switch } from '../components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import api from '../services/api';
 import { locationsApi, membersApi, venuesApi, groupTypesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -213,6 +214,11 @@ export default function LocationsPage() {
         <div className="space-y-3">
           {roots.map(root => renderLocationTree(root))}
         </div>
+      )}
+
+      {/* ===== REASSIGN DATA TOOL (admins only) ===== */}
+      {['admin','system_admin','Executive Director'].includes(user?.role) && (
+        <ReassignDataTool locations={locations} />
       )}
 
       {/* ===== VENUE MANAGEMENT ===== */}
@@ -542,5 +548,109 @@ function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete,
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+
+// ============== REASSIGN DATA TOOL ==============
+function ReassignDataTool({ locations }) {
+  const [fromId, setFromId] = useState('');
+  const [toId, setToId] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const runPreview = async () => {
+    if (!fromId) { toast.error('Select source campus'); return; }
+    setPreviewing(true); setResult(null);
+    try {
+      const res = await api.get(`/admin/reassign/preview`, { params: { from_location_id: fromId } });
+      setPreview(res.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Preview failed');
+    } finally { setPreviewing(false); }
+  };
+
+  const runReassign = async () => {
+    if (!fromId || !toId) { toast.error('Pick both source and target'); return; }
+    if (fromId === toId) { toast.error('Source and target must differ'); return; }
+    const total = preview?.total ?? '?';
+    if (!window.confirm(`Reassign ${total} records from "${locations.find(l => l.id === fromId)?.name}" → "${locations.find(l => l.id === toId)?.name}"? This cannot be auto-reversed.`)) return;
+    setRunning(true);
+    try {
+      const res = await api.post('/admin/reassign/run', { from_location_id: fromId, to_location_id: toId });
+      setResult(res.data);
+      toast.success(`Reassigned ${res.data.total} records to ${res.data.target_name}`);
+      setPreview(null);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Reassign failed');
+    } finally { setRunning(false); }
+  };
+
+  const totalRecords = preview ? Object.values(preview.counts).reduce((a, b) => a + b, 0) : 0;
+
+  return (
+    <div className="space-y-3 border border-amber-200 dark:border-amber-900/40 rounded-xl p-4 bg-amber-50/40 dark:bg-amber-950/10" data-testid="reassign-tool">
+      <div>
+        <h2 className="text-lg font-semibold flex items-center gap-2"><Shield size={16} className="text-amber-600" /> Reassign Location Data</h2>
+        <p className="text-xs text-muted-foreground">Move all records (events, tasks, sales, HR, members, etc.) from one campus to another. Admin only.</p>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">From Campus</Label>
+          <Select value={fromId} onValueChange={(v) => { setFromId(v); setPreview(null); }}>
+            <SelectTrigger data-testid="reassign-from-select"><SelectValue placeholder="Select source..." /></SelectTrigger>
+            <SelectContent>
+              {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name} <span className="text-muted-foreground text-[10px]">({l.type})</span></SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">To Campus</Label>
+          <Select value={toId} onValueChange={setToId}>
+            <SelectTrigger data-testid="reassign-to-select"><SelectValue placeholder="Select target..." /></SelectTrigger>
+            <SelectContent>
+              {locations.filter(l => l.id !== fromId).map(l => <SelectItem key={l.id} value={l.id}>{l.name} <span className="text-muted-foreground text-[10px]">({l.type})</span></SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" onClick={runPreview} disabled={!fromId || previewing} data-testid="reassign-preview-btn">
+          {previewing ? 'Counting...' : 'Preview Impact'}
+        </Button>
+        <Button size="sm" onClick={runReassign} disabled={!fromId || !toId || running || totalRecords === 0} data-testid="reassign-run-btn">
+          {running ? 'Reassigning...' : `Reassign ${totalRecords || ''} records`}
+        </Button>
+      </div>
+      {preview && (
+        <div className="text-xs space-y-1 bg-background/60 rounded-lg p-3 border" data-testid="reassign-preview">
+          <p className="font-medium mb-1">Records to be moved (total: {preview.total}):</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1">
+            {Object.entries(preview.counts).filter(([, n]) => n > 0).map(([k, n]) => (
+              <div key={k} className="flex justify-between">
+                <span className="text-muted-foreground capitalize">{k.replace(/_/g, ' ')}</span>
+                <span className="font-semibold">{n}</span>
+              </div>
+            ))}
+            {preview.total === 0 && <p className="col-span-3 text-muted-foreground">No records to reassign.</p>}
+          </div>
+        </div>
+      )}
+      {result && (
+        <div className="text-xs space-y-1 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 rounded-lg p-3 border border-emerald-200 dark:border-emerald-900/30" data-testid="reassign-result">
+          <p className="font-medium">✓ Reassigned {result.total} records → {result.target_name}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-0.5">
+            {Object.entries(result.moved).filter(([, n]) => n > 0).map(([k, n]) => (
+              <div key={k} className="flex justify-between">
+                <span className="capitalize">{k.replace(/_/g, ' ')}</span>
+                <span className="font-semibold">{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

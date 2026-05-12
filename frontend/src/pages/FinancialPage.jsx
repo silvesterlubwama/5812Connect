@@ -104,6 +104,8 @@ export default function FinancialPage() {
   const [revalueForm, setRevalueForm] = useState({ current_value: 0, method: 'appreciation', notes: '' });
   const [showStartingBal, setShowStartingBal] = useState(null); // holds the account
   const [startingBalValue, setStartingBalValue] = useState('');
+  const [showAttachReceipt, setShowAttachReceipt] = useState(null); // holds the expense being attached to
+  const [attachReceiptUrl, setAttachReceiptUrl] = useState('');
   const today = new Date().toISOString().split('T')[0];
 
   const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
@@ -484,9 +486,9 @@ export default function FinancialPage() {
                             {e.receipt_url ? (
                               <a href={e.receipt_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">View</a>
                             ) : (
-                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => {
-                                const url = prompt('Paste receipt URL or image link:');
-                                if (url) attachReceipt(e.id, url);
+                              <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`attach-receipt-${e.id}`} onClick={() => {
+                                setShowAttachReceipt(e);
+                                setAttachReceiptUrl('');
                               }}>Attach</Button>
                             )}
                           </td>
@@ -1270,6 +1272,30 @@ export default function FinancialPage() {
                   setShowStartingBal(null);
                   financialApi.accounts().then(r => setSubAccounts(r.data)).catch(() => {});
                 } catch { toast.error('Failed'); }
+              }}>Save</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Attach Receipt Dialog (replaces prompt) */}
+      <Dialog open={!!showAttachReceipt} onOpenChange={(o) => { if (!o) { setShowAttachReceipt(null); setAttachReceiptUrl(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Attach Receipt</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs text-muted-foreground">Paste a receipt URL or image link for <span className="font-semibold">{showAttachReceipt?.title}</span>.</p>
+            <div className="space-y-1">
+              <Label className="text-xs">Receipt URL</Label>
+              <Input type="url" placeholder="https://..." value={attachReceiptUrl} onChange={e => setAttachReceiptUrl(e.target.value)} data-testid="attach-receipt-url-input" autoFocus />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowAttachReceipt(null); setAttachReceiptUrl(''); }}>Cancel</Button>
+              <Button className="flex-1" data-testid="confirm-attach-receipt-btn" disabled={!attachReceiptUrl.trim()} onClick={async () => {
+                try {
+                  await attachReceipt(showAttachReceipt.id, attachReceiptUrl.trim());
+                  setShowAttachReceipt(null);
+                  setAttachReceiptUrl('');
+                } catch { /* attachReceipt handles its own toast */ }
               }}>Save</Button>
             </div>
           </div>

@@ -638,3 +638,94 @@ async def cleanup_orphaned_references(current_user: dict = Depends(require_admin
 
     await _audit(current_user["id"], "maintenance", "cleanup_orphans", "system", cleaned)
     return {"cleaned": cleaned, "total_orphans_removed": sum(cleaned.values())}
+
+
+
+# ========== BULK REASSIGN LOCATION-SPECIFIC DATA ==========
+
+REASSIGNABLE_COLLECTIONS = {
+    "events": "Events",
+    "tasks": "Tasks",
+    "boards": "Kanban Boards",
+    "members": "Members",
+    "users": "Users",
+    "financial": "Financial entries (donations/expenses)",
+    "sales": "Sales / POS transactions",
+    "products": "Products",
+    "resources": "Resources / Assets",
+    "hr_salaries": "HR — Salaries",
+    "hr_payslips": "HR — Payslips",
+    "hr_contracts": "HR — Contracts",
+}
+
+
+@router.get("/reassign/preview")
+async def reassign_preview(from_location_id: str, current_user: dict = Depends(require_admin)) -> dict:
+    """Count records keyed to a given location_id across all reassignable collections.
+    Use this to preview impact before calling /reassign/run."""
+    if not from_location_id:
+        raise HTTPException(status_code=400, detail="from_location_id required")
+    counts = {}
+    for coll, _label in REASSIGNABLE_COLLECTIONS.items():
+        try:
+            counts[coll] = await db[coll].count_documents({"location_id": from_location_id})
+        except Exception as e:
+            logger.error(f"reassign_preview count failed for {coll}: {e}")
+            counts[coll] = 0
+    return {"from_location_id": from_location_id, "counts": counts, "total": sum(counts.values())}
+
+
+@router.post("/reassign/run")
+async def reassign_run(data: dict, current_user: dict = Depends(require_admin)) -> dict:
+    """Bulk-reassign location-keyed records from one campus to another.
+    Body: { from_location_id, to_location_id, collections: [...] (default = all reassignable) }
+    Idempotent; only touches records whose location_id == from_location_id."""
+    from_id = data.get("from_location_id")
+    to_id = data.get("to_location_id")
+    collections = data.get("collections") or list(REASSIGNABLE_COLLECTIONS.keys())
+    if not from_id or not to_id:
+        raise HTTPException(status_code=400, detail="from_location_id and to_location_id required")
+    if from_id == to_id:
+        raise HTTPException(status_code=400, detail="from and to must differ")
+    # Verify target campus exists
+    target = await db.locations.find_one({"id": to_id}, {"_id": 0, "id": 1, "name": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="Target campus not found")
+    moved = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for coll in collections:
+        if coll not in REASSIGNABLE_COLLECTIONS:
+            continue
+        try:
+            res = await db[coll].update_many(
+                {"location_id": from_id},
+                {"$set": {"location_id": to_id, "reassigned_from": from_id, "reassigned_at": now_iso}},
+            )
+            moved[coll] = res.modified_count
+        except Exception as e:
+            logger.error(f"reassign {coll}: {e}")
+            moved[coll] = 0
+    # Users/members carry an array `location_ids` too — patch those when caller asks.
+    if data.get("patch_location_arrays", True):
+        for coll in ("users", "members"):
+            try:
+                # Replace the from_id occurrence inside location_ids
+                cursor = db[coll].find({"location_ids": from_id}, {"_id": 0, "id": 1, "location_ids": 1})
+                arr_patched = 0
+                async for doc in cursor:
+                    new_arr = [to_id if x == from_id else x for x in (doc.get("location_ids") or [])]
+                    # de-dup while preserving order
+                    seen = set(); deduped = []
+                    for x in new_arr:
+                        if x not in seen:
+                            seen.add(x); deduped.append(x)
+                    await db[coll].update_one({"id": doc["id"]}, {"$set": {"location_ids": deduped}})
+                    arr_patched += 1
+                if arr_patched:
+                    moved[f"{coll}_location_ids_array"] = arr_patched
+            except Exception as e:
+                logger.error(f"reassign array-patch {coll}: {e}")
+    await _audit(current_user["id"], "reassign", "location_data", from_id, {
+        "to_location_id": to_id, "moved": moved,
+    })
+    return {"from_location_id": from_id, "to_location_id": to_id, "target_name": target.get("name"), "moved": moved, "total": sum(moved.values())}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, Download, RefreshCw, Settings } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, Download, RefreshCw, Settings, Pencil } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -34,6 +34,7 @@ export default function HRPage() {
   const [showIssueContract, setShowIssueContract] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
+  const [editingSalaryId, setEditingSalaryId] = useState(null);
   const [templateForm, setTemplateForm] = useState({ name: '', content: '' });
   const [payPeriod, setPayPeriod] = useState(new Date().toISOString().slice(0, 7));
   const [docReqForm, setDocReqForm] = useState({ staff_id: '', doc_types: ['resume', 'id_document'], message: '' });
@@ -81,13 +82,37 @@ export default function HRPage() {
   const handleCreateSalary = async () => {
     setSaving(true);
     try {
-      const res = await api.post('/hr/salaries', { ...salaryForm, base_salary: parseFloat(salaryForm.base_salary), location_id: activeCampus });
-      setSalaries(prev => [res.data, ...prev]);
+      if (editingSalaryId) {
+        const res = await api.put(`/hr/salaries/${editingSalaryId}`, {
+          base_salary: parseFloat(salaryForm.base_salary),
+          currency: salaryForm.currency,
+          pay_frequency: salaryForm.pay_frequency,
+          line_items: salaryForm.line_items,
+        });
+        setSalaries(prev => prev.map(x => x.id === editingSalaryId ? res.data : x));
+        toast.success('Salary updated');
+      } else {
+        const res = await api.post('/hr/salaries', { ...salaryForm, base_salary: parseFloat(salaryForm.base_salary), location_id: activeCampus });
+        setSalaries(prev => [res.data, ...prev]);
+        toast.success('Salary record created');
+      }
       setShowSalary(false);
+      setEditingSalaryId(null);
       setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
-      toast.success('Salary record created');
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
+  };
+
+  const openEditSalary = (s) => {
+    setEditingSalaryId(s.id);
+    setSalaryForm({
+      staff_id: s.staff_id || '',
+      base_salary: String(s.base_salary || ''),
+      currency: s.currency || 'UGX',
+      pay_frequency: s.pay_frequency || 'monthly',
+      line_items: s.line_items || [],
+    });
+    setShowSalary(true);
   };
 
   const handleCreateTemplate = async () => {
@@ -195,7 +220,10 @@ export default function HRPage() {
                       <p className="text-sm font-bold">{s.currency} {(s.base_salary || 0).toLocaleString()}</p>
                       <p className="text-[10px] text-muted-foreground">{(s.line_items || []).length} line items</p>
                     </div>
-                    <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={async () => { if (!window.confirm('Delete salary record?')) return; await api.delete(`/hr/salaries/${s.id}`); setSalaries(prev => prev.filter(x => x.id !== s.id)); toast.success('Deleted'); }}><Trash2 size={13} /></Button>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-7" onClick={() => openEditSalary(s)} data-testid={`salary-edit-${s.id}`} title="Edit salary"><Pencil size={13} /></Button>
+                      <Button size="sm" variant="ghost" className="text-destructive h-7" data-testid={`salary-delete-${s.id}`} onClick={async () => { if (!window.confirm('Delete salary record?')) return; await api.delete(`/hr/salaries/${s.id}`); setSalaries(prev => prev.filter(x => x.id !== s.id)); toast.success('Deleted'); }}><Trash2 size={13} /></Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -301,13 +329,13 @@ export default function HRPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Add Salary Dialog */}
-      <Dialog open={showSalary} onOpenChange={setShowSalary}>
+      {/* Add/Edit Salary Dialog */}
+      <Dialog open={showSalary} onOpenChange={(o) => { setShowSalary(o); if (!o) { setEditingSalaryId(null); setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] }); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Add Salary Record</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingSalaryId ? 'Edit Salary Record' : 'Add Salary Record'}</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Staff Member *</Label>
-              <Select value={salaryForm.staff_id} onValueChange={v => setSalaryForm({...salaryForm, staff_id: v})}>
+              <Select value={salaryForm.staff_id} onValueChange={v => setSalaryForm({...salaryForm, staff_id: v})} disabled={!!editingSalaryId}>
                 <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
                 <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>)}</SelectContent>
               </Select>
@@ -349,8 +377,8 @@ export default function HRPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button variant="outline" className="flex-1" onClick={() => setShowSalary(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleCreateSalary} disabled={saving || !salaryForm.staff_id || !salaryForm.base_salary}>{saving ? 'Saving...' : 'Create'}</Button>
+              <Button variant="outline" className="flex-1" onClick={() => { setShowSalary(false); setEditingSalaryId(null); }}>Cancel</Button>
+              <Button className="flex-1" onClick={handleCreateSalary} disabled={saving || !salaryForm.staff_id || !salaryForm.base_salary} data-testid="salary-save-btn">{saving ? 'Saving...' : (editingSalaryId ? 'Save' : 'Create')}</Button>
             </div>
           </div>
         </DialogContent>
