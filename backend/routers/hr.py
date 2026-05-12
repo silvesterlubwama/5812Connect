@@ -160,11 +160,54 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
 
 @router.put("/salaries/{salary_id}")
 async def update_salary(salary_id: str, data: dict, current_user: dict = Depends(require_director)):
+    existing = await db.hr_salaries.find_one({"id": salary_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Salary not found")
     allowed = {"base_salary", "currency", "pay_frequency", "effective_date", "line_items", "status"}
     update = {k: v for k, v in data.items() if k in allowed}
+    if "base_salary" in update:
+        update["base_salary"] = float(update["base_salary"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # Capture change diff for the audit timeline
+    changes = {}
+    for k, v in update.items():
+        if k in {"updated_at"}:
+            continue
+        if existing.get(k) != v:
+            changes[k] = {"from": existing.get(k), "to": v}
     await db.hr_salaries.update_one({"id": salary_id}, {"$set": update})
+    if changes:
+        await db.hr_salary_history.insert_one({
+            "id": f"slh_{uuid.uuid4().hex[:8]}",
+            "salary_id": salary_id,
+            "staff_id": existing.get("staff_id"),
+            "staff_name": existing.get("staff_name"),
+            "location_id": existing.get("location_id"),
+            "changes": changes,
+            "changed_at": update["updated_at"],
+            "changed_by": current_user["id"],
+            "changed_by_name": current_user.get("name", ""),
+            "changed_by_role": current_user.get("role", ""),
+            "reason": (data.get("reason") or "").strip()[:500],
+        })
+        await _audit(current_user["id"], "update", "salary", salary_id, {"changes": changes, "staff": existing.get("staff_name")})
     return await db.hr_salaries.find_one({"id": salary_id}, {"_id": 0})
+
+
+@router.get("/salaries/history")
+async def list_salary_history(staff_id: Optional[str] = None, salary_id: Optional[str] = None, limit: int = 200, current_user: dict = Depends(require_hr)):
+    """Salary-change audit timeline. Filter by staff_id or salary_id."""
+    query = {}
+    if staff_id:
+        query["staff_id"] = staff_id
+    if salary_id:
+        query["salary_id"] = salary_id
+    if not query:
+        # Default: scope to current campus
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
+    return await db.hr_salary_history.find(query, {"_id": 0}).sort("changed_at", -1).to_list(min(limit, 1000))
 
 
 @router.delete("/salaries/{salary_id}")

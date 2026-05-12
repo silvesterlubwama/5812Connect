@@ -309,11 +309,76 @@ async def accounts_receivable(
             c["latest_date"] = s.get("created_at")
         total_out += float(s.get("total") or 0)
     rows = sorted(by_customer.values(), key=lambda x: -x["total"])
+    # Enrich each row with last reminder tier + active payment promise
+    cust_keys = [r.get("customer_id") or r.get("customer_name") for r in rows]
+    reminders_map = {}
+    promises_map = {}
+    if cust_keys:
+        async for r in db.payment_reminders.find({"customer_key": {"$in": cust_keys}}, {"_id": 0}).sort("sent_at", -1):
+            k = r.get("customer_key")
+            if k not in reminders_map:
+                reminders_map[k] = {"tier": r.get("tier"), "sent_at": r.get("sent_at")}
+        async for p in db.payment_promises.find({"customer_key": {"$in": cust_keys}, "status": "active"}, {"_id": 0}):
+            promises_map[p.get("customer_key")] = {
+                "promised_date": p.get("promised_date"),
+                "promised_amount": p.get("promised_amount"),
+                "note": p.get("note"),
+            }
+    for r in rows:
+        k = r.get("customer_id") or r.get("customer_name")
+        if k in reminders_map:
+            r["last_reminder"] = reminders_map[k]
+        if k in promises_map:
+            r["payment_promise"] = promises_map[k]
     return {
         "total_outstanding": total_out,
         "customer_count": len(rows),
         "by_customer": rows,
     }
+
+
+# ========== PAYMENT PROMISES (customer commits to pay by date) ==========
+
+@router.post("/accounts-receivable/promise")
+async def record_payment_promise(data: dict, current_user: dict = Depends(get_current_user)):
+    """Record a customer's payment promise. Pauses dunning until promised_date passes.
+    Body: { customer_key, promised_date (YYYY-MM-DD), promised_amount?, note? }"""
+    key = (data.get("customer_key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="customer_key required")
+    promised_date = (data.get("promised_date") or "").strip()
+    if not promised_date or len(promised_date) < 10:
+        raise HTTPException(status_code=400, detail="promised_date required (YYYY-MM-DD)")
+    # Normalize to end-of-day so the promise is honored *through* that date
+    iso_date = promised_date[:10] + "T23:59:59+00:00"
+    doc = {
+        "id": f"pp_{uuid.uuid4().hex[:8]}",
+        "customer_key": key,
+        "promised_date": iso_date,
+        "promised_amount": float(data.get("promised_amount") or 0) or None,
+        "note": (data.get("note") or "")[:500],
+        "status": "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    # Deactivate any existing active promise for this customer first
+    await db.payment_promises.update_many(
+        {"customer_key": key, "status": "active"},
+        {"$set": {"status": "superseded", "superseded_at": doc["created_at"]}},
+    )
+    await db.payment_promises.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/accounts-receivable/promise/{customer_key}")
+async def clear_payment_promise(customer_key: str, current_user: dict = Depends(get_current_user)):
+    res = await db.payment_promises.update_many(
+        {"customer_key": customer_key, "status": "active"},
+        {"$set": {"status": "cleared", "cleared_at": datetime.now(timezone.utc).isoformat(), "cleared_by": current_user["id"]}},
+    )
+    return {"cleared": res.modified_count}
 
 
 # ========== BULK BARCODE RE-ISSUE ==========

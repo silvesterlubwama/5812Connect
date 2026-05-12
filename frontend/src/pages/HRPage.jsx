@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, Download, RefreshCw, Settings, Pencil } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, Download, RefreshCw, Settings, Pencil, History } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -35,6 +35,10 @@ export default function HRPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
   const [editingSalaryId, setEditingSalaryId] = useState(null);
+  const [editReason, setEditReason] = useState('');
+  const [historySalary, setHistorySalary] = useState(null);
+  const [historyEntries, setHistoryEntries] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [templateForm, setTemplateForm] = useState({ name: '', content: '' });
   const [payPeriod, setPayPeriod] = useState(new Date().toISOString().slice(0, 7));
   const [docReqForm, setDocReqForm] = useState({ staff_id: '', doc_types: ['resume', 'id_document'], message: '' });
@@ -88,6 +92,7 @@ export default function HRPage() {
           currency: salaryForm.currency,
           pay_frequency: salaryForm.pay_frequency,
           line_items: salaryForm.line_items,
+          reason: editReason,
         });
         setSalaries(prev => prev.map(x => x.id === editingSalaryId ? res.data : x));
         toast.success('Salary updated');
@@ -98,6 +103,7 @@ export default function HRPage() {
       }
       setShowSalary(false);
       setEditingSalaryId(null);
+      setEditReason('');
       setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
@@ -105,6 +111,7 @@ export default function HRPage() {
 
   const openEditSalary = (s) => {
     setEditingSalaryId(s.id);
+    setEditReason('');
     setSalaryForm({
       staff_id: s.staff_id || '',
       base_salary: String(s.base_salary || ''),
@@ -113,6 +120,17 @@ export default function HRPage() {
       line_items: s.line_items || [],
     });
     setShowSalary(true);
+  };
+
+  const openSalaryHistory = async (s) => {
+    setHistorySalary(s);
+    setHistoryEntries([]);
+    setHistoryLoading(true);
+    try {
+      const res = await api.get('/hr/salaries/history', { params: { staff_id: s.staff_id } });
+      setHistoryEntries(res.data || []);
+    } catch (e) { toast.error('Failed to load history'); }
+    finally { setHistoryLoading(false); }
   };
 
   const handleCreateTemplate = async () => {
@@ -221,6 +239,7 @@ export default function HRPage() {
                       <p className="text-[10px] text-muted-foreground">{(s.line_items || []).length} line items</p>
                     </div>
                     <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-7" onClick={() => openSalaryHistory(s)} data-testid={`salary-history-${s.id}`} title="View change history"><History size={13} /></Button>
                       <Button size="sm" variant="ghost" className="h-7" onClick={() => openEditSalary(s)} data-testid={`salary-edit-${s.id}`} title="Edit salary"><Pencil size={13} /></Button>
                       <Button size="sm" variant="ghost" className="text-destructive h-7" data-testid={`salary-delete-${s.id}`} onClick={async () => { if (!window.confirm('Delete salary record?')) return; await api.delete(`/hr/salaries/${s.id}`); setSalaries(prev => prev.filter(x => x.id !== s.id)); toast.success('Deleted'); }}><Trash2 size={13} /></Button>
                     </div>
@@ -376,8 +395,14 @@ export default function HRPage() {
                 <Button size="sm" className="h-8" onClick={addLineItem}>+</Button>
               </div>
             </div>
+            {editingSalaryId && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Reason for change (optional)</Label>
+                <Input value={editReason} onChange={e => setEditReason(e.target.value)} placeholder="e.g. annual raise, promotion, role change" data-testid="salary-edit-reason" />
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
-              <Button variant="outline" className="flex-1" onClick={() => { setShowSalary(false); setEditingSalaryId(null); }}>Cancel</Button>
+              <Button variant="outline" className="flex-1" onClick={() => { setShowSalary(false); setEditingSalaryId(null); setEditReason(''); }}>Cancel</Button>
               <Button className="flex-1" onClick={handleCreateSalary} disabled={saving || !salaryForm.staff_id || !salaryForm.base_salary} data-testid="salary-save-btn">{saving ? 'Saving...' : (editingSalaryId ? 'Save' : 'Create')}</Button>
             </div>
           </div>
@@ -547,6 +572,49 @@ export default function HRPage() {
               <Button variant="outline" className="flex-1" onClick={() => setShowSettings(false)}>Cancel</Button>
               <Button className="flex-1" onClick={handleSaveSettings} data-testid="hr-settings-save">Save Settings</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Salary Change History Dialog */}
+      <Dialog open={!!historySalary} onOpenChange={(o) => { if (!o) { setHistorySalary(null); setHistoryEntries([]); } }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Salary Change History — {historySalary?.staff_name}</DialogTitle>
+          </DialogHeader>
+          <div className="mt-2 space-y-2">
+            {historyLoading ? (
+              <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>
+            ) : historyEntries.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No changes recorded yet.</p>
+            ) : historyEntries.map(h => (
+              <div key={h.id} className="border rounded-lg p-3 text-xs space-y-1" data-testid={`history-${h.id}`}>
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>{h.changed_at?.slice(0, 16).replace('T', ' ')}</span>
+                  <span><span className="font-medium text-foreground">{h.changed_by_name || 'Unknown'}</span> <span className="opacity-70">({h.changed_by_role})</span></span>
+                </div>
+                <div className="space-y-0.5">
+                  {Object.entries(h.changes || {}).map(([field, v]) => {
+                    const isMoney = field === 'base_salary';
+                    const fmtV = (x) => {
+                      if (x == null) return '—';
+                      if (Array.isArray(x)) return `${x.length} item(s)`;
+                      if (isMoney) return Number(x).toLocaleString();
+                      return String(x);
+                    };
+                    return (
+                      <div key={field} className="flex items-baseline gap-2">
+                        <span className="capitalize text-muted-foreground min-w-[6.5rem]">{field.replace(/_/g, ' ')}:</span>
+                        <span className="line-through opacity-60">{fmtV(v.from)}</span>
+                        <span className="text-muted-foreground">→</span>
+                        <span className="font-semibold">{fmtV(v.to)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {h.reason && <p className="italic text-muted-foreground border-t pt-1 mt-1">“{h.reason}”</p>}
+              </div>
+            ))}
           </div>
         </DialogContent>
       </Dialog>

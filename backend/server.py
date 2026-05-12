@@ -646,16 +646,18 @@ async def _fire_scheduled_customer_statements():
 
 
 async def _fire_overdue_payment_reminders():
-    """Daily 08:00 UTC: find customers with pending sales >= 14 days old and send a reminder email.
-    Idempotent — only 1 reminder per customer per 7 days."""
+    """Daily 08:00 UTC: tiered dunning ladder.
+    Tier 1 (gentle) ≥ 14d, Tier 2 (firmer) ≥ 30d, Tier 3 (final) ≥ 60d.
+    Skips customers with active "payment_promise" until the promised_date.
+    Idempotent — won't repeat the same tier; advances to the next when threshold crossed."""
     try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        # Aggregate by customer
+        now = datetime.now(timezone.utc)
+        cutoff_14 = (now - timedelta(days=14)).isoformat()
+        # Aggregate pending sales ≥ 14d old
         pending = await db.sales.find({
             "payment_status": "pending",
             "voided": {"$ne": True},
-            "created_at": {"$lte": cutoff},
+            "created_at": {"$lte": cutoff_14},
         }, {"_id": 0}).to_list(2000)
         if not pending:
             return
@@ -667,14 +669,36 @@ async def _fire_overdue_payment_reminders():
             by_customer.setdefault(key, []).append(s)
         sent_count = 0
         for cust_key, sales in by_customer.items():
-            # Skip if reminder sent in last 7 days
-            recent = await db.payment_reminders.find_one({
-                "customer_key": cust_key,
-                "sent_at": {"$gte": recent_cutoff},
-            })
-            if recent:
-                continue
             try:
+                # Active payment_promise — skip until promised_date elapses
+                promise = await db.payment_promises.find_one({
+                    "customer_key": cust_key,
+                    "status": "active",
+                })
+                if promise and promise.get("promised_date"):
+                    try:
+                        promised = datetime.fromisoformat(promise["promised_date"].replace("Z", "+00:00"))
+                        if promised >= now:
+                            continue
+                    except Exception:
+                        pass
+
+                oldest_days = max(((now - datetime.fromisoformat(o["created_at"].replace("Z", "+00:00"))).days) for o in sales)
+                # Pick the next tier
+                if oldest_days >= 60:
+                    next_tier = 3
+                elif oldest_days >= 30:
+                    next_tier = 2
+                else:
+                    next_tier = 1
+                # Was this tier already sent?
+                already = await db.payment_reminders.find_one({
+                    "customer_key": cust_key,
+                    "tier": next_tier,
+                })
+                if already:
+                    continue
+
                 from routers.statements import _render_statement_html, _html_to_pdf
                 customer = await db.customer_accounts.find_one(
                     {"$or": [{"id": cust_key}, {"name": cust_key}]},
@@ -683,10 +707,9 @@ async def _fire_overdue_payment_reminders():
                 to_email = customer.get("email") or (sales[0].get("customer_email") if sales else None)
                 if not to_email:
                     continue
-                period_from = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
-                period_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                period_from = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+                period_to = now.strftime("%Y-%m-%d")
                 total_outstanding = sum(float(s.get("total") or 0) for s in sales)
-                # Render PDF
                 full_sales = await db.sales.find({
                     "$or": [{"customer_id": cust_key}, {"customer_name": customer.get("name") or cust_key}],
                     "voided": {"$ne": True},
@@ -699,36 +722,81 @@ async def _fire_overdue_payment_reminders():
                 sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
                 if not resend.api_key:
                     continue
-                oldest_days = max(((datetime.now(timezone.utc) - datetime.fromisoformat(o["created_at"].replace("Z", "+00:00"))).days) for o in sales)
                 currency = sales[0].get("items", [{}])[0].get("currency") if sales[0].get("items") else "UGX"
-                body = f"""<div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>
-                    <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' style='height: 40px; margin-bottom: 20px;' />
-                    <p>Hi {customer.get('name') or cust_key},</p>
-                    <p>This is a friendly reminder of <strong>{len(sales)} outstanding payment(s)</strong> totalling <strong style='color:#b45309;'>{currency} {total_outstanding:,.2f}</strong>.</p>
-                    <p>The oldest is <strong>{oldest_days} days</strong> old. A full statement is attached.</p>
-                    <p>If you have already paid, please disregard. Otherwise, kindly settle at your earliest convenience.</p>
-                    <p>Thank you,<br/>58:12 Global</p></div>"""
-                resend.Emails.send({
+
+                # Build tier-specific copy + subject
+                if next_tier == 1:
+                    subject = f"Friendly reminder: Outstanding balance — {currency} {total_outstanding:,.2f}"
+                    intro = (f"<p>This is a friendly reminder of <strong>{len(sales)} outstanding payment(s)</strong> "
+                             f"totalling <strong style='color:#b45309;'>{currency} {total_outstanding:,.2f}</strong>. "
+                             f"The oldest is <strong>{oldest_days} days</strong> old.</p>"
+                             f"<p>If you have already paid, please disregard. Otherwise, kindly settle at your earliest convenience.</p>")
+                    cc = None
+                elif next_tier == 2:
+                    late_fee = total_outstanding * 0.05
+                    subject = f"Second notice: please settle {currency} {total_outstanding:,.2f}"
+                    intro = (f"<p>We have not yet received payment for <strong>{len(sales)} invoice(s)</strong> "
+                             f"totalling <strong style='color:#b45309;'>{currency} {total_outstanding:,.2f}</strong>. "
+                             f"The oldest is now <strong>{oldest_days} days</strong> overdue.</p>"
+                             f"<p>To avoid a possible late fee of approximately <strong>{currency} {late_fee:,.2f}</strong> "
+                             f"(≈5%), please arrange payment within the next 7 days. If you have already paid, please reply with confirmation.</p>")
+                    cc = None
+                else:  # tier 3 — final
+                    subject = f"FINAL NOTICE: {currency} {total_outstanding:,.2f} overdue"
+                    intro = (f"<p>This is our <strong>final reminder</strong> regarding <strong>{len(sales)} unpaid invoice(s)</strong> "
+                             f"totalling <strong style='color:#b45309;'>{currency} {total_outstanding:,.2f}</strong>. "
+                             f"The oldest is now <strong>{oldest_days} days</strong> overdue.</p>"
+                             f"<p>If payment is not received within 7 days, the account may be referred to management. "
+                             f"Please contact us immediately if there are any issues.</p>")
+                    # CC manager — look up a director/manager in the customer's home location if available
+                    cc = None
+                    try:
+                        loc_id = (sales[0] or {}).get("location_id")
+                        if loc_id:
+                            mgr = await db.users.find_one({
+                                "location_id": loc_id,
+                                "role": {"$in": ["Manager", "Director", "Executive Director"]},
+                                "status": "active",
+                                "email": {"$exists": True, "$ne": ""},
+                            }, {"_id": 0, "email": 1})
+                            if mgr and mgr.get("email"):
+                                cc = [mgr["email"]]
+                    except Exception:
+                        cc = None
+
+                body = (f"<div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'>"
+                        f"<img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' style='height: 40px; margin-bottom: 20px;' />"
+                        f"<p>Hi {customer.get('name') or cust_key},</p>"
+                        f"{intro}"
+                        f"<p>A full statement is attached for your reference.</p>"
+                        f"<p>Thank you,<br/>58:12 Global</p></div>")
+                payload = {
                     "from": sender, "to": to_email,
-                    "subject": f"Friendly reminder: Outstanding balance — {currency} {total_outstanding:,.2f}",
+                    "subject": subject,
                     "html": body,
                     "attachments": [{"filename": f"statement-{period_from}-{period_to}.pdf", "content": list(pdf)}],
-                })
+                }
+                if cc:
+                    payload["cc"] = cc
+                resend.Emails.send(payload)
                 await db.payment_reminders.insert_one({
                     "id": f"rem_{uuid.uuid4().hex[:8]}",
                     "customer_key": cust_key,
                     "customer_name": customer.get("name") or cust_key,
                     "to_email": to_email,
+                    "cc": cc or [],
+                    "tier": next_tier,
                     "outstanding_total": total_outstanding,
                     "outstanding_count": len(sales),
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "oldest_days": oldest_days,
+                    "sent_at": now.isoformat(),
                     "auto_triggered": True,
                 })
                 sent_count += 1
             except Exception as e:
                 logger.error(f"Auto payment-reminder for {cust_key}: {e}")
         if sent_count:
-            logger.info(f"Auto-sent {sent_count} payment reminders")
+            logger.info(f"Auto-sent {sent_count} payment reminders (tiered)")
     except Exception as e:
         logger.error(f"Overdue payment reminders error: {e}")
 
