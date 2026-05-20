@@ -1113,3 +1113,330 @@ async def employee_expenses_summary(period: Optional[str] = None, current_user: 
         "count": len(rows),
     }
 
+
+
+# ========== ATTENDANCE / CLOCK-IN-OUT (Odoo-style) ==========
+
+@router.post("/attendance/clock-in")
+async def attendance_clock_in(data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Clock the current user in. Idempotent: returns the active entry if one already exists.
+    Optional body: { notes?, location_id? }"""
+    data = data or {}
+    open_entry = await db.hr_attendance.find_one({
+        "staff_id": current_user["id"],
+        "check_out_time": None,
+    }, {"_id": 0})
+    if open_entry:
+        return {"already_clocked_in": True, "entry": open_entry}
+    now = datetime.now(timezone.utc)
+    entry = {
+        "id": f"att_{uuid.uuid4().hex[:10]}",
+        "staff_id": current_user["id"],
+        "staff_name": current_user.get("name", ""),
+        "department": current_user.get("department", ""),
+        "location_id": data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id"),
+        "check_in_time": now.isoformat(),
+        "check_out_time": None,
+        "duration_minutes": None,
+        "notes": (data.get("notes") or "")[:300],
+        "date": now.strftime("%Y-%m-%d"),
+        "auto_closed": False,
+    }
+    await db.hr_attendance.insert_one(entry)
+    entry.pop("_id", None)
+    return {"already_clocked_in": False, "entry": entry}
+
+
+@router.post("/attendance/clock-out")
+async def attendance_clock_out(data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Close the user's open attendance entry. Returns 400 if no open entry exists."""
+    data = data or {}
+    open_entry = await db.hr_attendance.find_one({
+        "staff_id": current_user["id"],
+        "check_out_time": None,
+    }, {"_id": 0})
+    if not open_entry:
+        raise HTTPException(status_code=400, detail="No active clock-in")
+    now = datetime.now(timezone.utc)
+    try:
+        check_in = datetime.fromisoformat(open_entry["check_in_time"].replace("Z", "+00:00"))
+        duration = int((now - check_in).total_seconds() / 60)
+    except Exception:
+        duration = 0
+    update = {
+        "check_out_time": now.isoformat(),
+        "duration_minutes": max(0, duration),
+    }
+    if data.get("notes"):
+        update["notes"] = ((open_entry.get("notes") or "") + " · " + data["notes"][:300]).strip(" ·")
+    await db.hr_attendance.update_one({"id": open_entry["id"]}, {"$set": update})
+    return await db.hr_attendance.find_one({"id": open_entry["id"]}, {"_id": 0})
+
+
+@router.get("/attendance/me/active")
+async def attendance_active(current_user: dict = Depends(get_current_user)):
+    """Return the user's currently-open clock-in (or null)."""
+    entry = await db.hr_attendance.find_one({
+        "staff_id": current_user["id"],
+        "check_out_time": None,
+    }, {"_id": 0})
+    return entry  # may be null
+
+
+@router.get("/attendance")
+async def list_attendance(
+    staff_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 200,
+    current_user: dict = Depends(get_current_user),
+):
+    """List attendance entries. Non-HR users see only their own."""
+    query = {}
+    if staff_id and _require_hr_access(current_user):
+        query["staff_id"] = staff_id
+    elif not _require_hr_access(current_user):
+        query["staff_id"] = current_user["id"]
+    else:
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
+    if date_from or date_to:
+        date_q = {}
+        if date_from:
+            date_q["$gte"] = date_from[:10]
+        if date_to:
+            date_q["$lte"] = date_to[:10]
+        query["date"] = date_q
+    return await db.hr_attendance.find(query, {"_id": 0}).sort("check_in_time", -1).to_list(min(limit, 1000))
+
+
+@router.put("/attendance/{entry_id}")
+async def update_attendance(entry_id: str, data: dict, current_user: dict = Depends(require_director)):
+    """HR/director correction of an attendance entry (e.g. forgotten clock-out).
+    Body: { check_in_time?, check_out_time?, notes? }"""
+    allowed = {"check_in_time", "check_out_time", "notes"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if "check_in_time" in update and "check_out_time" in update:
+        try:
+            ci = datetime.fromisoformat(update["check_in_time"].replace("Z", "+00:00"))
+            co = datetime.fromisoformat(update["check_out_time"].replace("Z", "+00:00"))
+            update["duration_minutes"] = max(0, int((co - ci).total_seconds() / 60))
+        except Exception:
+            pass
+    update["edited_by"] = current_user["id"]
+    update["edited_at"] = datetime.now(timezone.utc).isoformat()
+    await db.hr_attendance.update_one({"id": entry_id}, {"$set": update})
+    return await db.hr_attendance.find_one({"id": entry_id}, {"_id": 0})
+
+
+@router.delete("/attendance/{entry_id}")
+async def delete_attendance(entry_id: str, current_user: dict = Depends(require_director)):
+    await db.hr_attendance.delete_one({"id": entry_id})
+    return {"deleted": True}
+
+
+@router.get("/attendance/summary")
+async def attendance_summary(period: Optional[str] = None, current_user: dict = Depends(require_hr)):
+    """Per-staff hours summary for a YYYY-MM (defaults to current). Returns: [{staff_id, name, total_minutes, days_present, entries_count}]"""
+    period = period or datetime.now(timezone.utc).strftime("%Y-%m")
+    start = f"{period}-01"
+    y, m = map(int, period.split("-"))
+    nm_y, nm_m = (y, m + 1) if m < 12 else (y + 1, 1)
+    end = f"{nm_y:04d}-{nm_m:02d}-01"
+    query = {"date": {"$gte": start, "$lt": end}, "check_out_time": {"$ne": None}}
+    campus = await get_campus_filter(current_user)
+    if campus:
+        query.update(campus)
+    rows = await db.hr_attendance.find(query, {"_id": 0}).to_list(5000)
+    by_staff = {}
+    for r in rows:
+        sid = r.get("staff_id")
+        if not sid:
+            continue
+        d = by_staff.setdefault(sid, {"staff_id": sid, "staff_name": r.get("staff_name"), "total_minutes": 0, "days_present": set(), "entries_count": 0})
+        d["total_minutes"] += int(r.get("duration_minutes") or 0)
+        d["days_present"].add(r.get("date"))
+        d["entries_count"] += 1
+    return [
+        {**v, "days_present": len(v["days_present"]), "total_hours": round(v["total_minutes"] / 60, 2)}
+        for v in by_staff.values()
+    ]
+
+
+
+# ========== COMPENSATION SUMMARY PDF (year-end statement) ==========
+
+@router.get("/staff/{staff_id}/compensation-summary")
+async def compensation_summary(staff_id: str, year: Optional[int] = None, format: str = "pdf", current_user: dict = Depends(get_current_user)):
+    """Per-staff year-end compensation statement aggregating:
+      • salary on file & history (changes within the year)
+      • payslips issued & total net paid
+      • leave usage by type
+      • reimbursements paid
+    Self-only access for the staff member; HR/director for anyone.
+    `format=json` for machine consumption, otherwise returns a PDF."""
+    target_id = staff_id
+    if target_id != current_user["id"] and not _require_hr_access(current_user):
+        raise HTTPException(status_code=403, detail="Not permitted")
+    user = await db.users.find_one({"id": target_id}, {"_id": 0, "id": 1, "name": 1, "role": 1, "department": 1, "location_id": 1, "email": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    yr = int(year or datetime.now(timezone.utc).year)
+    y_start = f"{yr}-01-01"
+    y_end = f"{yr}-12-31"
+    # Salary current + history
+    current_salary = await db.hr_salaries.find_one({"staff_id": target_id, "status": "active"}, {"_id": 0})
+    history = await db.hr_salary_history.find({
+        "staff_id": target_id,
+        "changed_at": {"$gte": y_start + "T00:00:00", "$lte": y_end + "T23:59:59"},
+    }, {"_id": 0}).sort("changed_at", 1).to_list(100)
+    # Payslips
+    payslips = await db.hr_payslips.find({
+        "staff_id": target_id,
+        "period": {"$gte": f"{yr}-01", "$lte": f"{yr}-12"},
+    }, {"_id": 0}).sort("period", 1).to_list(50)
+    total_net = sum(float(p.get("net_salary") or 0) for p in payslips)
+    total_gross = sum(float(p.get("gross_salary") or 0) for p in payslips)
+    total_deductions = sum(float(p.get("deductions") or 0) for p in payslips)
+    # Leave usage
+    leave_used = {}
+    async for lr in db.hr_leave_requests.find({
+        "staff_id": target_id,
+        "status": "approved",
+        "start_date": {"$lte": y_end},
+        "end_date": {"$gte": y_start},
+    }, {"_id": 0}):
+        leave_used[lr.get("leave_type")] = leave_used.get(lr.get("leave_type"), 0) + (lr.get("days") or 0)
+    # Reimbursements
+    reimbursed = await db.hr_employee_expenses.find({
+        "staff_id": target_id,
+        "status": "reimbursed",
+        "date": {"$gte": y_start, "$lte": y_end},
+    }, {"_id": 0}).sort("date", 1).to_list(500)
+    total_reimbursed = sum(float(r.get("amount") or 0) for r in reimbursed)
+    summary = {
+        "staff": user,
+        "year": yr,
+        "current_salary": current_salary,
+        "salary_history": history,
+        "payslips": payslips,
+        "totals": {
+            "gross_paid": total_gross,
+            "deductions": total_deductions,
+            "net_paid": total_net,
+            "reimbursed": total_reimbursed,
+            "total_compensation": total_net + total_reimbursed,
+        },
+        "leave_used": leave_used,
+        "reimbursements": reimbursed,
+    }
+    if format == "json":
+        return summary
+    # ---- Render PDF ----
+    rows_payslips = "".join(
+        f"<tr><td>{p.get('period')}</td><td>{p.get('currency','UGX')} {float(p.get('gross_salary') or 0):,.2f}</td>"
+        f"<td>{float(p.get('deductions') or 0):,.2f}</td>"
+        f"<td style='font-weight:700'>{float(p.get('net_salary') or 0):,.2f}</td>"
+        f"<td>{p.get('status','')}</td></tr>"
+        for p in payslips
+    ) or "<tr><td colspan='5' style='text-align:center;color:#64748b;padding:14px'>No payslips for this year.</td></tr>"
+    rows_history = "".join(
+        f"<tr><td>{h.get('changed_at','')[:10]}</td><td>{h.get('changed_by_name','')}</td><td>{', '.join(h.get('changes',{}).keys())}</td><td>{h.get('reason','') or '—'}</td></tr>"
+        for h in history
+    ) or "<tr><td colspan='4' style='text-align:center;color:#64748b;padding:10px'>No salary changes this year.</td></tr>"
+    rows_leave = "".join(
+        f"<tr><td>{lt}</td><td>{days}</td></tr>" for lt, days in leave_used.items()
+    ) or "<tr><td colspan='2' style='text-align:center;color:#64748b;padding:10px'>No leave taken this year.</td></tr>"
+    rows_reim = "".join(
+        f"<tr><td>{r.get('date','')}</td><td>{r.get('title','')}</td><td>{r.get('category','')}</td>"
+        f"<td style='text-align:right'>{r.get('currency','UGX')} {float(r.get('amount') or 0):,.2f}</td></tr>"
+        for r in reimbursed
+    ) or "<tr><td colspan='4' style='text-align:center;color:#64748b;padding:10px'>No reimbursements paid.</td></tr>"
+    cur_sal_text = (
+        f"{current_salary.get('currency','UGX')} {float(current_salary.get('base_salary') or 0):,.2f} / {current_salary.get('pay_frequency','monthly')}"
+        if current_salary else "No active salary on file"
+    )
+    html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<style>
+  body {{ font-family: Arial, sans-serif; padding: 20mm; color: #1a1a2e; font-size: 11px; }}
+  h1 {{ font-size: 20px; margin: 0; }}
+  .accent {{ color: #48a9c5; }}
+  .head {{ display:flex; justify-content:space-between; border-bottom:2px solid #1a1a2e; padding-bottom:8px; align-items:flex-start; }}
+  .logo {{ height: 36px; }}
+  h2 {{ font-size: 13px; margin: 20px 0 6px 0; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; color:#1a1a2e; }}
+  .totals {{ background:#f5f7f9; padding:12px; border-radius:6px; margin:10px 0; display:grid; grid-template-columns:repeat(2,1fr); gap:4px 16px; }}
+  .totals .label {{ color:#64748b; }}
+  .totals .v {{ text-align:right; font-weight:600; }}
+  .totals .grand {{ grid-column:1/3; border-top:1px solid #cbd5e1; padding-top:6px; margin-top:4px; display:flex; justify-content:space-between; font-size:13px; }}
+  table {{ width:100%; border-collapse:collapse; font-size:10px; margin-top:6px; }}
+  th {{ background:#1a1a2e; color:#fff; padding:5px; text-align:left; }}
+  td {{ padding:4px 5px; border-bottom:1px solid #e2e8f0; }}
+  .meta {{ font-size:10px; color:#64748b; }}
+</style></head><body>
+  <div class='head'>
+    <div>
+      <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' class='logo' />
+      <p class='meta' style='margin:4px 0 0 0'>58:12 Global · Confidential HR Document</p>
+    </div>
+    <div style='text-align:right'>
+      <h1>Compensation Summary <span class='accent'>{yr}</span></h1>
+      <p class='meta' style='margin:2px 0 0 0'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+    </div>
+  </div>
+  <div style='margin-top:14px'>
+    <p style='margin:0; font-size:14px; font-weight:700'>{user.get('name','')}</p>
+    <p class='meta'>{user.get('role','')} · {user.get('department','') or '—'}{' · ' + user.get('email') if user.get('email') else ''}</p>
+    <p class='meta'>Current salary: <strong>{cur_sal_text}</strong></p>
+  </div>
+
+  <div class='totals'>
+    <div class='label'>Gross paid (year)</div><div class='v'>{total_gross:,.2f}</div>
+    <div class='label'>Deductions</div><div class='v' style='color:#b45309'>−{total_deductions:,.2f}</div>
+    <div class='label'>Net salary paid</div><div class='v'>{total_net:,.2f}</div>
+    <div class='label'>Reimbursements paid</div><div class='v'>{total_reimbursed:,.2f}</div>
+    <div class='grand'><span>Total compensation</span><span>{(total_net + total_reimbursed):,.2f}</span></div>
+  </div>
+
+  <h2>Payslips</h2>
+  <table>
+    <thead><tr><th>Period</th><th>Gross</th><th>Deductions</th><th>Net</th><th>Status</th></tr></thead>
+    <tbody>{rows_payslips}</tbody>
+  </table>
+
+  <h2>Salary Changes</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Approved by</th><th>Fields</th><th>Reason</th></tr></thead>
+    <tbody>{rows_history}</tbody>
+  </table>
+
+  <h2>Leave Taken (approved)</h2>
+  <table>
+    <thead><tr><th>Type</th><th>Days</th></tr></thead>
+    <tbody>{rows_leave}</tbody>
+  </table>
+
+  <h2>Reimbursements Paid</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Title</th><th>Category</th><th style='text-align:right'>Amount</th></tr></thead>
+    <tbody>{rows_reim}</tbody>
+  </table>
+
+  <p class='meta' style='margin-top:20mm; text-align:center'>This is an automatically generated statement. For corrections contact HR.</p>
+</body></html>"""
+    # Use WeasyPrint (already a dependency)
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Compensation PDF render failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = (user.get('name') or 'staff').replace(' ', '_')[:30]
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="compensation-{safe_name}-{yr}.pdf"'},
+    )
+

@@ -220,6 +220,7 @@ export default function HRPage() {
           <TabsTrigger value="documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
           <TabsTrigger value="leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
           <TabsTrigger value="reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
+          <TabsTrigger value="attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -241,6 +242,18 @@ export default function HRPage() {
                       <p className="text-[10px] text-muted-foreground">{(s.line_items || []).length} line items</p>
                     </div>
                     <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-7" onClick={async () => {
+                        try {
+                          const yr = new Date().getFullYear();
+                          const res = await api.get(`/hr/staff/${s.staff_id}/compensation-summary`, { params: { year: yr }, responseType: 'blob' });
+                          const url = URL.createObjectURL(res.data);
+                          const a = document.createElement('a');
+                          a.href = url; a.download = `compensation-${(s.staff_name||'staff').replace(/\s+/g,'_')}-${yr}.pdf`;
+                          document.body.appendChild(a); a.click(); a.remove();
+                          URL.revokeObjectURL(url);
+                          toast.success('Compensation PDF downloaded');
+                        } catch { toast.error('Download failed'); }
+                      }} data-testid={`salary-comp-pdf-${s.id}`} title="Download yearly compensation summary"><FileText size={13} /></Button>
                       <Button size="sm" variant="ghost" className="h-7" onClick={() => openSalaryHistory(s)} data-testid={`salary-history-${s.id}`} title="View change history"><History size={13} /></Button>
                       <Button size="sm" variant="ghost" className="h-7" onClick={() => openEditSalary(s)} data-testid={`salary-edit-${s.id}`} title="Edit salary"><Pencil size={13} /></Button>
                       <Button size="sm" variant="ghost" className="text-destructive h-7" data-testid={`salary-delete-${s.id}`} onClick={async () => { if (!window.confirm('Delete salary record?')) return; await api.delete(`/hr/salaries/${s.id}`); setSalaries(prev => prev.filter(x => x.id !== s.id)); toast.success('Deleted'); }}><Trash2 size={13} /></Button>
@@ -357,6 +370,11 @@ export default function HRPage() {
         {/* REIMBURSEMENTS TAB */}
         <TabsContent value="reimbursements" className="mt-4">
           <ReimbursementsPanel currentUser={user} />
+        </TabsContent>
+
+        {/* ATTENDANCE TAB */}
+        <TabsContent value="attendance" className="mt-4">
+          <AttendancePanel currentUser={user} staff={staff} />
         </TabsContent>
       </Tabs>
 
@@ -984,6 +1002,142 @@ function ReimbursementsPanel({ currentUser }) {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+
+
+// ========= Attendance Panel =========
+function AttendancePanel({ currentUser, staff }) {
+  const [active, setActive] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [summary, setSummary] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);  // for live timer
+  const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [aRes, eRes, sRes] = await Promise.all([
+        api.get('/hr/attendance/me/active').catch(() => ({ data: null })),
+        api.get('/hr/attendance').catch(() => ({ data: [] })),
+        api.get('/hr/attendance/summary', { params: { period } }).catch(() => ({ data: [] })),
+      ]);
+      setActive(aRes.data);
+      setEntries(eRes.data || []);
+      setSummary(sRes.data || []);
+    } finally { setLoading(false); }
+  }, [period]);
+  useEffect(() => { reload(); }, [reload]);
+  // Live timer for active entry
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  const elapsed = active ? (() => {
+    const start = new Date(active.check_in_time);
+    const diff = Math.max(0, Math.floor((Date.now() - start.getTime()) / 1000));
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    const s = diff % 60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  })() : null;
+
+  const clockIn = async () => {
+    try { await api.post('/hr/attendance/clock-in'); toast.success('Clocked in'); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const clockOut = async () => {
+    try { await api.post('/hr/attendance/clock-out'); toast.success('Clocked out'); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const myEntries = entries.filter(e => e.staff_id === currentUser.id);
+  const otherEntries = entries.filter(e => e.staff_id !== currentUser.id).slice(0, 30);
+
+  if (loading) return <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>;
+
+  return (
+    <div className="space-y-4" data-testid="attendance-panel">
+      {/* Clock card */}
+      <Card className={`rounded-xl ${active ? 'border-emerald-300 bg-emerald-50/30 dark:bg-emerald-950/20' : ''}`}>
+        <CardContent className="p-5 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">{active ? 'Currently clocked in' : 'Not clocked in'}</p>
+            <p className="text-3xl font-bold font-mono mt-0.5" data-testid="att-timer">{elapsed || '00:00:00'}</p>
+            {active && <p className="text-[10px] text-muted-foreground mt-1">Since {new Date(active.check_in_time).toLocaleString()}</p>}
+          </div>
+          {active ? (
+            <Button size="lg" variant="destructive" onClick={clockOut} data-testid="att-clock-out-btn">Clock Out</Button>
+          ) : (
+            <Button size="lg" className="gap-2" onClick={clockIn} data-testid="att-clock-in-btn">Clock In</Button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* My recent entries */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-semibold">My Recent Entries</h3>
+        {myEntries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No entries yet.</p> : (
+          <div className="space-y-1.5">
+            {myEntries.slice(0, 12).map(e => (
+              <div key={e.id} className="flex items-center justify-between p-2 rounded border border-border text-xs" data-testid={`att-${e.id}`}>
+                <div>
+                  <span className="font-medium">{e.date}</span>
+                  <span className="text-muted-foreground ml-2">{new Date(e.check_in_time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} → {e.check_out_time ? new Date(e.check_out_time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '— (active)'}</span>
+                </div>
+                {e.duration_minutes != null ? (
+                  <Badge variant="outline" className="text-[10px]">{Math.floor(e.duration_minutes/60)}h {e.duration_minutes%60}m</Badge>
+                ) : (
+                  <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">active</Badge>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* HR-only: team summary */}
+      {staff.length > 0 && summary.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold flex-1">Team Hours</h3>
+            <Input type="month" value={period} onChange={e => setPeriod(e.target.value)} className="w-40 h-7 text-xs" data-testid="att-period-input" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {summary.map(s => (
+              <Card key={s.staff_id} className="rounded-xl" data-testid={`att-summary-${s.staff_id}`}>
+                <CardContent className="p-3">
+                  <p className="text-sm font-medium truncate">{s.staff_name}</p>
+                  <p className="text-2xl font-bold">{s.total_hours}<span className="text-xs text-muted-foreground font-normal">h</span></p>
+                  <p className="text-[10px] text-muted-foreground">{s.days_present} day(s) · {s.entries_count} entr{s.entries_count === 1 ? 'y' : 'ies'}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* HR-only: other team's recent entries */}
+      {otherEntries.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold">Team Recent Activity</h3>
+          <div className="space-y-1.5">
+            {otherEntries.map(e => (
+              <div key={e.id} className="flex items-center justify-between p-2 rounded border border-border text-xs">
+                <div>
+                  <span className="font-medium">{e.staff_name}</span>
+                  <span className="text-muted-foreground ml-2">{e.date} · {new Date(e.check_in_time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} → {e.check_out_time ? new Date(e.check_out_time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : 'active'}</span>
+                </div>
+                {e.duration_minutes != null && <Badge variant="outline" className="text-[10px]">{Math.floor(e.duration_minutes/60)}h {e.duration_minutes%60}m</Badge>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
