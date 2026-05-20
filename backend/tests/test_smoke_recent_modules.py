@@ -396,3 +396,82 @@ class TestPaymentReminders:
                          headers=_hdr(token), timeout=10)
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+# ============================================================
+# FINANCIAL → ACCOUNTING AUTO-POST INTEGRATION
+# ============================================================
+class TestFinancialToAccounting:
+    """Verify donation + approved-expense entries in financial.py
+    auto-post balanced journal entries into the accounting ledger.
+    Silently no-ops if CoA isn't seeded for the campus."""
+
+    def test_donation_auto_posts_to_ledger(self, token, primary_location):
+        # Ensure CoA is in place
+        requests.post(f"{BASE_URL}/api/accounting/seed", headers=_hdr(token),
+                      json={"location_id": primary_location, "currency": "UGX"}, timeout=15)
+        # Ensure a misc journal exists
+        jrns = requests.get(f"{BASE_URL}/api/accounting/journals", headers=_hdr(token), timeout=10).json()
+        jrn = next((j for j in jrns if j.get("kind") == "miscellaneous" and j.get("location_id") == primary_location), None)
+        if not jrn:
+            r = requests.post(f"{BASE_URL}/api/accounting/journals", headers=_hdr(token),
+                              json={"code": f"GL{uuid.uuid4().hex[:3].upper()}", "name": "CI GL",
+                                    "kind": "miscellaneous", "location_id": primary_location}, timeout=10)
+            assert r.status_code == 200, r.text
+
+        # Create a donation
+        r = requests.post(f"{BASE_URL}/api/financial/donations", headers=_hdr(token),
+                          json={"donor_name": f"CI Donor {uuid.uuid4().hex[:4]}",
+                                "amount": 5000, "currency": "UGX", "type": "tithe",
+                                "location_id": primary_location}, timeout=10)
+        assert r.status_code == 200, r.text
+        don = r.json()
+        # Verify a posted balanced JE was auto-generated from the donation
+        entries = requests.get(
+            f"{BASE_URL}/api/accounting/entries",
+            headers=_hdr(token), params={"limit": 50}, timeout=10
+        ).json()
+        je = next(
+            (e for e in entries
+             if e.get("auto_generated_from") == "donation" and e.get("source_id") == don["id"]),
+            None,
+        )
+        assert je is not None, "Donation did not auto-post a journal entry"
+        assert je["status"] == "posted"
+        assert je["total_debit"] == je["total_credit"] == 5000.0
+        # Cleanup
+        requests.delete(f"{BASE_URL}/api/financial/donations/{don['id']}", headers=_hdr(token), timeout=10)
+
+    def test_expense_approval_auto_posts_to_ledger(self, token, primary_location):
+        # Create a pending expense
+        r = requests.post(f"{BASE_URL}/api/financial/expenses", headers=_hdr(token),
+                          json={"title": f"CI Supplies {uuid.uuid4().hex[:4]}",
+                                "amount": 2000, "currency": "UGX",
+                                "category": "supplies",
+                                "location_id": primary_location}, timeout=10)
+        assert r.status_code == 200, r.text
+        exp = r.json()
+        # No JE yet (pending state)
+        entries = requests.get(f"{BASE_URL}/api/accounting/entries", headers=_hdr(token),
+                               params={"limit": 100}, timeout=10).json()
+        pre = next((e for e in entries if e.get("source_id") == exp["id"]), None)
+        assert pre is None, "Pending expense must NOT auto-post"
+
+        # Approve it
+        a = requests.put(f"{BASE_URL}/api/financial/expenses/{exp['id']}/approve",
+                         headers=_hdr(token), json={"comment": "ok"}, timeout=10)
+        assert a.status_code == 200, a.text
+
+        # Now a balanced JE must exist
+        entries = requests.get(f"{BASE_URL}/api/accounting/entries", headers=_hdr(token),
+                               params={"limit": 100}, timeout=10).json()
+        je = next(
+            (e for e in entries
+             if e.get("auto_generated_from") == "expense" and e.get("source_id") == exp["id"]),
+            None,
+        )
+        assert je is not None, "Approved expense did not auto-post a journal entry"
+        assert je["status"] == "posted"
+        assert je["total_debit"] == je["total_credit"] == 2000.0
+        # Cleanup
+        requests.delete(f"{BASE_URL}/api/financial/expenses/{exp['id']}", headers=_hdr(token), timeout=10)

@@ -6,6 +6,27 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 116 (May 20, 2026)
+**Financial.py ↔ Accounting.py auto-posting bridge — `financial` flows now feed the double-entry ledger automatically.**
+
+### What was wired
+- ✅ **Donation create** (`POST /financial/donations`) → balanced JE auto-posted: Dr Cash / Cr Donations Revenue.
+- ✅ **Expense approve** (`PUT /financial/expenses/{id}/approve`) → balanced JE auto-posted: Dr [Expense category account, e.g. Supplies/Travel/Utilities] / Cr Cash. Posting deferred to approval (not creation) since pending expenses aren't yet a cash outflow.
+
+### How the mapping works
+- New `_post_to_accounting(kind, doc, current_user)` helper in `financial.py` finds the right CoA accounts via the existing `_find_account(location_id, account_type=, name_hints=)` helper.
+- **Account selection heuristic** with `_EXPENSE_CATEGORY_HINTS`: maps financial-module expense categories (`salaries/utilities/supplies/travel/...`) to CoA account names (case-insensitive contains). Falls back to first matching expense-type account if no hint matches.
+- **Silent no-op safety**: if a location hasn't seeded its CoA yet, OR no journal exists, the helper just returns — financial flows continue to work as before with zero behaviour change.
+- **Idempotency**: queries `auto_generated_from + source_id` before inserting; never double-posts.
+
+### Smoke coverage
+Two new pytest tests in `test_smoke_recent_modules.py` (now 16/16 passing in 0.7s):
+- `test_donation_auto_posts_to_ledger` — verifies a 5,000 UGX donation creates a balanced posted JE
+- `test_expense_approval_auto_posts_to_ledger` — verifies pending expense ≠ JE, but approval triggers a balanced posted JE
+
+### Result
+The Trial Balance / P&L / Balance Sheet on `/accounting` now reflects **all** financial activity (sales + donations + approved expenses + asset depreciation) — not just sales. No UI changes; existing financial.py users see no friction.
+
 ## Recently Resolved — Iteration 115 (May 20, 2026)
 **Pytest smoke CI job + Testing-agent validation of all recent modules.**
 

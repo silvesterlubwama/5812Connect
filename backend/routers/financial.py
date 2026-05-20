@@ -125,7 +125,128 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
         doc["location_id"] = doc["sublocation_id"]
     await db.donations.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "donation", doc["id"])
+    # Auto-post to accounting ledger (silent no-op if CoA not configured)
+    try:
+        await _post_to_accounting("donation", doc, current_user)
+    except Exception as e:
+        logger.warning(f"Donation auto-post to accounting skipped: {e}")
     return doc
+
+
+# ========== AUTO-POST FINANCIAL FLOWS TO ACCOUNTING LEDGER ==========
+
+# Heuristic mapping from financial expense category → CoA account name fragment.
+# First active expense-type account whose name contains the fragment wins;
+# falls back to the first expense-type account in the location.
+_EXPENSE_CATEGORY_HINTS = {
+    "salaries": ["salar", "wage"],
+    "utilities": ["utilit", "rent"],
+    "rent": ["rent", "utilit"],
+    "supplies": ["suppl"],
+    "maintenance": ["maint", "repair"],
+    "programs": ["program"],
+    "travel": ["travel", "meal"],
+    "meals": ["meal", "travel"],
+    "fuel": ["fuel", "travel"],
+    "training": ["train", "develop"],
+    "accommodation": ["accommod", "travel"],
+}
+
+
+async def _find_account(location_id: str, *, account_type: str = None, name_hints: list = None) -> dict:
+    """Find a matching CoA account by type, optionally narrowed by name hints (case-insensitive contains)."""
+    q = {"location_id": location_id, "active": True}
+    if account_type:
+        q["type"] = account_type
+    candidates = await db.accounting_accounts.find(q, {"_id": 0}).sort("code", 1).to_list(100)
+    if not candidates:
+        return None
+    if name_hints:
+        for h in name_hints:
+            for c in candidates:
+                if h.lower() in (c.get("name") or "").lower():
+                    return c
+    return candidates[0]
+
+
+async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
+    """Create + post a balanced JE for a financial-module record.
+    `kind` ∈ {'donation', 'expense_approved'}.
+    Silently no-ops if the location has no Chart of Accounts yet."""
+    loc_id = doc.get("location_id")
+    if not loc_id:
+        return
+    try:
+        amount = float(doc.get("amount") or 0)
+    except (TypeError, ValueError):
+        return
+    if amount <= 0:
+        return
+    # Find a miscellaneous journal (general ledger journal)
+    journal = await db.accounting_journals.find_one(
+        {"location_id": loc_id, "kind": "miscellaneous", "active": True}, {"_id": 0}
+    ) or await db.accounting_journals.find_one(
+        {"location_id": loc_id, "active": True}, {"_id": 0}
+    )
+    if not journal:
+        return
+    if kind == "donation":
+        debit_acc = await _find_account(loc_id, account_type="asset_cash")
+        credit_acc = await _find_account(loc_id, account_type="income", name_hints=["donation", "contribut"])
+        narration = f"Donation from {doc.get('donor_name', 'anonymous')} ({doc.get('type', '')})"
+        ref = doc["id"]
+        source_kind = "donation"
+    elif kind == "expense_approved":
+        category = (doc.get("category") or "").lower().strip()
+        hints = _EXPENSE_CATEGORY_HINTS.get(category, ["other"])
+        debit_acc = await _find_account(loc_id, account_type="expense", name_hints=hints)
+        credit_acc = await _find_account(loc_id, account_type="asset_cash")
+        narration = f"Expense: {doc.get('title', '')} [{category or 'general'}]"
+        ref = doc["id"]
+        source_kind = "expense"
+    else:
+        return
+    if not debit_acc or not credit_acc:
+        return
+    # Idempotency — never post twice for the same source
+    existing = await db.accounting_entries.find_one(
+        {"auto_generated_from": source_kind, "source_id": doc["id"]}, {"_id": 0, "id": 1}
+    )
+    if existing:
+        return
+    from routers.accounting import _next_entry_number
+    entry_id = f"je_{uuid.uuid4().hex[:10]}"
+    entry_number = await _next_entry_number(journal["id"])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entry_date = (doc.get("date") or now_iso)[:10]
+    entry = {
+        "id": entry_id,
+        "number": entry_number,
+        "journal_id": journal["id"],
+        "journal_code": journal.get("code"),
+        "date": entry_date,
+        "ref": ref,
+        "narration": narration,
+        "total_debit": round(amount, 2),
+        "total_credit": round(amount, 2),
+        "status": "posted",
+        "location_id": loc_id,
+        "currency": doc.get("currency") or "UGX",
+        "auto_generated_from": source_kind,
+        "source_id": doc["id"],
+        "created_at": now_iso,
+        "posted_at": now_iso,
+        "posted_by": current_user["id"],
+    }
+    await db.accounting_entries.insert_one(entry)
+    await db.accounting_entry_lines.insert_many([
+        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+         "journal_id": journal["id"], "date": entry_date, "location_id": loc_id, "status": "posted",
+         "account_id": debit_acc["id"], "debit": round(amount, 2), "credit": 0, "description": narration},
+        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+         "journal_id": journal["id"], "date": entry_date, "location_id": loc_id, "status": "posted",
+         "account_id": credit_acc["id"], "debit": 0, "credit": round(amount, 2), "description": narration},
+    ])
 
 
 # ========== EXPENSES ==========
@@ -202,6 +323,11 @@ async def approve_expense(expense_id: str, data: dict = None, current_user: dict
     update = {"status": "approved", "approved_by": current_user["id"], "approved_by_name": current_user.get("name", ""), "approved_at": datetime.now(timezone.utc).isoformat(), "approval_comment": data.get("comment", "")}
     await db.expenses.update_one({"id": expense_id}, {"$set": update})
     await _audit(current_user["id"], "update", "expense_approval", expense_id)
+    # Auto-post to accounting ledger on approval (silent no-op if CoA not configured)
+    try:
+        await _post_to_accounting("expense_approved", {**expense, **update}, current_user)
+    except Exception as e:
+        logger.warning(f"Expense auto-post to accounting skipped: {e}")
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification
