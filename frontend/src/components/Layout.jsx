@@ -8,7 +8,7 @@ import {
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
   PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server,
-  MessageSquare
+  MessageSquare, BookOpen
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -71,6 +71,7 @@ const NAV_SECTIONS = [
     roles: MANAGER_PLUS,
     items: [
       { to: '/financial', icon: DollarSign, label: 'Financial' },
+      { to: '/accounting', icon: BookOpen, label: 'Accounting' },
       { to: '/sales', icon: ShoppingCart, label: 'Marketplace' },
     ]
   },

@@ -455,3 +455,136 @@ async def import_trello(data: dict, current_user: dict = Depends(get_current_use
         imported += 1
 
     return {"imported": imported, "message": f"Successfully imported {imported} cards"}
+
+
+# ========== TASK TIME-TRACKING (P3: Project depth) ==========
+
+@router.post("/tasks/{task_id}/time/start")
+async def start_task_timer(task_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Start a timer for a task. Idempotent — returns the existing open timer if one exists.
+    Body: { notes? }"""
+    data = data or {}
+    task = await db.tasks.find_one({"id": task_id}, {"_id": 0, "id": 1, "title": 1, "board_id": 1})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    existing = await db.task_time_entries.find_one({
+        "task_id": task_id,
+        "user_id": current_user["id"],
+        "ended_at": None,
+    }, {"_id": 0})
+    if existing:
+        return {"already_running": True, "entry": existing}
+    now = datetime.now(timezone.utc)
+    entry = {
+        "id": f"tte_{uuid.uuid4().hex[:10]}",
+        "task_id": task_id,
+        "task_title": task.get("title"),
+        "board_id": task.get("board_id"),
+        "user_id": current_user["id"],
+        "user_name": current_user.get("name", ""),
+        "started_at": now.isoformat(),
+        "ended_at": None,
+        "duration_minutes": None,
+        "notes": (data.get("notes") or "")[:300],
+    }
+    await db.task_time_entries.insert_one(entry)
+    entry.pop("_id", None)
+    return {"already_running": False, "entry": entry}
+
+
+@router.post("/tasks/{task_id}/time/stop")
+async def stop_task_timer(task_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Stop the current user's running timer for a task. Body: { notes? }"""
+    data = data or {}
+    entry = await db.task_time_entries.find_one({
+        "task_id": task_id,
+        "user_id": current_user["id"],
+        "ended_at": None,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=400, detail="No timer running for this task")
+    now = datetime.now(timezone.utc)
+    try:
+        start = datetime.fromisoformat(entry["started_at"].replace("Z", "+00:00"))
+        duration = int((now - start).total_seconds() / 60)
+    except Exception:
+        duration = 0
+    update = {
+        "ended_at": now.isoformat(),
+        "duration_minutes": max(0, duration),
+    }
+    if data.get("notes"):
+        update["notes"] = ((entry.get("notes") or "") + " · " + data["notes"][:300]).strip(" ·")
+    await db.task_time_entries.update_one({"id": entry["id"]}, {"$set": update})
+    return await db.task_time_entries.find_one({"id": entry["id"]}, {"_id": 0})
+
+
+@router.post("/tasks/{task_id}/time/log")
+async def log_task_time(task_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Manually log time on a task (without a live timer).
+    Body: { minutes (int), date? (YYYY-MM-DD, default today), notes? }"""
+    task = await db.tasks.find_one({"id": task_id}, {"_id": 0, "id": 1, "title": 1, "board_id": 1})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        minutes = int(data.get("minutes") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="minutes must be an integer")
+    if minutes <= 0:
+        raise HTTPException(status_code=400, detail="minutes must be positive")
+    if minutes > 24 * 60:
+        raise HTTPException(status_code=400, detail="Cannot log more than 24h in one entry")
+    date_str = (data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entry = {
+        "id": f"tte_{uuid.uuid4().hex[:10]}",
+        "task_id": task_id,
+        "task_title": task.get("title"),
+        "board_id": task.get("board_id"),
+        "user_id": current_user["id"],
+        "user_name": current_user.get("name", ""),
+        "started_at": f"{date_str}T00:00:00+00:00",
+        "ended_at": now_iso,
+        "duration_minutes": minutes,
+        "manual": True,
+        "date": date_str,
+        "notes": (data.get("notes") or "")[:300],
+    }
+    await db.task_time_entries.insert_one(entry)
+    entry.pop("_id", None)
+    return entry
+
+
+@router.get("/tasks/{task_id}/time")
+async def list_task_time_entries(task_id: str, current_user: dict = Depends(get_current_user)):
+    """Time entries on a task (everyone's, sorted newest first)."""
+    entries = await db.task_time_entries.find({"task_id": task_id}, {"_id": 0}).sort("started_at", -1).to_list(500)
+    total_minutes = sum(int(e.get("duration_minutes") or 0) for e in entries if e.get("ended_at"))
+    return {
+        "entries": entries,
+        "total_minutes": total_minutes,
+        "total_hours": round(total_minutes / 60, 2),
+    }
+
+
+@router.delete("/tasks/{task_id}/time/{entry_id}")
+async def delete_task_time_entry(task_id: str, entry_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a time entry. Only owner may delete."""
+    entry = await db.task_time_entries.find_one({"id": entry_id, "task_id": task_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the owner may delete this entry")
+    await db.task_time_entries.delete_one({"id": entry_id})
+    return {"deleted": True}
+
+
+@router.get("/time/me/active")
+async def my_active_task_timer(current_user: dict = Depends(get_current_user)):
+    """Return the user's currently-running task timer (or null)."""
+    entry = await db.task_time_entries.find_one({
+        "user_id": current_user["id"],
+        "ended_at": None,
+    }, {"_id": 0})
+    return entry
+
