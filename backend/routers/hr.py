@@ -623,3 +623,243 @@ async def auto_generate_payslips(current_user: dict = Depends(require_director))
                 await db.hr_payslips.insert_one(payslip)
                 generated_total += 1
     return {"message": f"Auto-generated {generated_total} payslips for {current_period}", "count": generated_total}
+
+
+# ========== LEAVE / TIME-OFF MANAGEMENT (Odoo-style) ==========
+
+# Default leave types per campus (can be overridden in hr_settings)
+DEFAULT_LEAVE_TYPES = [
+    {"id": "annual", "name": "Annual Leave", "default_days": 21, "paid": True, "color": "#3b82f6"},
+    {"id": "sick", "name": "Sick Leave", "default_days": 10, "paid": True, "color": "#f97316"},
+    {"id": "unpaid", "name": "Unpaid Leave", "default_days": 0, "paid": False, "color": "#6b7280"},
+    {"id": "maternity", "name": "Maternity Leave", "default_days": 60, "paid": True, "color": "#ec4899"},
+    {"id": "paternity", "name": "Paternity Leave", "default_days": 7, "paid": True, "color": "#0ea5e9"},
+    {"id": "bereavement", "name": "Bereavement", "default_days": 5, "paid": True, "color": "#6366f1"},
+]
+
+
+def _count_business_days(start_iso: str, end_iso: str) -> int:
+    """Count business days (Mon-Fri) between two YYYY-MM-DD dates inclusive."""
+    from datetime import date as dt_date, timedelta as td
+    try:
+        sd = dt_date.fromisoformat(start_iso[:10])
+        ed = dt_date.fromisoformat(end_iso[:10])
+    except Exception:
+        return 0
+    if ed < sd:
+        return 0
+    n = 0
+    d = sd
+    while d <= ed:
+        if d.weekday() < 5:  # 0..4 = Mon..Fri
+            n += 1
+        d += td(days=1)
+    return n
+
+
+@router.get("/leave/types")
+async def list_leave_types(location_id: Optional[str] = None, current_user: dict = Depends(require_hr)):
+    """Return leave types (campus-overridable). Falls back to defaults."""
+    loc = location_id or current_user.get("active_campus_id") or current_user.get("location_id")
+    settings = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0, "leave_types": 1})
+    if settings and settings.get("leave_types"):
+        return settings["leave_types"]
+    return DEFAULT_LEAVE_TYPES
+
+
+@router.put("/leave/types")
+async def set_leave_types(data: dict, current_user: dict = Depends(require_director)):
+    """Set leave types for a campus. Body: { location_id, leave_types: [...] }"""
+    loc = data.get("location_id") or current_user.get("active_campus_id")
+    if not loc:
+        raise HTTPException(status_code=400, detail="location_id required")
+    await db.hr_settings.update_one(
+        {"location_id": loc},
+        {"$set": {"leave_types": data.get("leave_types") or []}},
+        upsert=True,
+    )
+    return {"updated": True}
+
+
+@router.get("/leave/balance")
+async def leave_balance(staff_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get leave balance for a staff member.
+    - Without staff_id: returns the current user's balance.
+    - With staff_id: HR/director access required."""
+    target_id = staff_id or current_user["id"]
+    if staff_id and target_id != current_user["id"]:
+        if not _require_hr_access(current_user):
+            raise HTTPException(status_code=403, detail="HR access required to view other users' balances")
+    user = await db.users.find_one({"id": target_id}, {"_id": 0, "id": 1, "name": 1, "location_id": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    types = await list_leave_types(location_id=user.get("location_id"), current_user=current_user)
+    # Aggregate approved leave usage in the current calendar year
+    year = datetime.now(timezone.utc).year
+    year_start = f"{year}-01-01"
+    year_end = f"{year}-12-31"
+    used_by_type = {}
+    async for lr in db.hr_leave_requests.find({
+        "staff_id": target_id,
+        "status": "approved",
+        "start_date": {"$lte": year_end},
+        "end_date": {"$gte": year_start},
+    }, {"_id": 0}):
+        used_by_type[lr.get("leave_type")] = used_by_type.get(lr.get("leave_type"), 0) + (lr.get("days") or 0)
+    # Per-user allocation override stored on the user record
+    user_allocations = (await db.users.find_one({"id": target_id}, {"_id": 0, "leave_allocations": 1})) or {}
+    overrides = user_allocations.get("leave_allocations") or {}
+    return {
+        "staff_id": target_id,
+        "staff_name": user.get("name"),
+        "year": year,
+        "balances": [
+            {
+                "type": t["id"],
+                "name": t["name"],
+                "allocated": int(overrides.get(t["id"], t.get("default_days") or 0)),
+                "used": int(used_by_type.get(t["id"], 0)),
+                "remaining": int(overrides.get(t["id"], t.get("default_days") or 0)) - int(used_by_type.get(t["id"], 0)),
+                "paid": t.get("paid", True),
+                "color": t.get("color", "#6b7280"),
+            }
+            for t in types
+        ],
+    }
+
+
+@router.put("/leave/allocation/{staff_id}")
+async def set_leave_allocation(staff_id: str, data: dict, current_user: dict = Depends(require_director)):
+    """Override a staff member's annual allocation per leave type.
+    Body: { allocations: {annual: 25, sick: 12, ...} }"""
+    allocations = data.get("allocations") or {}
+    if not isinstance(allocations, dict):
+        raise HTTPException(status_code=400, detail="allocations must be an object")
+    await db.users.update_one({"id": staff_id}, {"$set": {"leave_allocations": {k: int(v) for k, v in allocations.items()}}})
+    return {"updated": True}
+
+
+@router.get("/leave/requests")
+async def list_leave_requests(status: Optional[str] = None, staff_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List leave requests. Non-HR users only see their own; HR sees campus-scoped."""
+    query = {}
+    if status:
+        query["status"] = status
+    if staff_id:
+        query["staff_id"] = staff_id
+    if not _require_hr_access(current_user):
+        # Non-HR: only their own
+        query["staff_id"] = current_user["id"]
+    else:
+        # HR scoped to campus
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
+    return await db.hr_leave_requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/leave/requests")
+async def create_leave_request(data: dict, current_user: dict = Depends(get_current_user)):
+    """Submit a leave request.
+    Body: { leave_type, start_date, end_date, half_day?: bool, notes? }"""
+    leave_type = (data.get("leave_type") or "").strip()
+    start_date = (data.get("start_date") or "").strip()[:10]
+    end_date = (data.get("end_date") or "").strip()[:10]
+    if not leave_type or not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="leave_type, start_date, end_date required")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be ≥ start_date")
+    half_day = bool(data.get("half_day"))
+    days = _count_business_days(start_date, end_date)
+    if days == 0:
+        raise HTTPException(status_code=400, detail="No business days in the selected range")
+    if half_day and start_date == end_date:
+        days = 0.5
+    # Optional staff_id override (HR booking on someone's behalf)
+    staff_id = data.get("staff_id") or current_user["id"]
+    if staff_id != current_user["id"] and not _require_hr_access(current_user):
+        raise HTTPException(status_code=403, detail="Cannot file leave for another user")
+    staff = await db.users.find_one({"id": staff_id}, {"_id": 0, "name": 1, "role": 1, "department": 1, "location_id": 1, "email": 1})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    doc = {
+        "id": f"lvr_{uuid.uuid4().hex[:10]}",
+        "staff_id": staff_id,
+        "staff_name": staff.get("name"),
+        "department": staff.get("department"),
+        "location_id": staff.get("location_id"),
+        "leave_type": leave_type,
+        "start_date": start_date,
+        "end_date": end_date,
+        "half_day": half_day,
+        "days": days,
+        "notes": (data.get("notes") or "")[:500],
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.hr_leave_requests.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/leave/requests/{request_id}")
+async def update_leave_request(request_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Approve/decline/cancel a leave request.
+    Body: { status: 'approved'|'declined'|'cancelled', decision_note?: '' }"""
+    lr = await db.hr_leave_requests.find_one({"id": request_id}, {"_id": 0})
+    if not lr:
+        raise HTTPException(status_code=404, detail="Request not found")
+    status = (data.get("status") or "").strip()
+    if status not in {"approved", "declined", "cancelled", "pending"}:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    # Cancel is allowed by the requester if still pending; approve/decline requires HR
+    if status == "cancelled" and lr["staff_id"] == current_user["id"]:
+        pass
+    elif not _require_hr_access(current_user):
+        raise HTTPException(status_code=403, detail="HR access required to change status")
+    if lr.get("status") in {"approved", "declined"} and status != "cancelled":
+        raise HTTPException(status_code=400, detail="Request is already finalized")
+    update = {
+        "status": status,
+        "decision_at": datetime.now(timezone.utc).isoformat(),
+        "decision_by": current_user["id"],
+        "decision_by_name": current_user.get("name", ""),
+        "decision_note": (data.get("decision_note") or "")[:500],
+    }
+    await db.hr_leave_requests.update_one({"id": request_id}, {"$set": update})
+    return await db.hr_leave_requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@router.delete("/leave/requests/{request_id}")
+async def delete_leave_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    lr = await db.hr_leave_requests.find_one({"id": request_id}, {"_id": 0})
+    if not lr:
+        raise HTTPException(status_code=404, detail="Request not found")
+    # Only owner (still pending) or HR may delete
+    if lr["staff_id"] != current_user["id"] and not _require_hr_access(current_user):
+        raise HTTPException(status_code=403, detail="Not permitted")
+    if lr.get("status") == "approved" and not _require_hr_access(current_user):
+        raise HTTPException(status_code=400, detail="Cannot delete an approved request — cancel it instead")
+    await db.hr_leave_requests.delete_one({"id": request_id})
+    return {"deleted": True}
+
+
+@router.get("/leave/calendar")
+async def leave_calendar(month: Optional[str] = None, current_user: dict = Depends(require_hr)):
+    """Approved leaves for the given YYYY-MM (or current month). Useful for an HR planning view."""
+    now = datetime.now(timezone.utc)
+    target = month or now.strftime("%Y-%m")
+    start = f"{target}-01"
+    # Next month start
+    y, m = map(int, target.split("-"))
+    nm = m + 1; ny = y
+    if nm > 12:
+        nm = 1; ny = y + 1
+    nstart = f"{ny:04d}-{nm:02d}-01"
+    query = {"status": "approved", "start_date": {"$lt": nstart}, "end_date": {"$gte": start}}
+    campus = await get_campus_filter(current_user)
+    if campus:
+        query.update(campus)
+    return await db.hr_leave_requests.find(query, {"_id": 0}).sort("start_date", 1).to_list(500)
+

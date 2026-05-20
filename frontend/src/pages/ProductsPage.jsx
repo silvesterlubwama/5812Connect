@@ -55,6 +55,11 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState([]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(null);
+  const [activePricelist, setActivePricelist] = useState(null); // { id, name, discount_pct }
+  const [showPickCustomer, setShowPickCustomer] = useState(false);
+  const [pickCustQuery, setPickCustQuery] = useState('');
+  const [pickCustResults, setPickCustResults] = useState([]);
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
@@ -212,8 +217,19 @@ export default function ProductsPage() {
   })();
 
   // Cart operations
-  const addToCart = (product, variant = null) => {
-    const effectivePrice = variant?.price ?? product.price;
+  const addToCart = async (product, variant = null) => {
+    let effectivePrice = variant?.price ?? product.price;
+    let priceSource = 'base';
+    // Apply customer pricelist if a registered customer is selected
+    if (selectedCustomerId) {
+      try {
+        const r = await api.get('/pricelists/resolve', { params: { customer_id: selectedCustomerId, product_id: product.id, variant_id: variant?.id || undefined } });
+        if (r.data && typeof r.data.price === 'number') {
+          effectivePrice = r.data.price;
+          priceSource = r.data.source || 'pricelist';
+        }
+      } catch { /* fall back to base price */ }
+    }
     const effectiveStock = variant ? (variant.stock || 0) : (product.stock || 0);
     if (effectiveStock <= 0) { toast.error(`${product.name}${variant ? ` (${variant.name})` : ''} is out of stock`); return; }
     const key = variant ? `${product.id}:${variant.id}` : product.id;
@@ -235,9 +251,10 @@ export default function ProductsPage() {
         packaging_cost: packCost,
         packaging_label: variant?.packaging_label || '',
         include_packaging: packCost > 0,  // default include if there's a cost
+        price_source: priceSource,
       }];
     });
-    toast.success(`Added ${product.name}${variant ? ` (${variant.name})` : ''}`);
+    toast.success(`Added ${product.name}${variant ? ` (${variant.name})` : ''}${priceSource !== 'base' ? ` · ${priceSource === 'pricelist_override' ? 'custom price' : 'discount'} applied` : ''}`);
   };
 
   const togglePackaging = (item) => {
@@ -852,7 +869,16 @@ export default function ProductsPage() {
               )}
               <div className="p-4 border-t border-border space-y-3 bg-card">
                 <div className="space-y-2">
-                  <Input placeholder="Customer name" value={customerName} onChange={e => setCustomerName(e.target.value)} className="text-sm h-8" data-testid="customer-name-input" />
+                  <div className="flex gap-1.5">
+                    <Input placeholder="Customer name" value={customerName} onChange={e => { setCustomerName(e.target.value); if (selectedCustomerId) { setSelectedCustomerId(null); setActivePricelist(null); } }} className="text-sm h-8 flex-1" data-testid="customer-name-input" />
+                    <Button size="sm" variant="outline" className="h-8 px-2 text-xs" data-testid="pos-pick-customer-btn" onClick={() => setShowPickCustomer(true)} title="Pick registered customer for pricelist">👤</Button>
+                  </div>
+                  {activePricelist && (
+                    <div className="flex items-center justify-between gap-1.5 px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 text-[10px]" data-testid="active-pricelist-banner">
+                      <span className="text-emerald-700 dark:text-emerald-300">Pricelist: <strong>{activePricelist.name}</strong>{activePricelist.discount_pct ? ` · -${activePricelist.discount_pct}%` : ''}</span>
+                      <button onClick={() => { setSelectedCustomerId(null); setActivePricelist(null); }} className="text-emerald-700 hover:text-emerald-900 text-xs">×</button>
+                    </div>
+                  )}
                   <Select value={paymentMethod} onValueChange={setPaymentMethod}>
                     <SelectTrigger className="h-8 text-sm" data-testid="payment-method-select"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1645,6 +1671,65 @@ export default function ProductsPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pick Registered Customer (Pricelist) Dialog */}
+      <Dialog open={showPickCustomer} onOpenChange={(o) => { setShowPickCustomer(o); if (!o) { setPickCustQuery(''); setPickCustResults([]); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Pick Registered Customer</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs text-muted-foreground">Pick a registered customer to apply their pricelist & track loyalty.</p>
+            <Input
+              placeholder="Search by name, phone, or email..."
+              value={pickCustQuery}
+              autoFocus
+              data-testid="pos-pick-customer-search"
+              onChange={async e => {
+                const q = e.target.value;
+                setPickCustQuery(q);
+                if (q.trim().length < 2) { setPickCustResults([]); return; }
+                try {
+                  const r = await api.get('/customers', { params: { search: q } });
+                  setPickCustResults((r.data || []).slice(0, 12));
+                } catch { /* ignore */ }
+              }}
+            />
+            <div className="max-h-72 overflow-y-auto space-y-1">
+              {pickCustResults.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">{pickCustQuery.length < 2 ? 'Start typing to search...' : 'No matches'}</p>
+              ) : pickCustResults.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`pos-pick-customer-${c.id}`}
+                  className="w-full text-left p-2 rounded-md border border-border hover:border-primary hover:bg-muted/50 transition"
+                  onClick={async () => {
+                    setSelectedCustomerId(c.id);
+                    setCustomerName(c.name || 'Customer');
+                    // Try to resolve their pricelist (resolve against a dummy product to detect blanket discount)
+                    try {
+                      const plList = await api.get('/pricelists');
+                      const pl = (plList.data || []).find(p => (p.customer_ids || []).includes(c.id) || p.customer_id === c.id);
+                      if (pl && (pl.discount_pct || (pl.product_prices || []).length)) {
+                        setActivePricelist({ id: pl.id, name: pl.name, discount_pct: pl.discount_pct });
+                        toast.success(`Pricelist: ${pl.name}${pl.discount_pct ? ` (-${pl.discount_pct}%)` : ''}`);
+                      } else {
+                        setActivePricelist(null);
+                      }
+                    } catch { /* ignore */ }
+                    setShowPickCustomer(false);
+                    setPickCustQuery(''); setPickCustResults([]);
+                  }}
+                >
+                  <p className="text-sm font-medium">{c.name}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {c.phone || ''} {c.email ? ` · ${c.email}` : ''}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -218,6 +218,7 @@ export default function HRPage() {
           <TabsTrigger value="payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
           <TabsTrigger value="contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
           <TabsTrigger value="documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
+          <TabsTrigger value="leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -345,6 +346,11 @@ export default function HRPage() {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        {/* LEAVE TAB */}
+        <TabsContent value="leave" className="mt-4">
+          <LeavePanel currentUser={user} staff={staff} isHr={salaries.length >= 0 /* user has hr page access */} />
         </TabsContent>
       </Tabs>
 
@@ -644,3 +650,165 @@ function ComplianceOptionsPicker({ country, onPick }) {
     </div>
   );
 }
+
+
+// ========= Leave / Time-off Panel =========
+function LeavePanel({ currentUser, staff }) {
+  const [types, setTypes] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [balance, setBalance] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showRequest, setShowRequest] = useState(false);
+  const [requestForm, setRequestForm] = useState({ leave_type: 'annual', start_date: '', end_date: '', half_day: false, notes: '', staff_id: '' });
+  const [decideOn, setDecideOn] = useState(null);
+  const [decisionNote, setDecisionNote] = useState('');
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [tRes, rRes, bRes] = await Promise.all([
+        api.get('/hr/leave/types').catch(() => ({ data: [] })),
+        api.get('/hr/leave/requests').catch(() => ({ data: [] })),
+        api.get('/hr/leave/balance').catch(() => ({ data: null })),
+      ]);
+      setTypes(tRes.data || []);
+      setRequests(rRes.data || []);
+      setBalance(bRes.data);
+    } finally { setLoading(false); }
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  const typeMeta = (id) => types.find(t => t.id === id) || { name: id, color: '#6b7280' };
+  const submitRequest = async () => {
+    try {
+      const payload = { ...requestForm };
+      if (!payload.staff_id) delete payload.staff_id;
+      await api.post('/hr/leave/requests', payload);
+      toast.success('Leave request submitted');
+      setShowRequest(false);
+      setRequestForm({ leave_type: 'annual', start_date: '', end_date: '', half_day: false, notes: '', staff_id: '' });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const decide = async (newStatus) => {
+    try {
+      await api.put(`/hr/leave/requests/${decideOn.id}`, { status: newStatus, decision_note: decisionNote });
+      toast.success(newStatus === 'approved' ? 'Approved' : newStatus === 'declined' ? 'Declined' : 'Updated');
+      setDecideOn(null); setDecisionNote('');
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  if (loading) return <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>;
+  return (
+    <div className="space-y-4" data-testid="leave-panel">
+      {/* Personal balances row */}
+      {balance && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {balance.balances.map(b => (
+            <div key={b.type} className="rounded-lg border p-2.5" style={{ borderLeftWidth: 3, borderLeftColor: b.color }} data-testid={`leave-balance-${b.type}`}>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{b.name}</p>
+              <p className="text-lg font-bold">{b.remaining}<span className="text-xs text-muted-foreground font-normal">/{b.allocated}d</span></p>
+              <p className="text-[10px] text-muted-foreground">{b.used} used this year</p>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-semibold">Leave Requests</h3>
+        <Button size="sm" className="gap-1.5" onClick={() => setShowRequest(true)} data-testid="leave-new-btn"><Plus size={13} /> New Request</Button>
+      </div>
+      {requests.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No leave requests.</p> : (
+        <div className="space-y-2">
+          {requests.map(r => {
+            const meta = typeMeta(r.leave_type);
+            const canDecide = r.status === 'pending' && r.staff_id !== currentUser.id;
+            const canCancel = r.status === 'pending' && r.staff_id === currentUser.id;
+            return (
+              <Card key={r.id} className="rounded-xl" data-testid={`leave-${r.id}`}>
+                <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <span className="w-2 h-10 rounded-full" style={{ backgroundColor: meta.color }} />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{r.staff_name} <span className="text-muted-foreground font-normal">· {meta.name}</span></p>
+                      <p className="text-xs text-muted-foreground">{r.start_date} → {r.end_date} · {r.days}{r.half_day ? '' : 'd'} {r.half_day ? '(half day)' : ''} {r.notes ? `· ${r.notes}` : ''}</p>
+                      {r.decision_by_name && r.status !== 'pending' && (
+                        <p className="text-[10px] text-muted-foreground italic">{r.status} by {r.decision_by_name}{r.decision_note ? ` — “${r.decision_note}”` : ''}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Badge className={`text-[10px] capitalize ${r.status === 'approved' ? 'bg-green-100 text-green-700' : r.status === 'declined' ? 'bg-red-100 text-red-700' : r.status === 'cancelled' ? 'bg-gray-100 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</Badge>
+                    {canDecide && (
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setDecideOn(r); setDecisionNote(''); }} data-testid={`leave-decide-${r.id}`}>Decide</Button>
+                    )}
+                    {canCancel && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={async () => { if (!window.confirm('Cancel this request?')) return; await api.put(`/hr/leave/requests/${r.id}`, { status: 'cancelled' }); reload(); }} data-testid={`leave-cancel-${r.id}`}>Cancel</Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* New Request Dialog */}
+      <Dialog open={showRequest} onOpenChange={setShowRequest}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>New Leave Request</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Leave Type *</Label>
+              <Select value={requestForm.leave_type} onValueChange={v => setRequestForm({...requestForm, leave_type: v})}>
+                <SelectTrigger data-testid="leave-type-select"><SelectValue /></SelectTrigger>
+                <SelectContent>{types.map(t => <SelectItem key={t.id} value={t.id}>{t.name}{!t.paid ? ' (unpaid)' : ''}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Start Date *</Label><Input type="date" value={requestForm.start_date} onChange={e => setRequestForm({...requestForm, start_date: e.target.value})} data-testid="leave-start-input" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">End Date *</Label><Input type="date" value={requestForm.end_date} min={requestForm.start_date} onChange={e => setRequestForm({...requestForm, end_date: e.target.value})} data-testid="leave-end-input" /></div>
+            </div>
+            <div className="flex items-center justify-between p-2.5 rounded border">
+              <div><p className="text-sm font-medium">Half-day</p><p className="text-[10px] text-muted-foreground">For single-day requests only</p></div>
+              <Switch checked={requestForm.half_day} onCheckedChange={v => setRequestForm({...requestForm, half_day: v})} disabled={!requestForm.start_date || requestForm.start_date !== requestForm.end_date} />
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label><Textarea rows={2} value={requestForm.notes} onChange={e => setRequestForm({...requestForm, notes: e.target.value})} placeholder="Reason (optional)" /></div>
+            {staff.length > 0 && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">File for (HR only — leave blank for yourself)</Label>
+                <Select value={requestForm.staff_id || 'self'} onValueChange={v => setRequestForm({...requestForm, staff_id: v === 'self' ? '' : v})}>
+                  <SelectTrigger><SelectValue placeholder="Yourself" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="self">Yourself</SelectItem>
+                    {staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowRequest(false)}>Cancel</Button>
+              <Button className="flex-1" data-testid="leave-submit-btn" disabled={!requestForm.start_date || !requestForm.end_date} onClick={submitRequest}>Submit</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Decision Dialog */}
+      <Dialog open={!!decideOn} onOpenChange={(o) => { if (!o) setDecideOn(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Decide Leave Request</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs text-muted-foreground"><strong>{decideOn?.staff_name}</strong> requests <strong>{typeMeta(decideOn?.leave_type).name}</strong> {decideOn?.start_date} → {decideOn?.end_date} ({decideOn?.days}d).</p>
+            <div className="space-y-1">
+              <Label className="text-xs">Decision Note (optional)</Label>
+              <Textarea rows={2} value={decisionNote} onChange={e => setDecisionNote(e.target.value)} data-testid="leave-decision-note" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="destructive" className="flex-1" onClick={() => decide('declined')} data-testid="leave-decline-btn">Decline</Button>
+              <Button className="flex-1" onClick={() => decide('approved')} data-testid="leave-approve-btn">Approve</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+

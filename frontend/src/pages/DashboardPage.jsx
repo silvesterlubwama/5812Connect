@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi, locationsApi } from '../services/api';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -78,7 +79,14 @@ export default function DashboardPage() {
         setFamilyCount(Array.isArray(famRes.data) ? famRes.data.length : 0);
         setChildrenCount(Array.isArray(chdRes.data) ? chdRes.data.length : 0);
         const prods = Array.isArray(prodRes.data) ? prodRes.data : [];
-        setLowStockProducts(prods.filter(p => p.stock <= (p.reorder_level || 5)));
+        // Use the new endpoint that supports per-variant alerts
+        try {
+          const alertsRes = await api.get('/products/reorder-alerts');
+          setLowStockProducts(alertsRes.data || []);
+        } catch {
+          // Fallback to legacy product-level filter
+          setLowStockProducts(prods.filter(p => p.stock <= (p.reorder_level || 5)).map(p => ({ product_id: p.id, product_name: p.name, stock: p.stock, reorder_level: p.reorder_level || 5 })));
+        }
         setActionItems(actionsRes.data);
         if (statsRes.data?.group_breakdown) {
           setDeptData(Object.entries(statsRes.data.group_breakdown).map(([name, count]) => ({ name, count })));
@@ -227,12 +235,20 @@ export default function DashboardPage() {
 
       {/* Alerts Row */}
       {!loadingStats && lowStockProducts.length > 0 && (
-        <Card className="shadow-soft rounded-xl border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
+        <Card className="shadow-soft rounded-xl border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800" data-testid="reorder-alerts-card">
           <CardContent className="p-4 flex items-center gap-3">
             <AlertCircle size={16} className="text-amber-600 shrink-0" />
             <div className="flex-1">
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Low Stock Alert</p>
-              <p className="text-xs text-amber-600 dark:text-amber-500">{lowStockProducts.length} product{lowStockProducts.length > 1 ? 's' : ''} at or below reorder threshold: {lowStockProducts.map(p => p.name).join(', ')}</p>
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Reorder Alerts</p>
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                {lowStockProducts.length} product{lowStockProducts.length > 1 ? 's' : ''} at or below reorder threshold:{' '}
+                {lowStockProducts.slice(0, 5).map(p => {
+                  const lv = (p.low_variants || []);
+                  if (lv.length) return `${p.product_name} (${lv.map(v => `${v.name}: ${v.stock}`).join(', ')})`;
+                  return `${p.product_name} (${p.stock} ≤ ${p.reorder_level})`;
+                }).join(' · ')}
+                {lowStockProducts.length > 5 ? ` +${lowStockProducts.length - 5} more` : ''}
+              </p>
             </div>
             <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-100 shrink-0" onClick={() => navigate('/sales')}>
               View Products
