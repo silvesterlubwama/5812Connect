@@ -756,7 +756,7 @@ export default function ProductsPage() {
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">{[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
                 ) : (
                   <div>
-                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} products?`)) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch {} } setSelectedIds(new Set()); fetchProducts(); toast.success('Deleted'); }} /></div>}
+                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} products?`)) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch { /* ignore individual failures */ } } setSelectedIds(new Set()); fetchAll(); toast.success('Deleted'); }} /></div>}
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     {filteredProducts.map(p => (
                       <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>

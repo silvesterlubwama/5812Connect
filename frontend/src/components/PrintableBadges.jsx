@@ -7,10 +7,6 @@ import { getCountryOutline } from './countryOutlines';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
-function printElement(ref, title) {
-  const html = ref.current?.innerHTML;
-  if (!html) return;
-
 function generateInitialsImg(name, bg = '#fbbf24', fg = '#1a1a2e', sz = 128) {
   const initials = (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const c = document.createElement('canvas'); c.width = sz; c.height = sz;
@@ -20,6 +16,10 @@ function generateInitialsImg(name, bg = '#fbbf24', fg = '#1a1a2e', sz = 128) {
   ctx.fillText(initials, sz/2, sz/2);
   return c.toDataURL('image/png');
 }
+
+function printElement(ref, title) {
+  const html = ref.current?.innerHTML;
+  if (!html) return;
 
   const win = window.open('', '_blank', 'width=500,height=400');
   if (!win) return;

@@ -156,7 +156,7 @@ export default function PortalProfile() {
           ) : (
             <div className="divide-y">
               {(checkins.checkins || []).slice(0, 10).map((c, i) => (
-                <div key={item?.label || i} className="flex items-center justify-between py-2.5">
+                <div key={c.id || c.check_in_time || `c-${i}`} className="flex items-center justify-between py-2.5">
                   <div>
                     <p className="text-sm">{c.event_name || c.type || 'Check-in'}</p>
                     <p className="text-xs text-muted-foreground">{c.method || 'manual'}</p>

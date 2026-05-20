@@ -136,7 +136,6 @@ export default function ResourcesPage() {
   const filtered = resources.filter(r => {
     if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
     if (typeFilter !== 'all' && r.type !== typeFilter) return false;
-    if (false) return false;
     return true;
   });
 

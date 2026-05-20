@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from './AuthContext';
+import { secureStorage } from '../services/secureStorage';
 
 const WebSocketContext = createContext(null);
 

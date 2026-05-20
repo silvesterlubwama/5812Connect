@@ -6,6 +6,26 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 114 (May 20, 2026)
+**CI lint gate added + 8 real bugs the gate surfaced.**
+
+### CI infrastructure
+- ✅ `scripts/lint-check.sh` — local pre-commit gate (Python ruff F821/F823/F841/E722/B006 + JS eslint --quiet)
+- ✅ `.github/workflows/ci.yml` — runs the same gate on every push/PR
+- ✅ `frontend/eslint.config.mjs` — minimal flat config (ESLint v9 compatible) targeting only critical errors (jsx-key, no-undef, react-hooks rules), warnings for unused vars and exhaustive-deps
+
+### Real bugs the gate caught & fixed
+1. **`TasksPage.jsx:502`** — bulk-move handler referenced undefined `lists` (should be `board?.lists`); would crash when used.
+2. **`EventsPage.jsx:415, 430`** — array-key references to undefined `item` variable (introduced in earlier iteration).
+3. **`PortalProfile.jsx:159`** — same `item?.label` undefined reference pattern.
+4. **`ProductsPage.jsx:759`** — bulk-delete called nonexistent `fetchProducts` (actual function is `fetchAll`).
+5. **`WebSocketContext.js`** — missing `import { secureStorage }` (3 uses; would throw at runtime).
+6. **`PrintableBadges.jsx`** — `generateInitialsImg` was nested inside `printElement`, making it inaccessible to the 2 call sites at lines 102/205 (silent breakage of badge initials fallback).
+7. **`ResourcesPage.jsx:139`** — dead `if (false) return false` branch.
+8. **7 ui/*.jsx files** — mismatched quote characters in imports (`from '...something"`), real syntax errors in calendar/alert-dialog/carousel/command/form/toaster/toggle-group/pagination components. Each would crash when its component loaded.
+
+All fixes applied. Both lint gates now pass green.
+
 ## Recently Resolved — Iteration 113 (May 20, 2026)
 **Code review remediation — Critical (🔴) security/correctness fixes applied.**
 

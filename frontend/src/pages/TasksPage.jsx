@@ -499,11 +499,11 @@ export default function TasksPage() {
                     <Archive size={13} /> Archive
                   </Button>
                   <Select onValueChange={(v) => {
-                    const list = lists.find(l => l.id === v);
+                    const list = (board?.lists || []).find(l => l.id === v);
                     if (list) bulkMoveToList(list.id, list.name);
                   }}>
                     <SelectTrigger className="h-8 w-auto text-xs bg-transparent border-white/10 text-slate-300" data-testid="bulk-move-select"><SelectValue placeholder="Move to..." /></SelectTrigger>
-                    <SelectContent>{lists.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                    <SelectContent>{(board?.lists || []).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
                   </Select>
                   <Button size="sm" variant="ghost" className="text-red-400 hover:bg-red-500/10 h-8 text-xs" onClick={bulkDelete} data-testid="bulk-delete-btn">
                     <Trash2 size={13} />

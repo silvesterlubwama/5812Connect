@@ -1,0 +1,43 @@
+name: CI Lint Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Critical lint checks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Python — production code (F821/F823/F841/E722/B006)
+        run: |
+          ruff check backend \
+            --select F821,F823,F841,E722,B006 \
+            --exclude backend/tests
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+
+      - name: JavaScript — errors only
+        working-directory: frontend
+        run: yarn eslint --quiet "src/**/*.{js,jsx}"
