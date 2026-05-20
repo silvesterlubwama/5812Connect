@@ -41,3 +41,87 @@ jobs:
       - name: JavaScript — errors only
         working-directory: frontend
         run: yarn eslint --quiet "src/**/*.{js,jsx}"
+
+  pytest-smoke:
+    runs-on: ubuntu-latest
+    name: Backend pytest smoke
+    services:
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})' || mongo --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: test_5812
+      JWT_SECRET: test-jwt-secret-for-ci
+      ENV: test
+      # Resend / email creds intentionally omitted — email-dependent tests should be gated/skipped in CI
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx requests
+
+      - name: Wait for MongoDB
+        run: |
+          for i in {1..30}; do
+            if mongosh --quiet --eval 'db.runCommand({ping:1})' mongodb://localhost:27017 2>/dev/null; then
+              echo "MongoDB ready"; break
+            fi
+            echo "Waiting for MongoDB ($i/30)..."
+            sleep 1
+          done
+
+      - name: Start FastAPI backend in background
+        working-directory: backend
+        run: |
+          uvicorn server:app --host 0.0.0.0 --port 8001 --log-level warning &
+          echo $! > /tmp/api.pid
+          # Wait for readiness
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8001/docs > /dev/null 2>&1; then
+              echo "API ready"; break
+            fi
+            echo "Waiting for API ($i/30)..."
+            sleep 1
+          done
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: test_5812
+          JWT_SECRET: test-jwt-secret-for-ci
+
+      - name: Seed admin user (idempotent)
+        run: |
+          curl -fsS -X POST http://localhost:8001/api/seed/run \
+            -H "Content-Type: application/json" || true
+
+      - name: Run pytest smoke (recent modules, fast-fail)
+        working-directory: backend
+        run: |
+          # Smoke tests cover the recently-added modules (iterations 103-114).
+          # Older iteration tests run nightly in a separate workflow.
+          pytest tests/test_smoke_recent_modules.py \
+            -v --maxfail=5 --tb=short -p no:cacheprovider --timeout=60
+        env:
+          TEST_API_URL: http://localhost:8001
+          REACT_APP_BACKEND_URL: http://localhost:8001
+          TEST_ADMIN_EMAIL: admin@5812uganda.org
+          TEST_ADMIN_PASSWORD: Admin@5812
+
+      - name: Stop API
+        if: always()
+        run: kill $(cat /tmp/api.pid) 2>/dev/null || true

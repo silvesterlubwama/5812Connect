@@ -47,10 +47,32 @@ if [ $failed -eq 0 ]; then
   echo -e "${GREEN}═══════════════════════════════════════${NC}"
   echo -e "${GREEN}  ✓ All lint gates passed${NC}"
   echo -e "${GREEN}═══════════════════════════════════════${NC}"
-  exit 0
 else
   echo -e "${RED}═══════════════════════════════════════${NC}"
   echo -e "${RED}  ✗ Lint gate failed — see errors above${NC}"
   echo -e "${RED}═══════════════════════════════════════${NC}"
   exit 1
 fi
+
+# Optional: run pytest smoke if --with-tests is passed and the API is reachable
+if [ "${1:-}" = "--with-tests" ]; then
+  echo ""
+  echo -e "${YELLOW}[3/3] Backend pytest smoke (--with-tests)${NC}"
+  if ! curl -fsS http://localhost:8001/docs > /dev/null 2>&1; then
+    echo -e "${YELLOW}  ⚠ Skipped — no API at http://localhost:8001/docs${NC}"
+    echo -e "${YELLOW}  Tip: ensure supervisor is running the backend.${NC}"
+    exit 0
+  fi
+  cd backend
+  if TEST_API_URL=http://localhost:8001 REACT_APP_BACKEND_URL=http://localhost:8001 \
+     python -m pytest tests/test_smoke_recent_modules.py \
+       -v --maxfail=5 --tb=short -p no:cacheprovider 2>&1; then
+    echo -e "${GREEN}  ✓ Pytest smoke passed${NC}"
+  else
+    echo -e "${RED}  ✗ Pytest smoke failed${NC}"
+    exit 1
+  fi
+  cd ..
+fi
+
+exit 0
