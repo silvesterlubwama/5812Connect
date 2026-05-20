@@ -53,7 +53,7 @@ export default function ApprovalsPage() {
   }, []);
   useEffect(() => { reload(); }, [reload]);
 
-  const addWfStep = () => setWfForm(p => ({ ...p, steps: [...p.steps, { name: '', approver_role: 'Manager', min_approvals: 1 }] }));
+  const addWfStep = () => setWfForm(p => ({ ...p, steps: [...p.steps, { _key: `s-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, name: '', approver_role: 'Manager', min_approvals: 1 }] }));
   const updateStep = (i, k, v) => setWfForm(p => { const s = [...p.steps]; s[i] = {...s[i], [k]: v}; return {...p, steps: s}; });
   const removeStep = (i) => setWfForm(p => ({ ...p, steps: p.steps.filter((_, j) => j !== i) }));
 
@@ -180,7 +180,7 @@ export default function ApprovalsPage() {
                     <p className="text-sm font-medium">{wf.name} <Badge variant="outline" className="text-[10px] ml-1 capitalize">{wf.kind}</Badge></p>
                     <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1 flex-wrap">
                       {wf.steps.map((s, i) => (
-                        <React.Fragment key={s.id || i}>
+                        <React.Fragment key={s.id || `${wf.id}-step-${i}`}>
                           {i > 0 && <ArrowRight size={10} />}
                           <span className="px-1.5 py-0.5 rounded bg-muted">{s.name} <span className="opacity-60">({s.approver_role || s.approver_user_id})</span></span>
                         </React.Fragment>
@@ -212,7 +212,7 @@ export default function ApprovalsPage() {
             <div className="space-y-2">
               <Label className="text-xs">Steps</Label>
               {wfForm.steps.map((s, i) => (
-                <div key={i} className="grid grid-cols-12 gap-2 items-end p-2 border rounded" data-testid={`wf-step-${i}`}>
+                <div key={s._key || `s-${i}`} className="grid grid-cols-12 gap-2 items-end p-2 border rounded" data-testid={`wf-step-${i}`}>
                   <div className="col-span-5 space-y-1"><Label className="text-[10px]">Name</Label><Input className="h-8 text-xs" value={s.name} onChange={e => updateStep(i, 'name', e.target.value)} placeholder="Manager review" /></div>
                   <div className="col-span-4 space-y-1"><Label className="text-[10px]">Approver Role</Label>
                     <Select value={s.approver_role || 'none'} onValueChange={v => updateStep(i, 'approver_role', v === 'none' ? '' : v)}>
@@ -284,15 +284,15 @@ export default function ApprovalsPage() {
                   const state = viewReq.step_states[idx];
                   const isCurrent = viewReq.status === 'in_progress' && idx === viewReq.current_step;
                   return (
-                    <div key={idx} className={`p-2 rounded border ${isCurrent ? 'border-primary bg-primary/5' : ''}`} data-testid={`req-step-${idx}`}>
+                    <div key={st.id || `step-${idx}`} className={`p-2 rounded border ${isCurrent ? 'border-primary bg-primary/5' : ''}`} data-testid={`req-step-${idx}`}>
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-medium">{idx + 1}. {st.name} <span className="text-xs text-muted-foreground font-normal">({st.approver_role || 'specific user'})</span></p>
                         <Badge className={`text-[10px] capitalize ${STATUS_COLOR[state.status] || STATUS_COLOR.in_progress}`}>{state.status}</Badge>
                       </div>
                       {state.approvals?.length > 0 && (
                         <div className="mt-1 space-y-0.5">
-                          {state.approvals.map((a, i) => (
-                            <p key={i} className="text-[11px] text-muted-foreground">
+                          {state.approvals.map((a) => (
+                            <p key={`${a.user_id}-${a.at}`} className="text-[11px] text-muted-foreground">
                               {a.outcome === 'approved' ? '✓' : '✗'} {a.user_name} ({a.user_role}) — <em>{a.note || 'no note'}</em>
                             </p>
                           ))}

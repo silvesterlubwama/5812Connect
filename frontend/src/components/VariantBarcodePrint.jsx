@@ -102,7 +102,13 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
                 textMargin: 1,
                 margin: 0,
               });
-            } catch (e) { svg.outerHTML = '<span style="color:red;font-size:8px">' + svg.getAttribute('data-code') + '</span>'; }
+            } catch (err) {
+              const span = document.createElement('span');
+              span.style.color = 'red';
+              span.style.fontSize = '8px';
+              span.textContent = svg.getAttribute('data-code') || '';
+              svg.replaceWith(span);
+            }
           });
           setTimeout(() => { window.focus(); window.print(); }, 300);
         });

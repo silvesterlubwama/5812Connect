@@ -304,7 +304,6 @@ class AnnouncementCreate(BaseModel):
 @router.get("/announcements")
 async def list_announcements(current_user: dict = Depends(get_current_user)):
     """List announcements — campus-specific + org-wide"""
-    campus = await get_campus_filter(current_user)
     user_locs = current_user.get("location_ids") or []
     user_loc = current_user.get("location_id", "")
     all_locs = list(set(user_locs + ([user_loc] if user_loc else [])))

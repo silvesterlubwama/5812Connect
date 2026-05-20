@@ -29,6 +29,8 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
   const [isRecurring, setIsRecurring] = useState(card?.is_recurring || false);
   const [recurrencePattern, setRecurrencePattern] = useState(card?.recurrence_pattern || 'weekly');
   const [recurrenceInterval, setRecurrenceInterval] = useState(card?.recurrence_interval || 1);
+  const [extResults, setExtResults] = useState([]);
+  const [extQuery, setExtQuery] = useState('');
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -321,31 +323,41 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 ))}
                 {boardStaff.length === 0 && <p className="text-xs text-slate-500 text-center py-1">No staff found</p>}
               </div>
-              {/* External user search */}
+              {/* External user search — XSS-safe React-rendered results */}
               <div className="mt-2">
-                <Input className="h-7 text-xs bg-[#0f172a] border-white/10 text-white placeholder:text-slate-500" placeholder="Search other campuses..." 
-                  onChange={async (e) => {
-                    const q = e.target.value.trim();
-                    if (q.length < 2) return;
+                <Input
+                  className="h-7 text-xs bg-[#0f172a] border-white/10 text-white placeholder:text-slate-500"
+                  placeholder="Search other campuses..."
+                  value={extQuery}
+                  onChange={async (ev) => {
+                    const q = ev.target.value;
+                    setExtQuery(q);
+                    if (q.trim().length < 2) { setExtResults([]); return; }
                     try {
-                      const res = await adminApi.users({ search: q, limit: 10 });
-                      const ext = (res.data || []).filter(u => !boardStaff.find(s => s.id === u.id));
-                      const container = e.target.parentElement.querySelector('.ext-results');
-                      if (container) container.innerHTML = ext.map(u => `<div class="ext-user" data-id="${u.id}" data-name="${u.name}">${u.name} (${u.role || '?'})</div>`).join('') || '<div class="text-slate-500 text-center py-1">No matches</div>';
-                    } catch {}
-                  }}
-                  onClick={(e) => {
-                    const handler = (ev) => {
-                      if (ev.target.classList.contains('ext-user')) {
-                        toggleAssignee(ev.target.dataset.id);
-                        ev.target.style.opacity = '0.5';
-                      }
-                    };
-                    const container = e.target.parentElement.querySelector('.ext-results');
-                    if (container) container.addEventListener('click', handler);
+                      const res = await adminApi.users({ search: q.trim(), limit: 10 });
+                      setExtResults((res.data || []).filter(u => !boardStaff.find(s => s.id === u.id)));
+                    } catch (err) {
+                      console.error('External user search failed:', err);
+                      setExtResults([]);
+                    }
                   }}
                 />
-                <div className="ext-results max-h-24 overflow-y-auto mt-1 space-y-0.5 text-xs text-slate-300 [&_.ext-user]:px-2 [&_.ext-user]:py-1 [&_.ext-user]:rounded [&_.ext-user]:cursor-pointer [&_.ext-user:hover]:bg-white/10"></div>
+                <div className="max-h-24 overflow-y-auto mt-1 space-y-0.5 text-xs text-slate-300">
+                  {extQuery.trim().length >= 2 && extResults.length === 0 && (
+                    <div className="text-slate-500 text-center py-1">No matches</div>
+                  )}
+                  {extResults.map(u => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => toggleAssignee(u.id)}
+                      className={`w-full text-left px-2 py-1 rounded cursor-pointer hover:bg-white/10 ${assignees.includes(u.id) ? 'opacity-50' : ''}`}
+                      data-testid={`ext-user-${u.id}`}
+                    >
+                      {u.name} <span className="text-slate-500">({u.role || '?'})</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -411,7 +423,9 @@ function TaskTimeTracker({ taskId }) {
       setTotalHours(list.data.total_hours || 0);
       const a = activeRes.data;
       setActive(a && a.task_id === taskId ? a : null);
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('Task time-tracker reload failed:', err);
+    }
   }, [taskId]);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {

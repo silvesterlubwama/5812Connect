@@ -772,7 +772,6 @@ async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Sale not found")
     
     created = sale.get("created_at", "")
-    role = (current_user.get("role") or "").lower()
     role_level = get_role_level(current_user.get("role", ""))
     is_owner = sale.get("created_by") == current_user["id"]
     
@@ -782,7 +781,8 @@ async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_use
             from dateutil.parser import parse as dt_parse
             age = datetime.now(timezone.utc) - dt_parse(created).replace(tzinfo=timezone.utc)
             minutes_old = age.total_seconds() / 60
-        except: pass
+        except Exception:
+            pass
     
     can_delete = False
     if role_level >= 10:  # Admin — always

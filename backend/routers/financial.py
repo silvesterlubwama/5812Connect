@@ -205,8 +205,9 @@ async def approve_expense(expense_id: str, data: dict = None, current_user: dict
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification
-            await _create_notification(f"Expense Approved", f"Your expense '{expense.get('title')}' ({expense.get('amount', 0):,.0f} {expense.get('currency', 'UGX')}) has been approved by {current_user.get('name', 'admin')}.", expense.get("created_by"), "success", "/portal/expenses")
-        except: pass
+            await _create_notification("Expense Approved", f"Your expense '{expense.get('title')}' ({expense.get('amount', 0):,.0f} {expense.get('currency', 'UGX')}) has been approved by {current_user.get('name', 'admin')}.", expense.get("created_by"), "success", "/portal/expenses")
+        except Exception:
+            pass
     return {**expense, **update}
 
 
@@ -221,8 +222,9 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification
-            await _create_notification(f"Expense Rejected", f"Your expense '{expense.get('title')}' was rejected. Reason: {data.get('comment', 'No reason given')}", expense.get("created_by"), "error", "/portal/expenses")
-        except: pass
+            await _create_notification("Expense Rejected", f"Your expense '{expense.get('title')}' was rejected. Reason: {data.get('comment', 'No reason given')}", expense.get("created_by"), "error", "/portal/expenses")
+        except Exception:
+            pass
     return {**expense, **update}
 
 
@@ -710,7 +712,7 @@ async def get_sponsor(sponsor_id: str, current_user: dict = Depends(require_staf
 @router.get("/financial/accounts")
 async def list_sublocation_accounts(campus_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
     """Get financial accounts per sub-location within a campus, unified at campus level."""
-    campus = await get_campus_filter(current_user)
+    # NOTE: campus filter not used here; we explicitly resolve the target campus from the caller
     target_campus = campus_id or current_user.get("active_campus_id") or ""
     if not target_campus:
         raise HTTPException(status_code=400, detail="Campus ID required")

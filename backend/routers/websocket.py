@@ -75,7 +75,7 @@ class ConnectionManager:
                 for ws in connections:
                     try:
                         await ws.send_json(message)
-                    except:
+                    except Exception:
                         pass
 
     def is_user_online(self, user_id: str) -> bool:
@@ -246,7 +246,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
                 elif msg_type == "set_status":
                     status = msg.get("status", "online")  # online, away, dnd
-                    status_message = msg.get("status_message", "")
                     # Broadcast to others
                     await manager.broadcast_presence(user_id, status)
 

@@ -6,6 +6,24 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 113 (May 20, 2026)
+**Code review remediation — Critical (🔴) security/correctness fixes applied.**
+
+### Critical 🔴 fixes
+- ✅ **XSS in CardDetailDialog ext-user search** (line 334): replaced `innerHTML` template-literal injection + manual `addEventListener` hack with a clean React-state-driven dropdown (`extResults` state + `<button>` rows). Eliminates XSS via API-returned usernames; also removes the stale-closure event-listener bug.
+- ✅ **`outerHTML` injection in VariantBarcodePrint** (line 105): replaced with `createElement` + `textContent` + `replaceWith` (no string concatenation into DOM).
+- ✅ **Empty `catch {}` blocks in CardDetailDialog/TaskTimeTracker**: now log to `console.error` so failures are debuggable.
+- ✅ **F841 unused variables** in production: `financial.py:713` (`campus`), `misc.py:307` (`campus`), `sales.py:775` (`role`), `websocket.py:249` (`status_message`). Verified 3 affected endpoints still respond correctly after fix.
+- ✅ **Bare `except:` in production** (E722): `events.py` (2 sites), `financial.py` (2 sites), `websocket.py` (1 site). All converted to `except Exception:` for traceability.
+- ✅ **Array-index React keys in ApprovalsPage**: workflow-step rows, approval-chain steps, and per-step approvals log all now use stable keys (`s.id || ${wf.id}-step-${i}`, `${a.user_id}-${a.at}`).
+
+### Note on items NOT addressed this pass (scoped intentionally)
+- **189 React hook-dependency warnings** are mostly intentional (effects deliberately running once on mount, or scoped behind useCallback). A blanket fix would risk introducing infinite-loop bugs. Recommend addressing per-component when each is next touched.
+- **Refactoring 5 700+ line components** (AccessPage, AccountingPage, UserEditDialog, CalendarPage, Layout) is a high-risk change that warrants its own dedicated iteration.
+- **secureStorage** is only used for non-secret app state (active_campus_id, theme); auth tokens flow through the axios interceptor with the proper Bearer-token pattern.
+- **Receipt/UnifiedBadge/BadgePrintView print pipelines** were flagged by the reviewer but already use DOMPurify and `escapeHtml` — they're safe; flags were false positives on the API surface.
+- **Test file warnings** (206 `is`-vs-`==`, missing type hints) are lower priority — production code prioritized.
+
 ## Recently Resolved — Iteration 112 (May 20, 2026)
 **Suggested improvement: Sale Discount > threshold auto-approval guard.**
 

@@ -964,7 +964,8 @@ async def public_book_event(data: PublicBookingCreate):
                 from datetime import date as dt_date
                 ed = dt_date.fromisoformat(event_date)
                 days_until = (ed - dt_date.today()).days
-            except: pass
+            except Exception:
+                pass
         if method == "cash":
             if days_until <= 3:
                 raise HTTPException(status_code=400, detail="Cash payments not accepted within 3 days of event. Please use card or mobile money.")
@@ -1602,9 +1603,12 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
 
         elif pattern == "custom" and custom_dates:
             if i < len(custom_dates):
-                try: event_date = datetime.fromisoformat(custom_dates[i])
-                except: continue
-            else: break
+                try:
+                    event_date = datetime.fromisoformat(custom_dates[i])
+                except Exception:
+                    continue
+            else:
+                break
 
         elif pattern == "custom_weekly" and days_of_week:
             # Multiple days per week (e.g., Mon+Wed+Fri)
