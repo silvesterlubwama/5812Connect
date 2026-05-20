@@ -252,6 +252,31 @@ async def act_on_request(request_id: str, data: dict, current_user: dict = Depen
     })
     req = await _maybe_advance(req)
     await db.approval_requests.replace_one({"id": request_id}, req)
+    # Cross-module side-effect: when a sale_discount request finalizes, update the sale
+    try:
+        if req.get("subject_kind") == "sale_discount" and req.get("subject_id") and req["status"] in {"approved", "rejected"}:
+            sale_update = {"discount_approval_status": req["status"]}
+            if req["status"] == "rejected":
+                # Mark sale as voided when discount is rejected — cashier must re-ring
+                sale_update["voided"] = True
+                sale_update["voided_at"] = datetime.now(timezone.utc).isoformat()
+                sale_update["voided_reason"] = "Discount rejected"
+            await db.sales.update_one({"id": req["subject_id"]}, {"$set": sale_update})
+        # Same loop for HR reimbursement approvals
+        if req.get("subject_kind") == "expense" and req.get("subject_id") and req["status"] in {"approved", "rejected"}:
+            new_state = "approved" if req["status"] == "approved" else "rejected"
+            await db.hr_employee_expenses.update_one(
+                {"id": req["subject_id"]},
+                {"$set": {
+                    "status": new_state,
+                    "decision_at": datetime.now(timezone.utc).isoformat(),
+                    "decision_by": current_user["id"],
+                    "decision_by_name": current_user.get("name", ""),
+                    "decision_note": "Via approval workflow",
+                }},
+            )
+    except Exception as e:
+        logger.warning(f"Subject sync after approval failed: {e}")
     req.pop("_id", None)
     return req
 

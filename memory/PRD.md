@@ -6,6 +6,18 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 112 (May 20, 2026)
+**Suggested improvement: Sale Discount > threshold auto-approval guard.**
+
+- ✅ **Discount-threshold guard** in `POST /sales`: detects max per-line discount (`manual_discount_pct`/`discount_pct`) or aggregate basket discount (`discount` / `subtotal`). If it exceeds the campus threshold (`store_settings.discount_approval_threshold`, default 20%), auto-spawns a `kind: sale_discount` approval against a matching workflow.
+- ✅ **Payment lock**: while approval is pending, `payment_status` forced to "pending" and `PUT /sales/{id}/payment-status` to "paid" returns 400 with a clear "discount approval is pending" error.
+- ✅ **Cross-module side-effects** on approval finalize:
+   • `sale_discount` approved → sale's `discount_approval_status` flips to "approved", payment unblocked.
+   • `sale_discount` rejected → sale auto-voided with `voided_reason="Discount rejected"`.
+   • Bonus loop closed: `expense` approval finalize now mirrors to `hr_employee_expenses.status` automatically.
+- ✅ Sale rows expose `requires_discount_approval`, `discount_approval_id`, `discount_pct_max`, `discount_threshold`, `discount_approval_status` for receipt-watermark rendering.
+- ✅ Curl-verified all 4 happy/edge paths: spawn → block-paid → approve → mark-paid; spawn → reject → auto-void.
+
 ## Recently Resolved — Iteration 111 (May 20, 2026)
 **Full backlog single-pass: P1 follow-ups + P3/P4 frontend + cross-module integrations + Calendar/Discuss/Docs polish.**
 

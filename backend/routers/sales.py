@@ -124,7 +124,107 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         await _auto_post_sale_journal_entry(doc, current_user)
     except Exception as e:
         logger.warning(f"Sale auto-journal post skipped: {e}")
+    # Discount-threshold guard: if a line or basket discount exceeds the campus threshold,
+    # auto-spawn a sale_discount approval request and mark the sale as approval-pending.
+    try:
+        await _maybe_spawn_discount_approval(doc, current_user)
+        # Re-fetch to surface the approval fields on the response
+        latest = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+        if latest:
+            doc.update(latest)
+    except Exception as e:
+        logger.warning(f"Discount approval check skipped: {e}")
     return doc
+
+
+async def _maybe_spawn_discount_approval(sale: dict, current_user: dict):
+    """If any line discount % or the aggregate basket discount exceeds the campus threshold
+    (`discount_approval_threshold` on store_settings, default 20%), spawn an approval
+    request of kind 'sale_discount' against a matching workflow.
+
+    Side-effects on the sale:
+      • requires_discount_approval: true
+      • discount_approval_id: <areq_*>
+      • discount_pct_max: <observed max %>
+    Also forces payment_status -> 'pending' until the approval clears
+    (a cashier-side guard the receipt can render as a watermark)."""
+    threshold = 20.0
+    try:
+        s_settings = await db.store_settings.find_one({"location_id": sale.get("location_id")}, {"_id": 0, "discount_approval_threshold": 1})
+        if s_settings and s_settings.get("discount_approval_threshold") is not None:
+            threshold = float(s_settings["discount_approval_threshold"])
+    except Exception:
+        pass
+    # Per-line discount: look at any `discount_pct` or `manual_discount_pct` field
+    items = sale.get("items") or []
+    max_line_disc = 0.0
+    for it in items:
+        for k in ("manual_discount_pct", "discount_pct", "discount_percent"):
+            try:
+                v = float(it.get(k) or 0)
+                if v > max_line_disc:
+                    max_line_disc = v
+            except (TypeError, ValueError):
+                continue
+    # Aggregate basket discount
+    subtotal = float(sale.get("subtotal") or 0)
+    discount_amt = float(sale.get("discount") or 0)
+    basket_pct = 0.0
+    if subtotal > 0 and discount_amt > 0:
+        basket_pct = (discount_amt / subtotal) * 100.0
+    max_observed = max(max_line_disc, basket_pct)
+    if max_observed <= threshold:
+        return
+    # Find a sale_discount workflow at this location (or any active one)
+    wf = await db.approval_workflows.find_one({
+        "kind": "sale_discount",
+        "active": True,
+        "$or": [{"location_id": sale.get("location_id")}, {"location_id": None}],
+    }, {"_id": 0})
+    if not wf:
+        # No workflow configured → mark the sale for visibility but don't block
+        await db.sales.update_one({"id": sale["id"]}, {"$set": {
+            "requires_discount_approval": True,
+            "discount_pct_max": round(max_observed, 2),
+            "discount_threshold": threshold,
+            "discount_approval_status": "no_workflow",
+        }})
+        return
+    steps = wf.get("steps") or []
+    now = datetime.now(timezone.utc).isoformat()
+    step_states = [{"step_index": i, "status": "pending", "approvals": [], "started_at": (now if i == 0 else None)} for i, _ in enumerate(steps)]
+    req = {
+        "id": f"areq_{uuid.uuid4().hex[:10]}",
+        "workflow_id": wf["id"],
+        "workflow_name": wf.get("name"),
+        "workflow_snapshot": {"steps": steps, "kind": wf.get("kind")},
+        "subject_kind": "sale_discount",
+        "subject_id": sale["id"],
+        "title": f"Sale discount {round(max_observed,1)}% on {sale.get('receipt_number')}",
+        "summary": f"{sale.get('cashier','cashier')} applied {round(max_observed,1)}% discount on receipt {sale.get('receipt_number')} (threshold {threshold}%).",
+        "amount": float(sale.get("total") or 0),
+        "currency": sale.get("currency") or "UGX",
+        "metadata": {"sale_id": sale["id"], "max_discount_pct": round(max_observed, 2), "threshold": threshold},
+        "status": "in_progress",
+        "current_step": 0,
+        "step_states": step_states,
+        "submitted_by": current_user["id"],
+        "submitted_by_name": current_user.get("name", ""),
+        "location_id": sale.get("location_id"),
+        "auto_generated": True,
+        "created_at": now,
+    }
+    await db.approval_requests.insert_one(req)
+    # Force payment to pending and tag the sale
+    await db.sales.update_one({"id": sale["id"]}, {"$set": {
+        "requires_discount_approval": True,
+        "discount_approval_id": req["id"],
+        "discount_pct_max": round(max_observed, 2),
+        "discount_threshold": threshold,
+        "discount_approval_status": "pending",
+        "payment_status": "pending",
+        "paid_at": None,
+    }})
 
 
 async def _auto_post_sale_journal_entry(sale: dict, current_user: dict):
@@ -200,6 +300,9 @@ async def update_sale_payment_status(sale_id: str, data: dict, current_user: dic
     new_status = (data.get("payment_status") or "").lower()
     if new_status not in {"paid", "pending"}:
         raise HTTPException(status_code=400, detail="payment_status must be 'paid' or 'pending'")
+    # Block marking-as-paid while a discount approval is pending
+    if new_status == "paid" and sale.get("requires_discount_approval") and sale.get("discount_approval_status") not in {"approved", "no_workflow"}:
+        raise HTTPException(status_code=400, detail=f"Cannot mark paid — discount approval is {sale.get('discount_approval_status','pending')}. Approve the request first.")
     update = {
         "payment_status": new_status,
         "payment_updated_at": datetime.now(timezone.utc).isoformat(),
