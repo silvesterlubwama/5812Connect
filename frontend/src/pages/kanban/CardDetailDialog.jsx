@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download, Link2, ExternalLink } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download, Link2, ExternalLink, Clock, Play, Square } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -7,6 +7,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { tasksApi, tasksExtApi, adminApi } from '../../services/api';
+import api from '../../services/api';
 import { toast } from 'sonner';
 
 const LABEL_COLORS = ['#10b981','#f59e0b','#f97316','#ef4444','#8b5cf6','#3b82f6','#06b6d4','#84cc16','#ec4899','#6366f1'];
@@ -139,6 +140,8 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 className="bg-[#0f172a] border-white/15 text-slate-200 placeholder:text-slate-500 text-sm resize-none"
                 value={description} onChange={e => setDescription(e.target.value)} onBlur={save} data-testid="card-description" />
             </div>
+
+            <TaskTimeTracker taskId={card.id} />
 
             {checklist.length > 0 && (
               <div className="space-y-2">
@@ -387,3 +390,104 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
     </Dialog>
   );
 }
+
+
+// ========= Task Time Tracker Widget =========
+function TaskTimeTracker({ taskId }) {
+  const [entries, setEntries] = useState([]);
+  const [active, setActive] = useState(null);
+  const [totalHours, setTotalHours] = useState(0);
+  const [tick, setTick] = useState(0);
+  const [logForm, setLogForm] = useState({ minutes: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+  const [showLog, setShowLog] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const [list, activeRes] = await Promise.all([
+        api.get(`/tasks/${taskId}/time`),
+        api.get('/time/me/active').catch(() => ({ data: null })),
+      ]);
+      setEntries(list.data.entries || []);
+      setTotalHours(list.data.total_hours || 0);
+      const a = activeRes.data;
+      setActive(a && a.task_id === taskId ? a : null);
+    } catch { /* ignore */ }
+  }, [taskId]);
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  const elapsed = active ? (() => {
+    const start = new Date(active.started_at);
+    const s = Math.max(0, Math.floor((Date.now() - start.getTime()) / 1000));
+    return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  })() : null;
+
+  const start = async () => {
+    try { await api.post(`/tasks/${taskId}/time/start`); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const stop = async () => {
+    try { await api.post(`/tasks/${taskId}/time/stop`); toast.success('Time logged'); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const logManual = async () => {
+    try {
+      const payload = { minutes: parseInt(logForm.minutes), date: logForm.date, notes: logForm.notes };
+      await api.post(`/tasks/${taskId}/time/log`, payload);
+      toast.success('Time logged');
+      setShowLog(false);
+      setLogForm({ minutes: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const deleteEntry = async (id) => {
+    if (!window.confirm('Delete this time entry?')) return;
+    try { await api.delete(`/tasks/${taskId}/time/${id}`); reload(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  return (
+    <div className="space-y-2" data-testid="task-time-tracker">
+      <div className="flex items-center justify-between">
+        <Label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+          <Clock size={14} /> Time Tracking
+          {totalHours > 0 && <span className="text-xs text-slate-500 font-normal">{totalHours}h logged</span>}
+        </Label>
+        <div className="flex gap-1">
+          {active ? (
+            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={stop} data-testid="task-time-stop"><Square size={11} className="mr-1" />Stop {elapsed}</Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-7 text-xs bg-[#0f172a] border-white/15 text-slate-200" onClick={start} data-testid="task-time-start"><Play size={11} className="mr-1" />Start</Button>
+          )}
+          <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-300" onClick={() => setShowLog(s => !s)} data-testid="task-time-log-btn">Log manually</Button>
+        </div>
+      </div>
+      {showLog && (
+        <div className="grid grid-cols-12 gap-2 p-2 rounded bg-[#0f172a] border border-white/10">
+          <Input className="col-span-3 h-7 text-xs" type="number" placeholder="minutes" value={logForm.minutes} onChange={e => setLogForm({...logForm, minutes: e.target.value})} data-testid="task-time-log-mins" />
+          <Input className="col-span-3 h-7 text-xs" type="date" value={logForm.date} onChange={e => setLogForm({...logForm, date: e.target.value})} />
+          <Input className="col-span-4 h-7 text-xs" placeholder="notes" value={logForm.notes} onChange={e => setLogForm({...logForm, notes: e.target.value})} />
+          <Button size="sm" className="col-span-2 h-7 text-xs" disabled={!logForm.minutes} onClick={logManual} data-testid="task-time-log-submit">Log</Button>
+        </div>
+      )}
+      {entries.length > 0 && (
+        <div className="space-y-1 text-xs">
+          {entries.slice(0, 8).map(e => (
+            <div key={e.id} className="flex items-center justify-between p-1.5 rounded bg-[#0f172a]/50">
+              <span className="text-slate-300">{e.user_name} · {(e.started_at || '').slice(0, 10)}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-200 font-medium">{e.ended_at ? `${Math.floor((e.duration_minutes||0)/60)}h ${(e.duration_minutes||0)%60}m` : 'running'}</span>
+                <button onClick={() => deleteEntry(e.id)} className="text-slate-500 hover:text-red-400">×</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+

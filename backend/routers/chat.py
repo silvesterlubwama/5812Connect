@@ -75,6 +75,25 @@ async def send_message(conv_id: str, data: dict, current_user: dict = Depends(ge
     if not text: raise HTTPException(status_code=400, detail="Message text required")
     thread_id = data.get("thread_id")
     reply_to = data.get("reply_to")
+    # Parse @mentions (allow client to pass parsed list OR detect from text)
+    mentions = data.get("mentions") or []
+    if not mentions:
+        # Cheap fallback: extract @word tokens and try to resolve to participant names
+        import re
+        candidates = list(set(re.findall(r"@([\w'.-]+)", text)))
+        if candidates:
+            conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
+            if conv and conv.get("participants"):
+                participants = await db.users.find(
+                    {"id": {"$in": conv["participants"]}},
+                    {"_id": 0, "id": 1, "name": 1}
+                ).to_list(50)
+                for cand in candidates:
+                    low = cand.lower()
+                    for u in participants:
+                        if (u.get("name") or "").lower().replace(" ", "").startswith(low.replace(" ", "")):
+                            mentions.append({"user_id": u["id"], "user_name": u.get("name")})
+                            break
     msg = {
         "id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
         "sender_id": current_user["id"], "sender_name": current_user.get("name", "Unknown"),
@@ -84,6 +103,8 @@ async def send_message(conv_id: str, data: dict, current_user: dict = Depends(ge
         msg["thread_id"] = thread_id
     if reply_to:
         msg["reply_to"] = reply_to
+    if mentions:
+        msg["mentions"] = mentions
     await db.chat_messages.insert_one(msg); msg.pop("_id", None)
     await db.conversations.update_one({"id": conv_id}, {"$set": {"updated_at": msg["created_at"], "last_message": text[:100]}})
     try:
@@ -91,6 +112,25 @@ async def send_message(conv_id: str, data: dict, current_user: dict = Depends(ge
         conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
         if conv:
             await manager.send_to_users(conv.get("participants", []), {"type": "chat_message", "conversation_id": conv_id, "message": msg})
+        # Fire mention notifications
+        for m in mentions:
+            uid = m.get("user_id")
+            if not uid or uid == current_user["id"]:
+                continue
+            try:
+                await db.notifications.insert_one({
+                    "id": f"ntf_{uuid.uuid4().hex[:10]}",
+                    "user_id": uid,
+                    "kind": "chat_mention",
+                    "title": f"{current_user.get('name','Someone')} mentioned you",
+                    "body": text[:140],
+                    "ref": {"conversation_id": conv_id, "message_id": msg["id"]},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "read": False,
+                })
+                await manager.send_to_users([uid], {"type": "notification", "kind": "chat_mention", "conversation_id": conv_id, "message": msg})
+            except Exception as ee:
+                logger.warning(f"Mention notify failed: {ee}")
     except Exception as e:
         logger.warning(f"WebSocket broadcast failed: {e}")
     return msg

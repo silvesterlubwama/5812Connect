@@ -722,3 +722,139 @@ async def account_ledger(
         e = e_map.get(ln["entry_id"]) or {}
         out.append({**ln, "entry_number": e.get("number"), "narration": e.get("narration"), "ref": e.get("ref"), "running_balance": round(running, 2)})
     return {"account": acc, "lines": out, "ending_balance": round(running, 2)}
+
+
+# ============================================================
+# ASSET DEPRECIATION SCHEDULES
+# ============================================================
+
+@router.get("/assets/{asset_id}/depreciation-schedule")
+async def asset_depreciation_schedule(asset_id: str, method: str = "straight_line", current_user: dict = Depends(get_current_user)):
+    """Generate a depreciation schedule for an asset (straight-line or declining-balance).
+    Doesn't mutate anything — pure projection for review/printing.
+    Methods:
+      • straight_line: equal monthly portion across (depreciation_years × 12) months
+      • declining_balance: 2× straight-line rate applied to remaining book value
+    """
+    asset = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    years = int(asset.get("depreciation_years") or 0)
+    if years <= 0:
+        raise HTTPException(status_code=400, detail="Asset has no depreciation_years set")
+    initial = float(asset.get("value") or asset.get("current_value") or asset.get("purchase_value") or 0)
+    if initial <= 0:
+        raise HTTPException(status_code=400, detail="Asset has no value")
+    start = (asset.get("purchase_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    try:
+        from datetime import date as dt_date
+        sd = dt_date.fromisoformat(start)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid purchase_date")
+    months = years * 12
+    schedule = []
+    if method == "declining_balance":
+        rate = (1 / years) * 2
+        book = initial
+        for m in range(months):
+            month_dep = round(book * (rate / 12), 2)
+            # last month: write down to ~0 if it would go negative
+            if m == months - 1 and book - month_dep > 0.01:
+                month_dep = round(book, 2)
+            book = round(max(0.0, book - month_dep), 2)
+            y, mo = sd.year + (sd.month - 1 + m) // 12, ((sd.month - 1 + m) % 12) + 1
+            schedule.append({
+                "month_index": m + 1,
+                "period": f"{y:04d}-{mo:02d}",
+                "depreciation": month_dep,
+                "book_value": book,
+            })
+    else:
+        # Straight-line
+        monthly = round(initial / months, 2)
+        book = initial
+        for m in range(months):
+            # last month catches rounding drift
+            month_dep = monthly if m < months - 1 else round(book, 2)
+            book = round(max(0.0, book - month_dep), 2)
+            y, mo = sd.year + (sd.month - 1 + m) // 12, ((sd.month - 1 + m) % 12) + 1
+            schedule.append({
+                "month_index": m + 1,
+                "period": f"{y:04d}-{mo:02d}",
+                "depreciation": month_dep,
+                "book_value": book,
+            })
+    total_dep = round(sum(s["depreciation"] for s in schedule), 2)
+    return {
+        "asset_id": asset_id,
+        "asset_name": asset.get("name"),
+        "method": method,
+        "initial_value": initial,
+        "months": months,
+        "total_depreciation": total_dep,
+        "schedule": schedule,
+    }
+
+
+@router.post("/assets/{asset_id}/depreciate/{period}")
+async def post_asset_depreciation(asset_id: str, period: str, data: dict = None, current_user: dict = Depends(require_director)):
+    """Post a depreciation journal entry for one period (YYYY-MM) for an asset.
+    Debits 'Depreciation Expense' (expense_depreciation), credits 'Accumulated Depreciation' (asset_fixed account named 'Accumulated Depreciation').
+    Idempotent — skips if an entry for this asset+period already exists."""
+    data = data or {}
+    method = data.get("method") or "straight_line"
+    # Get the schedule and find the month
+    schedule_resp = await asset_depreciation_schedule(asset_id, method=method, current_user=current_user)
+    line = next((s for s in schedule_resp["schedule"] if s["period"] == period), None)
+    if not line:
+        raise HTTPException(status_code=400, detail=f"Period {period} not in asset's depreciation schedule")
+    amount = line["depreciation"]
+    if amount <= 0:
+        return {"skipped": True, "reason": "no depreciation in this period"}
+    # Idempotency
+    existing = await db.accounting_entries.find_one({
+        "auto_generated_from": "asset_depreciation",
+        "source_id": asset_id,
+        "period": period,
+    }, {"_id": 0})
+    if existing:
+        return {"skipped": True, "reason": "already posted", "entry_id": existing["id"]}
+    asset = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    loc_id = asset.get("location_id")
+    # Find depreciation expense account + accumulated depreciation account
+    dep_exp = await db.accounting_accounts.find_one({"location_id": loc_id, "type": "expense_depreciation", "active": True}, {"_id": 0, "id": 1})
+    acc_dep = await db.accounting_accounts.find_one({"location_id": loc_id, "name": {"$regex": "accumulated", "$options": "i"}, "active": True}, {"_id": 0, "id": 1})
+    if not dep_exp or not acc_dep:
+        raise HTTPException(status_code=400, detail="Configure CoA: need a 'Depreciation Expense' account and an 'Accumulated Depreciation' account")
+    # Pick a journal — prefer miscellaneous
+    journal = await db.accounting_journals.find_one({"location_id": loc_id, "kind": "miscellaneous", "active": True}, {"_id": 0})
+    if not journal:
+        journal = await db.accounting_journals.find_one({"location_id": loc_id, "active": True}, {"_id": 0})
+    if not journal:
+        raise HTTPException(status_code=400, detail="No journal configured for this location")
+    entry_id = f"je_{uuid.uuid4().hex[:10]}"
+    entry_number = await _next_entry_number(journal["id"])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entry = {
+        "id": entry_id, "number": entry_number, "journal_id": journal["id"], "journal_code": journal.get("code"),
+        "date": f"{period}-15", "ref": f"DEP-{asset.get('name','')}-{period}",
+        "narration": f"Depreciation of {asset.get('name','asset')} for {period} ({method})",
+        "total_debit": amount, "total_credit": amount, "status": "posted",
+        "location_id": loc_id, "currency": "UGX",
+        "auto_generated_from": "asset_depreciation", "source_id": asset_id, "period": period,
+        "created_at": now_iso, "posted_at": now_iso, "posted_by": current_user["id"],
+    }
+    await db.accounting_entries.insert_one(entry)
+    await db.accounting_entry_lines.insert_many([
+        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+         "journal_id": journal["id"], "date": entry["date"], "location_id": loc_id, "status": "posted",
+         "account_id": dep_exp["id"], "debit": amount, "credit": 0, "description": entry["narration"]},
+        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+         "journal_id": journal["id"], "date": entry["date"], "location_id": loc_id, "status": "posted",
+         "account_id": acc_dep["id"], "debit": 0, "credit": amount, "description": "Accumulated depreciation"},
+    ])
+    # Also reduce current_value on the asset record itself
+    await db.assets.update_one({"id": asset_id}, {"$set": {"current_value": line["book_value"]}})
+    entry.pop("_id", None)
+    return entry
+

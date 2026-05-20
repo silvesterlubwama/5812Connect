@@ -21,6 +21,7 @@ import CheckInsPage from './pages/CheckInsPage';
 import SettingsPage from './pages/SettingsPage';
 import FinancialPage from './pages/FinancialPage';
 import AccountingPage from './pages/AccountingPage';
+import ApprovalsPage from './pages/ApprovalsPage';
 import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
 import AuditPage from './pages/AuditPage';
@@ -122,6 +123,7 @@ function AppRoutes() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="financial" element={<FinancialPage />} />
         <Route path="accounting" element={<AccountingPage />} />
+        <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
         <Route path="accounts-receivable" element={<AccountsReceivablePage />} />

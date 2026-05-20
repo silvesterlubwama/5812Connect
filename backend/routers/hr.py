@@ -1008,7 +1008,61 @@ async def create_employee_expense(data: dict, current_user: dict = Depends(get_c
     }
     await db.hr_employee_expenses.insert_one(doc)
     doc.pop("_id", None)
+    # Cross-module: auto-spawn approval request if amount >= configured threshold
+    try:
+        await _maybe_spawn_reimbursement_approval(doc, current_user)
+    except Exception as e:
+        logger.warning(f"Auto approval-request spawn skipped: {e}")
     return doc
+
+
+async def _maybe_spawn_reimbursement_approval(expense: dict, current_user: dict):
+    """If a workflow with kind='expense' (or named after reimbursement) exists for this location
+    and the amount exceeds the campus's approval threshold (default 100 in expense's currency),
+    automatically submit an approval_request and link it on the expense."""
+    threshold_amount = 100.0
+    try:
+        settings = await db.hr_settings.find_one({"location_id": expense.get("location_id")}, {"_id": 0, "reimbursement_approval_threshold": 1})
+        if settings and settings.get("reimbursement_approval_threshold") is not None:
+            threshold_amount = float(settings["reimbursement_approval_threshold"])
+    except Exception:
+        pass
+    if float(expense.get("amount") or 0) < threshold_amount:
+        return
+    wf = await db.approval_workflows.find_one({
+        "kind": "expense",
+        "active": True,
+        "$or": [{"location_id": expense.get("location_id")}, {"location_id": None}],
+    }, {"_id": 0})
+    if not wf:
+        return
+    steps = wf.get("steps") or []
+    now = datetime.now(timezone.utc).isoformat()
+    step_states = [{"step_index": i, "status": "pending", "approvals": [], "started_at": (now if i == 0 else None)} for i, _ in enumerate(steps)]
+    req = {
+        "id": f"areq_{uuid.uuid4().hex[:10]}",
+        "workflow_id": wf["id"],
+        "workflow_name": wf.get("name"),
+        "workflow_snapshot": {"steps": steps, "kind": wf.get("kind")},
+        "subject_kind": "expense",
+        "subject_id": expense["id"],
+        "title": f"Reimbursement: {expense.get('title','')}",
+        "summary": f"{expense.get('staff_name')} requested {expense.get('currency')} {expense.get('amount')} — {expense.get('category')}",
+        "amount": expense.get("amount"),
+        "currency": expense.get("currency"),
+        "metadata": {"expense_id": expense["id"]},
+        "status": "in_progress",
+        "current_step": 0,
+        "step_states": step_states,
+        "submitted_by": expense["staff_id"],
+        "submitted_by_name": expense.get("staff_name", ""),
+        "location_id": expense.get("location_id"),
+        "auto_generated": True,
+        "created_at": now,
+    }
+    await db.approval_requests.insert_one(req)
+    # Link back on the expense
+    await db.hr_employee_expenses.update_one({"id": expense["id"]}, {"$set": {"approval_request_id": req["id"]}})
 
 
 @router.put("/expenses/{expense_id}")

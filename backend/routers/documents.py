@@ -121,6 +121,19 @@ async def upload_member_document(
 
     local_path = _save_file(member_id, data, ext)
 
+    # Versioning: if a prior doc with the same (member_id, doc_type, label) exists, link it
+    prior_query = {
+        "member_id": member_id,
+        "doc_type": doc_type,
+        "is_deleted": {"$ne": True},
+        "superseded_by": {"$exists": False},
+    }
+    if label:
+        prior_query["label"] = label
+    prior = await db.files.find_one(prior_query, {"_id": 0, "id": 1, "version": 1, "version_chain_id": 1})
+    chain_id = (prior or {}).get("version_chain_id") or (prior or {}).get("id")
+    version = ((prior or {}).get("version") or 1) + 1 if prior else 1
+
     doc = {
         "id": f"doc_{str(uuid.uuid4())[:8]}",
         "member_id": member_id,
@@ -132,11 +145,19 @@ async def upload_member_document(
         "content_type": file.content_type,
         "size": len(data),
         "is_deleted": False,
+        "version": version,
+        "version_chain_id": chain_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
     await db.files.insert_one(doc)
     doc.pop("_id", None)
+    # Mark prior as superseded
+    if prior:
+        await db.files.update_one(
+            {"id": prior["id"]},
+            {"$set": {"superseded_by": doc["id"], "superseded_at": doc["created_at"]}},
+        )
 
     # Fulfill a pending request if request_id provided
     if request_id:
@@ -165,6 +186,20 @@ async def list_member_documents(member_id: str, current_user: dict = Depends(get
                 resolved_id = linked["id"]
     docs = await db.files.find({"member_id": {"$in": [member_id, resolved_id]}, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
+
+
+@router.get("/documents/{doc_id}/versions")
+async def list_document_versions(doc_id: str, current_user: dict = Depends(get_current_user)):
+    """Return the full version chain for a document, oldest first."""
+    doc = await db.files.find_one({"id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    chain_id = doc.get("version_chain_id") or doc["id"]
+    versions = await db.files.find(
+        {"$or": [{"id": chain_id}, {"version_chain_id": chain_id}]},
+        {"_id": 0},
+    ).sort("version", 1).to_list(100)
+    return versions
 
 
 @router.get("/documents/{doc_id}/file")
