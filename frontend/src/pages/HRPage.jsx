@@ -219,6 +219,7 @@ export default function HRPage() {
           <TabsTrigger value="contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
           <TabsTrigger value="documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
           <TabsTrigger value="leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
+          <TabsTrigger value="reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -351,6 +352,11 @@ export default function HRPage() {
         {/* LEAVE TAB */}
         <TabsContent value="leave" className="mt-4">
           <LeavePanel currentUser={user} staff={staff} isHr={salaries.length >= 0 /* user has hr page access */} />
+        </TabsContent>
+
+        {/* REIMBURSEMENTS TAB */}
+        <TabsContent value="reimbursements" className="mt-4">
+          <ReimbursementsPanel currentUser={user} />
         </TabsContent>
       </Tabs>
 
@@ -804,6 +810,176 @@ function LeavePanel({ currentUser, staff }) {
             <div className="flex gap-2 pt-2">
               <Button variant="destructive" className="flex-1" onClick={() => decide('declined')} data-testid="leave-decline-btn">Decline</Button>
               <Button className="flex-1" onClick={() => decide('approved')} data-testid="leave-approve-btn">Approve</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+
+
+// ========= Employee Expense Reimbursements Panel =========
+function ReimbursementsPanel({ currentUser }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({ title: '', amount: '', currency: 'UGX', category: 'travel', date: new Date().toISOString().slice(0, 10), receipt_url: '', notes: '' });
+  const [decideOn, setDecideOn] = useState(null);
+  const [decisionNote, setDecisionNote] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = filterStatus !== 'all' ? { status: filterStatus } : {};
+      const res = await api.get('/hr/expenses', { params });
+      setRows(res.data || []);
+    } finally { setLoading(false); }
+  }, [filterStatus]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const openNew = () => {
+    setEditingId(null);
+    setForm({ title: '', amount: '', currency: 'UGX', category: 'travel', date: new Date().toISOString().slice(0, 10), receipt_url: '', notes: '' });
+    setShowForm(true);
+  };
+  const openEdit = (e) => {
+    setEditingId(e.id);
+    setForm({ title: e.title || '', amount: String(e.amount || ''), currency: e.currency || 'UGX', category: e.category || 'other', date: (e.date || '').slice(0, 10), receipt_url: e.receipt_url || '', notes: e.notes || '' });
+    setShowForm(true);
+  };
+  const submit = async () => {
+    if (!form.title || !form.amount) { toast.error('Title and amount required'); return; }
+    try {
+      const payload = { ...form, amount: parseFloat(form.amount) };
+      if (editingId) await api.put(`/hr/expenses/${editingId}`, payload);
+      else await api.post('/hr/expenses', payload);
+      toast.success(editingId ? 'Saved' : 'Submitted');
+      setShowForm(false); setEditingId(null);
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const decide = async (newStatus) => {
+    try {
+      await api.put(`/hr/expenses/${decideOn.id}`, { status: newStatus, decision_note: decisionNote });
+      toast.success(newStatus === 'approved' ? 'Approved' : newStatus === 'rejected' ? 'Rejected' : 'Reimbursed');
+      setDecideOn(null); setDecisionNote('');
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const STATUS_COLORS = {
+    pending: 'bg-amber-100 text-amber-700',
+    approved: 'bg-blue-100 text-blue-700',
+    rejected: 'bg-red-100 text-red-700',
+    reimbursed: 'bg-green-100 text-green-700',
+  };
+
+  if (loading) return <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>;
+
+  return (
+    <div className="space-y-3" data-testid="reimbursements-panel">
+      <div className="flex justify-between items-center gap-2">
+        <div className="flex gap-1.5">
+          {['all', 'pending', 'approved', 'reimbursed', 'rejected'].map(s => (
+            <Button key={s} size="sm" variant={filterStatus === s ? 'default' : 'outline'} className="h-7 text-xs capitalize" onClick={() => setFilterStatus(s)} data-testid={`reim-filter-${s}`}>{s}</Button>
+          ))}
+        </div>
+        <Button size="sm" className="gap-1.5" onClick={openNew} data-testid="reim-new-btn"><Plus size={13} /> New Expense</Button>
+      </div>
+
+      {rows.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No expenses {filterStatus !== 'all' ? `in "${filterStatus}"` : ''}.</p> : (
+        <div className="space-y-2">
+          {rows.map(e => {
+            const isOwner = e.staff_id === currentUser.id;
+            const canEdit = isOwner && e.status === 'pending';
+            return (
+              <Card key={e.id} className="rounded-xl" data-testid={`reim-${e.id}`}>
+                <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium">{e.title}</p>
+                      <Badge variant="outline" className="text-[10px] capitalize">{e.category}</Badge>
+                      {!isOwner && <Badge variant="secondary" className="text-[10px]">{e.staff_name}</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{e.date} · {e.notes || 'No notes'}</p>
+                    {e.receipt_url && <a href={e.receipt_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline">View receipt</a>}
+                    {e.decision_by_name && (
+                      <p className="text-[10px] text-muted-foreground italic mt-0.5">{e.status} by {e.decision_by_name}{e.decision_note ? ` — “${e.decision_note}”` : ''}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className="text-sm font-bold">{e.currency} {(e.amount || 0).toLocaleString()}</p>
+                    </div>
+                    <Badge className={`text-[10px] capitalize ${STATUS_COLORS[e.status] || ''}`}>{e.status}</Badge>
+                    <div className="flex gap-0.5">
+                      {!isOwner && e.status === 'pending' && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setDecideOn(e); setDecisionNote(''); }} data-testid={`reim-decide-${e.id}`}>Decide</Button>
+                      )}
+                      {!isOwner && e.status === 'approved' && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={async () => {
+                          try { await api.put(`/hr/expenses/${e.id}`, { status: 'reimbursed' }); toast.success('Marked reimbursed'); reload(); }
+                          catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                        }} data-testid={`reim-pay-${e.id}`}>Mark Paid</Button>
+                      )}
+                      {canEdit && <Button size="sm" variant="ghost" className="h-7" onClick={() => openEdit(e)} data-testid={`reim-edit-${e.id}`}><Pencil size={12} /></Button>}
+                      {(canEdit || !isOwner) && <Button size="sm" variant="ghost" className="h-7 text-destructive" data-testid={`reim-del-${e.id}`} onClick={async () => { if (!window.confirm('Delete this expense?')) return; await api.delete(`/hr/expenses/${e.id}`); reload(); }}><Trash2 size={12} /></Button>}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* New/Edit Dialog */}
+      <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) setEditingId(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{editingId ? 'Edit Expense' : 'New Expense'}</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label className="text-xs">Title *</Label><Input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Uber to client meeting" data-testid="reim-title-input" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Amount *</Label><Input type="number" value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} step="0.01" data-testid="reim-amount-input" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Currency</Label>
+                <Select value={form.currency} onValueChange={v => setForm({...form, currency: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{['UGX','USD','KES','EUR','GBP','THB','HTG'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Category</Label>
+                <Select value={form.category} onValueChange={v => setForm({...form, category: v})}>
+                  <SelectTrigger data-testid="reim-category-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>{['travel','meals','supplies','training','fuel','accommodation','other'].map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Date</Label><Input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Receipt URL</Label><Input type="url" value={form.receipt_url} onChange={e => setForm({...form, receipt_url: e.target.value})} placeholder="https://..." /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label><Textarea rows={2} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowForm(false); setEditingId(null); }}>Cancel</Button>
+              <Button className="flex-1" onClick={submit} data-testid="reim-submit-btn">{editingId ? 'Save' : 'Submit'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Decision Dialog */}
+      <Dialog open={!!decideOn} onOpenChange={(o) => { if (!o) setDecideOn(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Decide Expense</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs text-muted-foreground"><strong>{decideOn?.staff_name}</strong> submitted <strong>{decideOn?.title}</strong> — {decideOn?.currency} {(decideOn?.amount || 0).toLocaleString()}.</p>
+            <div className="space-y-1"><Label className="text-xs">Decision Note (optional)</Label><Textarea rows={2} value={decisionNote} onChange={e => setDecisionNote(e.target.value)} data-testid="reim-decision-note" /></div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="destructive" className="flex-1" onClick={() => decide('rejected')} data-testid="reim-reject-btn">Reject</Button>
+              <Button className="flex-1" onClick={() => decide('approved')} data-testid="reim-approve-btn">Approve</Button>
             </div>
           </div>
         </DialogContent>

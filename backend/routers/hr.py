@@ -241,8 +241,72 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
     return await _generate_payslips_for(period, location_id, current_user)
 
 
+async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
+    """Return (unpaid_days, working_days_in_period) for a YYYY-MM period.
+    Uses approved leave requests whose leave_type maps to a non-paid type (or id == 'unpaid')."""
+    from datetime import date as dt_date, timedelta as td
+    try:
+        y, m = map(int, period.split("-"))
+    except Exception:
+        return (0.0, 0)
+    first = dt_date(y, m, 1)
+    nm_y, nm_m = (y, m + 1) if m < 12 else (y + 1, 1)
+    last = dt_date(nm_y, nm_m, 1) - td(days=1)
+    # Count working days in the period
+    working = 0
+    d = first
+    while d <= last:
+        if d.weekday() < 5:
+            working += 1
+        d += td(days=1)
+    # Tally approved unpaid leave days that overlap the period
+    unpaid_total = 0.0
+    async for lr in db.hr_leave_requests.find({
+        "staff_id": staff_id,
+        "status": "approved",
+        "start_date": {"$lte": last.isoformat()},
+        "end_date": {"$gte": first.isoformat()},
+    }, {"_id": 0}):
+        # Resolve whether this leave_type is paid (campus-overridable)
+        lt_id = lr.get("leave_type")
+        is_paid = True
+        if lt_id == "unpaid":
+            is_paid = False
+        else:
+            loc_id = lr.get("location_id")
+            settings = await db.hr_settings.find_one({"location_id": loc_id}, {"_id": 0, "leave_types": 1}) if loc_id else None
+            types = (settings or {}).get("leave_types") or DEFAULT_LEAVE_TYPES
+            t = next((t for t in types if t.get("id") == lt_id), None)
+            if t and t.get("paid") is False:
+                is_paid = False
+        if is_paid:
+            continue
+        # Days within the period (business days only)
+        try:
+            sd = dt_date.fromisoformat(lr["start_date"][:10])
+            ed = dt_date.fromisoformat(lr["end_date"][:10])
+        except Exception:
+            continue
+        sd = max(sd, first); ed = min(ed, last)
+        if ed < sd:
+            continue
+        biz = 0
+        d = sd
+        while d <= ed:
+            if d.weekday() < 5:
+                biz += 1
+            d += td(days=1)
+        if lr.get("half_day") and lr.get("days") == 0.5 and biz == 1:
+            unpaid_total += 0.5
+        else:
+            unpaid_total += biz
+    return (unpaid_total, working)
+
+
 async def _generate_payslips_for(period: str, location_id: str, current_user: dict) -> dict:
-    """Shared helper: generate missing payslips for a period + optional location."""
+    """Shared helper: generate missing payslips for a period + optional location.
+    Applies automatic unpaid-leave proration: gross is reduced by (unpaid_days / working_days)
+    and a transparent line-item 'Unpaid leave proration' is added so payslip math is auditable."""
     query = {"status": "active"}
     if location_id:
         query["location_id"] = location_id
@@ -252,10 +316,28 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
         if existing:
             continue
-        gross = sal.get("base_salary", 0)
+        base_gross = float(sal.get("base_salary", 0) or 0)
         deductions = 0
         allowances = 0
         items = []
+        # ---- Unpaid leave proration (NEW) ----
+        unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
+        proration_amount = 0.0
+        effective_gross = base_gross
+        if unpaid_days > 0 and working_days > 0 and base_gross > 0:
+            proration_amount = round(base_gross * (unpaid_days / working_days), 2)
+            effective_gross = max(0.0, base_gross - proration_amount)
+            items.append({
+                "name": "Unpaid leave proration",
+                "type": "deduction",
+                "amount": proration_amount,
+                "is_percentage": False,
+                "calculated_amount": proration_amount,
+                "auto_generated": True,
+                "details": f"{unpaid_days} unpaid day(s) ÷ {working_days} working days",
+            })
+            deductions += proration_amount
+        gross = effective_gross  # Allowances / % deductions compute against the post-proration gross
         for li in (sal.get("line_items") or []):
             amt = float(li.get("amount", 0))
             if li.get("is_percentage"):
@@ -266,7 +348,9 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             else:
                 allowances += amt
                 items.append({**li, "calculated_amount": amt})
-        net = gross + allowances - deductions
+        # Net is computed against original base for transparency: base + allowances - deductions
+        # (deductions already includes the unpaid-leave proration)
+        net = base_gross + allowances - deductions
         payslip = {
             "id": f"ps_{uuid.uuid4().hex[:8]}",
             "salary_id": sal["id"],
@@ -275,10 +359,13 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "department": sal.get("department", ""),
             "location_id": sal.get("location_id", ""),
             "period": period,
-            "gross_salary": gross,
+            "gross_salary": base_gross,
             "allowances": allowances,
             "deductions": deductions,
             "net_salary": net,
+            "unpaid_leave_days": unpaid_days,
+            "working_days": working_days,
+            "unpaid_leave_proration": proration_amount,
             "currency": sal.get("currency", "UGX"),
             "line_items": items,
             "status": "draft",
@@ -862,4 +949,167 @@ async def leave_calendar(month: Optional[str] = None, current_user: dict = Depen
     if campus:
         query.update(campus)
     return await db.hr_leave_requests.find(query, {"_id": 0}).sort("start_date", 1).to_list(500)
+
+
+
+# ========== EMPLOYEE EXPENSE REIMBURSEMENT (Odoo-style) ==========
+
+EXPENSE_CATEGORIES = ["travel", "meals", "supplies", "training", "fuel", "accommodation", "other"]
+
+
+@router.get("/expenses")
+async def list_employee_expenses(status: Optional[str] = None, staff_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Employee expense submissions. Non-HR users see only their own."""
+    query = {}
+    if status:
+        query["status"] = status
+    if staff_id:
+        query["staff_id"] = staff_id
+    if not _require_hr_access(current_user):
+        query["staff_id"] = current_user["id"]
+    else:
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
+    return await db.hr_employee_expenses.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/expenses")
+async def create_employee_expense(data: dict, current_user: dict = Depends(get_current_user)):
+    """Submit a new employee expense.
+    Body: { title, amount, currency?, category, date, receipt_url?, notes? }"""
+    title = (data.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    try:
+        amount = float(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="amount must be numeric")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be positive")
+    category = (data.get("category") or "other").strip().lower()
+    if category not in EXPENSE_CATEGORIES:
+        category = "other"
+    doc = {
+        "id": f"eex_{uuid.uuid4().hex[:10]}",
+        "staff_id": current_user["id"],
+        "staff_name": current_user.get("name", ""),
+        "department": current_user.get("department", ""),
+        "location_id": current_user.get("location_id") or current_user.get("active_campus_id"),
+        "title": title[:200],
+        "amount": amount,
+        "currency": (data.get("currency") or "UGX").upper()[:5],
+        "category": category,
+        "date": (data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10],
+        "receipt_url": (data.get("receipt_url") or "").strip()[:500] or None,
+        "notes": (data.get("notes") or "")[:500],
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.hr_employee_expenses.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/expenses/{expense_id}")
+async def update_employee_expense(expense_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Edit (owner, only while pending) OR approve/reject/reimburse (HR/director).
+    Body for owner edit: { title?, amount?, category?, date?, receipt_url?, notes? }
+    Body for status change: { status: 'approved'|'rejected'|'reimbursed', decision_note? }"""
+    exp = await db.hr_employee_expenses.find_one({"id": expense_id}, {"_id": 0})
+    if not exp:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    is_owner = exp["staff_id"] == current_user["id"]
+    is_hr = _require_hr_access(current_user)
+    # Status change branch
+    if "status" in data:
+        if not is_hr:
+            raise HTTPException(status_code=403, detail="HR access required to change status")
+        new_status = data["status"]
+        if new_status not in {"approved", "rejected", "reimbursed", "pending"}:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        if exp.get("status") == "reimbursed" and new_status != "reimbursed":
+            raise HTTPException(status_code=400, detail="Cannot change a reimbursed expense")
+        update = {
+            "status": new_status,
+            "decision_at": datetime.now(timezone.utc).isoformat(),
+            "decision_by": current_user["id"],
+            "decision_by_name": current_user.get("name", ""),
+            "decision_note": (data.get("decision_note") or "")[:500],
+        }
+        if new_status == "reimbursed":
+            update["reimbursed_at"] = update["decision_at"]
+        await db.hr_employee_expenses.update_one({"id": expense_id}, {"$set": update})
+        return await db.hr_employee_expenses.find_one({"id": expense_id}, {"_id": 0})
+    # Owner edit branch
+    if not is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner can edit")
+    if exp.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Can only edit pending expenses")
+    allowed = {"title", "amount", "category", "date", "receipt_url", "notes", "currency"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if "amount" in update:
+        try:
+            update["amount"] = float(update["amount"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="amount must be numeric")
+        if update["amount"] <= 0:
+            raise HTTPException(status_code=400, detail="amount must be positive")
+    if "category" in update and update["category"] not in EXPENSE_CATEGORIES:
+        update["category"] = "other"
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.hr_employee_expenses.update_one({"id": expense_id}, {"$set": update})
+    return await db.hr_employee_expenses.find_one({"id": expense_id}, {"_id": 0})
+
+
+@router.delete("/expenses/{expense_id}")
+async def delete_employee_expense(expense_id: str, current_user: dict = Depends(get_current_user)):
+    exp = await db.hr_employee_expenses.find_one({"id": expense_id}, {"_id": 0})
+    if not exp:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    is_owner = exp["staff_id"] == current_user["id"]
+    is_hr = _require_hr_access(current_user)
+    if not (is_owner or is_hr):
+        raise HTTPException(status_code=403, detail="Not permitted")
+    if exp.get("status") in {"approved", "reimbursed"} and not is_hr:
+        raise HTTPException(status_code=400, detail="Cannot delete approved/reimbursed expenses")
+    await db.hr_employee_expenses.delete_one({"id": expense_id})
+    return {"deleted": True}
+
+
+@router.get("/expenses/summary")
+async def employee_expenses_summary(period: Optional[str] = None, current_user: dict = Depends(require_hr)):
+    """Reimbursement summary for a period (YYYY-MM, defaults to current month).
+    Returns totals + by-staff and by-category breakdowns."""
+    period = period or datetime.now(timezone.utc).strftime("%Y-%m")
+    start = f"{period}-01"
+    y, m = map(int, period.split("-"))
+    nm_y, nm_m = (y, m + 1) if m < 12 else (y + 1, 1)
+    end = f"{nm_y:04d}-{nm_m:02d}-01"
+    query = {"date": {"$gte": start, "$lt": end}}
+    campus = await get_campus_filter(current_user)
+    if campus:
+        query.update(campus)
+    rows = await db.hr_employee_expenses.find(query, {"_id": 0}).to_list(2000)
+    by_status = {}
+    by_category = {}
+    by_staff = {}
+    for r in rows:
+        s = r.get("status", "pending")
+        by_status[s] = by_status.get(s, 0) + float(r.get("amount") or 0)
+        c = r.get("category", "other")
+        by_category[c] = by_category.get(c, 0) + float(r.get("amount") or 0)
+        k = r.get("staff_id")
+        if k:
+            by_staff.setdefault(k, {"staff_name": r.get("staff_name"), "total": 0, "count": 0})
+            by_staff[k]["total"] += float(r.get("amount") or 0)
+            by_staff[k]["count"] += 1
+    return {
+        "period": period,
+        "total": sum(by_status.values()),
+        "by_status": by_status,
+        "by_category": by_category,
+        "by_staff": list(by_staff.values()),
+        "count": len(rows),
+    }
 
