@@ -214,13 +214,13 @@ export default function HRPage() {
 
       <Tabs defaultValue="salaries">
         <TabsList className="flex-wrap">
-          <TabsTrigger value="salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
-          <TabsTrigger value="payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
-          <TabsTrigger value="contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
-          <TabsTrigger value="documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
-          <TabsTrigger value="leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
-          <TabsTrigger value="reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
-          <TabsTrigger value="attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
+          <TabsTrigger value="salaries" data-testid="hr-tab-salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
+          <TabsTrigger value="payslips" data-testid="hr-tab-payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
+          <TabsTrigger value="contracts" data-testid="hr-tab-contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
+          <TabsTrigger value="documents" data-testid="hr-tab-documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
+          <TabsTrigger value="leave" data-testid="hr-tab-leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
+          <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
+          <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}

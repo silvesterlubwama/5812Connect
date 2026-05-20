@@ -112,13 +112,13 @@ export default function LoginPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="identifier">Email, Phone, or ID Number</Label>
-                <Input id="identifier" type="text" placeholder="Email, phone, or national ID" value={identifier} onChange={e => setIdentifier(e.target.value)} required />
+                <Input id="identifier" type="text" placeholder="Email, phone, or national ID" value={identifier} onChange={e => setIdentifier(e.target.value)} required data-testid="login-identifier-input" />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
                 <div className="relative">
-                  <Input id="password" type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required className="pr-10" />
+                  <Input id="password" type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required className="pr-10" data-testid="login-password-input" />
                   <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -136,7 +136,7 @@ export default function LoginPage() {
                 </div>
               )}
 
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button type="submit" className="w-full" disabled={loading} data-testid="login-submit-button">
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
             </form>

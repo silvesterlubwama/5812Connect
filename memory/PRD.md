@@ -6,6 +6,24 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 115 (May 20, 2026)
+**Pytest smoke CI job + Testing-agent validation of all recent modules.**
+
+### Pytest CI smoke job
+- ✅ New `backend/tests/test_smoke_recent_modules.py` (14 tests, 0.5s runtime): covers Approvals workflows + requests + role hierarchy, HR Leave types/balance/lifecycle, Reimbursements lifecycle, Attendance clock-in/out idempotency, Accounting CoA seed + balanced/unbalanced entry validation + posted-entry trial-balance reconciliation, Sale discount auto-approval + payment lock, Payment reminders. State-aware (uses current-year dates for balance assertions; cleans up after itself).
+- ✅ `.github/workflows/ci.yml` extended with a `pytest-smoke` job that spins up MongoDB 6 + FastAPI in CI runner, seeds admin, runs the new smoke file.
+- ✅ `scripts/lint-check.sh --with-tests` runs the smoke file locally against the dev backend.
+
+### Testing-agent validation (iteration_84 report)
+- ✅ Backend: 14/14 pytest smoke PASS
+- ✅ Frontend: 10/10 target flows render & interact with **zero non-trivial console errors**
+- ✅ Cross-module verified end-to-end: HR reimbursement >$100 auto-spawns approval **and surfaces visually in Approvals Inbox** (`Reimbursement: Conference flight USD 350 · current step: Manager review`)
+- Action items returned: **1 MEDIUM (more data-testid coverage), 1 LOW (seed a low-stock product for visual demo)** — no functional bugs.
+
+### Test-id hardening (MEDIUM action item from testing agent)
+- ✅ LoginPage: added `data-testid` for `login-identifier-input`, `login-password-input`, `login-submit-button`
+- ✅ HRPage: added `data-testid` for all 7 tab triggers (`hr-tab-salaries/payslips/contracts/documents/leave/reimbursements/attendance`)
+
 ## Recently Resolved — Iteration 114 (May 20, 2026)
 **CI lint gate added + 8 real bugs the gate surfaced.**
 
