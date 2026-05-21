@@ -476,6 +476,17 @@ async def bulk_export_members(data: dict, current_user: dict = Depends(get_curre
 async def list_audit(skip: int = 0, limit: int = 100, current_user: dict = Depends(require_admin)) -> dict:
     logs = await db.audit_log.find({}, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
     total = await db.audit_log.count_documents({})
+    # Backfill user_name for older log rows that don't have it stored.
+    missing_user_ids = list({l.get("user_id") for l in logs if l.get("user_id") and not l.get("user_name")})
+    if missing_user_ids:
+        users = await db.users.find(
+            {"id": {"$in": missing_user_ids}},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(len(missing_user_ids))
+        name_map = {u["id"]: u.get("name", "") for u in users}
+        for log in logs:
+            if not log.get("user_name") and log.get("user_id"):
+                log["user_name"] = name_map.get(log["user_id"], "")
     return {"logs": logs, "total": total}
 
 

@@ -1,12 +1,42 @@
 """Accounting depth (Odoo-style): Chart of Accounts, Journals, Double-entry Ledger,
 Fiscal Periods, Tax Codes, Trial Balance + P&L."""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter
+from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter, is_system_admin
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import uuid
 
 router = APIRouter(prefix="/api/accounting", tags=["accounting"])
+
+
+async def _user_can_access_location(user: dict, location_id: str) -> bool:
+    """Mirror of Financial's campus scoping: admins/system_admin/Executive Director see all.
+    Other roles must have the location_id in their own location_ids/active_campus."""
+    if not location_id:
+        return True
+    if is_system_admin(user):
+        return True
+    role = (user.get("role") or "")
+    if role in {"admin", "Executive Director"}:
+        return True
+    user_locs = set(user.get("location_ids") or [])
+    if user.get("location_id"):
+        user_locs.add(user["location_id"])
+    if user.get("active_campus_id"):
+        user_locs.add(user["active_campus_id"])
+    # Include sub-locations whose parent is in the user's set
+    if user_locs:
+        children = await db.locations.find(
+            {"parent_id": {"$in": list(user_locs)}}, {"_id": 0, "id": 1}
+        ).to_list(500)
+        user_locs.update(c["id"] for c in children)
+    return location_id in user_locs
+
+
+async def _require_location_access(user: dict, location_id: str):
+    """Raise 403 if user can't act on this location's accounting data."""
+    if not await _user_can_access_location(user, location_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this campus's accounting data")
 
 
 # ============================================================
@@ -77,6 +107,7 @@ async def seed_default_coa(data: dict = None, current_user: dict = Depends(requi
     location_id = data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id")
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id required")
+    await _require_location_access(current_user, location_id)
     currency = (data.get("currency") or "UGX").upper()[:5]
     created = []
     for acc in DEFAULT_COA:
@@ -143,6 +174,7 @@ async def create_account(data: dict, current_user: dict = Depends(require_direct
     loc = data.get("location_id") or current_user.get("active_campus_id")
     if not loc:
         raise HTTPException(status_code=400, detail="location_id required")
+    await _require_location_access(current_user, loc)
     existing = await db.accounting_accounts.find_one({"location_id": loc, "code": code})
     if existing:
         raise HTTPException(status_code=400, detail=f"Account code {code} already exists")
@@ -420,6 +452,7 @@ async def create_entry(data: dict, current_user: dict = Depends(require_director
         raise HTTPException(status_code=404, detail="Journal not found")
     date = (data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
     location_id = data.get("location_id") or journal.get("location_id") or current_user.get("active_campus_id")
+    await _require_location_access(current_user, location_id)
     if await _period_is_locked(date, location_id):
         raise HTTPException(status_code=400, detail="Fiscal period is locked for this date")
     lines_in = data.get("lines") or []

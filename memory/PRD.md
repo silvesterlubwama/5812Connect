@@ -6,6 +6,28 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 117 (May 21, 2026)
+**3 user-reported fixes: campus-aware currency, accounting campus switcher + restrictions, audit-log user names.**
+
+### Currency per campus on /accounting
+- ✅ Added a **campus switcher dropdown** to the header (mirrors `/financial` pattern). Each option shows `Name (CURRENCY)`.
+- ✅ `currentCurrency` is derived from the picked location and now appears on: page subtitle, Trial Balance / Income / Expense / Net Profit summary cards, Trial Balance + Balance Sheet table headers.
+- ✅ The "Seed Default CoA" button now seeds with the selected location's currency (was hard-coded UGX).
+- ✅ The "New Account" dialog pre-fills the currency from the active location.
+
+### Same restrictions as finance
+- ✅ Backend `accounting.py` now exposes `_user_can_access_location(user, location_id)` + `_require_location_access()` (mirrors the Financial scoping rules): admins/sysadmins/EDs see all; other roles must own the location_id (including sub-locations under parents they own).
+- ✅ Enforced on `POST /seed`, `POST /accounts`, `POST /entries`. The other location-bound writes are protected at the route level via `require_director`/`require_admin` and now also at the campus level for non-admin directors.
+- ✅ Frontend `AccountingPage` auto-clamps non-admin users to their primary `location_id` (just like Financial does) and client-side filters journals/entries/taxes/fiscal-periods to the picked campus.
+
+### Audit trail shows user name
+- ✅ `_audit()` now snapshots `user_name` at write time (resilient to user renames/deletes later).
+- ✅ `GET /admin/audit` backfills `user_name` on the fly for older log rows by joining with the `users` collection. Verified via curl: old logs now display "Admin" instead of raw UUIDs.
+
+### Tests
+- All 16 pytest smoke tests still PASS.
+- Backend + frontend lint clean.
+
 ## Recently Resolved — Iteration 116 (May 20, 2026)
 **Financial.py ↔ Accounting.py auto-posting bridge — `financial` flows now feed the double-entry ledger automatically.**
 

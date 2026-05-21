@@ -28,7 +28,13 @@ const STATUS_COLORS = {
 
 export default function AccountingPage() {
   const { user } = useAuth();
-  const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || 'loc_001';
+  // Campus switcher — mirrors Financial page pattern. Defaults to active campus / user's primary.
+  const [locationFilter, setLocationFilter] = useState(localStorage.getItem('5812_active_campus') || user?.location_id || 'loc_001');
+  const [allLocations, setAllLocations] = useState([]);
+  // Currency derived from the chosen location (falls back to UGX)
+  const currentLocation = allLocations.find(l => l.id === locationFilter);
+  const currentCurrency = currentLocation?.currency || 'UGX';
+  const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
   const [accounts, setAccounts] = useState([]);
   const [journals, setJournals] = useState([]);
   const [accountTypes, setAccountTypes] = useState([]);
@@ -52,42 +58,62 @@ export default function AccountingPage() {
   const [fiscalForm, setFiscalForm] = useState({ name: '', start_date: '', end_date: '' });
   const [viewLedger, setViewLedger] = useState(null);
 
+  // Load all locations once (for the switcher) — admins see all; non-admins are
+  // restricted by the backend to their own campuses anyway.
+  useEffect(() => {
+    api.get('/locations').then(r => setAllLocations(r.data || [])).catch(() => setAllLocations([]));
+  }, []);
+
+  // Force non-admins to their primary campus (mirrors Financial restriction).
+  useEffect(() => {
+    if (!isFinanceAdmin && user?.location_id && locationFilter !== user.location_id) {
+      setLocationFilter(user.location_id);
+    }
+  }, [user, isFinanceAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
       const [accRes, jrnRes, typesRes, entRes, taxRes, fpRes, tbRes, plRes, bsRes] = await Promise.all([
-        api.get('/accounting/accounts', { params: { location_id: activeCampus } }).catch(() => ({ data: [] })),
+        api.get('/accounting/accounts', { params: { location_id: locationFilter } }).catch(() => ({ data: [] })),
         api.get('/accounting/journals').catch(() => ({ data: [] })),
         api.get('/accounting/account-types').catch(() => ({ data: [] })),
         api.get('/accounting/entries', { params: { limit: 100 } }).catch(() => ({ data: [] })),
         api.get('/accounting/taxes').catch(() => ({ data: [] })),
         api.get('/accounting/fiscal-periods').catch(() => ({ data: [] })),
-        api.get('/accounting/reports/trial-balance', { params: { location_id: activeCampus } }).catch(() => ({ data: null })),
-        api.get('/accounting/reports/profit-loss', { params: { location_id: activeCampus } }).catch(() => ({ data: null })),
-        api.get('/accounting/reports/balance-sheet', { params: { location_id: activeCampus } }).catch(() => ({ data: null })),
+        api.get('/accounting/reports/trial-balance', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
+        api.get('/accounting/reports/profit-loss', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
+        api.get('/accounting/reports/balance-sheet', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
       ]);
       setAccounts(accRes.data || []);
-      setJournals(jrnRes.data || []);
+      // Filter journals + entries to the picked campus (so Director of one campus
+      // doesn't see another's journals if get_campus_filter happens to be permissive).
+      setJournals((jrnRes.data || []).filter(j => !j.location_id || j.location_id === locationFilter));
       setAccountTypes(typesRes.data || []);
-      setEntries(entRes.data || []);
-      setTaxes(taxRes.data || []);
-      setFiscalPeriods(fpRes.data || []);
+      setEntries((entRes.data || []).filter(e => !e.location_id || e.location_id === locationFilter));
+      setTaxes((taxRes.data || []).filter(t => !t.location_id || t.location_id === locationFilter));
+      setFiscalPeriods((fpRes.data || []).filter(f => !f.location_id || f.location_id === locationFilter));
       setTb(tbRes.data); setPl(plRes.data); setBs(bsRes.data);
     } finally { setLoading(false); }
-  }, [activeCampus]);
+  }, [locationFilter]);
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const seedDefault = async () => {
     try {
-      const res = await api.post('/accounting/seed', { location_id: activeCampus });
+      const res = await api.post('/accounting/seed', { location_id: locationFilter, currency: currentCurrency });
       toast.success(`Seeded ${res.data.seeded} accounts (${res.data.skipped} already existed)`);
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
+  const openNewAccountForm = () => {
+    setAccountForm({ code: '', name: '', type: 'asset_current', currency: currentCurrency });
+    setShowAccountForm(true);
+  };
+
   const createAccount = async () => {
     try {
-      await api.post('/accounting/accounts', { ...accountForm, location_id: activeCampus });
+      await api.post('/accounting/accounts', { ...accountForm, location_id: locationFilter });
       toast.success('Account created');
       setShowAccountForm(false);
       setAccountForm({ code: '', name: '', type: 'asset_current', currency: 'UGX' });
@@ -97,7 +123,7 @@ export default function AccountingPage() {
 
   const createJournal = async () => {
     try {
-      await api.post('/accounting/journals', { ...journalForm, location_id: activeCampus });
+      await api.post('/accounting/journals', { ...journalForm, location_id: locationFilter });
       toast.success('Journal created');
       setShowJournalForm(false);
       setJournalForm({ code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
@@ -107,7 +133,7 @@ export default function AccountingPage() {
 
   const createTax = async () => {
     try {
-      await api.post('/accounting/taxes', { ...taxForm, rate: parseFloat(taxForm.rate), location_id: activeCampus });
+      await api.post('/accounting/taxes', { ...taxForm, rate: parseFloat(taxForm.rate), location_id: locationFilter });
       toast.success('Tax created');
       setShowTaxForm(false);
       setTaxForm({ name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' });
@@ -117,7 +143,7 @@ export default function AccountingPage() {
 
   const createFiscal = async () => {
     try {
-      await api.post('/accounting/fiscal-periods', { ...fiscalForm, location_id: activeCampus });
+      await api.post('/accounting/fiscal-periods', { ...fiscalForm, location_id: locationFilter });
       toast.success('Fiscal period created');
       setShowFiscalForm(false);
       setFiscalForm({ name: '', start_date: '', end_date: '' });
@@ -159,7 +185,7 @@ export default function AccountingPage() {
         credit: parseFloat(l.credit) || 0,
         description: l.description,
       })).filter(l => l.account_id && (l.debit > 0 || l.credit > 0));
-      await api.post('/accounting/entries', { ...entryForm, lines, location_id: activeCampus });
+      await api.post('/accounting/entries', { ...entryForm, lines, location_id: locationFilter });
       toast.success('Entry created (draft)');
       setShowEntryForm(false);
       setEntryForm({ journal_id: '', date: new Date().toISOString().slice(0, 10), ref: '', narration: '', lines: [{ account_id: '', debit: '', credit: '', description: '' }, { account_id: '', debit: '', credit: '', description: '' }] });
@@ -208,9 +234,18 @@ export default function AccountingPage() {
           <h1 className="text-2xl font-semibold font-heading flex items-center gap-2">
             <BookOpen size={22} className="text-primary" /> Accounting
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Double-entry ledger · Chart of Accounts · Journals · Reports</p>
+          <p className="text-sm text-muted-foreground mt-0.5">Double-entry ledger · Chart of Accounts · Journals · Reports{currentLocation ? <> · <span className="font-medium">{currentLocation.name}</span> ({currentCurrency})</> : null}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          {/* Campus switcher — same pattern as Financial page */}
+          <Select value={locationFilter} onValueChange={setLocationFilter} disabled={!isFinanceAdmin && allLocations.length === 1}>
+            <SelectTrigger className="h-9 w-56 text-xs" data-testid="acc-campus-switcher"><SelectValue placeholder="Pick campus" /></SelectTrigger>
+            <SelectContent>
+              {allLocations.map(l => (
+                <SelectItem key={l.id} value={l.id}>{l.name} <span className="text-muted-foreground">({l.currency || 'UGX'})</span></SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {accounts.length === 0 && (
             <Button size="sm" onClick={seedDefault} data-testid="acc-seed-btn"><Plus size={14} className="mr-1" /> Seed Default CoA</Button>
           )}
@@ -224,24 +259,24 @@ export default function AccountingPage() {
           <Card className="rounded-xl"><CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1"><Scale size={14} className="text-muted-foreground" /><p className="text-xs text-muted-foreground uppercase">Trial Balance</p></div>
             <p className="text-2xl font-bold">{tb.totals.balanced ? '✓ Balanced' : '⚠ Off'}</p>
-            <p className="text-xs text-muted-foreground">D {fmt(tb.totals.debit)} = C {fmt(tb.totals.credit)}</p>
+            <p className="text-xs text-muted-foreground">D {fmt(tb.totals.debit)} = C {fmt(tb.totals.credit)} {currentCurrency}</p>
           </CardContent></Card>
           {pl && (
             <Card className="rounded-xl"><CardContent className="p-4">
               <div className="flex items-center gap-2 mb-1"><TrendingUp size={14} className="text-green-600" /><p className="text-xs text-muted-foreground uppercase">Income</p></div>
-              <p className="text-2xl font-bold text-green-700">{fmt(pl.totals.income)}</p>
+              <p className="text-2xl font-bold text-green-700">{currentCurrency} {fmt(pl.totals.income)}</p>
             </CardContent></Card>
           )}
           {pl && (
             <Card className="rounded-xl"><CardContent className="p-4">
               <div className="flex items-center gap-2 mb-1"><TrendingDown size={14} className="text-red-600" /><p className="text-xs text-muted-foreground uppercase">Expense</p></div>
-              <p className="text-2xl font-bold text-red-700">{fmt(pl.totals.expense)}</p>
+              <p className="text-2xl font-bold text-red-700">{currentCurrency} {fmt(pl.totals.expense)}</p>
             </CardContent></Card>
           )}
           {pl && (
             <Card className="rounded-xl"><CardContent className="p-4">
               <p className="text-xs text-muted-foreground uppercase mb-1">Net Profit</p>
-              <p className={`text-2xl font-bold ${pl.totals.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{fmt(pl.totals.net_profit)}</p>
+              <p className={`text-2xl font-bold ${pl.totals.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{currentCurrency} {fmt(pl.totals.net_profit)}</p>
             </CardContent></Card>
           )}
         </div>
@@ -292,7 +327,7 @@ export default function AccountingPage() {
         {/* ACCOUNTS */}
         <TabsContent value="accounts" className="space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" onClick={() => setShowAccountForm(true)} data-testid="acc-new-account-btn"><Plus size={14} className="mr-1" /> New Account</Button>
+            <Button size="sm" onClick={openNewAccountForm} data-testid="acc-new-account-btn"><Plus size={14} className="mr-1" /> New Account</Button>
           </div>
           {accounts.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No accounts yet — click "Seed Default CoA" to get started.</p> : (
             <div className="space-y-1.5">
@@ -386,7 +421,7 @@ export default function AccountingPage() {
         <TabsContent value="reports" className="space-y-4" data-testid="acc-reports-tab">
           {tb && (
             <Card className="rounded-xl">
-              <CardHeader><CardTitle className="text-base">Trial Balance</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-base">Trial Balance <span className="text-xs text-muted-foreground font-normal">({currentCurrency})</span></CardTitle></CardHeader>
               <CardContent className="text-xs space-y-1">
                 <table className="w-full">
                   <thead><tr className="border-b text-muted-foreground"><th className="text-left py-1">Code</th><th className="text-left">Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th><th className="text-right">Balance</th></tr></thead>
@@ -406,7 +441,7 @@ export default function AccountingPage() {
           )}
           {bs && (
             <Card className="rounded-xl">
-              <CardHeader><CardTitle className="text-base">Balance Sheet {bs.totals.balanced ? '✓' : '⚠'}</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-base">Balance Sheet <span className="text-xs text-muted-foreground font-normal">({currentCurrency})</span> {bs.totals.balanced ? '✓' : '⚠'}</CardTitle></CardHeader>
               <CardContent className="text-xs grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div><h4 className="font-semibold mb-1 text-blue-700">Assets · {fmt(bs.totals.assets)}</h4>{bs.assets.map(a => <p key={a.account_id} className="text-[11px]">{a.code} {a.name}: {fmt(a.balance)}</p>)}</div>
                 <div><h4 className="font-semibold mb-1 text-amber-700">Liabilities · {fmt(bs.totals.liabilities)}</h4>{bs.liabilities.map(a => <p key={a.account_id} className="text-[11px]">{a.code} {a.name}: {fmt(-a.balance)}</p>)}</div>

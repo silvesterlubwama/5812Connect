@@ -104,9 +104,19 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 async def _audit(user_id: str, action: str, resource: str, resource_id: str = None, details: dict = None):
     try:
+        # Snapshot the user's name at the time of the action so older audit log
+        # rows remain human-readable even if the user is later deleted/renamed.
+        user_name = ""
+        if user_id:
+            try:
+                u = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+                user_name = (u or {}).get("name", "") or ""
+            except Exception:
+                user_name = ""
         await db.audit_log.insert_one({
             "id": str(uuid.uuid4()),
             "user_id": user_id,
+            "user_name": user_name,
             "action": action,
             "resource": resource,
             "resource_id": resource_id,
