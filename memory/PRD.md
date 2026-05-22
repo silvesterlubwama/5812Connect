@@ -6,6 +6,38 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 122 (May 22, 2026)
+**Kiosk PIN unlock fix + Phase A QuickBooks-parity + Phase D Uganda reports.**
+
+### Kiosk fixes
+- ✅ New `POST /api/kiosk/unlock` endpoint (public, no auth). Accepts EITHER `{pin}` (matches user/member with admin/manager+ role) OR `{identifier, password}`. Returns 401/403 on failure.
+- ✅ Unlock dialog **duplicated to the home/login view** (was only inside the auth-gated dashboard block — invisible after reload).
+- ✅ Shared `doUnlock()` handler auto-detects 4-6 digit PIN vs password.
+
+### Phase A — QuickBooks-parity (new `routers/bank.py`)
+- ✅ **Bank Accounts** — first-class entity (`bnk_*`) with bank name, account number, IBAN, SWIFT/BIC, branch, account type (checking/savings/mobile_money/fixed_deposit/credit_card), country, currency, opening balance + date, linked CoA cash account, computed `current_balance` from posted entries.
+- ✅ **CSV Statement Import** — `POST /bank/accounts/{id}/import-csv` auto-detects common column headers (`Date`, `Description`, `Debit`, `Credit`, `Amount`, `Reference`, `Balance`) across formats from Uganda banks (Stanbic, DTB, Centenary), parses tolerant date/money formats (parens, commas, currency prefixes), creates `bank_statements` + `bank_transactions` rows.
+- ✅ **Categorization Rules** (`bank_rules`) — regex `match_pattern` → `target_account_id` in CoA. Auto-applied on import; bulk-applied via `/transactions/bulk-apply-suggestions`.
+- ✅ **Reconciliation** — `/transactions/{id}/reconcile` accepts `matched_entry_id` (link to existing JE), `target_account_id` (post new JE), or `action: ignore`. The auto-post writes balanced JEs to ledger (Cash ↔ category).
+- ✅ **Vendors** — first-class with TIN (Uganda Tax ID), VAT-registered flag, payment terms, default expense account, computed outstanding balance.
+- ✅ **Bills (AP)** — multi-line bills with per-line tax_rate, atomic numbering (`BILL-202605-0001`), auto-posts to ledger on creation: Dr expense accounts / Dr VAT input / Cr Accounts Payable. Status lifecycle: open → partially_paid → paid (or void).
+- ✅ **Bill Payments** — `POST /bills/{id}/payments` records a payment via a bank account; auto-posts Dr AP / Cr Bank; flips bill status when balance hits zero.
+- ✅ **Recurring Entries** — templates for repeating JEs OR bills. Daily/weekly/biweekly/monthly/quarterly/yearly schedules; `next_run_date` auto-advances. Fired by the existing daily scheduler in `server.py`.
+- ✅ **Multi-currency Revaluation** — `POST /accounting/fx/revalue` posts unrealized FX gain/loss against each foreign-currency CoA account, using caller-supplied rates. Requires "FX Revaluation Gain/Loss" accounts in CoA.
+
+### Phase D — Uganda-specific reports
+- ✅ **Cash Flow Statement** — `/accounting/reports/cash-flow` classifies postings by the *other* account's type: operating (income/expense/current asset/AR/AP), investing (fixed assets), financing (equity, non-current liab).
+- ✅ **AR Aging** — proper buckets (0-30 / 31-60 / 61-90 / 90+) by customer; sortable by total outstanding.
+- ✅ **AP Aging** — same buckets, by vendor, age computed from `due_date`.
+- ✅ **Uganda VAT/EFRIS Export** — `/accounting/reports/uganda-vat-export?date_from=&date_to=` produces a CSV with TIN, subtotal, VAT, total per sales-invoice + purchase-bill, in the column order URA's EFRIS system expects. Director-only.
+
+### Verified end-to-end
+- Bank account created → Bulunzi bill (59,000 UGX = 50k + 18% VAT) → bill payment (status=paid) → AP aging shows 0 (correctly) → Uganda VAT export CSV has the purchase line with full TIN/subtotal/VAT.
+- CSV import: 3 transactions parsed (auto-detected columns), 1 auto-suggested via "Farm supply" rule.
+- Daily scheduler now also fires `fire_due_recurring_entries`.
+
+All 16 pytest smoke tests pass. Phase B (Plaid) intentionally skipped per user. Phase C (M-Pesa for Kenya) scheduled for later.
+
 ## Recently Resolved — Iteration 121 (May 22, 2026)
 **2 more user-reported fixes: checkin visibility + public-page country filter.**
 

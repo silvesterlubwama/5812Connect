@@ -483,6 +483,7 @@ try:
     from routers.accounting import router as accounting_router
     from routers.approvals import router as approvals_router
     from routers.social_work import router as social_work_router, portal_router as school_portal_router
+    from routers.bank import router as bank_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -495,6 +496,7 @@ try:
     app.include_router(approvals_router)
     app.include_router(social_work_router)
     app.include_router(school_portal_router)
+    app.include_router(bank_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -580,6 +582,12 @@ async def _run_due_date_reminder_scheduler():
                 await _fire_birthday_anniversary_notifications()
                 await _fire_scheduled_customer_statements()
                 await _fire_overdue_payment_reminders()
+                # Phase A: recurring journal entries / bills
+                try:
+                    from routers.bank import fire_due_recurring_entries
+                    await fire_due_recurring_entries()
+                except Exception as e:
+                    logger.error(f"fire_due_recurring_entries: {e}")
                 last_birthday_check_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")

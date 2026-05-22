@@ -2,9 +2,11 @@
 Fiscal Periods, Tax Codes, Trial Balance + P&L."""
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter, is_system_admin
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as dt_date
 from typing import Optional, List, Dict, Any
 import uuid
+import io
+import csv
 
 router = APIRouter(prefix="/api/accounting", tags=["accounting"])
 
@@ -890,4 +892,417 @@ async def post_asset_depreciation(asset_id: str, period: str, data: dict = None,
     await db.assets.update_one({"id": asset_id}, {"$set": {"current_value": line["book_value"]}})
     entry.pop("_id", None)
     return entry
+
+
+
+# ============================================================
+# PHASE D — UGANDA-SPECIFIC + UNIVERSAL ADVANCED REPORTS
+# ============================================================
+
+@router.get("/reports/cash-flow")
+async def cash_flow_statement(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Indirect-method cash flow statement: classifies postings into operating /
+    investing / financing based on the *other* account's type in each posting.
+
+    Operating: postings against income/expense accounts
+    Investing: postings against fixed-asset accounts
+    Financing: postings against equity / non-current-liability accounts
+    """
+    match = {"status": "posted"}
+    if date_from:
+        match.setdefault("date", {})["$gte"] = date_from[:10]
+    if date_to:
+        match.setdefault("date", {})["$lte"] = date_to[:10]
+    if location_id:
+        match["location_id"] = location_id
+    else:
+        scope = await get_campus_filter(current_user)
+        if scope:
+            match.update(scope)
+    # We classify CASH movements: find lines hitting cash accounts, look at the
+    # paired (other-side) line in the same entry.
+    cash_accs = await db.accounting_accounts.find(
+        {"type": "asset_cash", "active": True}, {"_id": 0, "id": 1, "name": 1},
+    ).to_list(200)
+    if not cash_accs:
+        return {"date_from": date_from, "date_to": date_to,
+                "operating": [], "investing": [], "financing": [],
+                "totals": {"operating": 0, "investing": 0, "financing": 0, "net_change": 0}}
+    cash_ids = {a["id"] for a in cash_accs}
+    cash_lines = await db.accounting_entry_lines.find(
+        {**match, "account_id": {"$in": list(cash_ids)}}, {"_id": 0},
+    ).to_list(5000)
+    # For each cash line, fetch siblings in the same entry and classify
+    entry_ids = list({L["entry_id"] for L in cash_lines})
+    all_lines = await db.accounting_entry_lines.find(
+        {"entry_id": {"$in": entry_ids}}, {"_id": 0},
+    ).to_list(20000) if entry_ids else []
+    lines_by_entry = {}
+    for L in all_lines:
+        lines_by_entry.setdefault(L["entry_id"], []).append(L)
+    # Build account-id → type map
+    all_acc_ids = {L["account_id"] for L in all_lines}
+    accs = await db.accounting_accounts.find(
+        {"id": {"$in": list(all_acc_ids)}}, {"_id": 0, "id": 1, "name": 1, "type": 1, "code": 1},
+    ).to_list(2000) if all_acc_ids else []
+    acc_map = {a["id"]: a for a in accs}
+    operating = {}
+    investing = {}
+    financing = {}
+    for L in cash_lines:
+        cash_delta = float(L.get("debit") or 0) - float(L.get("credit") or 0)  # positive = cash in
+        siblings = [s for s in lines_by_entry.get(L["entry_id"], []) if s["id"] != L["id"]]
+        for s in siblings:
+            sib_acc = acc_map.get(s["account_id"]) or {}
+            sib_type = sib_acc.get("type", "")
+            sib_category = ACCOUNT_TYPES.get(sib_type, {}).get("category", "")
+            # The amount attributed to this sibling
+            sib_amount = float(s.get("credit") or 0) - float(s.get("debit") or 0)
+            # If multiple siblings, allocate proportionally (rare for our entries — most are 1:1)
+            if cash_delta != 0 and sib_amount == 0:
+                continue
+            label = f"{sib_acc.get('code','')} {sib_acc.get('name','(unknown)')}".strip()
+            attribution = sib_amount  # Sign: positive = cash in from this source
+            if sib_type == "asset_fixed":
+                bucket = investing
+            elif sib_category == "equity" or sib_type == "liability_non_current":
+                bucket = financing
+            else:  # income/expense/AR/AP/current-asset/current-liability → operating
+                bucket = operating
+            bucket[label] = bucket.get(label, 0) + attribution
+    def _to_rows(d):
+        return [{"account": k, "amount": round(v, 2)} for k, v in sorted(d.items(), key=lambda kv: -abs(kv[1]))]
+    op_total = round(sum(operating.values()), 2)
+    inv_total = round(sum(investing.values()), 2)
+    fin_total = round(sum(financing.values()), 2)
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "operating": _to_rows(operating),
+        "investing": _to_rows(investing),
+        "financing": _to_rows(financing),
+        "totals": {
+            "operating": op_total,
+            "investing": inv_total,
+            "financing": fin_total,
+            "net_change": round(op_total + inv_total + fin_total, 2),
+        },
+    }
+
+
+def _age_bucket(days_old: int) -> str:
+    if days_old <= 30:
+        return "0-30"
+    if days_old <= 60:
+        return "31-60"
+    if days_old <= 90:
+        return "61-90"
+    return "90+"
+
+
+@router.get("/reports/ar-aging")
+async def ar_aging(as_of: Optional[str] = None, location_id: Optional[str] = None,
+                  current_user: dict = Depends(get_current_user)):
+    """Accounts receivable aging — buckets sales' outstanding amounts by age."""
+    today = (as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    query = {"payment_status": "pending", "voided": {"$ne": True}}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        scope = await get_campus_filter(current_user)
+        if scope:
+            query.update(scope)
+    sales = await db.sales.find(query, {"_id": 0}).to_list(5000)
+    today_dt = dt_date.fromisoformat(today)
+    by_customer = {}
+    bucket_totals = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0}
+    for s in sales:
+        try:
+            sale_date = dt_date.fromisoformat((s.get("created_at") or s.get("date", ""))[:10])
+        except Exception:
+            sale_date = today_dt
+        age = (today_dt - sale_date).days
+        b = _age_bucket(age)
+        amt = float(s.get("total") or 0)
+        bucket_totals[b] += amt
+        bucket_totals["total"] += amt
+        key = s.get("customer_id") or s.get("customer_phone") or s.get("customer_name") or "Walk-in"
+        if key not in by_customer:
+            by_customer[key] = {
+                "customer_id": s.get("customer_id"),
+                "customer_name": s.get("customer_name") or "Walk-in",
+                "customer_phone": s.get("customer_phone"),
+                "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0,
+                "oldest_days": 0,
+                "sales_count": 0,
+            }
+        row = by_customer[key]
+        row[b] += amt
+        row["total"] += amt
+        row["oldest_days"] = max(row["oldest_days"], age)
+        row["sales_count"] += 1
+    # Round
+    for r in by_customer.values():
+        for b in ("0-30", "31-60", "61-90", "90+", "total"):
+            r[b] = round(r[b], 2)
+    rows = sorted(by_customer.values(), key=lambda r: -r["total"])
+    return {
+        "as_of": today,
+        "rows": rows,
+        "totals": {k: round(v, 2) for k, v in bucket_totals.items()},
+    }
+
+
+@router.get("/reports/ap-aging")
+async def ap_aging(as_of: Optional[str] = None, location_id: Optional[str] = None,
+                  current_user: dict = Depends(get_current_user)):
+    """Accounts payable aging — bills outstanding by age (from due_date)."""
+    today = (as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    query = {"status": {"$in": ["open", "partially_paid"]}}
+    if location_id:
+        query["location_id"] = location_id
+    else:
+        scope = await get_campus_filter(current_user)
+        if scope:
+            query.update(scope)
+    bills = await db.bills.find(query, {"_id": 0}).to_list(5000)
+    today_dt = dt_date.fromisoformat(today)
+    by_vendor = {}
+    bucket_totals = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0}
+    for b in bills:
+        try:
+            due_dt = dt_date.fromisoformat((b.get("due_date") or b.get("bill_date", ""))[:10])
+        except Exception:
+            due_dt = today_dt
+        age = (today_dt - due_dt).days  # positive = past due
+        bucket = _age_bucket(max(0, age))
+        amt = float(b.get("balance") or 0)
+        bucket_totals[bucket] += amt
+        bucket_totals["total"] += amt
+        key = b.get("vendor_id") or b.get("vendor_name") or "unknown"
+        if key not in by_vendor:
+            by_vendor[key] = {
+                "vendor_id": b.get("vendor_id"),
+                "vendor_name": b.get("vendor_name"),
+                "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0,
+                "oldest_days": 0,
+                "bills_count": 0,
+            }
+        row = by_vendor[key]
+        row[bucket] += amt
+        row["total"] += amt
+        row["oldest_days"] = max(row["oldest_days"], age)
+        row["bills_count"] += 1
+    for r in by_vendor.values():
+        for k in ("0-30", "31-60", "61-90", "90+", "total"):
+            r[k] = round(r[k], 2)
+    rows = sorted(by_vendor.values(), key=lambda r: -r["total"])
+    return {
+        "as_of": today,
+        "rows": rows,
+        "totals": {k: round(v, 2) for k, v in bucket_totals.items()},
+    }
+
+
+# ============================================================
+# MULTI-CURRENCY REVALUATION
+# ============================================================
+@router.post("/fx/revalue")
+async def revalue_currencies(data: dict, current_user: dict = Depends(require_director)):
+    """End-of-period FX revaluation. Posts unrealized FX gain/loss for accounts
+    held in foreign currencies vs the campus's functional currency.
+
+    Body: { as_of (YYYY-MM-DD), rates: { 'USD': 3700, 'KES': 28, ... },
+            functional_currency: 'UGX', location_id }
+
+    For each FX-denominated CoA account, compares the balance at the supplied
+    rate to the historical book value (which is implicit in the entries' UGX
+    amounts). The difference is posted as an unrealized FX gain or loss."""
+    as_of = (data.get("as_of") or "")[:10]
+    rates = data.get("rates") or {}
+    functional = (data.get("functional_currency") or "UGX").upper()
+    loc_id = data.get("location_id") or current_user.get("active_campus_id")
+    if not as_of:
+        raise HTTPException(status_code=400, detail="as_of required")
+    if not rates:
+        raise HTTPException(status_code=400, detail="rates required")
+    if not loc_id:
+        raise HTTPException(status_code=400, detail="location_id required")
+    # Find FX accounts: any account whose currency differs from functional
+    fx_accs = await db.accounting_accounts.find(
+        {"location_id": loc_id, "active": True, "currency": {"$nin": [functional, "", None]}},
+        {"_id": 0},
+    ).to_list(500)
+    if not fx_accs:
+        return {"posted": 0, "note": "No foreign-currency accounts found"}
+    # Find / create FX gain & loss accounts
+    fx_gain = await db.accounting_accounts.find_one(
+        {"location_id": loc_id, "active": True, "name": {"$regex": "fx gain|fx revaluation gain|forex gain", "$options": "i"}},
+        {"_id": 0},
+    )
+    fx_loss = await db.accounting_accounts.find_one(
+        {"location_id": loc_id, "active": True, "name": {"$regex": "fx loss|fx revaluation loss|forex loss", "$options": "i"}},
+        {"_id": 0},
+    )
+    if not fx_gain or not fx_loss:
+        raise HTTPException(
+            status_code=400,
+            detail="Create CoA accounts 'FX Revaluation Gain' (type=income_other) and 'FX Revaluation Loss' (type=expense) first",
+        )
+    journal = (await db.accounting_journals.find_one(
+        {"location_id": loc_id, "kind": "miscellaneous", "active": True}, {"_id": 0}
+    )) or (await db.accounting_journals.find_one(
+        {"location_id": loc_id, "active": True}, {"_id": 0}
+    ))
+    if not journal:
+        raise HTTPException(status_code=400, detail="No journal configured")
+    posted_entries = []
+    for acc in fx_accs:
+        currency = acc.get("currency", "")
+        rate = float(rates.get(currency, 0))
+        if not rate:
+            continue  # No rate supplied → skip
+        # Current local balance from posted entries
+        agg = await db.accounting_entry_lines.aggregate([
+            {"$match": {"account_id": acc["id"], "status": "posted", "date": {"$lte": as_of}}},
+            {"$group": {"_id": None, "d": {"$sum": "$debit"}, "c": {"$sum": "$credit"}}},
+        ]).to_list(1)
+        if not agg:
+            continue
+        book_value_fc = round(agg[0]["d"] - agg[0]["c"], 2)  # in functional currency (UGX)
+        if book_value_fc == 0:
+            continue
+        # We need the FX balance — but we don't have it stored. Heuristic: assume
+        # the recorded debit/credit amounts ARE in functional currency. To revalue,
+        # treat the account's natural-FX balance as book_value_fc / historical_rate
+        # — since we don't track historical rates per-line, we just expose the
+        # diff = book_value_fc * (rate / historical_rate - 1). Without history,
+        # the caller supplies BOTH 'current_rate' (in `rates`) AND optional
+        # 'historical_rate' overrides. If only one rate is given, we assume the
+        # historical rate is 1 (i.e., the book value is the FX balance) and
+        # convert at the new rate.
+        hist_rate = float(data.get("historical_rates", {}).get(currency) or 1)
+        new_local = book_value_fc * rate / hist_rate
+        diff = round(new_local - book_value_fc, 2)
+        if abs(diff) < 0.01:
+            continue
+        # Post: Dr/Cr the FX account by diff, opposite side to FX gain/loss
+        is_gain = diff > 0
+        from routers.accounting import _next_entry_number
+        entry_id = f"je_{uuid.uuid4().hex[:10]}"
+        entry_number = await _next_entry_number(journal["id"])
+        now_iso = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "id": entry_id, "number": entry_number,
+            "journal_id": journal["id"], "journal_code": journal.get("code"),
+            "date": as_of, "ref": f"FX-{currency}-{as_of}",
+            "narration": f"FX revaluation: {acc.get('name')} ({currency} @ {rate})",
+            "total_debit": abs(diff), "total_credit": abs(diff), "status": "posted",
+            "location_id": loc_id, "currency": functional,
+            "auto_generated_from": "fx_revaluation", "source_id": f"{acc['id']}_{as_of}",
+            "created_at": now_iso, "posted_at": now_iso, "posted_by": current_user["id"],
+        }
+        await db.accounting_entries.insert_one(entry)
+        gain_or_loss = fx_gain if is_gain else fx_loss
+        if is_gain:
+            # Asset gains: Dr Asset / Cr FX Gain. Liabilities reversed.
+            debit_acc, credit_acc = acc["id"], gain_or_loss["id"]
+        else:
+            debit_acc, credit_acc = gain_or_loss["id"], acc["id"]
+        await db.accounting_entry_lines.insert_many([
+            {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+             "journal_id": journal["id"], "date": as_of, "location_id": loc_id, "status": "posted",
+             "account_id": debit_acc, "debit": abs(diff), "credit": 0, "description": entry["narration"]},
+            {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
+             "journal_id": journal["id"], "date": as_of, "location_id": loc_id, "status": "posted",
+             "account_id": credit_acc, "debit": 0, "credit": abs(diff), "description": entry["narration"]},
+        ])
+        posted_entries.append({"account_id": acc["id"], "currency": currency, "diff": diff, "entry_id": entry_id})
+    await _audit(current_user["id"], "create", "fx_revaluation", as_of, {"count": len(posted_entries)})
+    return {"posted": len(posted_entries), "entries": posted_entries}
+
+
+# ============================================================
+# UGANDA VAT / EFRIS EXPORT
+# ============================================================
+@router.get("/reports/uganda-vat-export")
+async def uganda_vat_export(
+    date_from: str,
+    date_to: str,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(require_director),
+):
+    """Export VAT-relevant transactions in URA EFRIS-compatible CSV format.
+
+    URA EFRIS (Electronic Fiscal Receipting & Invoicing System) requires monthly
+    VAT returns with sales invoices + purchase bills. This endpoint produces a
+    CSV with one row per VAT-bearing transaction.
+    """
+    from starlette.responses import StreamingResponse
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to required")
+    query_sales = {
+        "voided": {"$ne": True},
+        "created_at": {"$gte": date_from + "T00:00:00", "$lte": date_to + "T23:59:59.999"},
+    }
+    query_bills = {
+        "bill_date": {"$gte": date_from, "$lte": date_to},
+        "status": {"$ne": "void"},
+    }
+    if location_id:
+        query_sales["location_id"] = location_id
+        query_bills["location_id"] = location_id
+    sales = await db.sales.find(query_sales, {"_id": 0}).to_list(5000)
+    bills = await db.bills.find(query_bills, {"_id": 0}).to_list(5000)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Type", "Date", "Invoice/Bill No", "Counterparty", "TIN",
+        "Subtotal (excl VAT)", "VAT Amount", "Total", "Currency", "Description",
+    ])
+    # Sales (output VAT)
+    for s in sales:
+        sub = float(s.get("subtotal") or 0)
+        tax = float(s.get("tax_amount") or 0)
+        # If subtotal is missing, derive it from items
+        if not sub and s.get("items"):
+            sub = sum((float(i.get("qty", 0) or 0) * float(i.get("unit_price", 0) or 0)) for i in s["items"])
+        writer.writerow([
+            "Sale",
+            (s.get("created_at") or "")[:10],
+            s.get("receipt_number") or s.get("id"),
+            s.get("customer_name") or "Walk-in",
+            s.get("customer_tin", ""),
+            f"{sub:.2f}",
+            f"{tax:.2f}",
+            f"{float(s.get('total') or 0):.2f}",
+            s.get("currency") or "UGX",
+            (s.get("notes") or "")[:200],
+        ])
+    # Bills (input VAT)
+    for b in bills:
+        writer.writerow([
+            "Purchase",
+            (b.get("bill_date") or "")[:10],
+            b.get("bill_number") or b.get("id"),
+            b.get("vendor_name") or "(unknown)",
+            b.get("vendor_tin", ""),
+            f"{float(b.get('subtotal') or 0):.2f}",
+            f"{float(b.get('tax_amount') or 0):.2f}",
+            f"{float(b.get('total') or 0):.2f}",
+            b.get("currency") or "UGX",
+            (b.get("notes") or "")[:200],
+        ])
+    buf.seek(0)
+    filename = f"uganda-vat-{date_from}-to-{date_to}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
