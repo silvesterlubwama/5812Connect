@@ -1,6 +1,6 @@
 """Events, Check-ins, Venues, Event Types, Public Events routes"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter, verify_password
 from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -799,6 +799,58 @@ async def unlock_kiosk(device_id: str, data: dict, current_user: dict = Depends(
 
 
 # ========== KIOSK ==========
+
+@router.post("/kiosk/unlock")
+async def kiosk_unlock(data: dict):
+    """Public endpoint to unlock a kiosk. Accepts ANY of:
+      - { pin: "1234" } → matches a user/member with that pin AND an admin/manager+ role
+      - { identifier, password } → standard auth flow (any admin/manager+)
+    Returns { unlocked: true, user_name, user_role } on success."""
+    PRIVILEGED_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager"}
+    pin = (data.get("pin") or "").strip()
+    identifier = (data.get("identifier") or "").strip()
+    password = data.get("password") or ""
+
+    # ---- PIN flow ----
+    if pin:
+        # Check users collection first (admin/manager PINs)
+        u = await db.users.find_one(
+            {"pin": pin, "status": {"$ne": "inactive"}},
+            {"_id": 0, "password_hash": 0, "pin_hash": 0},
+        )
+        # Fall back to members collection (PIN might be stored there for some installs)
+        if not u:
+            u = await db.members.find_one({"pin": pin}, {"_id": 0})
+        if not u:
+            raise HTTPException(status_code=401, detail="Invalid PIN")
+        role = u.get("role") or ""
+        if role not in PRIVILEGED_ROLES:
+            raise HTTPException(status_code=403, detail=f"PIN belongs to '{role or 'unknown'}', not an admin/manager")
+        return {"unlocked": True, "user_name": u.get("name", ""), "user_role": role, "method": "pin"}
+
+    # ---- password flow ----
+    if identifier and password:
+        # Locate user by email/username/phone
+        ident = identifier.lower()
+        u = await db.users.find_one(
+            {"$or": [
+                {"email": ident},
+                {"username": identifier},
+                {"phone": identifier},
+            ], "status": {"$ne": "inactive"}},
+            {"_id": 0},
+        )
+        if not u or not u.get("password_hash"):
+            raise HTTPException(status_code=401, detail="Unknown identifier")
+        if not verify_password(password, u["password_hash"]):
+            raise HTTPException(status_code=401, detail="Wrong password")
+        role = u.get("role") or ""
+        if role not in PRIVILEGED_ROLES:
+            raise HTTPException(status_code=403, detail=f"User '{role or 'unknown'}' is not an admin/manager")
+        return {"unlocked": True, "user_name": u.get("name", ""), "user_role": role, "method": "password"}
+
+    raise HTTPException(status_code=400, detail="Provide either {pin} or {identifier, password}")
+
 
 @router.post("/kiosk/checkin")
 async def kiosk_checkin(data: CheckInCreate):

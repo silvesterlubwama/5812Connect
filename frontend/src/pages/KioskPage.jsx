@@ -71,6 +71,30 @@ export default function KioskPage() {
   const [lockMode, setLockMode] = useState(() => localStorage.getItem('5812_kiosk_locked') === 'true');
   const [showUnlockDialog, setShowUnlockDialog] = useState(false);
   const [unlockPassword, setUnlockPassword] = useState('');
+
+  // Shared unlock handler — accepts admin PIN (4–6 digits) OR admin password.
+  // Available regardless of whether a staff member is logged in (locked kiosks
+  // after a reload have no staffUser yet).
+  const doUnlock = async () => {
+    const val = (unlockPassword || '').trim();
+    if (!val) { toast.error('Enter PIN or password'); return; }
+    try {
+      const isPin = /^\d{4,6}$/.test(val);
+      const body = isPin
+        ? { pin: val }
+        : { identifier: staffUser?.email || staffUser?.username || '', password: val };
+      if (!isPin && !body.identifier) {
+        toast.error('No admin identifier known — log in first or use an admin PIN');
+        return;
+      }
+      await api.post('/kiosk/unlock', body);
+      setLockMode(false); setLockToScan(false);
+      setShowUnlockDialog(false); setUnlockPassword('');
+      toast.success('Kiosk unlocked');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Unlock failed');
+    }
+  };
   const [lockToScan, setLockToScan] = useState(() => localStorage.getItem('5812_kiosk_lock_to_scan') === 'true'); // Lock to scan-only mode
   const [lockLocationId, setLockLocationId] = useState(() => localStorage.getItem('5812_kiosk_lock_location') || ''); // Lock to specific restricted location
   // PIN login state (kiosk staff sign-in via numpad)
@@ -717,19 +741,11 @@ export default function KioskPage() {
             <DialogContent className="max-w-xs">
               <DialogHeader><DialogTitle>Admin Unlock</DialogTitle></DialogHeader>
               <div className="space-y-3 mt-2">
-                <p className="text-xs text-muted-foreground">Enter admin password to unlock kiosk</p>
-                <Input type="password" placeholder="Admin password" value={unlockPassword} onChange={e => setUnlockPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') {
-                  api.post('/auth/login', { identifier: staffUser?.email, password: unlockPassword }).then(() => {
-                    setLockMode(false); setLockToScan(false); setShowUnlockDialog(false); setUnlockPassword(''); toast.success('Kiosk unlocked');
-                  }).catch(() => toast.error('Wrong password'));
-                }}} data-testid="unlock-password" />
+                <p className="text-xs text-muted-foreground">Enter admin PIN (4–6 digits) or admin password to unlock</p>
+                <Input type="password" placeholder="PIN or password" value={unlockPassword} onChange={e => setUnlockPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doUnlock(); }} data-testid="unlock-password" autoFocus />
                 <div className="flex gap-3">
                   <Button variant="outline" className="flex-1" onClick={() => { setShowUnlockDialog(false); setUnlockPassword(''); }}>Cancel</Button>
-                  <Button className="flex-1" onClick={() => {
-                    api.post('/auth/login', { identifier: staffUser?.email, password: unlockPassword }).then(() => {
-                      setLockMode(false); setLockToScan(false); setShowUnlockDialog(false); setUnlockPassword(''); toast.success('Kiosk unlocked');
-                    }).catch(() => toast.error('Wrong password'));
-                  }}>Unlock</Button>
+                  <Button className="flex-1" onClick={doUnlock} data-testid="kiosk-do-unlock-btn">Unlock</Button>
                 </div>
               </div>
             </DialogContent>
@@ -1128,6 +1144,22 @@ export default function KioskPage() {
             loading={pinSubmitting}
           />
           <Button variant="ghost" className="w-full mt-2" onClick={() => setShowStaffPin(false)}>Cancel</Button>
+        </DialogContent>
+      </Dialog>
+
+      {/* Admin Unlock Dialog — duplicated here so it works on the home/login view
+          after a page reload when there's no staffUser yet. */}
+      <Dialog open={showUnlockDialog} onOpenChange={setShowUnlockDialog}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader><DialogTitle>Admin Unlock</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-xs text-muted-foreground">Enter admin PIN (4–6 digits) or admin password to unlock</p>
+            <Input type="password" placeholder="PIN or password" value={unlockPassword} onChange={e => setUnlockPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') doUnlock(); }} data-testid="unlock-password-home" autoFocus />
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowUnlockDialog(false); setUnlockPassword(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={doUnlock} data-testid="kiosk-do-unlock-btn-home">Unlock</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
