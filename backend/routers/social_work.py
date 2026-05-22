@@ -34,6 +34,187 @@ PAYMENT_KINDS = {"tuition", "resource", "medical", "child_support"}
 RISK_LEVELS = {"low", "medium", "high"}
 
 
+# ============================================================
+# COUNTRY COMPLIANCE FIELDS
+# ============================================================
+# Each country gets its own additional record-collection requirements,
+# grouped for the UI (identity / official / family / school / health).
+# `type` ∈ text | textarea | select | yesno | date | number.
+# Field IDs are stable — DO NOT rename without a migration.
+COUNTRY_COMPLIANCE_FIELDS = {
+    # Uganda Ministry of Gender, Labour & Social Development (MGLSD) OVC record set
+    "UG": {
+        "name": "Uganda — MGLSD OVC record",
+        "fields": [
+            # Identity & registration
+            {"id": "birth_cert_no", "label": "Birth certificate number", "type": "text", "group": "identity"},
+            {"id": "birth_registered", "label": "Birth registered with NIRA?", "type": "yesno", "group": "identity"},
+            {"id": "national_id_no", "label": "National ID (NIN)", "type": "text", "group": "identity"},
+            {"id": "tribe", "label": "Tribe / Ethnicity", "type": "text", "group": "identity"},
+            {"id": "religion", "label": "Religion", "type": "select", "group": "identity",
+             "options": ["Christian — Catholic", "Christian — Protestant", "Christian — Pentecostal", "Muslim", "Traditional", "None", "Other"]},
+            # Administrative location (LC structure)
+            {"id": "village", "label": "Village / LC1", "type": "text", "group": "official"},
+            {"id": "parish", "label": "Parish / LC2", "type": "text", "group": "official"},
+            {"id": "sub_county", "label": "Sub-county / LC3", "type": "text", "group": "official"},
+            {"id": "district", "label": "District / LC5", "type": "text", "group": "official"},
+            {"id": "lc1_letter_on_file", "label": "LC1 introduction letter on file?", "type": "yesno", "group": "official"},
+            {"id": "dpo_case_number", "label": "DPO (District Probation Officer) case number", "type": "text", "group": "official"},
+            {"id": "dpo_status", "label": "DPO referral status", "type": "select", "group": "official",
+             "options": ["Not referred", "Referred — pending", "Registered", "Case closed"]},
+            # Vulnerability
+            {"id": "vulnerability_status", "label": "Vulnerability status", "type": "select", "group": "family",
+             "options": ["Single orphan (mother)", "Single orphan (father)", "Double orphan", "Abandoned",
+                         "Child-headed household", "Child with disability", "Living with HIV", "Living with chronic illness",
+                         "Refugee", "Street-connected", "Other vulnerable"]},
+            {"id": "vulnerability_score", "label": "Vulnerability score (0–100)", "type": "number", "group": "family"},
+            {"id": "living_arrangement", "label": "Living arrangement", "type": "select", "group": "family",
+             "options": ["With both biological parents", "With single parent", "With grandparent(s)",
+                         "With other relatives", "Foster family", "Institutional / shelter", "Independent"]},
+            # School practicalities (very Uganda-specific)
+            {"id": "school_distance_km", "label": "Distance to school (km)", "type": "number", "group": "school"},
+            {"id": "school_transport", "label": "Means of getting to school", "type": "select", "group": "school",
+             "options": ["Walk", "Bicycle", "Boda-boda", "Parent transport", "School bus", "Public transport"]},
+            {"id": "school_meal_received", "label": "Receives school meal?", "type": "yesno", "group": "school"},
+            {"id": "has_uniform", "label": "Has full school uniform?", "type": "yesno", "group": "school"},
+            {"id": "has_scholastic_materials", "label": "Has scholastic materials (books, pens)?", "type": "yesno", "group": "school"},
+            # Health
+            {"id": "immunisation_complete", "label": "Immunisation up-to-date?", "type": "yesno", "group": "health"},
+            {"id": "has_mosquito_net", "label": "Has a mosquito net at home?", "type": "yesno", "group": "health"},
+            {"id": "last_health_screening", "label": "Last health screening date", "type": "date", "group": "health"},
+            {"id": "nhif_registered", "label": "Health insurance registered?", "type": "yesno", "group": "health"},
+            {"id": "nutrition_status", "label": "Nutrition status", "type": "select", "group": "health",
+             "options": ["Good", "Moderate concern", "Severe — MUAC red", "Under treatment"]},
+            # Free-form
+            {"id": "additional_notes", "label": "Additional compliance notes", "type": "textarea", "group": "family"},
+        ],
+    },
+    # Kenya — adapted from Kenyan Children's Department / Department of Children Services
+    "KE": {
+        "name": "Kenya — Children's Department record",
+        "fields": [
+            {"id": "birth_notification_no", "label": "Birth notification number", "type": "text", "group": "identity"},
+            {"id": "national_id_no", "label": "Huduma / National ID (if applicable)", "type": "text", "group": "identity"},
+            {"id": "tribe", "label": "Tribe / Ethnicity", "type": "text", "group": "identity"},
+            {"id": "religion", "label": "Religion", "type": "text", "group": "identity"},
+            {"id": "ward", "label": "Ward", "type": "text", "group": "official"},
+            {"id": "sub_county", "label": "Sub-county", "type": "text", "group": "official"},
+            {"id": "county", "label": "County", "type": "text", "group": "official"},
+            {"id": "co_referral_number", "label": "Children's Officer case number", "type": "text", "group": "official"},
+            {"id": "vulnerability_status", "label": "Vulnerability status", "type": "select", "group": "family",
+             "options": ["OVC", "Disabled", "Living with HIV", "Refugee", "Street-connected", "Abused", "Other"]},
+            {"id": "living_arrangement", "label": "Living arrangement", "type": "select", "group": "family",
+             "options": ["With parents", "With relatives", "Foster", "Institutional", "Independent"]},
+            {"id": "nhif_member", "label": "NHIF member?", "type": "yesno", "group": "health"},
+            {"id": "immunisation_complete", "label": "Immunisation up-to-date?", "type": "yesno", "group": "health"},
+            {"id": "additional_notes", "label": "Additional compliance notes", "type": "textarea", "group": "family"},
+        ],
+    },
+    # Haiti — IBESR (Institut du Bien-Être Social et de Recherches)
+    "HT": {
+        "name": "Haïti — IBESR record",
+        "fields": [
+            {"id": "acte_naissance_no", "label": "Acte de naissance (numéro)", "type": "text", "group": "identity"},
+            {"id": "section_communale", "label": "Section communale", "type": "text", "group": "official"},
+            {"id": "commune", "label": "Commune", "type": "text", "group": "official"},
+            {"id": "departement", "label": "Département", "type": "text", "group": "official"},
+            {"id": "ibesr_dossier_no", "label": "IBESR dossier number", "type": "text", "group": "official"},
+            {"id": "vulnerability_status", "label": "Statut de vulnérabilité", "type": "select", "group": "family",
+             "options": ["Orphelin de mère", "Orphelin de père", "Orphelin total", "Enfant restavèk",
+                         "Enfant des rues", "En situation de handicap", "Autre"]},
+            {"id": "living_arrangement", "label": "Arrangement de vie", "type": "select", "group": "family",
+             "options": ["Parents biologiques", "Famille élargie", "Famille d'accueil", "Institution", "Indépendant"]},
+            {"id": "school_meal_received", "label": "Reçoit un repas à l'école?", "type": "yesno", "group": "school"},
+            {"id": "immunisation_complete", "label": "Vaccinations à jour?", "type": "yesno", "group": "health"},
+            {"id": "additional_notes", "label": "Notes additionnelles", "type": "textarea", "group": "family"},
+        ],
+    },
+    # Thailand — basic compliance for sponsored children
+    "TH": {
+        "name": "Thailand — basic welfare record",
+        "fields": [
+            {"id": "thai_id_no", "label": "Thai national ID (13-digit)", "type": "text", "group": "identity"},
+            {"id": "ethnicity", "label": "Ethnicity / Hill tribe", "type": "text", "group": "identity"},
+            {"id": "religion", "label": "Religion", "type": "text", "group": "identity"},
+            {"id": "tambon", "label": "Tambon (sub-district)", "type": "text", "group": "official"},
+            {"id": "amphoe", "label": "Amphoe (district)", "type": "text", "group": "official"},
+            {"id": "province", "label": "Province", "type": "text", "group": "official"},
+            {"id": "vulnerability_status", "label": "Vulnerability status", "type": "select", "group": "family",
+             "options": ["Orphan", "Stateless", "Migrant family", "Disabled", "Trafficking risk", "Other"]},
+            {"id": "living_arrangement", "label": "Living arrangement", "type": "select", "group": "family",
+             "options": ["With parents", "With relatives", "Foster", "Boarding school", "Children's home"]},
+            {"id": "uc_card_no", "label": "Universal Coverage health card no.", "type": "text", "group": "health"},
+            {"id": "additional_notes", "label": "Additional notes", "type": "textarea", "group": "family"},
+        ],
+    },
+    # USA — minimal (HIPAA-cautious — no SSN stored here)
+    "US": {
+        "name": "United States — basic welfare record",
+        "fields": [
+            {"id": "state", "label": "State", "type": "text", "group": "official"},
+            {"id": "county", "label": "County", "type": "text", "group": "official"},
+            {"id": "school_district", "label": "School district", "type": "text", "group": "school"},
+            {"id": "iep_504_plan", "label": "IEP / 504 plan in place?", "type": "yesno", "group": "school"},
+            {"id": "free_reduced_lunch", "label": "Free/reduced lunch program", "type": "yesno", "group": "school"},
+            {"id": "vulnerability_status", "label": "Vulnerability status", "type": "select", "group": "family",
+             "options": ["Foster care", "Unhoused", "Refugee/asylum", "Disability", "Single-parent", "Other"]},
+            {"id": "additional_notes", "label": "Additional compliance notes", "type": "textarea", "group": "family"},
+        ],
+    },
+    # Generic fallback for any country not yet templated
+    "GENERIC": {
+        "name": "Generic welfare record",
+        "fields": [
+            {"id": "national_id_no", "label": "National / Government ID", "type": "text", "group": "identity"},
+            {"id": "ethnicity", "label": "Ethnicity", "type": "text", "group": "identity"},
+            {"id": "religion", "label": "Religion", "type": "text", "group": "identity"},
+            {"id": "village", "label": "Village / Neighbourhood", "type": "text", "group": "official"},
+            {"id": "district", "label": "District / Region", "type": "text", "group": "official"},
+            {"id": "vulnerability_status", "label": "Vulnerability status", "type": "select", "group": "family",
+             "options": ["Orphan", "Single-parent household", "Disabled", "Refugee", "Other vulnerable"]},
+            {"id": "living_arrangement", "label": "Living arrangement", "type": "select", "group": "family",
+             "options": ["With parents", "With relatives", "Foster", "Institutional"]},
+            {"id": "additional_notes", "label": "Additional notes", "type": "textarea", "group": "family"},
+        ],
+    },
+}
+
+
+def _country_to_code(country: str) -> str:
+    if not country:
+        return "GENERIC"
+    s = country.strip().lower()
+    if s in {"ug", "uga", "uganda"}: return "UG"
+    if s in {"ke", "ken", "kenya"}: return "KE"
+    if s in {"ht", "hti", "haiti", "haïti"}: return "HT"
+    if s in {"th", "tha", "thailand"}: return "TH"
+    if s in {"us", "usa", "united states", "united states of america"}: return "US"
+    # Already a code?
+    if country.upper() in COUNTRY_COMPLIANCE_FIELDS:
+        return country.upper()
+    return "GENERIC"
+
+
+async def _resolve_country_for_case(case: dict) -> str:
+    """Return ISO-ish country code from the case's location."""
+    loc_id = case.get("location_id")
+    if not loc_id:
+        return "GENERIC"
+    loc = await db.locations.find_one({"id": loc_id}, {"_id": 0, "country": 1, "parent_id": 1})
+    if loc and loc.get("country"):
+        return _country_to_code(loc["country"])
+    # Walk parent chain (sub-locations may not have country set)
+    parent_id = (loc or {}).get("parent_id")
+    while parent_id:
+        parent = await db.locations.find_one({"id": parent_id}, {"_id": 0, "country": 1, "parent_id": 1})
+        if not parent:
+            break
+        if parent.get("country"):
+            return _country_to_code(parent["country"])
+        parent_id = parent.get("parent_id")
+    return "GENERIC"
+
+
 def _can_manage_social_work(user: dict) -> bool:
     """Manager+ OR explicit social_work role/department."""
     role = user.get("role", "")
@@ -156,13 +337,286 @@ async def get_case(case_id: str, current_user: dict = Depends(require_staff)):
     # Attach computed aggregates
     case["payments_total"] = await _case_payments_summary(case_id)
     case["notes_count"] = await db.social_case_notes.count_documents({"case_id": case_id})
+    # Attach the country-compliance schema the UI should render
+    case["compliance_country_code"] = await _resolve_country_for_case(case)
     return case
+
+
+# ============================================================
+# COUNTRY COMPLIANCE SCHEMA + PROFILE REPORT PDF
+# ============================================================
+
+@router.get("/compliance/{country}")
+async def get_compliance_schema(country: str, current_user: dict = Depends(require_staff)):
+    """Return the field schema for a country code or human name (e.g. 'Uganda').
+    The UI uses this to dynamically render the Compliance tab."""
+    code = _country_to_code(country)
+    schema = COUNTRY_COMPLIANCE_FIELDS.get(code) or COUNTRY_COMPLIANCE_FIELDS["GENERIC"]
+    return {"country_code": code, **schema}
+
+
+@router.get("/compliance")
+async def list_compliance_countries(current_user: dict = Depends(require_staff)):
+    """List all available country compliance templates (for picker UIs / admin)."""
+    return [
+        {"country_code": code, "name": schema["name"], "field_count": len(schema["fields"])}
+        for code, schema in COUNTRY_COMPLIANCE_FIELDS.items()
+    ]
+
+
+@router.get("/cases/{case_id}/report")
+async def generate_case_report(case_id: str, current_user: dict = Depends(require_staff)):
+    """Generate a branded, presentation-ready Beneficiary Profile Report PDF.
+    Includes identity, education, medical, family, compliance (country-specific),
+    goals, payments YTD, and recent case notes. Suitable for school / official handoff."""
+    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    notes = await db.social_case_notes.find(
+        {"case_id": case_id, "is_confidential": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(20)
+    payments = await db.social_child_payments.find({"case_id": case_id}, {"_id": 0}).sort("date", -1).to_list(500)
+    school = None
+    if (case.get("education") or {}).get("school_id"):
+        school = await db.social_schools.find_one(
+            {"id": case["education"]["school_id"]}, {"_id": 0, "name": 1, "address": 1, "head_teacher": 1, "phone": 1}
+        )
+    country_code = await _resolve_country_for_case(case)
+    compliance_schema = COUNTRY_COMPLIANCE_FIELDS.get(country_code, COUNTRY_COMPLIANCE_FIELDS["GENERIC"])
+    compliance_values = case.get("compliance") or {}
+
+    html = _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values)
+
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Case report PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = (case.get("subject_name") or "beneficiary").replace(" ", "_")[:40]
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="profile-{safe_name}-{case_id}.pdf"'},
+    )
+
+
+def _esc(value) -> str:
+    """Minimal HTML escape for values flowing into the PDF template."""
+    if value is None:
+        return ""
+    s = str(value)
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&#39;"))
+
+
+def _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values) -> str:
+    """Build a branded HTML report — clean, presentation-ready for school/official handoff."""
+    edu = case.get("education") or {}
+    med = case.get("medical") or {}
+    fam = case.get("family") or {}
+    goals = case.get("goals") or []
+
+    # Compliance grouped by 'group' key for readable layout
+    groups = {"identity": "Identity & Registration", "official": "Administrative & Official",
+              "family": "Family & Vulnerability", "school": "School", "health": "Health"}
+    fields_by_group = {g: [] for g in groups}
+    for f in compliance_schema.get("fields", []):
+        g = f.get("group", "family")
+        fields_by_group.setdefault(g, []).append(f)
+
+    def _val(v):
+        if v is None or v == "":
+            return "<em class='muted'>—</em>"
+        if isinstance(v, bool):
+            return "Yes" if v else "No"
+        if isinstance(v, list):
+            return ", ".join(_esc(x) for x in v) if v else "<em class='muted'>—</em>"
+        return _esc(v)
+
+    compliance_html = ""
+    for g_key, g_label in groups.items():
+        fields = fields_by_group.get(g_key, [])
+        rows = []
+        for f in fields:
+            raw = compliance_values.get(f["id"])
+            if f.get("type") == "yesno":
+                raw = bool(raw) if raw is not None else None
+            rows.append(f"<tr><td class='label'>{_esc(f['label'])}</td><td>{_val(raw)}</td></tr>")
+        if rows:
+            compliance_html += f"<h3>{_esc(g_label)}</h3><table class='kv'>{''.join(rows)}</table>"
+
+    payments_total_in = sum(float(p.get("amount") or 0) for p in payments if p.get("direction") == "in")
+    payments_total_out = sum(float(p.get("amount") or 0) for p in payments if p.get("direction") == "out")
+    payment_rows = "".join(
+        f"<tr><td>{_esc(p.get('date',''))}</td><td class='cap'>{_esc(p.get('kind',''))}</td>"
+        f"<td>{_esc(p.get('paid_to',''))}</td>"
+        f"<td style='text-align:right'>{_esc(p.get('currency','UGX'))} {float(p.get('amount') or 0):,.2f}</td></tr>"
+        for p in payments[:30]
+    ) or "<tr><td colspan='4' class='muted center'>No payments on record.</td></tr>"
+
+    note_rows = "".join(
+        f"<div class='note'><div class='note-h'><span class='cap'>{_esc(n.get('kind',''))}</span> "
+        f"<span class='muted'>· {_esc((n.get('created_at') or '')[:10])} · {_esc(n.get('created_by_name',''))}</span></div>"
+        f"<p>{_esc(n.get('body',''))}</p></div>"
+        for n in notes[:10]
+    ) or "<p class='muted'>No notes on record (excluding confidential).</p>"
+
+    goals_html = ""
+    if goals:
+        goals_html = "<ul class='goals'>" + "".join(
+            f"<li><strong>{_esc(g.get('goal',''))}</strong>"
+            + (f" — target {_esc(g.get('target_date',''))}" if g.get('target_date') else '')
+            + (f" <span class='muted'>({int(g.get('progress_pct',0))}% complete)</span>" if g.get('progress_pct') is not None else '')
+            + "</li>"
+            for g in goals
+        ) + "</ul>"
+    else:
+        goals_html = "<p class='muted'>No goals on record.</p>"
+
+    school_block = ""
+    if school:
+        school_block = (
+            f"<p><strong>{_esc(school.get('name',''))}</strong>"
+            + (f" — {_esc(school.get('address',''))}" if school.get('address') else '')
+            + "</p>"
+            + (f"<p class='muted'>Head Teacher: {_esc(school.get('head_teacher',''))}{' · '+_esc(school.get('phone','')) if school.get('phone') else ''}</p>" if school.get('head_teacher') or school.get('phone') else '')
+        )
+
+    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<style>
+  body {{ font-family: Arial, sans-serif; color: #1a1a2e; font-size: 11px; padding: 18mm; }}
+  h1 {{ font-size: 22px; margin: 0; color: #1a1a2e; }}
+  h2 {{ font-size: 14px; margin: 18px 0 6px 0; padding-bottom: 4px; border-bottom: 2px solid #48a9c5; color:#1a1a2e; }}
+  h3 {{ font-size: 11px; margin: 10px 0 4px 0; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }}
+  .head {{ display: flex; justify-content: space-between; border-bottom: 2px solid #1a1a2e; padding-bottom: 10px; align-items: flex-start; }}
+  .logo {{ height: 36px; }}
+  .meta {{ color: #64748b; font-size: 10px; }}
+  .muted {{ color: #94a3b8; }}
+  .center {{ text-align: center; padding: 14px; }}
+  .cap {{ text-transform: capitalize; }}
+  .subject {{ display: flex; gap: 14px; align-items: center; margin-top: 14px; }}
+  .photo {{ height: 64px; width: 64px; border-radius: 50%; object-fit: cover; border: 2px solid #e2e8f0; }}
+  .photo-placeholder {{ height: 64px; width: 64px; border-radius: 50%; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: #94a3b8; }}
+  .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 9px; margin-right: 4px; border: 1px solid; }}
+  .pill-cat {{ background: #f3e8ff; color: #6b21a8; border-color: #e9d5ff; }}
+  .pill-risk-low {{ background: #d1fae5; color: #065f46; border-color: #6ee7b7; }}
+  .pill-risk-medium {{ background: #fef3c7; color: #92400e; border-color: #fcd34d; }}
+  .pill-risk-high {{ background: #fee2e2; color: #991b1b; border-color: #fca5a5; }}
+  table.kv {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10px; }}
+  table.kv td {{ padding: 3px 5px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }}
+  table.kv td.label {{ width: 40%; color: #64748b; }}
+  table.payments {{ width: 100%; border-collapse: collapse; font-size: 10px; }}
+  table.payments th {{ background: #1a1a2e; color: white; padding: 5px; text-align: left; font-size: 9px; text-transform: uppercase; }}
+  table.payments td {{ padding: 4px 5px; border-bottom: 1px solid #e2e8f0; }}
+  .totals {{ margin-top: 6px; text-align: right; font-size: 11px; }}
+  .note {{ border-left: 3px solid #48a9c5; padding: 4px 8px; margin: 4px 0; background: #f8fafc; }}
+  .note-h {{ font-size: 9px; margin-bottom: 2px; }}
+  .note p {{ margin: 0; font-size: 10px; white-space: pre-wrap; }}
+  ul.goals {{ padding-left: 16px; margin: 4px 0; }}
+  ul.goals li {{ margin-bottom: 3px; font-size: 10px; }}
+  .footer {{ margin-top: 22mm; text-align: center; font-size: 9px; color: #64748b; }}
+  .sig {{ display: flex; justify-content: space-between; margin-top: 14mm; font-size: 10px; color: #64748b; }}
+  .sig div {{ width: 45%; border-top: 1px solid #1a1a2e; padding-top: 3px; text-align: center; }}
+</style></head><body>
+  <div class='head'>
+    <div>
+      <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' class='logo' />
+      <p class='meta' style='margin: 6px 0 0 0'>58:12 Global — Social Work &amp; Welfare</p>
+      <p class='meta' style='margin: 0'>Confidential Beneficiary Profile Report</p>
+    </div>
+    <div style='text-align: right'>
+      <h1>Profile Report</h1>
+      <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p class='meta'>Case ID: {_esc(case.get('id',''))}</p>
+    </div>
+  </div>
+
+  <div class='subject'>
+    {f"<img src='{_esc(case.get('subject_photo_url'))}' class='photo' />" if case.get('subject_photo_url') else f"<div class='photo-placeholder'>{_esc((case.get('subject_name') or '?')[:1])}</div>"}
+    <div>
+      <h1 style='font-size:18px'>{_esc(case.get('subject_name',''))}</h1>
+      <p style='margin: 3px 0; font-size: 10px;'>
+        {("DOB " + _esc(case.get('subject_dob','')[:10])) if case.get('subject_dob') else ''}
+        {(" · " + _esc(case.get('subject_kind',''))) if case.get('subject_kind') else ''}
+      </p>
+      <p style='margin: 4px 0 0 0'>
+        <span class='pill pill-cat'>{_esc(case.get('category','').replace('_', ' ').title())}</span>
+        <span class='pill pill-risk-{_esc(case.get('risk_level','low'))}'>{_esc(case.get('risk_level','low').title())} risk</span>
+        <span class='pill' style='background:#f1f5f9;color:#475569;border-color:#cbd5e1'>{_esc(case.get('status','').title())}</span>
+      </p>
+    </div>
+  </div>
+
+  {f"<p class='meta' style='margin-top:8px'>{_esc(case.get('summary',''))}</p>" if case.get('summary') else ''}
+
+  <h2>Education</h2>
+  <table class='kv'>
+    <tr><td class='label'>Grade / Level</td><td>{_val(edu.get('grade'))}</td></tr>
+    <tr><td class='label'>School</td><td>{_val(edu.get('school_name'))}</td></tr>
+    <tr><td class='label'>Enrollment date</td><td>{_val((edu.get('enrollment_date') or '')[:10])}</td></tr>
+    <tr><td class='label'>Extracurricular</td><td>{_val(edu.get('extracurricular'))}</td></tr>
+  </table>
+  {school_block}
+
+  <h2>Medical</h2>
+  <table class='kv'>
+    <tr><td class='label'>Conditions</td><td>{_val(med.get('conditions'))}</td></tr>
+    <tr><td class='label'>Allergies</td><td>{_val(med.get('allergies'))}</td></tr>
+    <tr><td class='label'>Receives medical support</td><td>{_val(med.get('receives_medical_support'))}</td></tr>
+    <tr><td class='label'>Primary doctor / clinic</td><td>{_val(med.get('primary_doctor'))}</td></tr>
+    {f"<tr><td class='label'>Notes</td><td>{_esc(med.get('notes'))}</td></tr>" if med.get('notes') else ''}
+  </table>
+
+  <h2>Family Situation</h2>
+  <table class='kv'>
+    <tr><td class='label'>Guardians</td><td>{_val(fam.get('guardians'))}</td></tr>
+    <tr><td class='label'>Siblings</td><td>{_val(fam.get('siblings'))}</td></tr>
+    <tr><td class='label'>Household income</td><td>{_val(fam.get('household_income'))}</td></tr>
+    {f"<tr><td class='label'>Notes</td><td>{_esc(fam.get('notes'))}</td></tr>" if fam.get('notes') else ''}
+  </table>
+
+  <h2>{_esc(compliance_schema.get('name', 'Compliance'))}</h2>
+  {compliance_html or "<p class='muted'>No compliance fields recorded.</p>"}
+
+  <h2>Goals &amp; Care Plan</h2>
+  {goals_html}
+
+  <h2>Payments on Record</h2>
+  <table class='payments'>
+    <thead><tr><th>Date</th><th>Kind</th><th>Paid to / Source</th><th style='text-align:right'>Amount</th></tr></thead>
+    <tbody>{payment_rows}</tbody>
+  </table>
+  <p class='totals'>
+    <strong>Out:</strong> {payments_total_out:,.2f}
+    &nbsp;·&nbsp;
+    <strong>In (sponsor support):</strong> {payments_total_in:,.2f}
+  </p>
+
+  <h2>Recent Case Notes</h2>
+  {note_rows}
+
+  <div class='sig'>
+    <div>Social Worker — name &amp; signature</div>
+    <div>Supervisor — name &amp; signature</div>
+  </div>
+
+  <div class='footer'>
+    Confidential — to be shared only with authorised school officials, government welfare officers, or approved sponsors.<br/>
+    Document generated by 58:12 Connect · {_esc(case.get('id',''))}
+  </div>
+</body></html>"""
 
 
 @router.put("/cases/{case_id}")
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
-               "risk_level", "sponsor_member_id"}
+               "risk_level", "sponsor_member_id", "compliance"}
     if "status" in data and data["status"] not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(CASE_STATUSES)}")
     if data.get("status") == "discharged" and not _can_manage_social_work(current_user):

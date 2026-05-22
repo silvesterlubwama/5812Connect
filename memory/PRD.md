@@ -6,6 +6,36 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 119 (May 22, 2026)
+**Social Work module — per-country compliance fields + beneficiary profile report PDF.**
+
+### Country compliance schemas
+- ✅ `COUNTRY_COMPLIANCE_FIELDS` config in `social_work.py` defines field schemas for **6 countries**:
+   • **UG (Uganda — MGLSD OVC record, 26 fields)**: birth cert / NIRA / NIN / tribe / religion / LC1-5 / DPO referral / vulnerability status & score / school distance + transport / school meal / uniform / mosquito net / immunisation / NHIF / nutrition (MUAC) — fully aligned with what Uganda's Ministry of Gender, Labour & Social Development asks of OVC programs.
+   • **KE (Kenya — Children's Department, 13 fields)**, **HT (Haïti — IBESR, 10 fields)**, **TH (Thailand, 10 fields)**, **US (7 fields, HIPAA-cautious — no SSN)**, **GENERIC fallback (8 fields)**.
+- ✅ Fields are grouped (`identity / official / family / school / health`) for clean UI rendering. Types: text / textarea / select / yesno / date / number.
+- ✅ `GET /api/social-work/compliance/{country}` returns the schema. Country auto-resolves from the case's `location.country` (walking the parent chain for sub-locations). Case detail attaches `compliance_country_code` so the UI knows which schema to load.
+
+### Profile report PDF
+- ✅ `GET /api/social-work/cases/{id}/report` produces a **branded, presentation-ready PDF** via WeasyPrint. Contents in order:
+   1. Subject header (photo, name, DOB, category pill, risk pill, status pill, summary)
+   2. Education (grade, school, enrollment, extracurricular) + school contact block
+   3. Medical (conditions, allergies, support flag, primary doctor, notes)
+   4. Family situation (guardians, siblings, household income, notes)
+   5. **Country-specific compliance** — grouped, alphabetised within group
+   6. Goals & care plan with target dates + progress %
+   7. Payments on record with totals (Out / In) and last 30 entries
+   8. Recent (non-confidential) case notes
+   9. Two signature lines (Social Worker, Supervisor)
+   10. Confidentiality footer
+- ✅ PDF validated end-to-end (18KB, %PDF-1.7 header).
+
+### Frontend
+- ✅ Case detail dialog: new **Compliance tab** (between Family and Goals) dynamically renders the country-specific field schema with proper input types (yes/no select, dropdowns, dates, numbers, text, textarea), grouped by section with section headers.
+- ✅ **"Download Profile Report"** button added to the dialog title bar — fetches the PDF as a blob and downloads with a clean filename.
+
+All 16 pytest smoke tests still PASS. Lint clean.
+
 ## Recently Resolved — Iteration 118 (May 22, 2026)
 **New Social Work & Welfare module — full case-management + school-portal system.**
 

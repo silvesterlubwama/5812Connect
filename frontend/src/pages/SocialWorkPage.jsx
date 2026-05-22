@@ -20,7 +20,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, Search } from 'lucide-react';
+import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, Search, FileDown, Globe } from 'lucide-react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -493,13 +493,15 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
   const [caseDoc, setCaseDoc] = useState(null);
   const [notes, setNotes] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [complianceSchema, setComplianceSchema] = useState(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(null);  // local edits (education/medical/family/goals)
+  const [complianceEdits, setComplianceEdits] = useState({});
   const [newNote, setNewNote] = useState({ kind: 'visit', body: '', is_confidential: false });
   const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
 
   const reload = useCallback(async () => {
-    if (!caseId) { setCaseDoc(null); setNotes([]); setPayments([]); return; }
+    if (!caseId) { setCaseDoc(null); setNotes([]); setPayments([]); setComplianceSchema(null); return; }
     setLoading(true);
     try {
       const [cR, nR, pR] = await Promise.all([
@@ -514,8 +516,15 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
         family: cR.data.family || {},
         goals: cR.data.goals || [],
       });
+      setComplianceEdits(cR.data.compliance || {});
       setNotes(nR.data || []);
       setPayments(pR.data || []);
+      // Pull the country-specific schema based on what the backend resolved
+      const code = cR.data.compliance_country_code || 'GENERIC';
+      try {
+        const sR = await api.get(`/social-work/compliance/${code}`);
+        setComplianceSchema(sR.data);
+      } catch { setComplianceSchema(null); }
     } finally { setLoading(false); }
   }, [caseId]);
   useEffect(() => { reload(); }, [reload]);
@@ -526,6 +535,27 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
       toast.success('Saved');
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const saveCompliance = async () => {
+    try {
+      await api.put(`/social-work/cases/${caseId}`, { compliance: complianceEdits });
+      toast.success('Compliance fields saved');
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const downloadReport = async () => {
+    try {
+      const r = await api.get(`/social-work/cases/${caseId}/report`, { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `profile-${(caseDoc?.subject_name || 'beneficiary').replace(/\s+/g, '_')}-${caseId}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Profile report downloaded');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Download failed'); }
   };
 
   const updateStatus = async (status) => {
@@ -574,6 +604,9 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
           <DialogTitle className="flex items-center gap-2">
             {caseDoc?.subject_photo_url && <img src={caseDoc.subject_photo_url} alt="" className="h-7 w-7 rounded-full object-cover" />}
             {caseDoc?.subject_name || 'Case'}
+            <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={downloadReport} disabled={!caseDoc} data-testid="cd-download-report-btn">
+              <FileDown size={11} className="mr-1" />Download Profile Report
+            </Button>
           </DialogTitle>
           {caseDoc && (
             <DialogDescription className="text-xs flex flex-wrap items-center gap-2">
@@ -594,6 +627,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
               <TabsTrigger value="education" data-testid="cd-tab-education"><BookOpen size={11} className="mr-1" />Education</TabsTrigger>
               <TabsTrigger value="medical" data-testid="cd-tab-medical"><Heart size={11} className="mr-1" />Medical</TabsTrigger>
               <TabsTrigger value="family" data-testid="cd-tab-family"><Home size={11} className="mr-1" />Family</TabsTrigger>
+              <TabsTrigger value="compliance" data-testid="cd-tab-compliance"><Globe size={11} className="mr-1" />Compliance</TabsTrigger>
               <TabsTrigger value="goals" data-testid="cd-tab-goals"><Target size={11} className="mr-1" />Goals</TabsTrigger>
               <TabsTrigger value="payments" data-testid="cd-tab-payments"><DollarSign size={11} className="mr-1" />Payments ({payments.length})</TabsTrigger>
               <TabsTrigger value="notes" data-testid="cd-tab-notes"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
@@ -715,6 +749,99 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                 <Textarea rows={3} value={editing.family?.notes || ''} onChange={e => setEditing({ ...editing, family: { ...editing.family, notes: e.target.value } })} />
               </div>
               <Button size="sm" onClick={() => saveSection('family')} data-testid="cd-family-save">Save family</Button>
+            </TabsContent>
+
+            {/* COMPLIANCE — country-specific fields */}
+            <TabsContent value="compliance" className="space-y-3 mt-3">
+              {!complianceSchema ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No compliance template for this country.</p>
+              ) : (
+                <>
+                  <div className="bg-primary/5 border border-primary/20 rounded p-2.5 text-xs flex items-center gap-2" data-testid="cd-compliance-header">
+                    <Globe size={13} className="text-primary" />
+                    <div>
+                      <p className="font-medium">{complianceSchema.name}</p>
+                      <p className="text-muted-foreground text-[10px]">{complianceSchema.fields.length} fields recommended for this country.</p>
+                    </div>
+                  </div>
+                  {(() => {
+                    const groupLabels = {
+                      identity: 'Identity & Registration',
+                      official: 'Administrative & Official',
+                      family: 'Family & Vulnerability',
+                      school: 'School',
+                      health: 'Health',
+                    };
+                    const groups = {};
+                    complianceSchema.fields.forEach(f => {
+                      const g = f.group || 'family';
+                      if (!groups[g]) groups[g] = [];
+                      groups[g].push(f);
+                    });
+                    return Object.keys(groupLabels).filter(g => groups[g]?.length).map(g => (
+                      <div key={g} className="space-y-2">
+                        <h4 className="text-xs uppercase text-muted-foreground font-semibold pt-2 border-t">{groupLabels[g]}</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {groups[g].map(f => {
+                            const v = complianceEdits[f.id];
+                            const setV = (val) => setComplianceEdits({ ...complianceEdits, [f.id]: val });
+                            const baseLabel = <Label className="text-xs">{f.label}</Label>;
+                            const tid = `cd-compliance-${f.id}`;
+                            if (f.type === 'yesno') return (
+                              <div key={f.id} className={`space-y-1 ${f.type === 'textarea' ? 'sm:col-span-2' : ''}`}>
+                                {baseLabel}
+                                <Select value={v === true ? 'yes' : v === false ? 'no' : ''} onValueChange={val => setV(val === 'yes')}>
+                                  <SelectTrigger className="h-8 text-xs" data-testid={tid}><SelectValue placeholder="—" /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="yes">Yes</SelectItem>
+                                    <SelectItem value="no">No</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            );
+                            if (f.type === 'select') return (
+                              <div key={f.id} className="space-y-1">
+                                {baseLabel}
+                                <Select value={v || ''} onValueChange={setV}>
+                                  <SelectTrigger className="h-8 text-xs" data-testid={tid}><SelectValue placeholder="Choose..." /></SelectTrigger>
+                                  <SelectContent>
+                                    {(f.options || []).map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            );
+                            if (f.type === 'textarea') return (
+                              <div key={f.id} className="space-y-1 sm:col-span-2">
+                                {baseLabel}
+                                <Textarea rows={2} value={v || ''} onChange={e => setV(e.target.value)} data-testid={tid} />
+                              </div>
+                            );
+                            if (f.type === 'date') return (
+                              <div key={f.id} className="space-y-1">
+                                {baseLabel}
+                                <Input type="date" value={v || ''} onChange={e => setV(e.target.value)} className="h-8 text-xs" data-testid={tid} />
+                              </div>
+                            );
+                            if (f.type === 'number') return (
+                              <div key={f.id} className="space-y-1">
+                                {baseLabel}
+                                <Input type="number" step="0.1" value={v ?? ''} onChange={e => setV(e.target.value === '' ? null : parseFloat(e.target.value))} className="h-8 text-xs" data-testid={tid} />
+                              </div>
+                            );
+                            return (
+                              <div key={f.id} className="space-y-1">
+                                {baseLabel}
+                                <Input value={v || ''} onChange={e => setV(e.target.value)} className="h-8 text-xs" data-testid={tid} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                  <Button size="sm" onClick={saveCompliance} data-testid="cd-compliance-save">Save compliance fields</Button>
+                </>
+              )}
             </TabsContent>
 
             {/* GOALS */}
