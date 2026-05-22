@@ -138,7 +138,19 @@ export default function InvoicesTab({ products = [], onConverted }) {
       toast.success(`Sale recorded — receipt ${res.data.receipt_number}`);
       fetchInvoices();
       if (onConverted) onConverted(res.data);
-    } catch (e) { toast.error(e.response?.data?.detail || 'Conversion failed'); }
+    } catch (e) {
+      let msg = e.response?.data?.detail;
+      if (typeof msg === 'object' && msg !== null) {
+        // Insufficient stock returns { error, items: [...] } — surface both
+        if (msg.error && Array.isArray(msg.items)) {
+          msg = `${msg.error}: ${msg.items.join('; ')}`;
+        } else {
+          msg = JSON.stringify(msg);
+        }
+      }
+      toast.error(msg || 'Conversion failed');
+      console.error('Invoice convert error:', e.response?.data || e);
+    }
   };
 
   const filtered = invoices.filter(i => {

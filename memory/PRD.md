@@ -6,6 +6,32 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 120 (May 22, 2026)
+**4 user-reported issues fixed.**
+
+### 1. New customer name auto-saved to DB on sale
+- ✅ `_ensure_customer_account()` in `routers/sales.py` runs after every sale create that lacks `customer_id`:
+   • De-dup match: by phone first (most reliable), then by name + location_id (case-insensitive exact).
+   • If matched: bump `total_purchases`, `total_spent`, append to `receipt_history`.
+   • If new: insert into `customer_accounts` with `created_from_sale` audit, then back-fill `customer_id` on the sale.
+- ✅ Skips walk-in names (`Walk-in`, `Walk-in Customer`, `anonymous`, `n/a`).
+- ✅ End-to-end verified: 2 sales with same phone share one `cust_*`, aggregates correct (2 purchases, total spent summed).
+
+### 2. Product save errors now surface
+- ✅ `handleSaveProduct` in `ProductsPage.jsx` catch block now logs full error response to console and shows the actual backend `detail` (handles plain string, Pydantic validation arrays, and dicts) in the toast. Same treatment applied to FinancialPage donation + expense, and InvoicesTab convert.
+- This makes the "isn't working" reports diagnosable — production users will now see, e.g., "Failed: location_id: field required" instead of "Failed to save product".
+
+### 3. Invoice → Sale conversion error messaging
+- ✅ Invoice-convert insufficient-stock error (which returns a `{error, items[]}` dict) is now displayed as `"Insufficient stock: Item A: need 5, have 2; …"` instead of `[object Object]`.
+
+### 4. Kiosk parent lookup now surfaces children
+- ✅ `POST /api/kiosk/pin-checkin` with `action: 'lookup'` now returns `children: [...]` (each with id, name, photo_url, date_of_birth) when the matched person has a `family_id` OR is in any child's `parent_ids`.
+- ✅ Kiosk frontend shows a 2-column **tap-to-select** grid of children with photo/name/DOB after the parent is identified. Each tap toggles selection. The Confirm button updates to "Check In (+2 children)" so the parent knows what's about to happen.
+- ✅ `action: 'checkin'` now accepts `child_ids: []` and creates additional `checkin` rows for each selected child with `method: 'parent_phone'`, `parent_id`, `parent_name` set.
+- ✅ Verified: a guest parent (phone last-4 = 9888) returns their child "Little Test Jr" in the lookup response.
+
+All 16 pytest smoke tests still pass. Backend + frontend lint clean.
+
 ## Recently Resolved — Iteration 119 (May 22, 2026)
 **Social Work module — per-country compliance fields + beneficiary profile report PDF.**
 

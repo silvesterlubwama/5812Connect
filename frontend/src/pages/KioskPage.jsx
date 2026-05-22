@@ -453,7 +453,13 @@ export default function KioskPage() {
         try {
           const pinRes = await api.post('/kiosk/pin-checkin', { pin: lookupId.trim(), action: 'lookup' });
           if (pinRes.data?.member_name) {
-            setFoundMember({ id: pinRes.data.member_id || pinRes.data.checkin?.member_id, name: pinRes.data.member_name, role: pinRes.data.type || 'member' });
+            setFoundMember({
+              id: pinRes.data.member_id || pinRes.data.checkin?.member_id,
+              name: pinRes.data.member_name,
+              role: pinRes.data.type || 'member',
+              children: pinRes.data.children || [],
+              _lookup_pin: lookupId.trim(),  // remember PIN so we can call checkin with it
+            });
             return;
           }
         } catch { /* fall through to regular lookup */ }
@@ -467,12 +473,29 @@ export default function KioskPage() {
   const handleMemberCheckin = async (member) => {
     setLoading(true);
     try {
-      await kioskApi.checkin({ member_id: member.id, member_name: member.name, type: member.role === 'Staff' ? 'staff' : 'member', method: 'id' });
-      toast.success(`${member.name} checked in!`);
-      setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 }));
+      // If this came from a PIN/phone lookup AND has selected children, route through
+      // the kiosk pin-checkin endpoint so children are also checked in.
+      const selectedChildren = member.selected_child_ids || [];
+      if (member._lookup_pin && (selectedChildren.length > 0 || (member.children || []).length > 0)) {
+        const res = await api.post('/kiosk/pin-checkin', {
+          pin: member._lookup_pin,
+          action: 'checkin',
+          child_ids: selectedChildren,
+        });
+        const extraCount = (res.data?.child_checkins || []).length;
+        toast.success(`${member.name} checked in!${extraCount ? ` + ${extraCount} child${extraCount === 1 ? '' : 'ren'}` : ''}`);
+        setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 + extraCount }));
+      } else {
+        await kioskApi.checkin({ member_id: member.id, member_name: member.name, type: member.role === 'Staff' ? 'staff' : 'member', method: 'id' });
+        toast.success(`${member.name} checked in!`);
+        setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 }));
+      }
       setFoundMember(null); setLookupId('');
       setView(safeBackView());
-    } catch { toast.error('Check-in failed'); }
+    } catch (err) {
+      const msg = err.response?.data?.detail;
+      toast.error(typeof msg === 'string' ? msg : 'Check-in failed');
+    }
     finally { setLoading(false); }
   };
 
@@ -959,11 +982,48 @@ export default function KioskPage() {
               <Button type="submit" className="w-full h-12 gap-2" disabled={lookupLoading}><Search size={18} /> {lookupLoading ? 'Looking...' : 'Find'}</Button>
             </form>
             {foundMember && (
-              <div className="p-4 rounded-xl border-2 border-primary bg-primary/5">
-                <p className="font-semibold text-lg">{foundMember.name}</p>
-                <p className="text-sm text-muted-foreground">{foundMember.role} &middot; {foundMember.group}</p>
-                <Button className="w-full mt-3 h-12 text-base gap-2" onClick={() => handleMemberCheckin(foundMember)} disabled={loading}>
-                  <UserCheck size={18} /> {loading ? 'Checking in...' : 'Confirm Check-In'}
+              <div className="p-4 rounded-xl border-2 border-primary bg-primary/5 space-y-3" data-testid="kiosk-found-member">
+                <div>
+                  <p className="font-semibold text-lg">{foundMember.name}</p>
+                  <p className="text-sm text-muted-foreground">{foundMember.role} &middot; {foundMember.group}</p>
+                </div>
+                {(foundMember.children || []).length > 0 && (
+                  <div className="border-t pt-3">
+                    <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Children — tap to check in</p>
+                    <div className="grid grid-cols-2 gap-2" data-testid="kiosk-children-list">
+                      {(foundMember.children || []).map(child => {
+                        const selected = (foundMember.selected_child_ids || []).includes(child.id);
+                        return (
+                          <button
+                            key={child.id}
+                            type="button"
+                            data-testid={`kiosk-child-${child.id}`}
+                            onClick={() => {
+                              const sel = new Set(foundMember.selected_child_ids || []);
+                              if (sel.has(child.id)) sel.delete(child.id); else sel.add(child.id);
+                              setFoundMember({ ...foundMember, selected_child_ids: Array.from(sel) });
+                            }}
+                            className={`p-2 rounded-lg border-2 text-left transition ${selected ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              {child.photo_url
+                                ? <img src={child.photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+                                : <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold">{(child.name || '?').slice(0, 1)}</div>}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{child.name}</p>
+                                {child.date_of_birth && <p className="text-[10px] text-muted-foreground">DOB {child.date_of_birth.slice(0, 10)}</p>}
+                              </div>
+                              {selected && <UserCheck size={14} className="text-primary shrink-0" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1">Selected: {(foundMember.selected_child_ids || []).length} of {(foundMember.children || []).length}</p>
+                  </div>
+                )}
+                <Button className="w-full h-12 text-base gap-2" onClick={() => handleMemberCheckin(foundMember)} disabled={loading} data-testid="kiosk-confirm-checkin-btn">
+                  <UserCheck size={18} /> {loading ? 'Checking in...' : (foundMember.selected_child_ids?.length ? `Check In (+${foundMember.selected_child_ids.length} child${foundMember.selected_child_ids.length === 1 ? '' : 'ren'})` : 'Confirm Check-In')}
                 </Button>
               </div>
             )}

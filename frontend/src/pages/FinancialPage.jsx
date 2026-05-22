@@ -209,7 +209,13 @@ export default function FinancialPage() {
       setDonationForm({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: today, notes: '' });
       toast.success('Donation recorded!');
       fetchAll();
-    } catch { toast.error('Failed to save donation'); }
+    } catch (err) {
+      let msg = err.response?.data?.detail;
+      if (Array.isArray(msg)) msg = msg.map(e => `${(e.loc || []).join('.')}: ${e.msg}`).join('; ');
+      else if (typeof msg === 'object' && msg !== null) msg = JSON.stringify(msg);
+      toast.error(`Failed: ${msg || err.message || 'unknown'}`);
+      console.error('Donation save error:', err.response?.data || err);
+    }
     finally { setSaving(false); }
   };
 
@@ -223,7 +229,13 @@ export default function FinancialPage() {
       setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '' });
       toast.success('Expense recorded!');
       fetchAll();
-    } catch { toast.error('Failed to save expense'); }
+    } catch (err) {
+      let msg = err.response?.data?.detail;
+      if (Array.isArray(msg)) msg = msg.map(e => `${(e.loc || []).join('.')}: ${e.msg}`).join('; ');
+      else if (typeof msg === 'object' && msg !== null) msg = JSON.stringify(msg);
+      toast.error(`Failed: ${msg || err.message || 'unknown'}`);
+      console.error('Expense save error:', err.response?.data || err);
+    }
     finally { setSaving(false); }
   };
 

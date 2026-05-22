@@ -117,6 +117,16 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
             {"$inc": {"total_purchases": 1, "total_spent": doc.get("total", 0)},
              "$push": {"receipt_history": {"receipt_number": receipt_number, "total": doc.get("total", 0), "date": doc.get("created_at"), "payment_status": payment_status}}}
         )
+    else:
+        # AUTO-CREATE customer: if a non-walk-in name was typed in for this sale and there's
+        # no customer_id, upsert into customer_accounts so future sales can match by phone/name.
+        try:
+            cust_id = await _ensure_customer_account(doc, current_user)
+            if cust_id:
+                await db.sales.update_one({"id": sale_id}, {"$set": {"customer_id": cust_id}})
+                doc["customer_id"] = cust_id
+        except Exception as e:
+            logger.warning(f"Auto-create customer failed: {e}")
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "sale", sale_id)
     # Auto-post a balanced journal entry if a Sales journal exists for this location
@@ -225,6 +235,70 @@ async def _maybe_spawn_discount_approval(sale: dict, current_user: dict):
         "payment_status": "pending",
         "paid_at": None,
     }})
+
+
+async def _ensure_customer_account(sale: dict, current_user: dict):
+    """If the sale carries a customer name/phone that isn't already in
+    `customer_accounts`, create the row and return its id. Returns None for
+    walk-ins or when nothing usable was provided.
+
+    Matching strategy (case-insensitive):
+      1. phone (if non-empty)
+      2. name (skip walk-in / anonymous-like names)
+    """
+    raw_name = (sale.get("customer_name") or "").strip()
+    phone = (sale.get("customer_phone") or "").strip()
+    if not raw_name and not phone:
+        return None
+    name_lower = raw_name.lower()
+    if not phone and name_lower in {"", "walk-in", "walk-in customer", "walkin", "anonymous", "n/a"}:
+        return None
+    existing = None
+    if phone:
+        existing = await db.customer_accounts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1})
+    if not existing and raw_name and name_lower not in {"walk-in", "walk-in customer"}:
+        # Case-insensitive exact match by name + location to reduce false-positives
+        import re
+        existing = await db.customer_accounts.find_one(
+            {"name": {"$regex": f"^{re.escape(raw_name)}$", "$options": "i"},
+             "location_id": sale.get("location_id")},
+            {"_id": 0, "id": 1, "name": 1},
+        )
+    if existing:
+        # Bump aggregates on the existing account
+        await db.customer_accounts.update_one(
+            {"id": existing["id"]},
+            {"$inc": {"total_purchases": 1, "total_spent": float(sale.get("total") or 0)},
+             "$push": {"receipt_history": {
+                 "receipt_number": sale.get("receipt_number") or sale.get("id"),
+                 "total": float(sale.get("total") or 0),
+                 "date": sale.get("created_at"),
+                 "payment_status": sale.get("payment_status"),
+             }}}
+        )
+        return existing["id"]
+    # Create a new one
+    cust_id = f"cust_{uuid.uuid4().hex[:10]}"
+    doc = {
+        "id": cust_id,
+        "name": raw_name[:120] or "Walk-in Customer",
+        "phone": phone[:40] or None,
+        "email": (sale.get("customer_email") or "").strip()[:120] or None,
+        "location_id": sale.get("location_id"),
+        "total_purchases": 1,
+        "total_spent": float(sale.get("total") or 0),
+        "receipt_history": [{
+            "receipt_number": sale.get("receipt_number") or sale.get("id"),
+            "total": float(sale.get("total") or 0),
+            "date": sale.get("created_at"),
+            "payment_status": sale.get("payment_status"),
+        }],
+        "created_from_sale": sale.get("id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.customer_accounts.insert_one(doc)
+    return cust_id
 
 
 async def _auto_post_sale_journal_entry(sale: dict, current_user: dict):

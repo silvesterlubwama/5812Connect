@@ -834,8 +834,32 @@ async def kiosk_pin_checkin(data: dict):
                     member = {"id": guest["id"], "name": guest.get("name", ""), "role": "guest", "phone": guest.get("phone", "")}
     if not member:
         raise HTTPException(status_code=404, detail="No match found for this PIN or phone number")
+    # If this person is/could be a parent, also surface their children so the kiosk
+    # can offer them as check-in options (kiosk is unauthenticated — staff-only
+    # parent-lookup endpoint won't work for an external parent at a kiosk).
+    children = []
+    try:
+        child_or = []
+        if member.get("family_id"):
+            child_or.append({"family_id": member["family_id"]})
+        if member.get("id"):
+            child_or.append({"parent_ids": member["id"]})
+        if child_or:
+            children = await db.children.find(
+                {"$or": child_or},
+                {"_id": 0, "id": 1, "name": 1, "photo_url": 1, "date_of_birth": 1, "family_id": 1},
+            ).to_list(20)
+    except Exception as e:
+        logger.warning(f"Kiosk children lookup failed: {e}")
+        children = []
     if action == "lookup":
-        return {"member_name": member.get("name"), "member_id": member.get("id"), "role": member.get("role", ""), "type": member.get("role", "member")}
+        return {
+            "member_name": member.get("name"),
+            "member_id": member.get("id"),
+            "role": member.get("role", ""),
+            "type": member.get("role", "member"),
+            "children": children,
+        }
     if action == "checkout":
         last_ci = await db.checkins.find_one(
             {"member_id": member["id"], "check_out_time": None},
@@ -845,6 +869,7 @@ async def kiosk_pin_checkin(data: dict):
             await db.checkins.update_one({"id": last_ci["id"]}, {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat()}})
             return {"message": "Checked out", "member_name": member.get("name")}
         return {"message": "No active check-in", "member_name": member.get("name")}
+    # ---- check in (parent + optional children) ----
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
     checkin = {
         "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
@@ -853,7 +878,29 @@ async def kiosk_pin_checkin(data: dict):
     }
     await db.checkins.insert_one(checkin)
     checkin.pop("_id", None)
-    return {"message": "Checked in", "member_name": member.get("name"), "checkin": checkin}
+    # Optionally check in the parent's children too
+    selected_child_ids = data.get("child_ids") or []
+    child_checkins = []
+    if selected_child_ids and children:
+        for child in children:
+            if child["id"] not in selected_child_ids:
+                continue
+            cci_id = f"ci_{str(uuid.uuid4())[:8]}"
+            cci = {
+                "id": cci_id, "member_id": child["id"], "member_name": child.get("name", ""),
+                "type": "child", "event_id": event_id, "event_name": event_name,
+                "method": "parent_phone", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
+                "parent_id": member["id"], "parent_name": member.get("name", ""),
+            }
+            await db.checkins.insert_one(cci)
+            cci.pop("_id", None)
+            child_checkins.append(cci)
+    return {
+        "message": "Checked in",
+        "member_name": member.get("name"),
+        "checkin": checkin,
+        "child_checkins": child_checkins,
+    }
 
 
 # ========== VENUES ==========

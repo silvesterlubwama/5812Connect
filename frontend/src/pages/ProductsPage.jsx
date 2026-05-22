@@ -560,7 +560,18 @@ export default function ProductsPage() {
         toast.success('Product added!');
       }
       setShowProductModal(false);
-    } catch { toast.error('Failed to save product'); }
+    } catch (err) {
+      // Surface the real backend reason so the user knows WHY it failed
+      let msg = err.response?.data?.detail;
+      if (Array.isArray(msg)) {
+        // Pydantic validation errors → join field path + msg
+        msg = msg.map(e => `${(e.loc || []).join('.')}: ${e.msg}`).join('; ');
+      } else if (typeof msg === 'object' && msg !== null) {
+        msg = JSON.stringify(msg);
+      }
+      toast.error(`Failed to save: ${msg || err.message || 'unknown error'}`);
+      console.error('Product save error:', err.response?.data || err);
+    }
     finally { setSaving(false); }
   };
 
