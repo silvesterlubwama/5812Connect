@@ -404,7 +404,7 @@ export default function KioskPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      await kioskApi.checkin({ member_name: visitorName, type: 'visitor', method: 'manual', phone: visitorPhone });
+      await kioskApi.checkin({ member_name: visitorName, type: 'visitor', method: 'manual', phone: visitorPhone, location_id: selectedLocation || undefined });
       toast.success(`Visitor "${visitorName}" checked in!`);
       // Save to recent visitors memory
       const vid = `visitor_${Date.now()}`;
@@ -418,7 +418,7 @@ export default function KioskPage() {
 
   const quickCheckinVisitor = async (visitor) => {
     try {
-      await kioskApi.checkin({ member_name: visitor.name, type: visitor.type || 'visitor', method: 'quick', phone: visitor.phone });
+      await kioskApi.checkin({ member_name: visitor.name, type: visitor.type || 'visitor', method: 'quick', phone: visitor.phone, location_id: selectedLocation || undefined });
       toast.success(`${visitor.name} checked in!`);
       saveRecentVisitor(visitor);
       setRecentVisitors(getRecentVisitors());
@@ -438,7 +438,7 @@ export default function KioskPage() {
       setRecentVisitors(getRecentVisitors());
       toast.success(`${guestForm.role === 'parent' ? 'Parent' : 'Visitor'} "${guestForm.name}" registered!`);
       // Also check them in
-      await kioskApi.checkin({ member_name: guestForm.name, type: guestForm.role, method: 'guest_register', phone: guestForm.phone });
+      await kioskApi.checkin({ member_name: guestForm.name, type: guestForm.role, method: 'guest_register', phone: guestForm.phone, location_id: selectedLocation || undefined });
     } catch (err) { toast.error(err.response?.data?.detail || 'Registration failed'); }
     finally { setGuestLoading(false); }
   };
@@ -451,7 +451,7 @@ export default function KioskPage() {
       // Short numeric input (4-6 digits) → try PIN / phone-last-4 first
       if (/^\d{4,6}$/.test(lookupId.trim())) {
         try {
-          const pinRes = await api.post('/kiosk/pin-checkin', { pin: lookupId.trim(), action: 'lookup' });
+          const pinRes = await api.post('/kiosk/pin-checkin', { pin: lookupId.trim(), action: 'lookup', location_id: selectedLocation || undefined });
           if (pinRes.data?.member_name) {
             setFoundMember({
               id: pinRes.data.member_id || pinRes.data.checkin?.member_id,
@@ -481,12 +481,13 @@ export default function KioskPage() {
           pin: member._lookup_pin,
           action: 'checkin',
           child_ids: selectedChildren,
+          location_id: selectedLocation || undefined,
         });
         const extraCount = (res.data?.child_checkins || []).length;
         toast.success(`${member.name} checked in!${extraCount ? ` + ${extraCount} child${extraCount === 1 ? '' : 'ren'}` : ''}`);
         setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 + extraCount }));
       } else {
-        await kioskApi.checkin({ member_id: member.id, member_name: member.name, type: member.role === 'Staff' ? 'staff' : 'member', method: 'id' });
+        await kioskApi.checkin({ member_id: member.id, member_name: member.name, type: member.role === 'Staff' ? 'staff' : 'member', method: 'id', location_id: selectedLocation || undefined });
         toast.success(`${member.name} checked in!`);
         setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 }));
       }

@@ -74,7 +74,7 @@ export default function PublicBookingsPage() {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues(), publicApi.products()])
+    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.products()])
       .then(([evRes, venRes, prodRes]) => { setEvents(evRes.data); setVenues(venRes.data); setShopProducts(prodRes.data || []); })
       .catch(() => toast.error('Failed to load data'))
       .finally(() => setLoading(false));

@@ -6,6 +6,27 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 121 (May 22, 2026)
+**2 more user-reported fixes: checkin visibility + public-page country filter.**
+
+### Fix 1: Kiosk-created check-ins now visible to staff
+- **Root cause:** `kiosk_pin_checkin`, `kiosk_checkin`, and the auth `parent_lookup_checkin` were inserting checkin rows **without `location_id`**. Staff `/checkins` GET applies `get_campus_filter()` which requires `location_id` to match → kiosk rows were silently excluded.
+- ✅ All three checkin-creation paths now resolve `location_id` with this precedence: explicit caller value → event.location_id → member/user.location_id → current_user.active_campus_id. Set on parent + child checkin rows.
+- ✅ Kiosk frontend (`KioskPage.jsx`) now passes `location_id: selectedLocation` to all `kioskApi.checkin` calls (visitor, quick, guest register, member-by-ID) AND to `/kiosk/pin-checkin` (lookup + checkin actions).
+- ✅ End-to-end verified: parent-kiosk checkin → child checkin → both rows have `location_id=loc_001` → admin sees them in `/checkins?limit=5`.
+
+### Fix 2: Public bookable items now correctly filtered by country
+- **Root cause:** `_public/events_` had two bugs:
+   1. The fallback line `if not e.get("country") or e["country"] == country` **leaked country-less events into every country**.
+   2. Locations store freeform names ("Uganda", "USA", "Haiti", "Kenya", "Thailand") but the frontend sends ISO codes ("UG", "US", "HT", "KE", "TH"). Equality check never matched.
+- ✅ New `_normalize_country_code()` helper maps both freeform names AND ISO codes → canonical ISO code. Each public event now gets a resolved `country_code` field (from `event.country`, then `location.country`, then walking up the parent_id chain for sub-locations).
+- ✅ Strict match: events without a resolved country are excluded from any country-specific filter (only show when `country=ALL`).
+- ✅ `/public/venues` now accepts `country=` query and applies the same normalization + parent-chain resolution.
+- ✅ Frontend `publicApi.venues` signature updated to accept params.
+- ✅ End-to-end verified: a Uganda event correctly appears for `country=UG`, does NOT appear for `country=US`. ALL filter returns all 27 events.
+
+All 16 pytest smoke tests still pass. Backend + frontend lint clean.
+
 ## Recently Resolved — Iteration 120 (May 22, 2026)
 **4 user-reported issues fixed.**
 

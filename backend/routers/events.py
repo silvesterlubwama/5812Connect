@@ -387,8 +387,19 @@ async def list_checkins(event_id: Optional[str] = None, member_id: Optional[str]
 @router.post("/checkins")
 async def create_checkin(data: CheckInCreate, current_user: dict = Depends(get_current_user)):
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    payload = data.model_dump()
+    # If the caller didn't specify a location_id, infer it (event → user) so the
+    # row is visible under campus-scoped queries.
+    if not payload.get("location_id"):
+        ev_id = payload.get("event_id")
+        if ev_id:
+            ev = await db.events.find_one({"id": ev_id}, {"_id": 0, "location_id": 1})
+            if ev:
+                payload["location_id"] = ev.get("location_id")
+        if not payload.get("location_id"):
+            payload["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     checkin = {
-        "id": ci_id, **data.model_dump(),
+        "id": ci_id, **payload,
         "check_in_time": datetime.now(timezone.utc).isoformat(),
         "checked_in_by": current_user["id"],
     }
@@ -675,6 +686,14 @@ async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_cur
         return {"parent": parent, "children": children, "checked_in": []}
 
     # Check in specified children (or all if no child_ids provided)
+    # Resolve the location_id so staff can see these rows under their campus filter.
+    resolved_location = (data.get("location_id") or "").strip() or None
+    if not resolved_location and event_id:
+        ev = await db.events.find_one({"id": event_id}, {"_id": 0, "location_id": 1})
+        if ev:
+            resolved_location = ev.get("location_id")
+    if not resolved_location:
+        resolved_location = parent.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or ""
     checked_in = []
     targets = children if not child_ids else [c for c in children if c["id"] in child_ids]
     for child in targets:
@@ -691,6 +710,7 @@ async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_cur
             "checked_in_by": current_user["id"],
             "parent_id": parent["id"],
             "parent_name": parent.get("name", ""),
+            "location_id": resolved_location or child.get("location_id") or "",
         }
         await db.checkins.insert_one(checkin)
         checkin.pop("_id", None)
@@ -783,8 +803,15 @@ async def unlock_kiosk(device_id: str, data: dict, current_user: dict = Depends(
 @router.post("/kiosk/checkin")
 async def kiosk_checkin(data: CheckInCreate):
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+    payload = data.model_dump()
+    # Infer location_id from event if not provided so staff list_checkins
+    # (campus-scoped) can see this row.
+    if not payload.get("location_id") and payload.get("event_id"):
+        ev = await db.events.find_one({"id": payload["event_id"]}, {"_id": 0, "location_id": 1})
+        if ev:
+            payload["location_id"] = ev.get("location_id") or ""
     checkin = {
-        "id": ci_id, **data.model_dump(),
+        "id": ci_id, **payload,
         "check_in_time": datetime.now(timezone.utc).isoformat(),
         "source": "kiosk",
     }
@@ -811,6 +838,9 @@ async def kiosk_pin_checkin(data: dict):
     event_id = data.get("event_id")
     event_name = data.get("event_name", "")
     action = data.get("action", "checkin")
+    # Resolve a location_id so that staff list_checkins (campus-filtered) can see this row.
+    # Priority: explicit caller value → event's location → matched person's location.
+    caller_location_id = (data.get("location_id") or "").strip() or None
     if not pin:
         raise HTTPException(status_code=400, detail="PIN or phone digits required")
     # Try PIN match first, then phone-last-4
@@ -834,6 +864,15 @@ async def kiosk_pin_checkin(data: dict):
                     member = {"id": guest["id"], "name": guest.get("name", ""), "role": "guest", "phone": guest.get("phone", "")}
     if not member:
         raise HTTPException(status_code=404, detail="No match found for this PIN or phone number")
+    # Resolve the location_id (kiosk → event → member → guest). Without this, the
+    # checkin row won't be visible to staff via the campus-scoped /checkins list.
+    resolved_location = caller_location_id
+    if not resolved_location and event_id:
+        ev = await db.events.find_one({"id": event_id}, {"_id": 0, "location_id": 1})
+        if ev:
+            resolved_location = ev.get("location_id")
+    if not resolved_location:
+        resolved_location = member.get("location_id") or member.get("active_campus_id") or ""
     # If this person is/could be a parent, also surface their children so the kiosk
     # can offer them as check-in options (kiosk is unauthenticated — staff-only
     # parent-lookup endpoint won't work for an external parent at a kiosk).
@@ -875,6 +914,7 @@ async def kiosk_pin_checkin(data: dict):
         "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
         "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
         "method": "pin", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
+        "location_id": resolved_location,
     }
     await db.checkins.insert_one(checkin)
     checkin.pop("_id", None)
@@ -891,6 +931,7 @@ async def kiosk_pin_checkin(data: dict):
                 "type": "child", "event_id": event_id, "event_name": event_name,
                 "method": "parent_phone", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
                 "parent_id": member["id"], "parent_name": member.get("name", ""),
+                "location_id": resolved_location or child.get("location_id") or "",
             }
             await db.checkins.insert_one(cci)
             cci.pop("_id", None)
@@ -936,6 +977,28 @@ async def delete_venue(venue_id: str, current_user: dict = Depends(get_current_u
 
 # ========== PUBLIC ENDPOINTS ==========
 
+def _normalize_country_code(value: str) -> str:
+    """Map freeform country names ('Uganda', 'USA', 'Haiti') to ISO-ish codes
+    used by the public booking page filter ('UG', 'US', 'HT', 'KE', 'TH').
+    Returns empty string for unrecognised input — callers should treat empty as
+    'no country' (excluded from any specific filter)."""
+    if not value:
+        return ""
+    s = str(value).strip().lower()
+    table = {
+        "uganda": "UG", "ug": "UG", "uga": "UG",
+        "usa": "US", "us": "US", "united states": "US", "united states of america": "US", "america": "US",
+        "kenya": "KE", "ke": "KE", "ken": "KE",
+        "haiti": "HT", "haïti": "HT", "ht": "HT", "hti": "HT",
+        "thailand": "TH", "th": "TH", "tha": "TH",
+    }
+    if s in table:
+        return table[s]
+    if len(s) == 2 and s.upper() in {"UG", "US", "KE", "HT", "TH"}:
+        return s.upper()
+    return ""
+
+
 @router.get("/public/events")
 async def public_events(country: Optional[str] = None):
     query = {"is_public": True, "status": "upcoming"}
@@ -944,28 +1007,88 @@ async def public_events(country: Optional[str] = None):
     query["date"] = {"$lte": max_date}
     events = await db.events.find(query, {"_id": 0}).sort("date", 1).to_list(200)
 
-    # Resolve country from location_id for events that don't have country set
+    # Resolve country code for every event. Priority:
+    #   1. event.country (already stored)
+    #   2. event's location.country
+    #   3. walk up parent_id chain (sub-locations may not have country set)
+    # Normalize to ISO code so freeform "Uganda" matches frontend's "UG".
     if events:
-        loc_ids = list(set(e.get("location_id") for e in events if e.get("location_id") and not e.get("country")))
+        loc_ids = list({e.get("location_id") for e in events if e.get("location_id")})
         loc_map = {}
         if loc_ids:
-            locs = await db.locations.find({"id": {"$in": loc_ids}}, {"_id": 0, "id": 1, "country": 1, "name": 1}).to_list(100)
-            loc_map = {l["id"]: l.get("country", "") for l in locs}
+            locs = await db.locations.find(
+                {"id": {"$in": loc_ids}},
+                {"_id": 0, "id": 1, "country": 1, "parent_id": 1},
+            ).to_list(500)
+            for L in locs:
+                loc_map[L["id"]] = L
+            # Resolve parents for sub-locations without country
+            parent_ids_needed = [L.get("parent_id") for L in locs if L.get("parent_id") and not L.get("country")]
+            parent_ids_needed = list({p for p in parent_ids_needed if p})
+            if parent_ids_needed:
+                parents = await db.locations.find(
+                    {"id": {"$in": parent_ids_needed}},
+                    {"_id": 0, "id": 1, "country": 1},
+                ).to_list(500)
+                for p in parents:
+                    loc_map[p["id"]] = p
         for ev in events:
-            if not ev.get("country") and ev.get("location_id"):
-                ev["country"] = loc_map.get(ev["location_id"], "")
+            resolved = _normalize_country_code(ev.get("country"))
+            if not resolved and ev.get("location_id"):
+                loc = loc_map.get(ev["location_id"]) or {}
+                resolved = _normalize_country_code(loc.get("country"))
+                if not resolved and loc.get("parent_id"):
+                    parent = loc_map.get(loc["parent_id"]) or {}
+                    resolved = _normalize_country_code(parent.get("country"))
+            ev["country_code"] = resolved
+            # Keep `country` field present for backwards compat with existing UI
+            if not ev.get("country"):
+                ev["country"] = resolved or ""
 
-    # Filter by country if specified
+    # Strict filter: an event without a resolved country is NOT shown when a
+    # specific country is requested (prevents Uganda events leaking to US users).
     if country and country != 'ALL':
-        events = [e for e in events if not e.get("country") or e["country"] == country]
+        target = _normalize_country_code(country) or country.upper()
+        events = [e for e in events if e.get("country_code") == target]
 
     return events
 
 
 @router.get("/public/venues")
-async def public_venues():
-    venues = await db.venues.find({"available": True, "is_bookable": {"$ne": False}}, {"_id": 0}).to_list(50)
-    return venues
+async def public_venues(country: Optional[str] = None):
+    """Public-bookable venues, optionally filtered by country."""
+    venues = await db.venues.find({"available": True, "is_bookable": {"$ne": False}}, {"_id": 0}).to_list(200)
+    if not country or country == 'ALL':
+        return venues
+    target = _normalize_country_code(country) or country.upper()
+    # Resolve country via location for venues that don't carry one
+    loc_ids = list({v.get("location_id") for v in venues if v.get("location_id")})
+    loc_map = {}
+    if loc_ids:
+        locs = await db.locations.find(
+            {"id": {"$in": loc_ids}},
+            {"_id": 0, "id": 1, "country": 1, "parent_id": 1},
+        ).to_list(500)
+        for L in locs:
+            loc_map[L["id"]] = L
+        parent_ids = [L.get("parent_id") for L in locs if L.get("parent_id") and not L.get("country")]
+        parent_ids = list({p for p in parent_ids if p})
+        if parent_ids:
+            parents = await db.locations.find({"id": {"$in": parent_ids}}, {"_id": 0, "id": 1, "country": 1}).to_list(500)
+            for p in parents:
+                loc_map[p["id"]] = p
+    out = []
+    for v in venues:
+        code = _normalize_country_code(v.get("country"))
+        if not code and v.get("location_id"):
+            loc = loc_map.get(v["location_id"]) or {}
+            code = _normalize_country_code(loc.get("country"))
+            if not code and loc.get("parent_id"):
+                code = _normalize_country_code((loc_map.get(loc["parent_id"]) or {}).get("country"))
+        v["country_code"] = code
+        if code == target:
+            out.append(v)
+    return out
 
 
 @router.post("/public/bookings/event")
