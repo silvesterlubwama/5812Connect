@@ -482,6 +482,7 @@ try:
     from routers.statements import router as statements_router
     from routers.accounting import router as accounting_router
     from routers.approvals import router as approvals_router
+    from routers.social_work import router as social_work_router, portal_router as school_portal_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -492,6 +493,8 @@ try:
     app.include_router(statements_router)
     app.include_router(accounting_router)
     app.include_router(approvals_router)
+    app.include_router(social_work_router)
+    app.include_router(school_portal_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

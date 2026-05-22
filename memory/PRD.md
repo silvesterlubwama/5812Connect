@@ -6,6 +6,37 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 118 (May 22, 2026)
+**New Social Work & Welfare module — full case-management + school-portal system.**
+
+### Backend (new `routers/social_work.py`)
+- ✅ **Cases** (`/api/social-work/cases`): linked to existing children OR members; categories (sponsored / restricted_location / welfare_support / multiple); status (active / on_hold / discharged); risk level (low/med/high); structured education + medical + family + goals sub-objects; sponsor_member_id FK.
+- ✅ **Case notes** (`/cases/{id}/notes`): kinds (visit / counseling / safeguarding / milestone / school / medical / other); confidentiality flag; attachments; tags; auto-tagged with author + role.
+- ✅ **Schools** (`/schools`): each gets an immutable `portal_token` URL; student-count enrichment.
+- ✅ **Portal passwords** (`/schools/{id}/portal-passwords`): one-time generated, hashed (bcrypt via existing `hash_password`), 7-day TTL (1–30 configurable); plaintext shown ONCE on issuance; revocable; usage tracked.
+- ✅ **Child payments** (`/cases/{id}/payments`): kinds (tuition/resource/medical/child_support); auto-**mirrors** into `expenses` (outflows) or `donations` (sponsor inflows) and auto-posts a balanced journal entry to the accounting ledger via the existing `_post_to_accounting` helper.
+- ✅ **Payments summary** (`/payments/summary?period=YYYY-MM`): by-kind + by-subject totals.
+
+### Public School Portal (separate `routers/social_work.py:portal_router`)
+- ✅ `POST /api/school-portal/login` (public): validates portal_token + password → returns 6-hour session token (sha256-hashed at rest).
+- ✅ `GET /me`: school + active students (limited fields — no full medical conditions, only allergies + receives_support flag).
+- ✅ `GET /students/{case_id}`: per-student detail with **prior school-source notes** (filters out confidential).
+- ✅ `POST /students/{case_id}/notes`: external teachers upload report cards / school events / medical-at-school incidents with attachment URLs. Marked `source: school_portal` and visible to staff.
+- ✅ `POST /logout`: invalidates the session token.
+
+### Frontend
+- ✅ **`/social-work`** staff page with KPIs (active cases, high risk, sponsored, payments this month), 3 main tabs (Cases / Schools / Payments overview), search + category/status/risk filters, "New Case" + "New School" dialogs, password issuance with **copy-on-display** (plaintext never re-shown).
+- ✅ **Case Detail Dialog** with 7 sub-tabs: Overview / Education / Medical / Family / Goals / Payments / Notes — each section saves independently. Goals are tracked with target_date + progress_pct.
+- ✅ **`/school-portal/:portal_token`** public page: clean password-gated login, live session-expiry countdown, student list with photos, per-student detail with medical alerts banner, note-submission dialog with kind selector + attachment URL.
+- ✅ Sidebar nav: new "Social Work" entry under **Operations** (Staff+).
+- ✅ Route registered in `App.js`: public `/school-portal/:portalToken` plus authenticated `/social-work`.
+
+### Cross-module wiring (verified end-to-end via curl)
+- Recorded a tuition payment → it appeared in `db.expenses` with `social_case_id` AND in the accounting general ledger (Dr Supplies / Cr Cash).
+- Recorded a child_support payment → it appeared in `db.donations` with `social_case_id` (no auto-post since no income journal at default loc, but mirror is in place).
+
+All 16 pytest smoke tests still pass. Lint clean on all 4 new files.
+
 ## Recently Resolved — Iteration 117 (May 21, 2026)
 **3 user-reported fixes: campus-aware currency, accounting campus switcher + restrictions, audit-log user names.**
 

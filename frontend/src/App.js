@@ -22,6 +22,8 @@ import SettingsPage from './pages/SettingsPage';
 import FinancialPage from './pages/FinancialPage';
 import AccountingPage from './pages/AccountingPage';
 import ApprovalsPage from './pages/ApprovalsPage';
+import SocialWorkPage from './pages/SocialWorkPage';
+import SchoolPortalPage from './pages/SchoolPortalPage';
 import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
 import AuditPage from './pages/AuditPage';
@@ -109,6 +111,7 @@ function AppRoutes() {
       <Route path="/receipt/:receiptNumber" element={<ReceiptViewPage />} />
       <Route path="/resource/:serial" element={<ResourceViewPage />} />
       <Route path="/quote/:quoteNumber/accept" element={<QuoteAcceptPage />} />
+      <Route path="/school-portal/:portalToken" element={<SchoolPortalPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
@@ -124,6 +127,7 @@ function AppRoutes() {
         <Route path="financial" element={<FinancialPage />} />
         <Route path="accounting" element={<AccountingPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
+        <Route path="social-work" element={<SocialWorkPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
         <Route path="accounts-receivable" element={<AccountsReceivablePage />} />
