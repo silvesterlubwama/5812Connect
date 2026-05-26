@@ -1,7 +1,7 @@
 """Financial routes: donations, expenses, products, sales, cashflow, balance, approval workflow"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter, get_role_level
+from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter, get_role_level, require_finance_view, require_finance_admin
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -106,7 +106,7 @@ async def distribute_funds(data: dict, current_user: dict = Depends(require_dire
 # ========== DONATIONS ==========
 
 @router.get("/financial/donations")
-async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     query = {**await _financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if date_from or date_to:
@@ -117,7 +117,7 @@ async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[
 
 
 @router.post("/financial/donations")
-async def create_donation(data: DonationCreate, current_user: dict = Depends(require_staff)):
+async def create_donation(data: DonationCreate, current_user: dict = Depends(require_finance_view)):
     doc = {"id": f"don_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
@@ -252,7 +252,7 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
 # ========== EXPENSES ==========
 
 @router.get("/financial/expenses")
-async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     query = {**await _financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if status: query["status"] = status
@@ -264,7 +264,7 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
 
 
 @router.post("/financial/expenses")
-async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_staff)):
+async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_finance_view)):
     doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
@@ -359,7 +359,7 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
 # ========== CASHFLOW & BALANCE ==========
 
 @router.get("/financial/cashflow")
-async def financial_cashflow(months: int = 6, current_user: dict = Depends(get_current_user)):
+async def financial_cashflow(months: int = 6, current_user: dict = Depends(require_finance_view)):
     from datetime import timedelta
     campus = await get_campus_filter(current_user)
     now = datetime.now(timezone.utc); monthly = []
@@ -381,12 +381,12 @@ async def financial_cashflow(months: int = 6, current_user: dict = Depends(get_c
     return {"monthly": monthly}
 
 @router.get("/financial/balance")
-async def get_financial_balance(current_user: dict = Depends(get_current_user)):
+async def get_financial_balance(current_user: dict = Depends(require_finance_view)):
     doc = await db.financial_settings.find_one({}, {"_id": 0})
     return doc or {"opening_balance": 0, "current_balance": 0, "set_at": None}
 
 @router.put("/financial/balance")
-async def set_financial_balance(opening_balance: float, current_user: dict = Depends(get_current_user)):
+async def set_financial_balance(opening_balance: float, current_user: dict = Depends(require_finance_admin)):
     now = datetime.now(timezone.utc).isoformat()
     await db.financial_settings.update_one({}, {"$set": {"opening_balance": opening_balance, "set_at": now, "set_by": current_user["id"]}}, upsert=True)
     return {"opening_balance": opening_balance, "set_at": now}
@@ -604,7 +604,7 @@ async def get_balance_sheet(location_id: Optional[str] = None, date_from: Option
 # ========== ASSETS ==========
 
 @router.get("/financial/assets")
-async def list_assets(location_id: Optional[str] = None, current_user: dict = Depends(require_staff)):
+async def list_assets(location_id: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     campus = await _financial_campus_filter(current_user)
     query = {**campus} if campus else {}
     if location_id: query["location_id"] = location_id

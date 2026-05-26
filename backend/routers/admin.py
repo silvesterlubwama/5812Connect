@@ -740,3 +740,45 @@ async def reassign_run(data: dict, current_user: dict = Depends(require_admin)) 
         "to_location_id": to_id, "moved": moved,
     })
     return {"from_location_id": from_id, "to_location_id": to_id, "target_name": target.get("name"), "moved": moved, "total": sum(moved.values())}
+
+
+# ========== FINANCE ACCESS MANAGEMENT ==========
+
+@router.get("/finance-access/users")
+async def list_finance_access_users(current_user: dict = Depends(require_admin)):
+    """List all users + their finance-access status. Useful for the admin
+    panel that grants/revokes financial visibility."""
+    from deps import FINANCE_PRIVILEGED_ROLES
+    users = await db.users.find(
+        {"status": {"$ne": "inactive"}},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1, "finance_access": 1, "location_id": 1, "department": 1},
+    ).sort("name", 1).to_list(2000)
+    for u in users:
+        role = u.get("role") or ""
+        u["finance_access_implicit"] = role in FINANCE_PRIVILEGED_ROLES
+        u["finance_access_effective"] = u["finance_access_implicit"] or bool(u.get("finance_access"))
+    return users
+
+
+@router.put("/finance-access/users/{user_id}")
+async def set_finance_access(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Grant or revoke explicit finance access for a non-Director user.
+    Body: { finance_access: bool, reason? }"""
+    target = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "name": 1, "role": 1, "finance_access": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_state = bool(data.get("finance_access"))
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "finance_access": new_state,
+        "finance_access_changed_at": datetime.now(timezone.utc).isoformat(),
+        "finance_access_changed_by": current_user["id"],
+    }})
+    await _audit(
+        current_user["id"],
+        "grant" if new_state else "revoke",
+        "finance_access",
+        user_id,
+        {"target_name": target.get("name"), "reason": data.get("reason", "")},
+    )
+    return {"updated": True, "user_id": user_id, "finance_access": new_state}
+

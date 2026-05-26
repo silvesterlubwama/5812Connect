@@ -6,6 +6,43 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 123 (May 26, 2026)
+**Finance data restricted to directors + explicit-grant employees + new Banking page UI.**
+
+### Security tightening (`deps.py`)
+- ✅ `has_finance_access(user)` — True if role ∈ {admin, system_admin, Executive Director, Adviser, Director, Manager} OR `user.finance_access == True`.
+- ✅ `require_finance_view` dependency — 403 unless finance access. Used for all GETs.
+- ✅ `require_finance_admin` dependency — Manager+ AND finance access. Used for sensitive WRITES.
+
+### Applied across routers
+- ✅ **`accounting.py`** — every read endpoint switched from `get_current_user` → `require_finance_view`. Writes use `require_finance_admin`.
+- ✅ **`financial.py`** — donations/expenses/balance/cashflow/assets all gated. Set-balance requires Director+.
+- ✅ **`bank.py`** — all reads + entry-level writes use `require_finance_view`; destructive ops use `require_finance_admin`.
+
+### Admin endpoint
+- ✅ `GET /api/admin/finance-access/users` — list with implicit (role) vs explicit grants
+- ✅ `PUT /api/admin/finance-access/users/{user_id}` — grant/revoke with audit trail
+
+### Verified end-to-end
+- Volunteer (role=Volunteer, no flag) → 403 on `/financial/donations`, `/bank/accounts`, `/accounting/accounts` ✓
+- Admin grants `finance_access: true` → volunteer re-login → can now read ✓
+- All 16 pytest smoke tests still pass
+
+### Frontend — new Banking page (`/banking`)
+- ✅ **Tabs:** Accounts / Statements & Reconcile / Vendors / Bills / Recurring / Rules
+- ✅ Bank account create with currency/country/branch + link to CoA cash account
+- ✅ CSV import via file picker; bulk-apply auto-suggestions button
+- ✅ Per-transaction reconciliation dialog (post JE to a CoA account, ignore, or match)
+- ✅ Vendor create with TIN + VAT-registered + terms
+- ✅ Categorization rules with regex + target CoA account
+- ✅ Recurring entries with one-click "Run now" + auto-advance schedule
+- ✅ Sidebar nav: **Banking** under Finance section (Landmark icon)
+
+### Admin page enhancement
+- ✅ New **Finance Access Manager** card (admin+ only) opens a dialog listing all users with implicit/explicit access badges and Grant/Revoke buttons.
+
+All backend + frontend lint clean. Services healthy.
+
 ## Recently Resolved — Iteration 122 (May 22, 2026)
 **Kiosk PIN unlock fix + Phase A QuickBooks-parity + Phase D Uganda reports.**
 

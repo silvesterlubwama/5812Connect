@@ -1,7 +1,7 @@
 """Accounting depth (Odoo-style): Chart of Accounts, Journals, Double-entry Ledger,
 Fiscal Periods, Tax Codes, Trial Balance + P&L."""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter, is_system_admin
+from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter, is_system_admin, require_finance_view, require_finance_admin
 from datetime import datetime, timezone, date as dt_date
 from typing import Optional, List, Dict, Any
 import uuid
@@ -96,7 +96,7 @@ DEFAULT_COA = [
 
 
 @router.get("/account-types")
-async def list_account_types(current_user: dict = Depends(get_current_user)):
+async def list_account_types(current_user: dict = Depends(require_finance_view)):
     """Return the standard account-type catalog for the CoA builder."""
     return [{"id": k, **v} for k, v in ACCOUNT_TYPES.items()]
 
@@ -139,7 +139,7 @@ async def list_accounts(
     location_id: Optional[str] = None,
     category: Optional[str] = None,
     active: bool = True,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     query = {}
     if active:
@@ -226,7 +226,7 @@ JOURNAL_KINDS = {"sales", "purchases", "bank", "cash", "miscellaneous"}
 
 
 @router.get("/journals")
-async def list_journals(current_user: dict = Depends(get_current_user)):
+async def list_journals(current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope, "active": True} if scope else {"active": True}
     return await db.accounting_journals.find(query, {"_id": 0}).sort("code", 1).to_list(200)
@@ -288,7 +288,7 @@ async def delete_journal(journal_id: str, current_user: dict = Depends(require_a
 # FISCAL PERIODS
 # ============================================================
 @router.get("/fiscal-periods")
-async def list_fiscal_periods(current_user: dict = Depends(get_current_user)):
+async def list_fiscal_periods(current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope} if scope else {}
     return await db.accounting_fiscal_periods.find(query, {"_id": 0}).sort("start_date", -1).to_list(100)
@@ -343,7 +343,7 @@ async def _period_is_locked(date_iso: str, location_id: str) -> bool:
 # TAX CODES
 # ============================================================
 @router.get("/taxes")
-async def list_taxes(current_user: dict = Depends(get_current_user)):
+async def list_taxes(current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope, "active": True} if scope else {"active": True}
     return await db.accounting_taxes.find(query, {"_id": 0}).sort("name", 1).to_list(100)
@@ -407,7 +407,7 @@ async def list_entries(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = 200,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     query = {}
     if journal_id:
@@ -529,7 +529,7 @@ async def create_entry(data: dict, current_user: dict = Depends(require_director
 
 
 @router.get("/entries/{entry_id}")
-async def get_entry(entry_id: str, current_user: dict = Depends(get_current_user)):
+async def get_entry(entry_id: str, current_user: dict = Depends(require_finance_view)):
     entry = await db.accounting_entries.find_one({"id": entry_id}, {"_id": 0})
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -609,7 +609,7 @@ async def trial_balance(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     """Trial Balance — totals of debit/credit per account from posted entries.
     Defaults to all posted entries up to today."""
@@ -675,7 +675,7 @@ async def profit_loss(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     """P&L for a period: sums income and expense accounts, returns net profit."""
     tb = await trial_balance(date_from=date_from, date_to=date_to, location_id=location_id, current_user=current_user)
@@ -701,7 +701,7 @@ async def profit_loss(
 async def balance_sheet(
     as_of: Optional[str] = None,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     """Balance Sheet at a given date — assets vs. liabilities + equity."""
     tb = await trial_balance(date_to=as_of, location_id=location_id, current_user=current_user)
@@ -734,7 +734,7 @@ async def account_ledger(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = 500,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     """Per-account ledger: chronological list of postings + running balance."""
     acc = await db.accounting_accounts.find_one({"id": account_id}, {"_id": 0})
@@ -764,7 +764,7 @@ async def account_ledger(
 # ============================================================
 
 @router.get("/assets/{asset_id}/depreciation-schedule")
-async def asset_depreciation_schedule(asset_id: str, method: str = "straight_line", current_user: dict = Depends(get_current_user)):
+async def asset_depreciation_schedule(asset_id: str, method: str = "straight_line", current_user: dict = Depends(require_finance_view)):
     """Generate a depreciation schedule for an asset (straight-line or declining-balance).
     Doesn't mutate anything — pure projection for review/printing.
     Methods:
@@ -904,7 +904,7 @@ async def cash_flow_statement(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_finance_view),
 ):
     """Indirect-method cash flow statement: classifies postings into operating /
     investing / financing based on the *other* account's type in each posting.
@@ -1007,7 +1007,7 @@ def _age_bucket(days_old: int) -> str:
 
 @router.get("/reports/ar-aging")
 async def ar_aging(as_of: Optional[str] = None, location_id: Optional[str] = None,
-                  current_user: dict = Depends(get_current_user)):
+                  current_user: dict = Depends(require_finance_view)):
     """Accounts receivable aging — buckets sales' outstanding amounts by age."""
     today = (as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
     query = {"payment_status": "pending", "voided": {"$ne": True}}
@@ -1060,7 +1060,7 @@ async def ar_aging(as_of: Optional[str] = None, location_id: Optional[str] = Non
 
 @router.get("/reports/ap-aging")
 async def ap_aging(as_of: Optional[str] = None, location_id: Optional[str] = None,
-                  current_user: dict = Depends(get_current_user)):
+                  current_user: dict = Depends(require_finance_view)):
     """Accounts payable aging — bills outstanding by age (from due_date)."""
     today = (as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
     query = {"status": {"$in": ["open", "partially_paid"]}}

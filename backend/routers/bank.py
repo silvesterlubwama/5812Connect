@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from deps import (
     db, get_current_user, require_staff, require_director, require_admin,
     require_manager, _audit, logger, get_campus_filter,
+    require_finance_view, require_finance_admin,
 )
 from datetime import datetime, timezone, timedelta, date as dt_date
 from typing import Optional, List, Dict, Any
@@ -30,7 +31,7 @@ RECURRING_SCHEDULES = {"daily", "weekly", "biweekly", "monthly", "quarterly", "y
 # ============================================================
 
 @router.get("/accounts")
-async def list_bank_accounts(country: Optional[str] = None, current_user: dict = Depends(require_staff)):
+async def list_bank_accounts(country: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope, "active": True} if scope else {"active": True}
     if country:
@@ -57,7 +58,7 @@ async def list_bank_accounts(country: Optional[str] = None, current_user: dict =
 
 
 @router.post("/accounts")
-async def create_bank_account(data: dict, current_user: dict = Depends(require_director)):
+async def create_bank_account(data: dict, current_user: dict = Depends(require_finance_admin)):
     """Create a bank account linked to a CoA cash account.
     Body: { name, bank_name, account_number, account_type, currency, country, branch?,
             swift_bic?, iban?, opening_balance?, opening_balance_date?, linked_account_id, location_id? }"""
@@ -100,7 +101,7 @@ async def create_bank_account(data: dict, current_user: dict = Depends(require_d
 
 
 @router.put("/accounts/{acc_id}")
-async def update_bank_account(acc_id: str, data: dict, current_user: dict = Depends(require_director)):
+async def update_bank_account(acc_id: str, data: dict, current_user: dict = Depends(require_finance_admin)):
     allowed = {"name", "bank_name", "account_number", "account_type", "branch",
                "swift_bic", "iban", "linked_account_id", "active", "notes"}
     update = {k: v for k, v in data.items() if k in allowed}
@@ -189,7 +190,7 @@ async def import_csv_statement(
     acc_id: str,
     file: UploadFile = File(...),
     column_map: Optional[str] = Form(None),  # JSON string {date, description, ...}
-    current_user: dict = Depends(require_staff),
+    current_user: dict = Depends(require_finance_view),
 ):
     """Import a bank statement CSV. The importer auto-detects common column names
     but accepts an explicit `column_map` JSON for non-standard banks.
@@ -324,7 +325,7 @@ async def import_csv_statement(
 
 
 @router.get("/statements")
-async def list_statements(bank_account_id: Optional[str] = None, current_user: dict = Depends(require_staff)):
+async def list_statements(bank_account_id: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     query = {}
     if bank_account_id:
         query["bank_account_id"] = bank_account_id
@@ -341,7 +342,7 @@ async def list_transactions(
     statement_id: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 500,
-    current_user: dict = Depends(require_staff),
+    current_user: dict = Depends(require_finance_view),
 ):
     query = {}
     if bank_account_id:
@@ -362,12 +363,12 @@ async def list_transactions(
 # ============================================================
 
 @router.get("/rules")
-async def list_rules(current_user: dict = Depends(require_staff)):
+async def list_rules(current_user: dict = Depends(require_finance_view)):
     return await db.bank_rules.find({}, {"_id": 0}).sort("priority", 1).to_list(500)
 
 
 @router.post("/rules")
-async def create_rule(data: dict, current_user: dict = Depends(require_director)):
+async def create_rule(data: dict, current_user: dict = Depends(require_finance_admin)):
     """Create a categorization rule.
     Body: { name, match_pattern (regex), target_account_id, priority?, is_active? }"""
     name = (data.get("name") or "").strip()
@@ -398,7 +399,7 @@ async def create_rule(data: dict, current_user: dict = Depends(require_director)
 
 
 @router.put("/rules/{rule_id}")
-async def update_rule(rule_id: str, data: dict, current_user: dict = Depends(require_director)):
+async def update_rule(rule_id: str, data: dict, current_user: dict = Depends(require_finance_admin)):
     allowed = {"name", "match_pattern", "target_account_id", "priority", "is_active"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "match_pattern" in update:
@@ -411,7 +412,7 @@ async def update_rule(rule_id: str, data: dict, current_user: dict = Depends(req
 
 
 @router.delete("/rules/{rule_id}")
-async def delete_rule(rule_id: str, current_user: dict = Depends(require_director)):
+async def delete_rule(rule_id: str, current_user: dict = Depends(require_finance_admin)):
     await db.bank_rules.delete_one({"id": rule_id})
     return {"deleted": True}
 
@@ -481,7 +482,7 @@ async def _post_bank_tx_to_ledger(tx: dict, target_account_id: str, current_user
 
 
 @router.post("/transactions/{tx_id}/reconcile")
-async def reconcile_transaction(tx_id: str, data: dict, current_user: dict = Depends(require_staff)):
+async def reconcile_transaction(tx_id: str, data: dict, current_user: dict = Depends(require_finance_view)):
     """Reconcile a bank transaction by either:
       - Matching an existing journal entry: { matched_entry_id }
       - Posting a new JE to a category account: { target_account_id }
@@ -520,7 +521,7 @@ async def reconcile_transaction(tx_id: str, data: dict, current_user: dict = Dep
 
 
 @router.post("/transactions/bulk-apply-suggestions")
-async def bulk_apply_suggestions(data: dict, current_user: dict = Depends(require_staff)):
+async def bulk_apply_suggestions(data: dict, current_user: dict = Depends(require_finance_view)):
     """Reconcile all unreconciled transactions for a bank account that already have
     a `suggested_account_id` (from auto-rules). Skips ones without a suggestion."""
     bank_account_id = data.get("bank_account_id")
@@ -555,7 +556,7 @@ async def bulk_apply_suggestions(data: dict, current_user: dict = Depends(requir
 # ============================================================
 
 @router.get("/vendors")
-async def list_vendors(search: Optional[str] = None, current_user: dict = Depends(require_staff)):
+async def list_vendors(search: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope} if scope else {}
     if search:
@@ -569,7 +570,7 @@ async def list_vendors(search: Optional[str] = None, current_user: dict = Depend
 
 
 @router.post("/vendors")
-async def create_vendor(data: dict, current_user: dict = Depends(require_staff)):
+async def create_vendor(data: dict, current_user: dict = Depends(require_finance_view)):
     name = (data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
@@ -598,7 +599,7 @@ async def create_vendor(data: dict, current_user: dict = Depends(require_staff))
 
 
 @router.put("/vendors/{vid}")
-async def update_vendor(vid: str, data: dict, current_user: dict = Depends(require_staff)):
+async def update_vendor(vid: str, data: dict, current_user: dict = Depends(require_finance_view)):
     allowed = {"name", "tin", "vat_registered", "contact_name", "email", "phone",
                "address", "country", "currency", "payment_terms_days", "default_account_id", "active", "notes"}
     update = {k: v for k, v in data.items() if k in allowed}
@@ -608,7 +609,7 @@ async def update_vendor(vid: str, data: dict, current_user: dict = Depends(requi
 
 
 @router.delete("/vendors/{vid}")
-async def delete_vendor(vid: str, current_user: dict = Depends(require_director)):
+async def delete_vendor(vid: str, current_user: dict = Depends(require_finance_admin)):
     has_bills = await db.bills.find_one({"vendor_id": vid})
     if has_bills:
         await db.vendors.update_one({"id": vid}, {"$set": {"active": False}})
@@ -632,7 +633,7 @@ def _bill_totals(items: list) -> tuple:
 async def list_bills(
     vendor_id: Optional[str] = None,
     status: Optional[str] = None,
-    current_user: dict = Depends(require_staff),
+    current_user: dict = Depends(require_finance_view),
 ):
     scope = await get_campus_filter(current_user)
     query = {**scope} if scope else {}
@@ -644,7 +645,7 @@ async def list_bills(
 
 
 @router.post("/bills")
-async def create_bill(data: dict, current_user: dict = Depends(require_staff)):
+async def create_bill(data: dict, current_user: dict = Depends(require_finance_view)):
     """Create a vendor bill (AP).
     Body: { vendor_id, bill_date, due_date?, items: [{description, qty, unit_price, account_id, tax_rate?}],
             currency?, notes?, status? (default 'open') }"""
@@ -793,7 +794,7 @@ async def _post_bill_to_ledger(bill: dict, current_user: dict):
 
 
 @router.put("/bills/{bid}")
-async def update_bill(bid: str, data: dict, current_user: dict = Depends(require_staff)):
+async def update_bill(bid: str, data: dict, current_user: dict = Depends(require_finance_view)):
     bill = await db.bills.find_one({"id": bid}, {"_id": 0})
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -811,7 +812,7 @@ async def update_bill(bid: str, data: dict, current_user: dict = Depends(require
 
 
 @router.post("/bills/{bid}/payments")
-async def pay_bill(bid: str, data: dict, current_user: dict = Depends(require_staff)):
+async def pay_bill(bid: str, data: dict, current_user: dict = Depends(require_finance_view)):
     """Record a payment against a bill.
     Body: { amount, payment_date?, bank_account_id, method?, reference?, notes? }"""
     bill = await db.bills.find_one({"id": bid}, {"_id": 0})
@@ -902,7 +903,7 @@ async def _post_bill_payment_to_ledger(bill: dict, payment: dict, bank_acc: dict
 
 
 @router.delete("/bills/{bid}")
-async def void_bill(bid: str, current_user: dict = Depends(require_director)):
+async def void_bill(bid: str, current_user: dict = Depends(require_finance_admin)):
     """Void a bill (does NOT delete the underlying JE — reverse that manually)."""
     await db.bills.update_one({"id": bid}, {"$set": {
         "status": "void",
@@ -917,14 +918,14 @@ async def void_bill(bid: str, current_user: dict = Depends(require_director)):
 # ============================================================
 
 @router.get("/recurring")
-async def list_recurring(current_user: dict = Depends(require_staff)):
+async def list_recurring(current_user: dict = Depends(require_finance_view)):
     scope = await get_campus_filter(current_user)
     query = {**scope} if scope else {}
     return await db.recurring_entries.find(query, {"_id": 0}).sort("next_run_date", 1).to_list(200)
 
 
 @router.post("/recurring")
-async def create_recurring(data: dict, current_user: dict = Depends(require_director)):
+async def create_recurring(data: dict, current_user: dict = Depends(require_finance_admin)):
     """Create a recurring template.
     Body: { name, kind ('journal_entry'|'bill'), schedule, day_of_month?, next_run_date,
             template: {...}, is_active? }"""
@@ -964,7 +965,7 @@ async def create_recurring(data: dict, current_user: dict = Depends(require_dire
 
 
 @router.put("/recurring/{rid}")
-async def update_recurring(rid: str, data: dict, current_user: dict = Depends(require_director)):
+async def update_recurring(rid: str, data: dict, current_user: dict = Depends(require_finance_admin)):
     allowed = {"name", "schedule", "day_of_month", "next_run_date", "template", "is_active"}
     update = {k: v for k, v in data.items() if k in allowed}
     await db.recurring_entries.update_one({"id": rid}, {"$set": update})
@@ -972,7 +973,7 @@ async def update_recurring(rid: str, data: dict, current_user: dict = Depends(re
 
 
 @router.delete("/recurring/{rid}")
-async def delete_recurring(rid: str, current_user: dict = Depends(require_director)):
+async def delete_recurring(rid: str, current_user: dict = Depends(require_finance_admin)):
     await db.recurring_entries.delete_one({"id": rid})
     return {"deleted": True}
 
@@ -1006,7 +1007,7 @@ def _advance_recurring_date(current: str, schedule: str, day_of_month: int = 1) 
 
 
 @router.post("/recurring/{rid}/run-now")
-async def run_recurring_now(rid: str, current_user: dict = Depends(require_director)):
+async def run_recurring_now(rid: str, current_user: dict = Depends(require_finance_admin)):
     """Manually trigger a recurring entry (and advance its next_run_date)."""
     rec = await db.recurring_entries.find_one({"id": rid}, {"_id": 0})
     if not rec:

@@ -334,6 +334,96 @@ export default function AdminPage() {
           {selectedUser && <UnifiedBadge person={{ ...selectedUser, country: locations.find(l => l.id === selectedUser.location_id)?.country, country_code: locations.find(l => l.id === selectedUser.location_id)?.country_code }} canWriteNfc={['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(currentUser?.role)} />}
         </DialogContent>
       </Dialog>
+
+      {/* Finance Access Management — admin only */}
+      {['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
+        <FinanceAccessManager />
+      )}
     </div>
+  );
+}
+
+// ============== FINANCE ACCESS MANAGER ==============
+function FinanceAccessManager() {
+  const [open, setOpen] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await adminApi.financeAccessUsers();
+      setUsers(r.data || []);
+    } catch (e) { toast.error('Failed to load users'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { if (open) load(); }, [open, load]);
+
+  const toggle = async (u, val) => {
+    try {
+      await adminApi.setFinanceAccess(u.id, val);
+      toast.success(`${val ? 'Granted' : 'Revoked'} finance access for ${u.name}`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const filtered = users.filter(u => !search || (u.name || '').toLowerCase().includes(search.toLowerCase()) || (u.email || '').toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <>
+      <Card className="rounded-xl mt-4 cursor-pointer hover:border-primary/40" onClick={() => setOpen(true)} data-testid="finance-access-manager-card">
+        <CardContent className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Shield size={18} className="text-primary" />
+            <div>
+              <p className="font-medium text-sm">Finance Access</p>
+              <p className="text-xs text-muted-foreground">Grant or revoke explicit financial-data access for non-Director staff</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline">Manage</Button>
+        </CardContent>
+      </Card>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Finance Access Management</DialogTitle>
+            <DialogDescription className="text-xs">
+              Directors (Manager, Director, Adviser, Executive Director, Admin) always have finance access automatically.
+              Toggle individual non-Director users here to grant them explicit access.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <Input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} className="h-9" data-testid="finance-access-search" />
+            {loading ? <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div> : (
+              <div className="space-y-1.5">
+                {filtered.map(u => {
+                  const granted = u.finance_access_effective;
+                  return (
+                    <div key={u.id} className="flex items-center justify-between p-2 rounded border" data-testid={`finance-access-row-${u.id}`}>
+                      <div>
+                        <p className="text-sm font-medium">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></p>
+                        <p className="text-[10px] text-muted-foreground">{u.email} · {u.department || '—'}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {u.finance_access_implicit ? (
+                          <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Implicit (role)</Badge>
+                        ) : granted ? (
+                          <>
+                            <Badge className="bg-blue-100 text-blue-700 text-[10px]">Explicit grant</Badge>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => toggle(u, false)} data-testid={`finance-revoke-${u.id}`}>Revoke</Button>
+                          </>
+                        ) : (
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => toggle(u, true)} data-testid={`finance-grant-${u.id}`}>Grant access</Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

@@ -24,6 +24,7 @@ import AccountingPage from './pages/AccountingPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import SocialWorkPage from './pages/SocialWorkPage';
 import SchoolPortalPage from './pages/SchoolPortalPage';
+import BankPage from './pages/BankPage';
 import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
 import AuditPage from './pages/AuditPage';
@@ -128,6 +129,7 @@ function AppRoutes() {
         <Route path="accounting" element={<AccountingPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="social-work" element={<SocialWorkPage />} />
+        <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
         <Route path="accounts-receivable" element={<AccountsReceivablePage />} />

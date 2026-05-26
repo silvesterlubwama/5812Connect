@@ -171,6 +171,54 @@ def has_campus_switcher(user: dict) -> bool:
     return (user.get("role") or "").lower() in CAMPUS_SWITCHER_ROLES
 
 
+# Roles that always have finance access (no explicit flag needed):
+FINANCE_PRIVILEGED_ROLES = {
+    "admin", "system_admin", "Executive Director", "Adviser",
+    "Director", "Manager",
+}
+
+
+def has_finance_access(user: dict) -> bool:
+    """Gate for VIEWING financial data (donations, expenses, sales financials,
+    bank accounts, ledger, vendors, bills, reports).
+
+    Allowed if:
+      • user.role is in FINANCE_PRIVILEGED_ROLES, OR
+      • user.finance_access == True (explicit per-user opt-in granted by admins)
+    """
+    if not user:
+        return False
+    if (user.get("role") or "") in FINANCE_PRIVILEGED_ROLES:
+        return True
+    if (user.get("role") or "").lower() in {"admin", "system_admin"}:
+        return True
+    return bool(user.get("finance_access"))
+
+
+async def require_finance_view(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless user has finance view access."""
+    if not has_finance_access(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Finance data is restricted. Ask an administrator to grant you finance access.",
+        )
+    return current_user
+
+
+async def require_finance_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless user is Director+ (or admin). Used for WRITES that
+    create/modify financial records (donations, expenses, bills, JEs, bank rules)."""
+    if not has_finance_access(current_user):
+        raise HTTPException(status_code=403, detail="Finance access required")
+    role = current_user.get("role") or ""
+    if role in {"Manager", "Director", "Adviser", "Executive Director", "admin", "system_admin"}:
+        return current_user
+    raise HTTPException(
+        status_code=403,
+        detail="This action requires Manager/Director level access",
+    )
+
+
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
     Only expands to actual sub-locations (rooms, buildings), NOT sibling campuses.
