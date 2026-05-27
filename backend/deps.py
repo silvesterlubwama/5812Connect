@@ -184,7 +184,7 @@ def has_finance_access(user: dict) -> bool:
 
     Allowed if:
       • user.role is in FINANCE_PRIVILEGED_ROLES, OR
-      • user.finance_access == True (explicit per-user opt-in granted by admins)
+      • user.finance_access == True AND (no `finance_access_expires_at` OR not yet expired)
     """
     if not user:
         return False
@@ -192,7 +192,20 @@ def has_finance_access(user: dict) -> bool:
         return True
     if (user.get("role") or "").lower() in {"admin", "system_admin"}:
         return True
-    return bool(user.get("finance_access"))
+    if not user.get("finance_access"):
+        return False
+    # Check optional expiry
+    expires = user.get("finance_access_expires_at")
+    if expires:
+        try:
+            from datetime import datetime as _dt
+            exp_dt = _dt.fromisoformat(str(expires).replace("Z", "+00:00"))
+            now = _dt.now(timezone.utc)
+            if exp_dt <= now:
+                return False  # Expired grant
+        except Exception:
+            pass
+    return True
 
 
 async def require_finance_view(current_user: dict = Depends(get_current_user)) -> dict:

@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import { adminApi, documentsApi, locationsApi } from '../services/api';
+import api, { adminApi, documentsApi, locationsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
@@ -349,6 +349,8 @@ function FinanceAccessManager() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [grantingUser, setGrantingUser] = useState(null);
+  const [ttlDays, setTtlDays] = useState('');
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -359,10 +361,20 @@ function FinanceAccessManager() {
   }, []);
   useEffect(() => { if (open) load(); }, [open, load]);
 
-  const toggle = async (u, val) => {
+  const grant = async (u, days) => {
     try {
-      await adminApi.setFinanceAccess(u.id, val);
-      toast.success(`${val ? 'Granted' : 'Revoked'} finance access for ${u.name}`);
+      const body = { finance_access: true };
+      if (days && parseInt(days) > 0) body.ttl_days = parseInt(days);
+      await api.put(`/admin/finance-access/users/${u.id}`, body);
+      toast.success(`Granted ${days ? `for ${days} days` : 'permanently'} to ${u.name}`);
+      setGrantingUser(null); setTtlDays('');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const revoke = async (u) => {
+    try {
+      await adminApi.setFinanceAccess(u.id, false);
+      toast.success(`Revoked for ${u.name}`);
       load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -377,7 +389,7 @@ function FinanceAccessManager() {
             <Shield size={18} className="text-primary" />
             <div>
               <p className="font-medium text-sm">Finance Access</p>
-              <p className="text-xs text-muted-foreground">Grant or revoke explicit financial-data access for non-Director staff</p>
+              <p className="text-xs text-muted-foreground">Grant or revoke explicit financial-data access for non-Director staff (with optional expiry)</p>
             </div>
           </div>
           <Button size="sm" variant="outline">Manage</Button>
@@ -389,7 +401,7 @@ function FinanceAccessManager() {
             <DialogTitle>Finance Access Management</DialogTitle>
             <DialogDescription className="text-xs">
               Directors (Manager, Director, Adviser, Executive Director, Admin) always have finance access automatically.
-              Toggle individual non-Director users here to grant them explicit access.
+              Toggle individual non-Director users here to grant them explicit access — permanent or time-limited.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 mt-2">
@@ -398,11 +410,18 @@ function FinanceAccessManager() {
               <div className="space-y-1.5">
                 {filtered.map(u => {
                   const granted = u.finance_access_effective;
+                  const expires = u.finance_access_expires_at;
                   return (
                     <div key={u.id} className="flex items-center justify-between p-2 rounded border" data-testid={`finance-access-row-${u.id}`}>
                       <div>
                         <p className="text-sm font-medium">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></p>
                         <p className="text-[10px] text-muted-foreground">{u.email} · {u.department || '—'}</p>
+                        {expires && !u.finance_access_implicit && (
+                          <p className="text-[10px] text-amber-700">Expires {String(expires).slice(0, 10)}</p>
+                        )}
+                        {u.finance_access_expired && (
+                          <p className="text-[10px] text-red-700">⚠ Grant expired</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         {u.finance_access_implicit ? (
@@ -410,10 +429,10 @@ function FinanceAccessManager() {
                         ) : granted ? (
                           <>
                             <Badge className="bg-blue-100 text-blue-700 text-[10px]">Explicit grant</Badge>
-                            <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => toggle(u, false)} data-testid={`finance-revoke-${u.id}`}>Revoke</Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => revoke(u)} data-testid={`finance-revoke-${u.id}`}>Revoke</Button>
                           </>
                         ) : (
-                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => toggle(u, true)} data-testid={`finance-grant-${u.id}`}>Grant access</Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setGrantingUser(u); setTtlDays(''); }} data-testid={`finance-grant-${u.id}`}>Grant access</Button>
                         )}
                       </div>
                     </div>
@@ -421,6 +440,33 @@ function FinanceAccessManager() {
                 })}
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* GRANT (with optional TTL) */}
+      <Dialog open={!!grantingUser} onOpenChange={(o) => { if (!o) { setGrantingUser(null); setTtlDays(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Grant finance access</DialogTitle><DialogDescription className="text-xs">Granting to <strong>{grantingUser?.name}</strong> ({grantingUser?.role})</DialogDescription></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Duration</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { d: '', label: 'Permanent' },
+                  { d: '30', label: '30 days' },
+                  { d: '90', label: '90 days' },
+                ].map(opt => (
+                  <Button key={opt.label} type="button" size="sm" variant={ttlDays === opt.d ? 'default' : 'outline'} className="h-8 text-xs" onClick={() => setTtlDays(opt.d)}>{opt.label}</Button>
+                ))}
+              </div>
+              <Input type="number" placeholder="Custom days (1-365)" value={ttlDays && !['','30','90'].includes(ttlDays) ? ttlDays : ''} onChange={e => setTtlDays(e.target.value)} className="h-8 mt-1" data-testid="finance-grant-ttl" />
+              <p className="text-[10px] text-muted-foreground">Leave blank for permanent. Temp grants auto-revoke at end-of-day on the expiry date.</p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => { setGrantingUser(null); setTtlDays(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={() => grant(grantingUser, ttlDays)} data-testid="finance-grant-confirm">Grant</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

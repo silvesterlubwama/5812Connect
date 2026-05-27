@@ -449,6 +449,7 @@ export default function AccountingPage() {
               </CardContent>
             </Card>
           )}
+          <AdvancedReports locationId={locationFilter} currency={currentCurrency} />
         </TabsContent>
       </Tabs>
 
@@ -679,3 +680,131 @@ export default function AccountingPage() {
     </div>
   );
 }
+
+
+// ============== ADVANCED REPORTS (Phase D) ==============
+function AdvancedReports({ locationId, currency }) {
+  const [activeReport, setActiveReport] = useState(null);  // 'cash_flow' | 'ar' | 'ap'
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [vatRange, setVatRange] = useState({ from: '', to: '' });
+
+  const fmt = (n) => (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const loadReport = async (which) => {
+    setLoading(true); setActiveReport(which); setData(null);
+    try {
+      let path;
+      if (which === 'cash_flow') path = '/accounting/reports/cash-flow';
+      else if (which === 'ar') path = '/accounting/reports/ar-aging';
+      else if (which === 'ap') path = '/accounting/reports/ap-aging';
+      const r = await api.get(path, { params: { location_id: locationId } });
+      setData(r.data);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load report'); }
+    finally { setLoading(false); }
+  };
+
+  const downloadVatExport = async () => {
+    if (!vatRange.from || !vatRange.to) { toast.error('Pick a date range'); return; }
+    try {
+      const r = await api.get('/accounting/reports/uganda-vat-export', {
+        params: { date_from: vatRange.from, date_to: vatRange.to, location_id: locationId },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = `uganda-vat-${vatRange.from}-to-${vatRange.to}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Uganda VAT CSV downloaded');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  return (
+    <div className="space-y-4" data-testid="acc-advanced-reports">
+      <h3 className="text-sm font-semibold uppercase text-muted-foreground border-t pt-4">Phase D — Advanced Reports</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Card className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => loadReport('cash_flow')} data-testid="acc-rep-cf-btn">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-1"><TrendingUp size={14} className="text-blue-600" /><p className="text-xs uppercase text-muted-foreground">Cash Flow Statement</p></div>
+            <p className="text-xs text-muted-foreground">Operating / Investing / Financing classification</p>
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => loadReport('ar')} data-testid="acc-rep-ar-btn">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-1"><Scale size={14} className="text-amber-600" /><p className="text-xs uppercase text-muted-foreground">AR Aging</p></div>
+            <p className="text-xs text-muted-foreground">Customer outstanding by bucket (0-30 / 31-60 / 61-90 / 90+)</p>
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => loadReport('ap')} data-testid="acc-rep-ap-btn">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-1"><Scale size={14} className="text-red-600" /><p className="text-xs uppercase text-muted-foreground">AP Aging</p></div>
+            <p className="text-xs text-muted-foreground">Vendor bills outstanding by bucket</p>
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl" data-testid="acc-rep-vat-card">
+          <CardContent className="p-4 space-y-2">
+            <div className="flex items-center gap-2"><FileText size={14} className="text-emerald-600" /><p className="text-xs uppercase text-muted-foreground">Uganda VAT / EFRIS</p></div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Input type="date" className="h-8 text-xs" value={vatRange.from} onChange={e => setVatRange({ ...vatRange, from: e.target.value })} placeholder="From" />
+              <Input type="date" className="h-8 text-xs" value={vatRange.to} onChange={e => setVatRange({ ...vatRange, to: e.target.value })} placeholder="To" />
+            </div>
+            <Button size="sm" className="w-full h-8 text-xs" onClick={downloadVatExport} disabled={!vatRange.from || !vatRange.to} data-testid="acc-rep-vat-download"><FileText size={11} className="mr-1" />Download CSV</Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      {loading && <div className="space-y-2">{[1, 2].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>}
+
+      {!loading && activeReport === 'cash_flow' && data && (
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Cash Flow Statement <span className="text-xs text-muted-foreground font-normal">({currency})</span></CardTitle></CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div>
+              <h4 className="font-semibold mb-1 text-blue-700">Operating · {fmt(data.totals.operating)}</h4>
+              {data.operating.map((r, i) => <p key={i} className="text-[11px] flex justify-between"><span>{r.account}</span><span className={r.amount < 0 ? 'text-red-600' : ''}>{fmt(r.amount)}</span></p>)}
+            </div>
+            <div>
+              <h4 className="font-semibold mb-1 text-purple-700">Investing · {fmt(data.totals.investing)}</h4>
+              {data.investing.length === 0 && <p className="text-[11px] text-muted-foreground">—</p>}
+              {data.investing.map((r, i) => <p key={i} className="text-[11px] flex justify-between"><span>{r.account}</span><span className={r.amount < 0 ? 'text-red-600' : ''}>{fmt(r.amount)}</span></p>)}
+            </div>
+            <div>
+              <h4 className="font-semibold mb-1 text-emerald-700">Financing · {fmt(data.totals.financing)}</h4>
+              {data.financing.length === 0 && <p className="text-[11px] text-muted-foreground">—</p>}
+              {data.financing.map((r, i) => <p key={i} className="text-[11px] flex justify-between"><span>{r.account}</span><span className={r.amount < 0 ? 'text-red-600' : ''}>{fmt(r.amount)}</span></p>)}
+            </div>
+            <div className="md:col-span-3 border-t pt-2 text-right text-base font-bold">
+              Net change in cash: <span className={data.totals.net_change < 0 ? 'text-red-700' : 'text-emerald-700'}>{fmt(data.totals.net_change)}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!loading && (activeReport === 'ar' || activeReport === 'ap') && data && (
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">{activeReport === 'ar' ? 'Accounts Receivable Aging' : 'Accounts Payable Aging'} <span className="text-xs text-muted-foreground font-normal">({currency})</span></CardTitle></CardHeader>
+          <CardContent className="text-xs">
+            {data.rows.length === 0 ? <p className="text-muted-foreground text-center py-4">No outstanding {activeReport === 'ar' ? 'receivables' : 'payables'}.</p> : (
+              <table className="w-full">
+                <thead><tr className="border-b text-muted-foreground"><th className="text-left">{activeReport === 'ar' ? 'Customer' : 'Vendor'}</th><th className="text-right">0-30</th><th className="text-right">31-60</th><th className="text-right">61-90</th><th className="text-right">90+</th><th className="text-right">Total</th></tr></thead>
+                <tbody>{data.rows.map((r, i) => (
+                  <tr key={i} className="border-b">
+                    <td className="py-1">{r.customer_name || r.vendor_name}</td>
+                    <td className="text-right">{fmt(r['0-30'])}</td>
+                    <td className="text-right">{fmt(r['31-60'])}</td>
+                    <td className="text-right">{fmt(r['61-90'])}</td>
+                    <td className={`text-right ${r['90+'] > 0 ? 'text-red-700 font-semibold' : ''}`}>{fmt(r['90+'])}</td>
+                    <td className="text-right font-semibold">{fmt(r.total)}</td>
+                  </tr>
+                ))}</tbody>
+                <tfoot><tr className="font-bold border-t-2"><td className="py-2">TOTAL</td><td className="text-right">{fmt(data.totals['0-30'])}</td><td className="text-right">{fmt(data.totals['31-60'])}</td><td className="text-right">{fmt(data.totals['61-90'])}</td><td className="text-right text-red-700">{fmt(data.totals['90+'])}</td><td className="text-right">{fmt(data.totals.total)}</td></tr></tfoot>
+              </table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+

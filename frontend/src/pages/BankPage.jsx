@@ -47,6 +47,12 @@ export default function BankPage() {
   const [vendorForm, setVendorForm] = useState({ name: '', tin: '', vat_registered: false, email: '', phone: '', payment_terms_days: 30, currency: 'UGX', country: 'UG' });
   const [showRuleForm, setShowRuleForm] = useState(false);
   const [ruleForm, setRuleForm] = useState({ name: '', match_pattern: '', target_account_id: '', priority: 100 });
+  const [showBillForm, setShowBillForm] = useState(false);
+  const [billForm, setBillForm] = useState({ vendor_id: '', bill_date: new Date().toISOString().slice(0, 10), due_date: '', currency: 'UGX', notes: '', items: [{ description: '', qty: 1, unit_price: 0, account_id: '', tax_rate: 0 }] });
+  const [payBill, setPayBill] = useState(null);
+  const [payForm, setPayForm] = useState({ amount: '', bank_account_id: '', method: 'bank_transfer', reference: '', notes: '' });
+  const [showRecForm, setShowRecForm] = useState(false);
+  const [recForm, setRecForm] = useState({ name: '', kind: 'bill', schedule: 'monthly', day_of_month: 1, next_run_date: '', template_vendor_id: '', template_items: [{ description: '', qty: 1, unit_price: 0, account_id: '' }], template_currency: 'UGX' });
   const [reconcileTx, setReconcileTx] = useState(null);  // tx being reconciled
   const [reconcileAccount, setReconcileAccount] = useState('');
   const fileInputRef = useRef(null);
@@ -116,6 +122,80 @@ export default function BankPage() {
       toast.success('Rule created');
       setShowRuleForm(false);
       setRuleForm({ name: '', match_pattern: '', target_account_id: '', priority: 100 });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  // Bill form helpers
+  const billItems = billForm.items;
+  const updateBillItem = (i, k, v) => setBillForm(p => { const it = [...p.items]; it[i] = { ...it[i], [k]: v }; return { ...p, items: it }; });
+  const addBillItem = () => setBillForm(p => ({ ...p, items: [...p.items, { description: '', qty: 1, unit_price: 0, account_id: '', tax_rate: 0 }] }));
+  const removeBillItem = (i) => setBillForm(p => ({ ...p, items: p.items.filter((_, j) => j !== i) }));
+  const billSubtotal = billItems.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unit_price) || 0), 0);
+  const billTax = billItems.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unit_price) || 0) * (parseFloat(i.tax_rate) || 0) / 100, 0);
+  const billTotal = billSubtotal + billTax;
+
+  const createBill = async () => {
+    if (!billForm.vendor_id) { toast.error('Pick a vendor'); return; }
+    const cleanedItems = billForm.items
+      .filter(i => i.description && parseFloat(i.unit_price) > 0 && i.account_id)
+      .map(i => ({
+        description: i.description, qty: parseFloat(i.qty) || 1,
+        unit_price: parseFloat(i.unit_price) || 0, account_id: i.account_id,
+        tax_rate: parseFloat(i.tax_rate) || 0,
+      }));
+    if (!cleanedItems.length) { toast.error('At least one valid line item with description, price, and expense account'); return; }
+    try {
+      await api.post('/bank/bills', {
+        vendor_id: billForm.vendor_id, bill_date: billForm.bill_date,
+        due_date: billForm.due_date || undefined, currency: billForm.currency,
+        notes: billForm.notes, items: cleanedItems,
+      });
+      toast.success('Bill created — auto-posted to ledger');
+      setShowBillForm(false);
+      setBillForm({ vendor_id: '', bill_date: new Date().toISOString().slice(0, 10), due_date: '', currency: 'UGX', notes: '', items: [{ description: '', qty: 1, unit_price: 0, account_id: '', tax_rate: 0 }] });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const submitBillPayment = async () => {
+    if (!payBill) return;
+    try {
+      await api.post(`/bank/bills/${payBill.id}/payments`, {
+        amount: parseFloat(payForm.amount), bank_account_id: payForm.bank_account_id,
+        method: payForm.method, reference: payForm.reference, notes: payForm.notes,
+      });
+      toast.success('Payment recorded — JE auto-posted');
+      setPayBill(null);
+      setPayForm({ amount: '', bank_account_id: '', method: 'bank_transfer', reference: '', notes: '' });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  // Recurring form helpers
+  const updateRecItem = (i, k, v) => setRecForm(p => { const it = [...p.template_items]; it[i] = { ...it[i], [k]: v }; return { ...p, template_items: it }; });
+  const addRecItem = () => setRecForm(p => ({ ...p, template_items: [...p.template_items, { description: '', qty: 1, unit_price: 0, account_id: '' }] }));
+  const removeRecItem = (i) => setRecForm(p => ({ ...p, template_items: p.template_items.filter((_, j) => j !== i) }));
+
+  const createRecurring = async () => {
+    if (!recForm.name || !recForm.next_run_date) { toast.error('Name and next run date required'); return; }
+    if (recForm.kind === 'bill' && !recForm.template_vendor_id) { toast.error('Pick a vendor for recurring bill'); return; }
+    const cleanedItems = recForm.template_items
+      .filter(i => i.description && parseFloat(i.unit_price) > 0 && i.account_id)
+      .map(i => ({ description: i.description, qty: parseFloat(i.qty) || 1, unit_price: parseFloat(i.unit_price) || 0, account_id: i.account_id }));
+    if (!cleanedItems.length) { toast.error('At least one valid line item'); return; }
+    try {
+      const template = recForm.kind === 'bill'
+        ? { vendor_id: recForm.template_vendor_id, items: cleanedItems, currency: recForm.template_currency }
+        : { journal_id: null, items: cleanedItems };  // For JE — needs further fields; placeholder
+      await api.post('/bank/recurring', {
+        name: recForm.name, kind: recForm.kind, schedule: recForm.schedule,
+        day_of_month: recForm.day_of_month, next_run_date: recForm.next_run_date,
+        template,
+      });
+      toast.success('Recurring template created');
+      setShowRecForm(false);
+      setRecForm({ name: '', kind: 'bill', schedule: 'monthly', day_of_month: 1, next_run_date: '', template_vendor_id: '', template_items: [{ description: '', qty: 1, unit_price: 0, account_id: '' }], template_currency: 'UGX' });
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -305,7 +385,10 @@ export default function BankPage() {
 
         {/* BILLS */}
         <TabsContent value="bills" className="space-y-3">
-          {bills.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No bills yet. Bills can be created via API or the Vendors workflow.</p> : (
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setShowBillForm(true)} disabled={vendors.length === 0} data-testid="bank-new-bill-btn"><Plus size={14} className="mr-1" />New Bill</Button>
+          </div>
+          {bills.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No bills yet. {vendors.length === 0 ? 'Create a vendor first.' : 'Click "New Bill" to add one.'}</p> : (
             <div className="space-y-2">
               {bills.map(b => (
                 <Card key={b.id} className="rounded-xl" data-testid={`bank-bill-${b.id}`}>
@@ -317,6 +400,9 @@ export default function BankPage() {
                     <div className="flex items-center gap-2">
                       <p className="font-bold">{fmt(b.balance, b.currency)} <span className="text-xs text-muted-foreground font-normal">of {fmt(b.total, b.currency)}</span></p>
                       <Badge className={`text-[10px] ${STATUS_COLORS[b.status] || ''} capitalize`}>{b.status?.replace('_', ' ')}</Badge>
+                      {(b.status === 'open' || b.status === 'partially_paid') && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setPayBill(b); setPayForm({ amount: String(b.balance || ''), bank_account_id: accounts[0]?.id || '', method: 'bank_transfer', reference: '', notes: '' }); }} data-testid={`bank-bill-pay-${b.id}`}>Record payment</Button>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -327,6 +413,9 @@ export default function BankPage() {
 
         {/* RECURRING */}
         <TabsContent value="recurring" className="space-y-3">
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setShowRecForm(true)} disabled={vendors.length === 0} data-testid="bank-new-recurring-btn"><Plus size={14} className="mr-1" />New Recurring</Button>
+          </div>
           {recurring.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No recurring entries scheduled.</p> : (
             <div className="space-y-2">
               {recurring.map(r => (
@@ -516,6 +605,151 @@ export default function BankPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* NEW BILL DIALOG */}
+      <Dialog open={showBillForm} onOpenChange={setShowBillForm}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>New Bill</DialogTitle><DialogDescription className="text-xs">Vendor bills auto-post to the accounting ledger (Dr Expense / Cr AP).</DialogDescription></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Vendor *</Label>
+                <Select value={billForm.vendor_id} onValueChange={v => setBillForm({ ...billForm, vendor_id: v })}>
+                  <SelectTrigger className="h-9" data-testid="bill-form-vendor"><SelectValue placeholder="Pick..." /></SelectTrigger>
+                  <SelectContent>{vendors.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Bill date *</Label><Input type="date" value={billForm.bill_date} onChange={e => setBillForm({ ...billForm, bill_date: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Due date</Label><Input type="date" value={billForm.due_date} onChange={e => setBillForm({ ...billForm, due_date: e.target.value })} placeholder="Auto from terms" /></div>
+            </div>
+            <div className="border rounded-lg p-2 space-y-2">
+              <div className="grid grid-cols-12 gap-1.5 text-[10px] uppercase text-muted-foreground font-semibold px-1">
+                <div className="col-span-4">Description</div>
+                <div className="col-span-1 text-right">Qty</div>
+                <div className="col-span-2 text-right">Unit Price</div>
+                <div className="col-span-3">Expense Account</div>
+                <div className="col-span-1 text-right">VAT %</div>
+                <div className="col-span-1"></div>
+              </div>
+              {billItems.map((it, i) => (
+                <div key={i} className="grid grid-cols-12 gap-1.5 items-center" data-testid={`bill-item-${i}`}>
+                  <Input className="col-span-4 h-8 text-xs" value={it.description} onChange={e => updateBillItem(i, 'description', e.target.value)} placeholder="Maize seeds" />
+                  <Input className="col-span-1 h-8 text-xs text-right" type="number" step="1" value={it.qty} onChange={e => updateBillItem(i, 'qty', e.target.value)} />
+                  <Input className="col-span-2 h-8 text-xs text-right" type="number" step="0.01" value={it.unit_price} onChange={e => updateBillItem(i, 'unit_price', e.target.value)} />
+                  <Select value={it.account_id} onValueChange={v => updateBillItem(i, 'account_id', v)}>
+                    <SelectTrigger className="col-span-3 h-8 text-xs"><SelectValue placeholder="Account" /></SelectTrigger>
+                    <SelectContent>{coaAccounts.filter(a => a.type?.startsWith('expense_') || a.type === 'expense' || a.type === 'asset_inventory').map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Input className="col-span-1 h-8 text-xs text-right" type="number" step="0.1" value={it.tax_rate} onChange={e => updateBillItem(i, 'tax_rate', e.target.value)} />
+                  <Button size="sm" variant="ghost" className="col-span-1 h-8 text-destructive" disabled={billItems.length <= 1} onClick={() => removeBillItem(i)}>×</Button>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" className="w-full h-8 text-xs" onClick={addBillItem}><Plus size={12} className="mr-1" />Add line</Button>
+              <div className="grid grid-cols-12 gap-1.5 text-xs font-semibold pt-2 border-t">
+                <div className="col-span-7 text-right">Subtotal / VAT / Total</div>
+                <div className="col-span-2 text-right">{billSubtotal.toLocaleString()}</div>
+                <div className="col-span-1 text-right">{billTax.toLocaleString()}</div>
+                <div className="col-span-2 text-right text-base">{billTotal.toLocaleString()}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Currency</Label>
+                <Select value={billForm.currency} onValueChange={v => setBillForm({ ...billForm, currency: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{['UGX','USD','KES','EUR','GBP','HTG','THB'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 col-span-2"><Label className="text-xs">Notes</Label><Input value={billForm.notes} onChange={e => setBillForm({ ...billForm, notes: e.target.value })} /></div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowBillForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={createBill} disabled={!billForm.vendor_id || billTotal === 0} data-testid="bill-form-submit">Create Bill</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* RECORD PAYMENT DIALOG */}
+      <Dialog open={!!payBill} onOpenChange={(o) => { if (!o) setPayBill(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Record payment — {payBill?.bill_number}</DialogTitle><DialogDescription className="text-xs">Vendor: <strong>{payBill?.vendor_name}</strong> · Balance: <strong>{payBill ? fmt(payBill.balance, payBill.currency) : ''}</strong></DialogDescription></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Amount *</Label><Input type="number" step="0.01" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} data-testid="pay-amount" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Method</Label>
+                <Select value={payForm.method} onValueChange={v => setPayForm({ ...payForm, method: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{['bank_transfer','cheque','cash','mobile_money','card'].map(m => <SelectItem key={m} value={m} className="capitalize">{m.replace('_', ' ')}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">From bank account *</Label>
+              <Select value={payForm.bank_account_id} onValueChange={v => setPayForm({ ...payForm, bank_account_id: v })}>
+                <SelectTrigger data-testid="pay-bank"><SelectValue placeholder="Pick..." /></SelectTrigger>
+                <SelectContent>{accounts.map(a => <SelectItem key={a.id} value={a.id}>{a.name} ({a.currency})</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Reference</Label><Input value={payForm.reference} onChange={e => setPayForm({ ...payForm, reference: e.target.value })} placeholder="TXN ref / cheque #" /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label><Input value={payForm.notes} onChange={e => setPayForm({ ...payForm, notes: e.target.value })} /></div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setPayBill(null)}>Cancel</Button>
+              <Button className="flex-1" onClick={submitBillPayment} disabled={!payForm.amount || !payForm.bank_account_id} data-testid="pay-submit">Record Payment</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* NEW RECURRING DIALOG */}
+      <Dialog open={showRecForm} onOpenChange={setShowRecForm}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>New Recurring Bill</DialogTitle><DialogDescription className="text-xs">A new bill will be auto-created on the schedule below.</DialogDescription></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Name *</Label><Input value={recForm.name} onChange={e => setRecForm({ ...recForm, name: e.target.value })} placeholder="Monthly Office Rent" data-testid="rec-form-name" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Next run date *</Label><Input type="date" value={recForm.next_run_date} onChange={e => setRecForm({ ...recForm, next_run_date: e.target.value })} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Schedule</Label>
+                <Select value={recForm.schedule} onValueChange={v => setRecForm({ ...recForm, schedule: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{['daily','weekly','biweekly','monthly','quarterly','yearly'].map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Day of month</Label><Input type="number" min={1} max={31} value={recForm.day_of_month} onChange={e => setRecForm({ ...recForm, day_of_month: parseInt(e.target.value) || 1 })} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Currency</Label>
+                <Select value={recForm.template_currency} onValueChange={v => setRecForm({ ...recForm, template_currency: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{['UGX','USD','KES','EUR','GBP'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Vendor *</Label>
+              <Select value={recForm.template_vendor_id} onValueChange={v => setRecForm({ ...recForm, template_vendor_id: v })}>
+                <SelectTrigger data-testid="rec-form-vendor"><SelectValue placeholder="Pick..." /></SelectTrigger>
+                <SelectContent>{vendors.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="border rounded-lg p-2 space-y-2">
+              <p className="text-[10px] uppercase text-muted-foreground font-semibold">Line items (template)</p>
+              {recForm.template_items.map((it, i) => (
+                <div key={i} className="grid grid-cols-12 gap-1.5 items-center">
+                  <Input className="col-span-5 h-8 text-xs" value={it.description} onChange={e => updateRecItem(i, 'description', e.target.value)} placeholder="Office rent" />
+                  <Input className="col-span-2 h-8 text-xs text-right" type="number" step="1" value={it.qty} onChange={e => updateRecItem(i, 'qty', e.target.value)} />
+                  <Input className="col-span-2 h-8 text-xs text-right" type="number" step="0.01" value={it.unit_price} onChange={e => updateRecItem(i, 'unit_price', e.target.value)} placeholder="Price" />
+                  <Select value={it.account_id} onValueChange={v => updateRecItem(i, 'account_id', v)}>
+                    <SelectTrigger className="col-span-2 h-8 text-xs"><SelectValue placeholder="Acct" /></SelectTrigger>
+                    <SelectContent>{coaAccounts.filter(a => a.type?.startsWith('expense_') || a.type === 'expense').map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button size="sm" variant="ghost" className="col-span-1 h-8 text-destructive" disabled={recForm.template_items.length <= 1} onClick={() => removeRecItem(i)}>×</Button>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" className="w-full h-8 text-xs" onClick={addRecItem}><Plus size={12} className="mr-1" />Add line</Button>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowRecForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={createRecurring} disabled={!recForm.name || !recForm.next_run_date || !recForm.template_vendor_id} data-testid="rec-form-submit">Create Schedule</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

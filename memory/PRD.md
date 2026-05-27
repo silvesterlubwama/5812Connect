@@ -6,6 +6,31 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 124 (May 26, 2026)
+**Time-limited finance access + Bills/Recurring create dialogs + Phase D reports UI.**
+
+### Time-limited finance access (suggested improvement)
+- ✅ `has_finance_access()` now checks `finance_access_expires_at` — expired grants auto-revoke.
+- ✅ `PUT /admin/finance-access/users/{id}` accepts optional `ttl_days` OR explicit `expires_at`. Omitting both = permanent.
+- ✅ `GET /admin/finance-access/users` enriches each row with `finance_access_expires_at` + `finance_access_expired` flag.
+- ✅ Admin UI: new "Grant access" sub-dialog with quick TTL chips (Permanent / 30d / 90d) + custom days. Expired grants show ⚠ in the list.
+- ✅ Verified end-to-end: 30-day grant works → simulated expiry → user auto-blocked with proper 403.
+
+### Bills + Recurring create dialogs (BankPage)
+- ✅ **New Bill** dialog: vendor picker, multi-line items with description/qty/unit_price/expense-account/VAT% per line, live subtotal+VAT+total footer, currency picker. On submit → auto-posts to ledger (Dr Expense + Dr VAT-input / Cr Accounts Payable).
+- ✅ **Record Payment** dialog per bill: amount (defaults to balance), method, bank account picker, reference, notes. Auto-posts Dr AP / Cr Bank.
+- ✅ **New Recurring** dialog: kind (bill default), schedule (daily…yearly), day_of_month, next_run_date, vendor + multi-line item template. Created template fires automatically by the daily scheduler.
+
+### Phase D reports wired into Accounting page
+- ✅ New **"Advanced Reports"** section in the Reports tab with 4 cards:
+   • **Cash Flow Statement** — operating/investing/financing breakdown with click-to-load tables and net change
+   • **AR Aging** — customer rows with 0-30/31-60/61-90/90+ buckets and totals
+   • **AP Aging** — vendor rows with same buckets
+   • **Uganda VAT/EFRIS Export** — date-range picker + CSV download
+- ✅ All reports respect the campus switcher (use the page's `locationFilter`) and show the campus currency.
+
+All 16 pytest smoke tests pass. All affected frontend pages lint clean. Backend healthy.
+
 ## Recently Resolved — Iteration 123 (May 26, 2026)
 **Finance data restricted to directors + explicit-grant employees + new Banking page UI.**
 
