@@ -10,14 +10,31 @@ api.interceptors.request.use(config => {
   return config;
 });
 
-// Handle 401
+// Handle 401 — but skip the auto-redirect for endpoints where a 401 is the
+// EXPECTED response to bad credentials (login attempts, kiosk PIN, kiosk unlock).
+// Otherwise a wrong PIN at the kiosk would kick the user back to the main
+// login page instead of letting them re-try on the kiosk lock screen.
+const LOGIN_PATHS_SKIP_REDIRECT = [
+  '/auth/login',
+  '/auth/pin-login',
+  '/auth/pos-login',
+  '/auth/2fa/verify',
+  '/auth/password-reset',
+  '/auth/forgot-password',
+  '/kiosk/unlock',
+  '/kiosk/pin-checkin',  // public kiosk lookup — 401 here means bad PIN, NOT session expiry
+];
 api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      secureStorage.removeToken();
-      secureStorage.removeUser();
-      window.location.href = '/login';
+      const url = (err.config?.url || '').toLowerCase();
+      const isLoginPath = LOGIN_PATHS_SKIP_REDIRECT.some(p => url.includes(p));
+      if (!isLoginPath) {
+        secureStorage.removeToken();
+        secureStorage.removeUser();
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err);
   }

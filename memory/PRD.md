@@ -6,6 +6,25 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 128 (May 27, 2026)
+**POS / Kiosk now stays on PIN entry screen on bad credentials.**
+
+### Root cause
+The global axios 401 interceptor (`/app/frontend/src/services/api.js`) **unconditionally** cleared the session and redirected to `/login` on every 401. But a wrong PIN at the kiosk legitimately returns 401 — that's *expected* user feedback, not session expiry. Result: a single mistyped digit yanked the user out of the kiosk back to the main login.
+
+### Fix
+- ✅ Interceptor now skips the auto-redirect for endpoints where a 401 is normal:
+  - `/auth/login`, `/auth/pin-login`, `/auth/pos-login`, `/auth/2fa/verify`, `/auth/password-reset`, `/auth/forgot-password`
+  - `/kiosk/unlock`, `/kiosk/pin-checkin` (public kiosk paths)
+- For these endpoints, the caller (PIN dialog, kiosk lookup) handles the 401 itself with a local toast/error state. User stays exactly where they were.
+- All OTHER 401s (genuine session expiry on protected APIs) still redirect normally.
+
+### Verified
+- `POST /auth/pin-login` with bad PIN → 401 "Invalid PIN" → frontend now stays on the PIN entry screen, displays the error inline. No more involuntary logout.
+- `POST /kiosk/unlock` with bad PIN → 401 → kiosk unlock dialog stays open with error toast.
+
+All 16 pytest smoke tests still pass. Single-file fix (3-line addition); lint clean.
+
 ## Recently Resolved — Iteration 127 (May 27, 2026)
 **4 user-reported fixes: location promotion bug + PDF bank import + finance sidebar gating + module clarity.**
 
