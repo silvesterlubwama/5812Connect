@@ -202,7 +202,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
 
   const writeToNfc = async () => {
     if (!('NDEFReader' in window)) {
-      toast.error('NFC not supported on this device/browser. Use Chrome on Android with NFC enabled.');
+      toast.error('Built-in NFC requires Chrome on Android. On desktop, use a USB NFC reader (which presents as a keyboard or HID) — your barcode scanner shortcut handles those automatically.');
       return;
     }
     setNfcWriting(true);

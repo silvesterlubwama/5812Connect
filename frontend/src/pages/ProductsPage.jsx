@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import useConfirm from '../hooks/useConfirm';
 import { ShoppingCart, Plus, Trash2, Edit2, Package, Receipt, RefreshCw, Minus, X, Search, MapPin, Settings, Download, Upload, Printer, Barcode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -27,7 +28,7 @@ import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
 import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
-import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer } from '../utils/posPeripherals';
+import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -48,6 +49,7 @@ const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category
 
 export default function ProductsPage() {
   const { user } = useAuth();
+  const { confirm, ConfirmDialog } = useConfirm();
   const [products, setProducts] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sales, setSales] = useState([]);
@@ -379,7 +381,7 @@ export default function ProductsPage() {
   };
 
   const discardDraft = async (id) => {
-    if (!window.confirm('Discard this parked sale?')) return;
+    if (!await confirm({ title: 'Discard parked sale?', message: 'This parked cart will be lost.', destructive: true, confirmLabel: 'Discard' })) return;
     try { await salesApi.deleteDraft(id); fetchDrafts(); toast.success('Discarded'); }
     catch { toast.error('Failed'); }
   };
@@ -576,7 +578,7 @@ export default function ProductsPage() {
   };
 
   const deleteProduct = async (id) => {
-    if (!window.confirm('Delete this product?')) return;
+    if (!await confirm({ title: 'Delete product?', message: 'This product will be removed permanently.', destructive: true, confirmLabel: 'Delete' })) return;
     await productsApi.delete(id);
     setProducts(prev => prev.filter(p => p.id !== id));
     toast.success('Product deleted');
@@ -706,6 +708,8 @@ export default function ProductsPage() {
               {drawerConnected ? 'Drawer Connected' : 'Connect Drawer'}
             </Button>
           )}
+          {/* Peripheral support diagnostics — shows what works in current browser */}
+          <PeripheralDiagnostics />
           {/* Offline status indicator */}
           {!isOnline && (
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-amber-50 border border-amber-300 text-xs text-amber-800" data-testid="offline-indicator">
@@ -767,7 +771,7 @@ export default function ProductsPage() {
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">{[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
                 ) : (
                   <div>
-                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!window.confirm(`Delete ${selectedIds.size} products?`)) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch { /* ignore individual failures */ } } setSelectedIds(new Set()); fetchAll(); toast.success('Deleted'); }} /></div>}
+                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!await confirm({ title: `Delete ${selectedIds.size} products?`, message: 'This cannot be undone.', destructive: true, confirmLabel: 'Delete all' })) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch { /* ignore individual failures */ } } setSelectedIds(new Set()); fetchAll(); toast.success('Deleted'); }} /></div>}
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     {filteredProducts.map(p => (
                       <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>
@@ -1038,7 +1042,7 @@ export default function ProductsPage() {
                             </Button>
                             {!isPending && (
                               <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-600" data-testid={`mark-pending-${sale.id}`} onClick={async () => {
-                                if (!window.confirm('Revert this sale to pending payment?')) return;
+                                if (!await confirm({ title: 'Revert sale to pending?', message: 'Marks this sale as unpaid again.', confirmLabel: 'Revert' })) return;
                                 try {
                                   await salesApi.setPaymentStatus(sale.id, 'pending');
                                   setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_status: 'pending' } : s));
@@ -1046,7 +1050,7 @@ export default function ProductsPage() {
                                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
                               }}>↺</Button>
                             )}
-                            <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this sale?')) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
+                            <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!await confirm({ title: 'Delete sale?', message: 'This removes the receipt and cannot be undone.', destructive: true, confirmLabel: 'Delete' })) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
                           </td>}
                         </tr>);
                       })}
@@ -1274,7 +1278,7 @@ export default function ProductsPage() {
             const ageS = (Date.now() - created) / 1000;
             return ageS <= 60 ? (
               <Button variant="outline" className="w-full mt-2 border-amber-300 text-amber-700 hover:bg-amber-50 gap-1.5" data-testid="undo-sale-btn" onClick={async () => {
-                if (!window.confirm('Void this sale and restore stock? (Cannot be undone after 60s)')) return;
+                if (!await confirm({ title: 'Void last sale?', message: 'Restore stock and remove this receipt. Cannot be undone after 60s.', destructive: true, confirmLabel: 'Void' })) return;
                 try {
                   await salesApi.undo(lastReceipt.id);
                   setLastReceipt({ ...lastReceipt, voided: true });
@@ -1743,6 +1747,57 @@ export default function ProductsPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog />
     </div>
   );
 }
+
+// ============== PERIPHERAL DIAGNOSTICS ==============
+function PeripheralDiagnostics() {
+  const [open, setOpen] = useState(false);
+  const info = describePeripheralSupport();
+  const totalSupported = info.supported.length;
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 text-xs gap-1"
+        onClick={() => setOpen(true)}
+        data-testid="peripheral-diagnostics-btn"
+        title="Show which POS peripherals work in this browser"
+      >
+        <span className={`w-1.5 h-1.5 rounded-full ${totalSupported >= 3 ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+        Peripherals ({totalSupported})
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md" data-testid="peripheral-diagnostics-dialog">
+          <DialogHeader>
+            <DialogTitle>Peripheral Support</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2 text-xs">
+            <p className="text-muted-foreground">What works on this browser ({info.isMobile ? (info.isAndroid ? 'Android' : 'iOS / mobile') : 'desktop'})</p>
+            <div>
+              <p className="font-semibold text-emerald-700 uppercase text-[10px] mb-1">✓ Supported ({info.supported.length})</p>
+              <ul className="space-y-1">
+                {info.supported.map((s, i) => <li key={i} className="flex items-start gap-1.5"><span className="text-emerald-600 mt-0.5">●</span><span>{s}</span></li>)}
+              </ul>
+            </div>
+            {info.unsupported.length > 0 && (
+              <div>
+                <p className="font-semibold text-muted-foreground uppercase text-[10px] mb-1">✗ Not in this browser</p>
+                <ul className="space-y-1">
+                  {info.unsupported.map((s, i) => <li key={i} className="flex items-start gap-1.5 text-muted-foreground"><span className="mt-0.5">○</span><span>{s}</span></li>)}
+                </ul>
+              </div>
+            )}
+            <div className="text-[10px] text-muted-foreground border-t pt-2">
+              <strong>Tip:</strong> USB barcode scanners that emulate keyboards work in EVERY browser — just plug them in and scan; the POS auto-captures rapid keystrokes ending in Enter, regardless of operating system.
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+

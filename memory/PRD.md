@@ -6,6 +6,23 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 126 (May 27, 2026)
+**POS fullscreen escape fix + cross-browser peripheral support clarity.**
+
+### 1. Browser confirm() exits fullscreen — replaced with custom AlertDialog
+- **Root cause:** `window.confirm()` (and `alert()` / `prompt()`) automatically exits browser fullscreen on Chrome/Edge/Firefox. Worse, the native dialog **blocks the JS thread** so `mousemove`/`click` events don't fire — meaning the kiosk idle-timer keeps counting toward auto-logout even though the user is reading the dialog → "returned to login screen" symptom.
+- ✅ New `useConfirm()` hook (`/app/frontend/src/hooks/useConfirm.jsx`) — drop-in Promise-based replacement for `window.confirm()` using shadcn `AlertDialog`. Returns a `confirm(opts)` → Promise<boolean> + a `<ConfirmDialog />` component to mount once.
+- ✅ Replaced **all 6** `window.confirm()` calls in `ProductsPage` (parked sale discard, product delete, bulk-delete products, revert sale, delete sale, void last sale).
+- ✅ The AlertDialog renders in-app — so fullscreen stays active AND mouse/click events keep firing → idle timer resets naturally → no more auto-logout during long confirmation reads.
+
+### 2. Cross-browser peripheral support clarity
+- **Reality:** USB barcode scanners (keyboard-HID emulation) work in **every** browser/OS — the POS keyboard capture is already cross-browser. Web Serial, Web HID, Web USB, Web Bluetooth all work on Chrome/Edge/Opera **desktop** (Windows/Mac/Linux), not just Android. Only Web NFC is Android-only.
+- ✅ Enhanced `utils/posPeripherals.js` with `detectPeripheralSupport()` + `describePeripheralSupport()` helpers that enumerate **every** API the current browser exposes.
+- ✅ New **Peripheral Diagnostics** button in POS header — opens a dialog listing supported vs. unsupported capabilities for the user's current browser/OS. Helps staff confirm "yes, your Mac/Windows POS WILL detect the cash drawer and barcode scanner".
+- ✅ Updated the misleading NFC error message in `UnifiedBadge.jsx` to clarify that desktop browsers can use USB NFC readers (which present as keyboards) — pointing users to the existing barcode-scanner shortcut path.
+
+All 16 pytest smoke tests still pass. All affected files lint clean.
+
 ## Recently Resolved — Iteration 125 (May 27, 2026)
 **Badge print color fix + welfare-category filters on members & children.**
 

@@ -1,7 +1,53 @@
 // POS peripherals — Web Serial (cash drawer + ESC/POS printer) + Web Audio (beeps).
 // Permission-gated: browser prompts user once per device; selection is remembered.
+//
+// Cross-browser capabilities (current state of the web platform):
+//   • USB barcode scanner via keyboard HID emulation — works on EVERY browser/OS.
+//   • Web Serial — Chrome/Edge/Opera DESKTOP (Win/Mac/Linux).
+//   • Web HID — Chrome/Edge/Opera DESKTOP (some USB cash drawers).
+//   • Web USB — Chrome/Edge/Opera DESKTOP (custom protocols).
+//   • Web Bluetooth — Chrome/Edge/Opera DESKTOP + Android (BT receipt printers).
+//   • Web NFC (NDEFReader) — Chrome ANDROID only.
+// Non-Android desktop browsers fully support all the above except NFC.
 
 let cachedSerialPort = null;
+
+/** Detect every peripheral API the current browser exposes. */
+export function detectPeripheralSupport() {
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+  const isAndroid = /Android/i.test(ua);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  return {
+    isAndroid,
+    isIOS,
+    isMobile: isAndroid || isIOS,
+    serial: typeof navigator !== 'undefined' && 'serial' in navigator,
+    hid: typeof navigator !== 'undefined' && 'hid' in navigator,
+    usb: typeof navigator !== 'undefined' && 'usb' in navigator,
+    bluetooth: typeof navigator !== 'undefined' && 'bluetooth' in navigator,
+    nfc: typeof window !== 'undefined' && 'NDEFReader' in window,
+    vibrate: typeof navigator !== 'undefined' && 'vibrate' in navigator,
+    keyboardScanner: true,  // HID keyboard scanners work anywhere
+  };
+}
+
+/** Friendly description of supported/unsupported peripherals for the Settings UI. */
+export function describePeripheralSupport() {
+  const s = detectPeripheralSupport();
+  const supported = ['USB barcode scanner (keyboard HID — works anywhere)'];
+  const unsupported = [];
+  if (s.serial) supported.push('Cash drawer (Web Serial)');
+  else unsupported.push('Cash drawer — needs Chrome/Edge desktop');
+  if (s.bluetooth) supported.push('Bluetooth receipt printer (Web Bluetooth)');
+  else unsupported.push('Bluetooth printer — needs Chrome/Edge desktop or Android');
+  if (s.hid) supported.push('USB HID devices (Web HID)');
+  else unsupported.push('Web HID — needs Chrome/Edge desktop');
+  if (s.usb) supported.push('Direct USB devices (Web USB)');
+  else unsupported.push('Web USB — needs Chrome/Edge desktop');
+  if (s.nfc) supported.push('Phone NFC (Web NFC)');
+  else unsupported.push('Phone NFC — Chrome Android only');
+  return { supported, unsupported, isMobile: s.isMobile, isAndroid: s.isAndroid };
+}
 
 /**
  * Check whether the browser supports Web Serial (Chrome / Edge / Opera desktop only).
