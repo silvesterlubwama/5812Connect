@@ -6,6 +6,28 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 125 (May 27, 2026)
+**Badge print color fix + welfare-category filters on members & children.**
+
+### 1. Badge print background restored
+- **Root cause:** Browsers strip `background-color` and `background-image` properties when printing unless explicitly told not to (default "Background graphics: OFF" in print preview). Inline `background: #1a1a2e` on the badge → printed white.
+- ✅ Added `-webkit-print-color-adjust: exact !important`, `print-color-adjust: exact !important`, `color-adjust: exact !important` to the print-window CSS in:
+   • `components/UnifiedBadge.jsx` (staff/member badge print)
+   • `components/PrintableBadges.jsx` (ChildTag + ParentBadge bulk print)
+   • `components/admin/BadgePrintView.jsx` (admin badge dialog)
+- ✅ Print now reproduces the badge's brand colors (navy/teal/etc) — the original look.
+
+### 2. Welfare-category filters on Members + Children
+- ✅ Backend: `GET /api/members` and `GET /api/children` now accept `welfare_category` query param (`sponsored | restricted_location | welfare_support | multiple | any`). The filter joins with `social_cases` to return only subjects with an active matching case.
+- ✅ Both endpoints also enrich each row with `welfare_case: {category, risk_level}` for any active case, so UIs can show a badge without an extra query.
+- ✅ Frontend UnifiedPeoplePage:
+   • **Members tab** — new "Welfare" Select between Status filter and Refresh button. Options: All / Any-active / Sponsored / In Shelter (Restricted) / Welfare Support / Multiple.
+   • **Children tab** — new "Welfare" Select next to the search bar with the same options.
+   • Each member card and child card now shows a small **welfare badge** when an active case exists (purple for member, rose for child) — tooltips show the risk level.
+- ✅ End-to-end verified: creating a sponsored case on a member → filter returns just that member with enrichment data; filter for welfare_support correctly excludes them.
+
+All 16 pytest smoke tests still pass. Backend + frontend lint clean.
+
 ## Recently Resolved — Iteration 124 (May 26, 2026)
 **Time-limited finance access + Bills/Recurring create dialogs + Phase D reports UI.**
 

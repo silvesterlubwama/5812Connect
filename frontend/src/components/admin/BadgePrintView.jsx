@@ -21,7 +21,7 @@ export function BadgePrintView({ user, onClose }) {
     doc.open();
     doc.write('<!DOCTYPE html>');
     doc.close();
-    doc.head.innerHTML = DOMPurify.sanitize(`<title>Badge - ${user.name}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; } @media print { body { height: auto; } }</style>`, { FORCE_BODY: true });
+    doc.head.innerHTML = DOMPurify.sanitize(`<title>Badge - ${user.name}</title><style>* { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; } body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; } @media print { body { height: auto; background: #fff !important; } }</style>`, { FORCE_BODY: true });
     const container = doc.createElement('div');
     container.innerHTML = DOMPurify.sanitize(printContents);
     doc.body.appendChild(container);

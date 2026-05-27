@@ -27,7 +27,7 @@ function printElement(ref, title) {
   doc.open();
   doc.write('<!DOCTYPE html>');
   doc.close();
-  doc.head.innerHTML = DOMPurify.sanitize(`<title>${title}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}@media print{body{min-height:auto}}</style>`, { FORCE_BODY: true });
+  doc.head.innerHTML = DOMPurify.sanitize(`<title>${title}</title><style>*{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff}@media print{body{min-height:auto;background:#fff !important}}</style>`, { FORCE_BODY: true });
   const container = doc.createElement('div');
   container.innerHTML = DOMPurify.sanitize(html);
   doc.body.appendChild(container);

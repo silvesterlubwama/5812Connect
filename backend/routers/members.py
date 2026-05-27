@@ -22,6 +22,7 @@ async def list_members(
     role: Optional[str] = None,
     location_id: Optional[str] = None,
     staff_only: Optional[bool] = None,
+    welfare_category: Optional[str] = None,  # sponsored|restricted_location|welfare_support|multiple|any
     skip: int = 0,
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
@@ -49,12 +50,32 @@ async def list_members(
         query["role"] = role
     if location_id and location_id != "all":
         query["location_id"] = location_id
+    # Welfare-category filter: restrict to members who have an active social_work case
+    if welfare_category and welfare_category != "all":
+        case_query = {"subject_kind": "member", "status": "active"}
+        if welfare_category != "any":
+            case_query["category"] = welfare_category
+        active_subjects = await db.social_cases.find(
+            case_query, {"_id": 0, "subject_id": 1}
+        ).to_list(5000)
+        ids = list({c["subject_id"] for c in active_subjects if c.get("subject_id")})
+        if not ids:
+            return {"members": [], "total": 0, "welfare_filtered": True}
+        conditions.append({"id": {"$in": ids}})
     if conditions:
         query["$and"] = conditions
     total = await db.members.count_documents(query)
     members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
-    # Enrich with location names
+    # Enrich with location names AND welfare category if any active case exists
     loc_cache = {}
+    member_ids = [m["id"] for m in members if m.get("id")]
+    welfare_map = {}
+    if member_ids:
+        async for c in db.social_cases.find(
+            {"subject_kind": "member", "subject_id": {"$in": member_ids}, "status": "active"},
+            {"_id": 0, "subject_id": 1, "category": 1, "risk_level": 1},
+        ):
+            welfare_map[c["subject_id"]] = {"category": c.get("category"), "risk_level": c.get("risk_level")}
     for m in members:
         lid = m.get("location_id")
         if lid and lid not in loc_cache:
@@ -62,6 +83,8 @@ async def list_members(
             loc_cache[lid] = loc.get("name") if loc else ""
         if lid:
             m["location_name"] = loc_cache.get(lid, "")
+        if m["id"] in welfare_map:
+            m["welfare_case"] = welfare_map[m["id"]]
     return {"members": members, "total": total}
 
 
@@ -455,12 +478,27 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
 # ========== CHILDREN ==========
 
 @router.get("/children")
-async def list_children(family_id: Optional[str] = None, search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def list_children(
+    family_id: Optional[str] = None,
+    search: Optional[str] = None,
+    welfare_category: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
     query = {**await get_campus_filter(current_user)}
     if family_id:
         query["family_id"] = family_id
     if search:
         query["name"] = {"$regex": search, "$options": "i"}
+    # Welfare-category filter: restrict to children with an active social_work case
+    if welfare_category and welfare_category != "all":
+        case_query = {"subject_kind": "child", "status": "active"}
+        if welfare_category != "any":
+            case_query["category"] = welfare_category
+        cases = await db.social_cases.find(case_query, {"_id": 0, "subject_id": 1}).to_list(5000)
+        ids = list({c["subject_id"] for c in cases if c.get("subject_id")})
+        if not ids:
+            return []
+        query["id"] = {"$in": ids}
     # Children in restricted sub-locations: only visible to staff assigned to that exact location
     if not is_system_admin(current_user):
         user_loc = current_user.get("location_id")
@@ -476,6 +514,18 @@ async def list_children(family_id: Optional[str] = None, search: Optional[str] =
             if other_restricted:
                 query["location_id"] = {"$nin": other_restricted}
     children = await db.children.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    # Enrich with welfare-case metadata
+    if children:
+        cids = [c["id"] for c in children]
+        wmap = {}
+        async for sc in db.social_cases.find(
+            {"subject_kind": "child", "subject_id": {"$in": cids}, "status": "active"},
+            {"_id": 0, "subject_id": 1, "category": 1, "risk_level": 1},
+        ):
+            wmap[sc["subject_id"]] = {"category": sc.get("category"), "risk_level": sc.get("risk_level")}
+        for c in children:
+            if c["id"] in wmap:
+                c["welfare_case"] = wmap[c["id"]]
     return children
 
 

@@ -121,6 +121,7 @@ export default function UnifiedPeoplePage() {
 
   const [allLocations, setAllLocations] = useState([]);
   const [filterLocation, setFilterLocation] = useState('all');
+  const [filterWelfare, setFilterWelfare] = useState('all');  // all|sponsored|restricted_location|welfare_support|multiple|any
   const [activeTab, setActiveTab] = useState('members');
   const [saving, setSaving] = useState(false);
   const [bulkDeleteTarget, setBulkDeleteTarget] = useState(null); // { type, ids, label }
@@ -140,21 +141,25 @@ export default function UnifiedPeoplePage() {
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, limit: 100, staff_only: true });
+      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, welfare_category: filterWelfare !== 'all' ? filterWelfare : undefined, limit: 100, staff_only: true });
       setMembers(res.data.members || res.data || []);
       setTotal(res.data.total || (res.data.members || res.data || []).length);
     } catch { toast.error('Failed to load members'); }
     finally { setLoading(false); }
-  }, [search, filterGroup, filterStatus, filterLocation]);
+  }, [search, filterGroup, filterStatus, filterLocation, filterWelfare]);
 
   const fetchPeople = useCallback(async () => {
     try {
-      const [famRes, chdRes, gstRes] = await Promise.all([familiesApi.list(), childrenApi.list(), guestsApi.list()]);
+      const [famRes, chdRes, gstRes] = await Promise.all([
+        familiesApi.list(),
+        childrenApi.list({ welfare_category: filterWelfare !== 'all' ? filterWelfare : undefined }),
+        guestsApi.list(),
+      ]);
       setFamilies(famRes.data || []);
       setChildren(chdRes.data || []);
       setGuests(gstRes.data || []);
     } catch (e) { console.warn(e.message || e); }
-  }, []);
+  }, [filterWelfare]);
 
   useEffect(() => {
     const load = async () => {
@@ -474,6 +479,17 @@ export default function UnifiedPeoplePage() {
               <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent>
             </Select>
+            <Select value={filterWelfare} onValueChange={setFilterWelfare}>
+              <SelectTrigger className="w-40 h-9" data-testid="member-welfare-filter"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Welfare</SelectItem>
+                <SelectItem value="any">Any active case</SelectItem>
+                <SelectItem value="sponsored">Sponsored</SelectItem>
+                <SelectItem value="restricted_location">In Shelter (Restricted)</SelectItem>
+                <SelectItem value="welfare_support">Welfare Support</SelectItem>
+                <SelectItem value="multiple">Multiple</SelectItem>
+              </SelectContent>
+            </Select>
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={fetchMembers}><RefreshCw size={13} /> Refresh</Button>
           </div>
           {/* Bulk bar */}
@@ -518,6 +534,11 @@ export default function UnifiedPeoplePage() {
                     <Badge variant="outline" className="text-[10px] capitalize">{m.role}</Badge>
                     <Badge variant="secondary" className="text-[10px]">{m.group}</Badge>
                     <Badge className={`text-[10px] ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{m.status || 'active'}</Badge>
+                    {m.welfare_case && (
+                      <Badge variant="outline" className="text-[10px] bg-purple-50 text-purple-700 border-purple-200" title={`Active social-work case (${m.welfare_case.risk_level || 'low'} risk)`}>
+                        {(m.welfare_case.category || '').replace(/_/g, ' ')}
+                      </Badge>
+                    )}
                     <div className="flex gap-1.5">
                       {m.is_medical && <span title="Medical" className="text-red-500"><Heart size={12} /></span>}
                       {m.is_resident && <span title="Resident" className="text-blue-500"><Home size={12} /></span>}
@@ -597,6 +618,17 @@ export default function UnifiedPeoplePage() {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input className="pl-9 h-8 text-sm" placeholder="Search children by name..." value={childSearch} onChange={e => setChildSearch(e.target.value)} data-testid="children-search" />
             </div>
+            <Select value={filterWelfare} onValueChange={setFilterWelfare}>
+              <SelectTrigger className="w-40 h-8 text-sm" data-testid="children-welfare-filter"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Children</SelectItem>
+                <SelectItem value="any">Any active case</SelectItem>
+                <SelectItem value="sponsored">Sponsored</SelectItem>
+                <SelectItem value="restricted_location">In Shelter (Restricted)</SelectItem>
+                <SelectItem value="welfare_support">Welfare Support</SelectItem>
+                <SelectItem value="multiple">Multiple</SelectItem>
+              </SelectContent>
+            </Select>
             <Button size="sm" className="gap-2" onClick={() => setShowChild(true)} data-testid="add-child-btn"><Plus size={14} /> Add Child</Button>
           </div>
           {(() => {
@@ -643,6 +675,11 @@ export default function UnifiedPeoplePage() {
                             {c.is_sponsored && <Badge className="text-[10px] bg-purple-100 text-purple-700">Sponsored{c.sponsor_first_name ? ` by ${c.sponsor_first_name}` : ''}</Badge>}
                             {c.is_resident && <Badge className="text-[10px] bg-blue-100 text-blue-700">Resident</Badge>}
                             {isRestricted && <Badge className="text-[10px] bg-amber-100 text-amber-700">Tracked</Badge>}
+                            {c.welfare_case && (
+                              <Badge variant="outline" className="text-[10px] bg-rose-50 text-rose-700 border-rose-200" title={`Active social-work case (${c.welfare_case.risk_level || 'low'} risk)`}>
+                                {(c.welfare_case.category || '').replace(/_/g, ' ')}
+                              </Badge>
+                            )}
                           </div>
                           <div className="flex gap-1.5 mt-1">
                             {c.is_medical && <span title="Medical enabled" className="text-red-500"><Heart size={12} /></span>}
