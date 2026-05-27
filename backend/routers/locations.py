@@ -98,7 +98,16 @@ async def create_location(data: LocationCreate, current_user: dict = Depends(req
 
 @router.put("/locations/{loc_id}")
 async def update_location(loc_id: str, data: LocationUpdate, current_user: dict = Depends(require_admin)):
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    # Use exclude_unset=True so we keep fields the caller explicitly set to null
+    # (e.g. promoting a sub-location to a main campus by clearing parent_id).
+    update_data = data.model_dump(exclude_unset=True)
+    if "parent_id" in update_data and not update_data["parent_id"]:
+        # Treat empty string / null both as "no parent" — promote to main campus
+        update_data["parent_id"] = None
+        # Also flip the type from sub-location to campus if currently nested
+        existing = await db.locations.find_one({"id": loc_id}, {"_id": 0, "type": 1})
+        if existing and existing.get("type") == "sub-location" and "type" not in update_data:
+            update_data["type"] = "campus"
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.locations.update_one({"id": loc_id}, {"$set": update_data})
     return await db.locations.find_one({"id": loc_id}, {"_id": 0})

@@ -265,10 +265,28 @@ export default function Layout() {
   const resultTypeIcon = { member: 'U', event: 'E', task: 'T', product: 'P' };
   const handleResultClick = (result) => { setSearchOpen(false); setSearchQuery(''); setSearchResults([]); navigate(result.url); };
 
+  // Finance feature gate (mirrors backend `has_finance_access`):
+  //   • implicit for Manager+/Director+/Admin/EDs
+  //   • explicit per-user via `finance_access: true` (with optional `finance_access_expires_at`)
+  const FINANCE_PRIVILEGED = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'];
+  const FINANCE_ROUTES = new Set(['/financial', '/accounting', '/banking']);
+  const userHasFinanceAccess = (() => {
+    if (FINANCE_PRIVILEGED.includes(userRole) || isAdmin) return true;
+    if (!user?.finance_access) return false;
+    // Honor optional expiry
+    const exp = user?.finance_access_expires_at;
+    if (exp) {
+      try { if (new Date(exp).getTime() <= Date.now()) return false; } catch { /* ignore */ }
+    }
+    return true;
+  })();
+
   // Check if user can see a nav item
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
+    // Finance items: gated by has_finance_access (role-based OR explicit grant)
+    if (FINANCE_ROUTES.has(item.to) && !userHasFinanceAccess) return false;
     // Campus feature toggles — show if any campus user has access to has the feature enabled.
     // Active campus selected → check that campus's flag. "All Locations" → check user's primary campus flag.
     if (item.to === '/financial' && !campusFeatures.financial_enabled) return false;
@@ -280,6 +298,12 @@ export default function Layout() {
 
   // Check if user can see a section
   const canSeeSection = (section) => {
+    // Special-case: the "Finance" section is visible to anyone with finance access
+    // (role-based OR explicit grant). Skip the role check in that case.
+    if (section.label === 'Finance') {
+      if (!userHasFinanceAccess) return false;
+      return section.items.some(item => canAccess(item));
+    }
     if (section.roles && !section.roles.includes(userRole) && !isAdmin) return false;
     // Section visible if at least one item is accessible
     return section.items.some(item => canAccess(item));

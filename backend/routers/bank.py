@@ -324,6 +324,178 @@ async def import_csv_statement(
     return statement
 
 
+
+@router.post("/accounts/{acc_id}/import-pdf")
+async def import_pdf_statement(
+    acc_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_finance_view),
+):
+    """Best-effort PDF bank statement parser. Uganda bank statements often arrive as
+    PDFs. We extract text from each page, then look for lines matching:
+        <date>  <description...>  <debit?>  <credit?>  <balance?>
+    Lines that don't parse are skipped. Returns the imported statement metadata so
+    the user can review the transactions in the UI and clean up false positives.
+
+    For scanned-image PDFs, OCR is required (not bundled here) — the endpoint will
+    return a clear error suggesting CSV import instead."""
+    try:
+        import pdfplumber
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF parser not available — install pdfplumber")
+    bank_acc = await db.bank_accounts.find_one({"id": acc_id}, {"_id": 0})
+    if not bank_acc:
+        raise HTTPException(status_code=404, detail="Bank account not found")
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file")
+    rows = []
+    try:
+        with pdfplumber.open(io.BytesIO(contents)) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text() or ""
+                for line in txt.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rows.append(line)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}")
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract any text from the PDF. If this is a scanned-image PDF, please open it in your bank's portal and download the CSV format instead.",
+        )
+    # Heuristic line parser: looks for one or two date tokens, a description, and
+    # 1–3 trailing money tokens. Reasonable for most Uganda bank statement formats.
+    date_re = re.compile(r"\b(\d{1,2}[/-][A-Za-z0-9]{1,4}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\b")
+    money_re = re.compile(r"-?\(?\d{1,3}(?:[,\s]\d{3})*(?:\.\d{2})?\)?")
+    # Load active categorization rules
+    rule_docs = await db.bank_rules.find({"is_active": True}, {"_id": 0}).sort("priority", 1).to_list(500)
+    compiled_rules = []
+    for r in rule_docs:
+        try:
+            compiled_rules.append((re.compile(r.get("match_pattern", ""), re.IGNORECASE), r))
+        except re.error:
+            continue
+    statement_id = f"stmt_{uuid.uuid4().hex[:10]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    transactions = []
+    total_credits = 0.0
+    total_debits = 0.0
+    earliest = None
+    latest = None
+    seen_descriptions = set()  # dedup same-line duplicates
+    for r_idx, line in enumerate(rows):
+        # Skip obvious header / footer / non-transaction lines
+        if len(line) < 12:
+            continue
+        if any(skip in line.lower() for skip in [
+            "statement", "page ", "account number", "branch", "opening balance",
+            "closing balance", "total credits", "total debits", "phone", "address",
+        ]):
+            continue
+        dm = date_re.search(line)
+        if not dm:
+            continue
+        date_str = _parse_date_tolerant(dm.group(1))
+        if not date_str:
+            continue
+        # Strip the date from the line and find money tokens AFTER it
+        after_date = line[dm.end():].strip()
+        money_matches = list(money_re.finditer(after_date))
+        if not money_matches:
+            continue
+        # Description = text before the first money token
+        first_money_start = money_matches[0].start()
+        description = after_date[:first_money_start].strip(" -|·\t")[:300]
+        if not description or description in seen_descriptions:
+            continue
+        # Disambiguate amount: heuristic — if 1 money token = amount (sign from context).
+        # If 2 = (debit, credit) where one is empty or zero; we use the non-zero one.
+        # If 3 = (debit, credit, balance) — same logic.
+        amounts = [_parse_money(m.group(0)) for m in money_matches]
+        balance = None
+        if len(amounts) >= 3:
+            balance = amounts[-1]
+            debit_or_credit = amounts[0] if amounts[0] != 0 else amounts[1]
+            # Sign: if value appeared as debit column (often first) we treat as outflow
+            amount = -abs(debit_or_credit) if amounts[0] != 0 else abs(debit_or_credit)
+        elif len(amounts) == 2:
+            balance = amounts[-1]
+            v = amounts[0]
+            amount = v  # keep sign as-is from the parser
+        else:
+            amount = amounts[0]
+        if amount == 0:
+            continue
+        # Apply categorization rules
+        suggested_account_id = None
+        applied_rule_id = None
+        for pattern, rule in compiled_rules:
+            if pattern.search(description):
+                suggested_account_id = rule.get("target_account_id")
+                applied_rule_id = rule.get("id")
+                break
+        tx = {
+            "id": f"btx_{uuid.uuid4().hex[:10]}",
+            "statement_id": statement_id,
+            "bank_account_id": acc_id,
+            "date": date_str,
+            "description": description,
+            "reference": "",
+            "amount": amount,
+            "balance": balance,
+            "status": "unreconciled",
+            "matched_entry_id": None,
+            "suggested_account_id": suggested_account_id,
+            "applied_rule_id": applied_rule_id,
+            "notes": "Imported from PDF — verify",
+            "imported_at": now_iso,
+            "imported_by": current_user["id"],
+            "row_index": r_idx,
+            "location_id": bank_acc.get("location_id"),
+            "source_format": "pdf",
+        }
+        transactions.append(tx)
+        seen_descriptions.add(description)
+        if amount > 0:
+            total_credits += amount
+        else:
+            total_debits += -amount
+        earliest = date_str if not earliest or date_str < earliest else earliest
+        latest = date_str if not latest or date_str > latest else latest
+    if not transactions:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract any transactions from the PDF. The format may not be recognised — try downloading the CSV version from your bank's portal instead.",
+        )
+    await db.bank_transactions.insert_many(transactions)
+    statement = {
+        "id": statement_id,
+        "bank_account_id": acc_id,
+        "bank_account_name": bank_acc.get("name"),
+        "period_start": earliest,
+        "period_end": latest,
+        "source_filename": file.filename[:200],
+        "format": "pdf",
+        "uploaded_at": now_iso,
+        "uploaded_by": current_user["id"],
+        "uploaded_by_name": current_user.get("name", ""),
+        "transaction_count": len(transactions),
+        "total_credits": round(total_credits, 2),
+        "total_debits": round(total_debits, 2),
+        "location_id": bank_acc.get("location_id"),
+        "auto_suggested_count": sum(1 for t in transactions if t["suggested_account_id"]),
+        "note": "Best-effort PDF parse — review each transaction before reconciling.",
+    }
+    await db.bank_statements.insert_one(statement)
+    statement.pop("_id", None)
+    await _audit(current_user["id"], "import_pdf", "bank_statement", statement_id,
+                 {"bank": bank_acc.get("name"), "rows": len(transactions)})
+    return statement
+
+
 @router.get("/statements")
 async def list_statements(bank_account_id: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
     query = {}

@@ -1,5 +1,6 @@
 import { secureStorage } from '../services/secureStorage';
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { DollarSign, TrendingUp, TrendingDown, Wallet, Plus, Download, Upload, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -367,6 +368,17 @@ export default function FinancialPage() {
         {(dateFrom || dateTo) && (
           <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear</Button>
         )}
+      </div>
+
+      {/* Quick-link banner — clarifies the relationship between Financial / Accounting / Banking */}
+      <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs flex flex-wrap items-center gap-2" data-testid="financial-modules-banner">
+        <span className="font-semibold">💡 Three connected views:</span>
+        <span>This page = quick entry & cash chart.</span>
+        <Link to="/accounting" className="text-primary hover:underline font-medium" data-testid="link-accounting">/accounting →</Link>
+        <span>= double-entry ledger + statements.</span>
+        <Link to="/banking" className="text-primary hover:underline font-medium" data-testid="link-banking">/banking →</Link>
+        <span>= bank accounts, vendor bills (AP), recurring entries.</span>
+        <span className="text-muted-foreground">Every entry here auto-posts to the ledger.</span>
       </div>
 
       {/* Cashflow Chart */}

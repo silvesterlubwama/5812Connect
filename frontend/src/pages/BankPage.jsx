@@ -200,17 +200,21 @@ export default function BankPage() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
-  const importCsv = async (e) => {
+  const importStatement = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !selectedBankId) return;
+    const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+    const endpoint = isPdf
+      ? `/bank/accounts/${selectedBankId}/import-pdf`
+      : `/bank/accounts/${selectedBankId}/import-csv`;
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const r = await api.post(`/bank/accounts/${selectedBankId}/import-csv`, fd);
-      toast.success(`Imported ${r.data.transaction_count} txs · ${r.data.auto_suggested_count} auto-suggested`);
+      const r = await api.post(endpoint, fd);
+      toast.success(`Imported ${r.data.transaction_count} ${isPdf ? 'PDF rows' : 'txs'} · ${r.data.auto_suggested_count} auto-suggested${isPdf ? ' (review for false positives)' : ''}`);
       reloadTransactions();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Import failed');
+      toast.error(err.response?.data?.detail || `${isPdf ? 'PDF' : 'CSV'} import failed`);
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -318,9 +322,9 @@ export default function BankPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={importCsv} className="hidden" data-testid="bank-csv-input" />
-                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={!selectedBankId} data-testid="bank-import-csv-btn">
-                  <Upload size={14} className="mr-1" />Import CSV
+                <input ref={fileInputRef} type="file" accept=".csv,.pdf,text/csv,application/pdf" onChange={importStatement} className="hidden" data-testid="bank-statement-input" />
+                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={!selectedBankId} data-testid="bank-import-stmt-btn">
+                  <Upload size={14} className="mr-1" />Import CSV / PDF
                 </Button>
                 <Button size="sm" onClick={applySuggestions} disabled={!selectedBankId} data-testid="bank-apply-suggestions-btn">
                   <CheckCircle2 size={14} className="mr-1" />Auto-apply suggestions

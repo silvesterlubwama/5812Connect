@@ -6,6 +6,29 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 127 (May 27, 2026)
+**4 user-reported fixes: location promotion bug + PDF bank import + finance sidebar gating + module clarity.**
+
+### 1. Location promote-to-main-campus
+- **Root cause:** `update_location` used `model_dump()` then filtered `if v is not None` — so setting `parent_id: null` to promote a sub-location was silently dropped.
+- ✅ Switched to `model_dump(exclude_unset=True)` so explicit-null values survive. When `parent_id` is cleared, also auto-flips `type: sub-location → campus`.
+- ✅ End-to-end verified: promoted `loc_59a87857` to main campus (type=campus, parent_id=null) in one PUT.
+
+### 2. PDF bank statement import
+- ✅ New `POST /api/bank/accounts/{id}/import-pdf` endpoint using `pdfplumber` for text-based PDFs. Best-effort heuristic parser extracts date/description/amount/balance from each line; applies the same auto-categorisation rules engine; clear error if the PDF is image-scanned (suggests CSV alternative).
+- ✅ Frontend BankPage button label updated to **"Import CSV / PDF"**, file input accepts both formats, automatically routes to the right endpoint based on extension. Toast confirmation notes "review for false positives" on PDF imports.
+
+### 3. Finance truly restricted in sidebar
+- ✅ `Layout.jsx` now computes `userHasFinanceAccess` (mirrors backend `has_finance_access`): True for Manager+/Director+/Admin OR explicit `finance_access` flag (honoring `finance_access_expires_at`).
+- ✅ Finance section is gated by finance access (not just role), so a Volunteer with explicit grant CAN see Finance, and conversely a Volunteer without it sees NOTHING under Finance.
+- ✅ Per-item gating on `/financial`, `/accounting`, `/banking` — all hidden unless finance access is active.
+
+### 4. Cross-module clarity banner
+- ✅ Added a small "💡 Three connected views" banner at the top of FinancialPage explaining how Financial / Accounting / Banking relate. Includes direct links to `/accounting` and `/banking`.
+- ✅ Note: no duplicate features removed because each module serves a distinct workflow (operator entry / auditor ledger / vendor-bill management). Auto-posting between them ensures consistency.
+
+All 16 pytest smoke tests still pass. Backend + frontend lint clean. `pdfplumber` added to requirements.txt.
+
 ## Recently Resolved — Iteration 126 (May 27, 2026)
 **POS fullscreen escape fix + cross-browser peripheral support clarity.**
 
