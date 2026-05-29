@@ -746,75 +746,129 @@ async def reassign_run(data: dict, current_user: dict = Depends(require_admin)) 
 
 @router.get("/finance-access/users")
 async def list_finance_access_users(current_user: dict = Depends(require_admin)):
-    """List all users + their finance-access status. Useful for the admin
-    panel that grants/revokes financial visibility."""
-    from deps import FINANCE_PRIVILEGED_ROLES
-    users = await db.users.find(
-        {"status": {"$ne": "inactive"}},
-        {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1, "finance_access": 1,
-         "finance_access_expires_at": 1, "location_id": 1, "department": 1},
-    ).sort("name", 1).to_list(2000)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for u in users:
-        role = u.get("role") or ""
-        u["finance_access_implicit"] = role in FINANCE_PRIVILEGED_ROLES
-        # Effective access takes expiry into account
-        explicit_active = bool(u.get("finance_access"))
-        if explicit_active and u.get("finance_access_expires_at"):
-            if str(u["finance_access_expires_at"]) <= now_iso:
-                explicit_active = False
-                u["finance_access_expired"] = True
-        u["finance_access_effective"] = u["finance_access_implicit"] or explicit_active
-    return users
+    """Backwards-compat alias — returns the same payload as
+    /admin/module-access/users?module=finance for legacy admin UIs."""
+    return await list_module_access_users(module="finance", current_user=current_user)
 
 
 @router.put("/finance-access/users/{user_id}")
 async def set_finance_access(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    """Grant or revoke explicit finance access for a non-Director user.
-    Body: { finance_access: bool, expires_at?: 'YYYY-MM-DD', ttl_days?: int, reason? }
-    `ttl_days` (if positive) overrides `expires_at` and sets expiry that many days out.
-    Omitting both = permanent grant."""
+    """Backwards-compat alias — delegates to /admin/module-access/users/{user_id}
+    with module=finance baked in."""
+    return await set_module_access(
+        user_id=user_id,
+        data={**(data or {}), "module": "finance", "granted": bool((data or {}).get("finance_access"))},
+        current_user=current_user,
+    )
+
+
+# ========== GENERIC MODULE ACCESS MANAGEMENT ==========
+
+@router.get("/module-access/modules")
+async def list_grantable_modules(current_user: dict = Depends(require_admin)):
+    """Enumerate the modules that can be granted. UI uses this to build the picker."""
+    from deps import GRANTABLE_MODULES
+    return [{"key": k, "label": v} for k, v in GRANTABLE_MODULES.items()]
+
+
+@router.get("/module-access/users")
+async def list_module_access_users(
+    module: str = "finance",
+    current_user: dict = Depends(require_admin),
+):
+    """List all users with their access status for a given module.
+    Same shape as the legacy finance-access endpoint but parameterised."""
+    from deps import GRANTABLE_MODULES, PRIVILEGED_ROLES, _grant_active
+    if module not in GRANTABLE_MODULES:
+        raise HTTPException(status_code=400, detail=f"Unknown module: {module}")
+    proj = {
+        "_id": 0, "id": 1, "name": 1, "email": 1, "role": 1,
+        "location_id": 1, "department": 1, "departments": 1,
+        f"{module}_access": 1, f"{module}_access_expires_at": 1,
+    }
+    users = await db.users.find(
+        {"status": {"$ne": "inactive"}}, proj,
+    ).sort("name", 1).to_list(2000)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for u in users:
+        role = u.get("role") or ""
+        implicit = role in PRIVILEGED_ROLES
+        # Module-specific implicit rules (HR role / dept also auto-pass HR)
+        if module == "hr" and not implicit:
+            dept = (u.get("department") or "").lower()
+            depts = [d.lower() for d in (u.get("departments") or [])]
+            if role in ("HR", "hr") or "hr" in depts or "human resources" in depts or dept in ("hr", "human resources"):
+                implicit = True
+        u["module"] = module
+        u["access_implicit"] = implicit
+        explicit_active = _grant_active(u, module)
+        if u.get(f"{module}_access") and u.get(f"{module}_access_expires_at"):
+            if str(u[f"{module}_access_expires_at"]) <= now_iso:
+                u["access_expired"] = True
+        u["access_effective"] = implicit or explicit_active
+        # Legacy shape compatibility for the existing FinanceAccessManager UI
+        if module == "finance":
+            u["finance_access_implicit"] = implicit
+            u["finance_access_effective"] = u["access_effective"]
+            u["finance_access_expires_at"] = u.get(f"{module}_access_expires_at")
+            u["finance_access_expired"] = u.get("access_expired", False)
+            u["finance_access"] = u.get(f"{module}_access", False)
+    return users
+
+
+@router.put("/module-access/users/{user_id}")
+async def set_module_access(user_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Grant or revoke explicit access for a module.
+    Body: { module: 'hr'|'sales'|..., granted: bool, expires_at?, ttl_days?, reason? }"""
+    from deps import GRANTABLE_MODULES
+    module = (data or {}).get("module") or "finance"
+    if module not in GRANTABLE_MODULES:
+        raise HTTPException(status_code=400, detail=f"Unknown module: {module}")
     target = await db.users.find_one(
         {"id": user_id},
-        {"_id": 0, "id": 1, "name": 1, "role": 1, "finance_access": 1},
+        {"_id": 0, "id": 1, "name": 1, "role": 1, f"{module}_access": 1},
     )
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    new_state = bool(data.get("finance_access"))
+    new_state = bool(data.get("granted") if "granted" in (data or {}) else data.get(f"{module}_access"))
     now_iso = datetime.now(timezone.utc).isoformat()
+    flag_key = f"{module}_access"
+    exp_key = f"{module}_access_expires_at"
     update = {
-        "finance_access": new_state,
-        "finance_access_changed_at": now_iso,
-        "finance_access_changed_by": current_user["id"],
+        flag_key: new_state,
+        f"{module}_access_changed_at": now_iso,
+        f"{module}_access_changed_by": current_user["id"],
     }
-    # Compute expiry: ttl_days > expires_at > permanent (clear)
     if new_state:
         ttl_days = data.get("ttl_days")
         expires_at = data.get("expires_at")
         if ttl_days and int(ttl_days) > 0:
             from datetime import timedelta
-            update["finance_access_expires_at"] = (
+            update[exp_key] = (
                 datetime.now(timezone.utc) + timedelta(days=int(ttl_days))
             ).strftime("%Y-%m-%dT23:59:59+00:00")
         elif expires_at:
-            update["finance_access_expires_at"] = str(expires_at)[:10] + "T23:59:59+00:00"
+            update[exp_key] = str(expires_at)[:10] + "T23:59:59+00:00"
         else:
-            # Permanent grant — explicitly clear any previous expiry
-            update["finance_access_expires_at"] = None
+            update[exp_key] = None
     else:
-        # Revoke — also clear expiry
-        update["finance_access_expires_at"] = None
+        update[exp_key] = None
     await db.users.update_one({"id": user_id}, {"$set": update})
     await _audit(
         current_user["id"],
         "grant" if new_state else "revoke",
-        "finance_access",
+        f"{module}_access",
         user_id,
-        {"target_name": target.get("name"), "reason": data.get("reason", ""),
-         "expires_at": update.get("finance_access_expires_at")},
+        {"target_name": target.get("name"), "module": module,
+         "reason": data.get("reason", ""), "expires_at": update.get(exp_key)},
     )
-    return {"updated": True, "user_id": user_id, "finance_access": new_state,
-            "expires_at": update.get("finance_access_expires_at")}
+    return {
+        "updated": True, "user_id": user_id, "module": module,
+        flag_key: new_state, exp_key: update.get(exp_key),
+        # Legacy aliases for finance UI compat
+        "finance_access": new_state if module == "finance" else None,
+        "expires_at": update.get(exp_key),
+    }
 
 
 

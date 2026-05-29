@@ -1,0 +1,50 @@
+{
+  "summary": "End-to-end test of Module Access generalization (Finance/HR/Sales/Banking/Accounting/Social Work/Restricted) + Manager-loses-implicit-finance behavior change. 59/59 pytest pass (47 regression smokes + 12 new). All frontend testids present; HR moved from Admin to Finance sidebar section confirmed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/module-access/users?module=<X>", "issue": "`access_expired` field is only included when an explicit grant exists AND has expired. For implicit/no-grant rows the key is omitted. Spec/review listed it as one of the enriched fields. Legacy finance shim does default it to False — inconsistent. Recommend always returning access_expired:false when not expired so the frontend can rely on the key."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_behaviors": [
+    "/api/admin/module-access/modules -> 7 entries (finance,hr,sales,banking,accounting,social_work,restricted)",
+    "/api/admin/module-access/users?module=<each of 7> -> 200 with access_implicit + access_effective",
+    "PUT /api/admin/module-access/users/{id} {module:hr, granted:true, ttl_days:30} -> persists, re-list shows access_effective=true",
+    "PUT ... granted:false -> revokes (access_effective false)",
+    "Legacy GET /api/admin/finance-access/users -> 200 with finance_access_implicit/finance_access_effective preserved",
+    "Legacy PUT /api/admin/finance-access/users/{id} {finance_access:true, ttl_days:30} -> 200",
+    "CRITICAL: Manager without grant -> 403 on /api/financial/donations; after PUT module=finance granted=true -> 200 (auto-finance for Managers removed as designed)",
+    "Frontend /admin: module-access-manager-card present, legacy finance-access-manager-card removed",
+    "Dialog shows all 7 chips (module-chip-finance|hr|sales|banking|accounting|social_work|restricted), module-picker + module-access-search present, default chip = Finance",
+    "HR chip switches list scope; Implicit (role) badge shown for Director/Admin; Grant button shown for Staff/Manager/Guest/Member",
+    "Nested grant dialog has Permanent/30/90/Custom TTL chips, module-grant-ttl + module-grant-confirm testids present",
+    "Sidebar Admin section: Staff & Users, Campuses, Financial APIs, Email Templates, Settings, Audit Trail, Privacy & GDPR (HR removed)",
+    "Sidebar Finance section (source confirmed Layout.jsx L70-81): Financial, Accounting, Banking, HR & Payroll, Approvals, Marketplace — each with module: key for per-module gating"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration90_module_access.py",
+    "/app/test_reports/pytest/iter90_full.xml"
+  ],
+  "action_items": [
+    "Optional polish: make /api/admin/module-access/users always include access_expired (default false) for shape consistency with the legacy finance shim."
+  ],
+  "critical_code_review_comments": [
+    "deps.py / admin.py module gate looks consistent: has_module_access('finance') delegate + Manager removed from FINANCE_PRIVILEGED_ROLES — verified end-to-end (403 -> 200 after grant).",
+    "Legacy /admin/finance-access/* shim correctly delegates to module='finance' and preserves old key names — back-compat clean.",
+    "Layout.jsx Finance section uses module: keys consistently; Admin section properly drops HR. PRIVILEGED_ROLES excludes Manager (matches backend)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration90_module_access.py"
+  ],
+  "success_rate": {"backend": "100% (59/59)", "frontend": "100% (all testids + sidebar reorg verified)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created one TEST_mgr_<ts>@example.com Manager user during test; teardown deletes it.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Module access UI is at /admin via module-access-manager-card. Test ids in dialog: module-picker, module-access-search, module-chip-<key>, module-access-row-<userid>, module-grant-<userid>, module-revoke-<userid>, module-grant-ttl, module-grant-confirm. Manager role no longer has automatic finance access — anything depending on Manager auto-access to finance endpoints must grant explicitly."
+}

@@ -335,109 +335,153 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Finance Access Management — admin only */}
+      {/* Module Access Management — admin only — finance, HR, sales, banking, accounting, social work, restricted */}
       {['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
-        <FinanceAccessManager />
+        <ModuleAccessManager />
       )}
     </div>
   );
 }
 
-// ============== FINANCE ACCESS MANAGER ==============
-function FinanceAccessManager() {
+// ============== MODULE ACCESS MANAGER ==============
+// Generic access-grant UI for any module gated by the appointment-only pattern:
+// Director+ have implicit access; everyone else needs an explicit, optionally
+// time-limited grant. Modules: finance, hr, sales, banking, accounting, social_work, restricted.
+function ModuleAccessManager() {
   const [open, setOpen] = useState(false);
+  const [modules, setModules] = useState([]);
+  const [activeModule, setActiveModule] = useState('finance');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [grantingUser, setGrantingUser] = useState(null);
   const [ttlDays, setTtlDays] = useState('');
+
+  // Load module catalogue once
+  useEffect(() => {
+    if (!open) return;
+    api.get('/admin/module-access/modules').then(r => setModules(r.data || []))
+      .catch(() => setModules([
+        { key: 'finance', label: 'Finance' },
+        { key: 'hr', label: 'HR & Payroll' },
+        { key: 'sales', label: 'Sales / Marketplace' },
+        { key: 'banking', label: 'Banking' },
+        { key: 'accounting', label: 'Accounting' },
+        { key: 'social_work', label: 'Social Work' },
+        { key: 'restricted', label: 'Restricted Access' },
+      ]));
+  }, [open]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await adminApi.financeAccessUsers();
+      const r = await api.get('/admin/module-access/users', { params: { module: activeModule } });
       setUsers(r.data || []);
     } catch (e) { toast.error('Failed to load users'); }
     finally { setLoading(false); }
-  }, []);
+  }, [activeModule]);
   useEffect(() => { if (open) load(); }, [open, load]);
 
   const grant = async (u, days) => {
     try {
-      const body = { finance_access: true };
+      const body = { module: activeModule, granted: true };
       if (days && parseInt(days) > 0) body.ttl_days = parseInt(days);
-      await api.put(`/admin/finance-access/users/${u.id}`, body);
-      toast.success(`Granted ${days ? `for ${days} days` : 'permanently'} to ${u.name}`);
+      await api.put(`/admin/module-access/users/${u.id}`, body);
+      toast.success(`Granted ${activeModule} access ${days ? `for ${days} days` : 'permanently'} to ${u.name}`);
       setGrantingUser(null); setTtlDays('');
       load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
   const revoke = async (u) => {
     try {
-      await adminApi.setFinanceAccess(u.id, false);
-      toast.success(`Revoked for ${u.name}`);
+      await api.put(`/admin/module-access/users/${u.id}`, { module: activeModule, granted: false });
+      toast.success(`Revoked ${activeModule} access for ${u.name}`);
       load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
   const filtered = users.filter(u => !search || (u.name || '').toLowerCase().includes(search.toLowerCase()) || (u.email || '').toLowerCase().includes(search.toLowerCase()));
+  const activeModuleLabel = modules.find(m => m.key === activeModule)?.label || activeModule;
 
   return (
     <>
-      <Card className="rounded-xl mt-4 cursor-pointer hover:border-primary/40" onClick={() => setOpen(true)} data-testid="finance-access-manager-card">
+      <Card className="rounded-xl mt-4 cursor-pointer hover:border-primary/40" onClick={() => setOpen(true)} data-testid="module-access-manager-card">
         <CardContent className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Shield size={18} className="text-primary" />
             <div>
-              <p className="font-medium text-sm">Finance Access</p>
-              <p className="text-xs text-muted-foreground">Grant or revoke explicit financial-data access for non-Director staff (with optional expiry)</p>
+              <p className="font-medium text-sm">Module Access</p>
+              <p className="text-xs text-muted-foreground">Grant or revoke per-module access (Finance, HR, Sales, Banking, Accounting, Social Work, Restricted) with optional expiry. Director+ have implicit access; everyone else is by appointment only.</p>
             </div>
           </div>
           <Button size="sm" variant="outline">Manage</Button>
         </CardContent>
       </Card>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Finance Access Management</DialogTitle>
+            <DialogTitle>Module Access Management</DialogTitle>
             <DialogDescription className="text-xs">
-              Directors (Manager, Director, Adviser, Executive Director, Admin) always have finance access automatically.
-              Toggle individual non-Director users here to grant them explicit access — permanent or time-limited.
+              Director and above (Executive Director, Adviser, Director, Admin, System Admin) always have access automatically.
+              Managers and below need an explicit grant per module — permanent or time-limited.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 mt-2">
-            <Input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} className="h-9" data-testid="finance-access-search" />
+          <div className="space-y-3 mt-2">
+            {/* Module picker chips */}
+            <div className="flex flex-wrap gap-1.5" data-testid="module-picker">
+              {modules.map(m => (
+                <Button
+                  key={m.key}
+                  size="sm"
+                  variant={activeModule === m.key ? 'default' : 'outline'}
+                  className="h-7 text-xs"
+                  onClick={() => setActiveModule(m.key)}
+                  data-testid={`module-chip-${m.key}`}
+                >
+                  {m.label.split('(')[0].trim()}
+                </Button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Managing: <strong>{activeModuleLabel}</strong>
+            </p>
+
+            <Input placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)} className="h-9" data-testid="module-access-search" />
             {loading ? <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div> : (
               <div className="space-y-1.5">
                 {filtered.map(u => {
-                  const granted = u.finance_access_effective;
-                  const expires = u.finance_access_expires_at;
+                  const implicit = u.access_implicit;
+                  const granted = u.access_effective;
+                  const expires = u[`${activeModule}_access_expires_at`];
+                  const expired = u.access_expired;
                   return (
-                    <div key={u.id} className="flex items-center justify-between p-2 rounded border" data-testid={`finance-access-row-${u.id}`}>
+                    <div key={u.id} className="flex items-center justify-between p-2 rounded border" data-testid={`module-access-row-${u.id}`}>
                       <div>
                         <p className="text-sm font-medium">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></p>
                         <p className="text-[10px] text-muted-foreground">{u.email} · {u.department || '—'}</p>
-                        {expires && !u.finance_access_implicit && (
+                        {expires && !implicit && (
                           <p className="text-[10px] text-amber-700">Expires {String(expires).slice(0, 10)}</p>
                         )}
-                        {u.finance_access_expired && (
+                        {expired && (
                           <p className="text-[10px] text-red-700">⚠ Grant expired</p>
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {u.finance_access_implicit ? (
+                        {implicit ? (
                           <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Implicit (role)</Badge>
                         ) : granted ? (
                           <>
                             <Badge className="bg-blue-100 text-blue-700 text-[10px]">Explicit grant</Badge>
-                            <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => revoke(u)} data-testid={`finance-revoke-${u.id}`}>Revoke</Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => revoke(u)} data-testid={`module-revoke-${u.id}`}>Revoke</Button>
                           </>
                         ) : (
-                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setGrantingUser(u); setTtlDays(''); }} data-testid={`finance-grant-${u.id}`}>Grant access</Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setGrantingUser(u); setTtlDays(''); }} data-testid={`module-grant-${u.id}`}>Grant</Button>
                         )}
                       </div>
                     </div>
                   );
                 })}
+                {!filtered.length && <p className="text-xs text-muted-foreground text-center py-6">No users match</p>}
               </div>
             )}
           </div>
@@ -447,7 +491,10 @@ function FinanceAccessManager() {
       {/* GRANT (with optional TTL) */}
       <Dialog open={!!grantingUser} onOpenChange={(o) => { if (!o) { setGrantingUser(null); setTtlDays(''); } }}>
         <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Grant finance access</DialogTitle><DialogDescription className="text-xs">Granting to <strong>{grantingUser?.name}</strong> ({grantingUser?.role})</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Grant {activeModule} access</DialogTitle>
+            <DialogDescription className="text-xs">Granting <strong>{activeModuleLabel}</strong> to <strong>{grantingUser?.name}</strong> ({grantingUser?.role})</DialogDescription>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5">
               <Label className="text-xs">Duration</Label>
@@ -460,16 +507,22 @@ function FinanceAccessManager() {
                   <Button key={opt.label} type="button" size="sm" variant={ttlDays === opt.d ? 'default' : 'outline'} className="h-8 text-xs" onClick={() => setTtlDays(opt.d)}>{opt.label}</Button>
                 ))}
               </div>
-              <Input type="number" placeholder="Custom days (1-365)" value={ttlDays && !['','30','90'].includes(ttlDays) ? ttlDays : ''} onChange={e => setTtlDays(e.target.value)} className="h-8 mt-1" data-testid="finance-grant-ttl" />
+              <Input type="number" placeholder="Custom days (1-365)" value={ttlDays && !['','30','90'].includes(ttlDays) ? ttlDays : ''} onChange={e => setTtlDays(e.target.value)} className="h-8 mt-1" data-testid="module-grant-ttl" />
               <p className="text-[10px] text-muted-foreground">Leave blank for permanent. Temp grants auto-revoke at end-of-day on the expiry date.</p>
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => { setGrantingUser(null); setTtlDays(''); }}>Cancel</Button>
-              <Button className="flex-1" onClick={() => grant(grantingUser, ttlDays)} data-testid="finance-grant-confirm">Grant</Button>
+              <Button className="flex-1" onClick={() => grant(grantingUser, ttlDays)} data-testid="module-grant-confirm">Grant</Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
     </>
   );
+}
+
+// Legacy alias kept for the (very few) other consumers — opens the same dialog default-tabbed to Finance.
+// eslint-disable-next-line no-unused-vars
+function FinanceAccessManager() {
+  return <ModuleAccessManager />;
 }

@@ -1,6 +1,6 @@
 """HR Module: contracts, salaries, payslips, document requests, per-campus settings"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level
+from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -8,24 +8,17 @@ import uuid
 router = APIRouter(prefix="/api/hr", tags=["hr"])
 
 
+# Legacy local helper kept as an alias to the centralised `has_module_access(user, 'hr')` —
+# all HR endpoints now go through `require_hr` which delegates to the standard module guard.
 def _require_hr_access(user: dict):
-    """Check if user has HR access: HR role, finance dept, or director+"""
-    role = user.get("role", "")
-    dept = (user.get("department") or "").lower()
-    depts = [d.lower() for d in (user.get("departments") or [])]
-    if role in ("HR", "hr"):
-        return True
-    if "hr" in depts or "human resources" in depts or "finance" in depts or dept in ("hr", "human resources", "finance"):
-        return True
-    if get_role_level(role) >= 8:  # Director+
-        return True
-    return False
+    from deps import has_module_access
+    return has_module_access(user, "hr")
 
 
-async def require_hr(current_user: dict = Depends(get_current_user)):
-    if not _require_hr_access(current_user):
-        raise HTTPException(status_code=403, detail="HR access required")
-    return current_user
+# `require_hr` is the dependency historically used by every endpoint in this file —
+# it now simply re-exports the shared `require_hr_view` (Director+ implicit, HR role
+# implicit, all others by explicit admin-granted TTL access).
+require_hr = require_hr_view
 
 
 # ========== HR SETTINGS PER CAMPUS ==========

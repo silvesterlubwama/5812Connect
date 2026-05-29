@@ -54,7 +54,7 @@ const NAV_SECTIONS = [
       { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
       { to: '/members', icon: Users, label: 'People', roles: STAFF_PLUS },
       { to: '/volunteer-scheduling', icon: Clock, label: 'Scheduling', roles: COORDINATOR_PLUS },
-      { to: '/social-work', icon: HeartHandshake, label: 'Social Work', roles: STAFF_PLUS },
+      { to: '/social-work', icon: HeartHandshake, label: 'Social Work', roles: STAFF_PLUS, module: 'social_work' },
       { to: '/access', icon: ScanLine, label: 'Access Control', roles: COORDINATOR_PLUS },
     ]
   },
@@ -69,13 +69,14 @@ const NAV_SECTIONS = [
   {
     label: 'Finance',
     collapsible: true,
-    roles: MANAGER_PLUS,
+    roles: STAFF_PLUS,  // visible to staff but each item is gated by module access
     items: [
-      { to: '/financial', icon: DollarSign, label: 'Financial' },
-      { to: '/accounting', icon: BookOpen, label: 'Accounting' },
-      { to: '/banking', icon: Landmark, label: 'Banking' },
-      { to: '/approvals', icon: Workflow, label: 'Approvals' },
-      { to: '/sales', icon: ShoppingCart, label: 'Marketplace' },
+      { to: '/financial', icon: DollarSign, label: 'Financial', module: 'finance' },
+      { to: '/accounting', icon: BookOpen, label: 'Accounting', module: 'accounting' },
+      { to: '/banking', icon: Landmark, label: 'Banking', module: 'banking' },
+      { to: '/hr', icon: Users, label: 'HR & Payroll', module: 'hr' },
+      { to: '/approvals', icon: Workflow, label: 'Approvals', module: 'finance' },
+      { to: '/sales', icon: ShoppingCart, label: 'Marketplace', module: 'sales' },
     ]
   },
   {
@@ -94,7 +95,6 @@ const NAV_SECTIONS = [
     items: [
       { to: '/admin', icon: User, label: 'Staff & Users' },
       { to: '/locations', icon: MapPin, label: 'Campuses' },
-      { to: '/hr', icon: Users, label: 'HR & Payroll' },
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
       { to: '/email-templates', icon: Mail, label: 'Email Templates' },
       { to: '/settings', icon: Settings, label: 'Settings' },
@@ -267,29 +267,43 @@ export default function Layout() {
   const handleResultClick = (result) => { setSearchOpen(false); setSearchQuery(''); setSearchResults([]); navigate(result.url); };
 
   // Finance feature gate (mirrors backend `has_finance_access`):
-  //   • implicit for Manager+/Director+/Admin/EDs
-  //   • explicit per-user via `finance_access: true` (with optional `finance_access_expires_at`)
-  const FINANCE_PRIVILEGED = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager'];
-  const FINANCE_ROUTES = new Set(['/financial', '/accounting', '/banking']);
-  const userHasFinanceAccess = (() => {
-    if (FINANCE_PRIVILEGED.includes(userRole) || isAdmin) return true;
-    if (!user?.finance_access) return false;
-    // Honor optional expiry
-    const exp = user?.finance_access_expires_at;
+  //   • implicit for Director+/Admin/EDs (Manager and below now require explicit grant)
+  //   • explicit per-user via `{module}_access: true` (with optional `{module}_access_expires_at`)
+  const PRIVILEGED_ROLES = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'];
+
+  const _grantActive = (mod) => {
+    if (!user?.[`${mod}_access`]) return false;
+    const exp = user?.[`${mod}_access_expires_at`];
     if (exp) {
       try { if (new Date(exp).getTime() <= Date.now()) return false; } catch { /* ignore */ }
     }
     return true;
-  })();
+  };
+
+  const hasModuleAccess = (mod) => {
+    if (!mod) return true;
+    if (PRIVILEGED_ROLES.includes(userRole) || isAdmin) return true;
+    // HR also auto-granted to users with HR role or HR/Human Resources department
+    if (mod === 'hr') {
+      if (['HR', 'hr'].includes(userRole)) return true;
+      const dept = (user?.department || '').toLowerCase();
+      const depts = (user?.departments || []).map(d => (d || '').toLowerCase());
+      if (dept === 'hr' || dept === 'human resources' || depts.includes('hr') || depts.includes('human resources')) return true;
+    }
+    return _grantActive(mod);
+  };
+
+  // Legacy alias used by a few places downstream.
+  const userHasFinanceAccess = hasModuleAccess('finance');
 
   // Check if user can see a nav item
   const canAccess = (item) => {
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
-    // Finance items: gated by has_finance_access (role-based OR explicit grant)
-    if (FINANCE_ROUTES.has(item.to) && !userHasFinanceAccess) return false;
-    // Campus feature toggles — show if any campus user has access to has the feature enabled.
-    // Active campus selected → check that campus's flag. "All Locations" → check user's primary campus flag.
+    // Per-module gate (new): each nav entry can declare a `module` key — Director+ implicit,
+    // everyone else needs an explicit grant.
+    if (item.module && !hasModuleAccess(item.module)) return false;
+    // Campus feature toggles — show if the campus enables the feature.
     if (item.to === '/financial' && !campusFeatures.financial_enabled) return false;
     if (item.to === '/sales' && !campusFeatures.marketplace_enabled) return false;
     if (item.to === '/financial-apis' && !campusFeatures.financial_apis_enabled) return false;
@@ -299,14 +313,8 @@ export default function Layout() {
 
   // Check if user can see a section
   const canSeeSection = (section) => {
-    // Special-case: the "Finance" section is visible to anyone with finance access
-    // (role-based OR explicit grant). Skip the role check in that case.
-    if (section.label === 'Finance') {
-      if (!userHasFinanceAccess) return false;
-      return section.items.some(item => canAccess(item));
-    }
     if (section.roles && !section.roles.includes(userRole) && !isAdmin) return false;
-    // Section visible if at least one item is accessible
+    // Section visible if at least one item passes its individual gate.
     return section.items.some(item => canAccess(item));
   };
 

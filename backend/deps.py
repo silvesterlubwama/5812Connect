@@ -174,38 +174,72 @@ def has_campus_switcher(user: dict) -> bool:
 # Roles that always have finance access (no explicit flag needed):
 FINANCE_PRIVILEGED_ROLES = {
     "admin", "system_admin", "Executive Director", "Adviser",
-    "Director", "Manager",
+    "Director",
+    # Managers are NOT automatically privileged any more — they must be granted explicitly.
+}
+
+# Per user request (iter 134): only Director+ get automatic access to gated modules.
+# Manager and below must be granted explicit, optionally time-limited access by an admin.
+PRIVILEGED_ROLES = FINANCE_PRIVILEGED_ROLES
+
+# Modules that follow the "appointment-only for non-Directors" access pattern.
+# Each module stores explicit grants on the user as: {module}_access (bool) + {module}_access_expires_at (iso str).
+GRANTABLE_MODULES = {
+    "finance": "Finance (Donations, Expenses, P&L, Balance Sheet)",
+    "hr": "HR & Payroll (Salaries, Payslips, Contracts, Leave, Attendance, Reimbursements)",
+    "sales": "Sales Portal / Marketplace / Products / POS",
+    "banking": "Banking (Bank accounts, Statements, Vendor bills, Recurring entries)",
+    "accounting": "Accounting (Chart of Accounts, Journals, Ledger, Reports)",
+    "social_work": "Social Work (Cases, Notes, Schools, Sponsor portal)",
+    "restricted": "Restricted-location data (shelters, sensitive sub-campuses)",
 }
 
 
-def has_finance_access(user: dict) -> bool:
-    """Gate for VIEWING financial data (donations, expenses, sales financials,
-    bank accounts, ledger, vendors, bills, reports).
-
-    Allowed if:
-      • user.role is in FINANCE_PRIVILEGED_ROLES, OR
-      • user.finance_access == True AND (no `finance_access_expires_at` OR not yet expired)
-    """
+def _grant_active(user: dict, module: str) -> bool:
+    """Return True if the user has an active explicit grant for the module
+    (the boolean flag is set AND the grant hasn't expired yet)."""
     if not user:
         return False
-    if (user.get("role") or "") in FINANCE_PRIVILEGED_ROLES:
-        return True
-    if (user.get("role") or "").lower() in {"admin", "system_admin"}:
-        return True
-    if not user.get("finance_access"):
+    if not user.get(f"{module}_access"):
         return False
-    # Check optional expiry
-    expires = user.get("finance_access_expires_at")
+    expires = user.get(f"{module}_access_expires_at")
     if expires:
         try:
             from datetime import datetime as _dt
             exp_dt = _dt.fromisoformat(str(expires).replace("Z", "+00:00"))
             now = _dt.now(timezone.utc)
             if exp_dt <= now:
-                return False  # Expired grant
+                return False  # Expired
         except Exception:
             pass
     return True
+
+
+def has_module_access(user: dict, module: str) -> bool:
+    """Generic gate for any grantable module. Privileged roles (Director+) get
+    automatic access; everyone else needs an explicit, optionally time-limited grant."""
+    if not user:
+        return False
+    if module not in GRANTABLE_MODULES:
+        return False
+    role = (user.get("role") or "")
+    if role in PRIVILEGED_ROLES:
+        return True
+    # Special-case HR: members of HR role / department have implicit HR access too,
+    # to preserve the original HR workflow without admin grants.
+    if module == "hr":
+        if role in ("HR", "hr"):
+            return True
+        dept = (user.get("department") or "").lower()
+        depts = [d.lower() for d in (user.get("departments") or [])]
+        if "hr" in depts or "human resources" in depts or dept in ("hr", "human resources"):
+            return True
+    return _grant_active(user, module)
+
+
+def has_finance_access(user: dict) -> bool:
+    """Backwards-compatible alias kept for routers that import this directly."""
+    return has_module_access(user, "finance")
 
 
 async def require_finance_view(current_user: dict = Depends(get_current_user)) -> dict:
@@ -219,17 +253,44 @@ async def require_finance_view(current_user: dict = Depends(get_current_user)) -
 
 
 async def require_finance_admin(current_user: dict = Depends(get_current_user)) -> dict:
-    """Dependency: 403 unless user is Director+ (or admin). Used for WRITES that
-    create/modify financial records (donations, expenses, bills, JEs, bank rules)."""
+    """Dependency: 403 unless user is Director+ with finance access, OR has been
+    granted explicit finance access. Used for WRITES that create/modify financial records."""
     if not has_finance_access(current_user):
         raise HTTPException(status_code=403, detail="Finance access required")
     role = current_user.get("role") or ""
-    if role in {"Manager", "Director", "Adviser", "Executive Director", "admin", "system_admin"}:
+    # Director+ always allowed; Manager and below need the explicit grant (which they
+    # passed the has_finance_access() check with).
+    if role in {"Director", "Adviser", "Executive Director", "admin", "system_admin"}:
+        return current_user
+    if _grant_active(current_user, "finance"):
         return current_user
     raise HTTPException(
         status_code=403,
-        detail="This action requires Manager/Director level access",
+        detail="This action requires Director access or an explicit finance grant",
     )
+
+
+def require_module_view(module: str):
+    """Factory: dependency that 403s unless the user has access to the named module."""
+    async def _dep(current_user: dict = Depends(get_current_user)) -> dict:
+        if not has_module_access(current_user, module):
+            raise HTTPException(
+                status_code=403,
+                detail=f"{GRANTABLE_MODULES.get(module, module)} is restricted. "
+                       f"Ask an administrator to grant you {module} access.",
+            )
+        return current_user
+    _dep.__name__ = f"require_{module}_view"
+    return _dep
+
+
+# Pre-built dependencies for the modules other than finance.
+require_hr_view = require_module_view("hr")
+require_sales_view = require_module_view("sales")
+require_banking_view = require_module_view("banking")
+require_accounting_view = require_module_view("accounting")
+require_social_work_view = require_module_view("social_work")
+require_restricted_view = require_module_view("restricted")
 
 
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
