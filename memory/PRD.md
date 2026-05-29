@@ -6,6 +6,25 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 133 (May 29, 2026)
+**5-item user batch + currency normalization. Pytest 47/47, lint clean.**
+
+### Changes
+1. **Sidebar: Staff & Users link returned to Admin section** — `Layout.jsx` Admin section gets `{to: '/admin', icon: User, label: 'Staff & Users'}` at the top, routing to the existing AdminPage (which was unreachable from the nav).
+2. **Sidebar label rename** — Operations entry "Staff & People" → just **"People"**.
+3. **/people Members tab removed** — staff source-of-truth is `/admin`. Default active tab is now **"Guests & Parents"**. Families and Children tabs unchanged.
+4. **POS cart: typeable quantity** — `<input type='number'>` replaces the read-only span between the Minus/Plus buttons. Min 1, blank/zero reverts to 1 on blur. Testid `cart-qty-input-<key>`. Minus/Plus buttons still work.
+5. **Finance UI: UGX default (not USD)** — `FinancialPage.jsx` currentCurrency now uses the selected location's currency OR falls back to **UGX** (org home) when no filter is applied. Removed the previous fallback that propagated USD from the admin's foreign HQ campus.
+6. **Comms unified scroll** — Pinned section stays pinned at top, but **Organization + Conversations** now share a single `<div className='overflow-y-auto flex-1' data-testid='comms-sidebar-scroll'>`. Scrolling past the org chart continues seamlessly into the conversations list. Online-count footer stays pinned at the bottom.
+
+### Data + safety
+- **One-shot DB fix**: 4 campuses with mismatched country/currency normalised — `loc_003` (Thailand) USD→THB, `loc_4b3fa4d6` (Uganda) USD→UGX, `loc_d4b35444` (Uganda) USD→UGX, `loc_39aa9967` (Haiti) USD→HTG.
+- **Prevention**: new `COUNTRY_CURRENCY_MAP` + `_expected_currency_for()` helper in `routers/locations.py`. `POST /api/locations` now auto-corrects USD→correct ISO currency when the supplied country has a clear expected currency and the admin didn't explicitly pick something exotic.
+
+### Tests / lint
+- All 47 pytest cases still PASS (16 smoke + 15 iter115 Pass 2 + 16 iter116 PDF export).
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+
 ## Recently Resolved — Iteration 132 (May 29, 2026)
 **P2 leftover batch: daily payday + overdue-task scheduling, a11y polish, test fixes — 47/47 green.**
 

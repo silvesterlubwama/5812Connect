@@ -111,16 +111,13 @@ export default function FinancialPage() {
 
   const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
 
-  // Currency: prefer the selected location, then the user's active/primary campus, then UGX (the
-  // org's home currency). Never default to USD — Uganda-based deployments would show $ wrongly.
-  const _activeCampusCurrency = (() => {
-    const id = user?.active_campus_id || user?.location_id;
-    if (!id) return null;
-    return allLocations.find(l => l.id === id)?.currency || null;
-  })();
+  // Currency: prefer the explicitly selected location. With no filter ("All Locations"),
+  // default to the org's home currency UGX rather than the admin's active campus currency
+  // (the admin's active campus may be a USA-based HQ even though the org is Uganda-based).
+  // Selecting a specific location always uses that location's currency.
   const currentCurrency = (locationFilter
     ? allLocations.find(l => l.id === locationFilter)?.currency
-    : _activeCampusCurrency
+    : null
   ) || 'UGX';
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));

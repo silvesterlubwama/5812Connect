@@ -9,6 +9,36 @@ import uuid
 router = APIRouter(prefix="/api", tags=["locations"])
 
 
+# Country → expected ISO currency. Used to auto-correct mismatches on create/update so
+# Uganda campuses always default to UGX, Kenya to KES, etc.
+COUNTRY_CURRENCY_MAP = {
+    "uganda": "UGX", "ug": "UGX",
+    "kenya": "KES", "ke": "KES",
+    "tanzania": "TZS", "tz": "TZS",
+    "rwanda": "RWF", "rw": "RWF",
+    "burundi": "BIF", "bi": "BIF",
+    "haiti": "HTG", "ht": "HTG",
+    "thailand": "THB", "th": "THB",
+    "usa": "USD", "us": "USD", "united states": "USD", "united states of america": "USD",
+    "united kingdom": "GBP", "uk": "GBP", "gb": "GBP",
+    "south africa": "ZAR", "za": "ZAR",
+    "nigeria": "NGN", "ng": "NGN",
+    "ghana": "GHS", "gh": "GHS",
+    "ethiopia": "ETB", "et": "ETB",
+}
+
+
+def _expected_currency_for(country: Optional[str], country_code: Optional[str]) -> Optional[str]:
+    """Return the canonical ISO currency for a country name or code, or None if unknown."""
+    for v in (country_code, country):
+        if not v:
+            continue
+        cur = COUNTRY_CURRENCY_MAP.get(str(v).strip().lower())
+        if cur:
+            return cur
+    return None
+
+
 class LocationCreate(BaseModel):
     name: str
     code: Optional[str] = None
@@ -89,7 +119,14 @@ async def list_locations(current_user: dict = Depends(get_current_user)) -> list
 
 @router.post("/locations")
 async def create_location(data: LocationCreate, current_user: dict = Depends(require_admin)) -> dict:
-    doc = {"id": f"loc_{str(uuid.uuid4())[:8]}", **data.model_dump(), "active": True, "member_count": 0, "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
+    payload = data.model_dump()
+    # Auto-correct currency if the supplied one mismatches the country and the caller didn't
+    # deliberately pick something exotic. Only override the LocationCreate default ("USD") —
+    # if the admin explicitly set a different currency, respect it.
+    expected = _expected_currency_for(payload.get("country"), payload.get("country_code"))
+    if expected and payload.get("currency") in (None, "", "USD") and expected != "USD":
+        payload["currency"] = expected
+    doc = {"id": f"loc_{str(uuid.uuid4())[:8]}", **payload, "active": True, "member_count": 0, "staff_ids": [], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
     await db.locations.insert_one(doc)
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "location", doc["id"])
