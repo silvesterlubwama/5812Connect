@@ -816,3 +816,66 @@ async def set_finance_access(user_id: str, data: dict, current_user: dict = Depe
     return {"updated": True, "user_id": user_id, "finance_access": new_state,
             "expires_at": update.get("finance_access_expires_at")}
 
+
+
+# ========== GUESTS → MEMBERS UNIFICATION MIGRATION ==========
+
+@router.get("/migrate/guests-to-members/preview")
+async def preview_guest_migration(current_user: dict = Depends(require_admin)) -> dict:
+    """Counts pending guest→member mirror rows. Safe to call any time."""
+    total_guests = await db.guests.count_documents({})
+    already_mirrored = await db.members.count_documents({"mirrored_from_guests": True})
+    guest_ids = await db.guests.find({}, {"_id": 0, "id": 1}).to_list(50000)
+    ids = [g["id"] for g in guest_ids if g.get("id")]
+    existing_member_ids = set()
+    if ids:
+        async for m in db.members.find({"id": {"$in": ids}}, {"_id": 0, "id": 1}):
+            existing_member_ids.add(m["id"])
+    pending = sum(1 for i in ids if i not in existing_member_ids)
+    return {
+        "total_guests": total_guests,
+        "already_mirrored_in_members": already_mirrored,
+        "pending_to_migrate": pending,
+        "members_with_same_id_already": len(existing_member_ids - {i for i in ids if i in existing_member_ids and i not in existing_member_ids}),
+    }
+
+
+@router.post("/migrate/guests-to-members/run")
+async def run_guest_migration(data: dict = None, current_user: dict = Depends(require_admin)) -> dict:
+    """One-time migration: mirror every guest into the unified `members`
+    collection with `kind` = 'parent' (if is_parent) or 'guest'. Same `id`
+    is reused so all existing FKs (children.parent_ids, residents, etc.)
+    keep working without rewrite.
+
+    - Idempotent: re-running will only upsert; no duplicate inserts.
+    - Pass `{ overwrite: true }` to overwrite existing member fields with
+      the latest guest data (use after major guest edits if needed).
+    """
+    overwrite = bool((data or {}).get("overwrite"))
+    migrated = 0
+    skipped = 0
+    errors = 0
+    async for guest in db.guests.find({}, {"_id": 0}):
+        gid = guest.get("id")
+        if not gid:
+            continue
+        try:
+            mirror_kind = "parent" if guest.get("is_parent") else "guest"
+            existing = await db.members.find_one({"id": gid}, {"_id": 0, "id": 1, "mirrored_from_guests": 1})
+            if existing and not existing.get("mirrored_from_guests") and not overwrite:
+                # Conflict — a real member already owns this id. Skip rather than clobber.
+                skipped += 1
+                continue
+            payload = {k: v for k, v in guest.items() if k not in ("_id",)}
+            payload["kind"] = mirror_kind
+            payload["mirrored_from_guests"] = True
+            payload.setdefault("status", "active")
+            await db.members.update_one({"id": gid}, {"$set": payload}, upsert=True)
+            migrated += 1
+        except Exception as e:
+            logger.error(f"guest→member migration failed for {gid}: {e}")
+            errors += 1
+    await _audit(current_user["id"], "migrate", "guests_to_members", "all", {
+        "migrated": migrated, "skipped": skipped, "errors": errors, "overwrite": overwrite,
+    })
+    return {"migrated": migrated, "skipped_conflict": skipped, "errors": errors}

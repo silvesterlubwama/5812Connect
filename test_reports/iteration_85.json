@@ -1,0 +1,60 @@
+{
+  "summary": "Pass 2 testing — Volunteer auto-generate-shifts-from-event + Guests/Parents unification into members. Created 15 new pytest cases (all green) and ran the 16-test smoke regression (all green). Frontend dialogs on /volunteer-scheduling and /locations render and accept input as designed; Preview migration shows Total=33 / Mirrored=33 / Pending=0.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration115_pass2_volunteers_unify.py",
+    "/app/backend/tests/test_smoke_recent_modules.py",
+    "/app/test_reports/pytest/iter115_pass2.xml"
+  ],
+  "tests_run": {
+    "iter115_pass2 (new)": "15 / 15 passed",
+    "smoke regression": "16 / 16 passed",
+    "total": "31 / 31 passed"
+  },
+  "backend_coverage": [
+    "GET /api/volunteer/role-defaults — generic fallback + event_type variants (service, worship, kids, outreach, conference) return roles + slots + all_role_options",
+    "POST /api/volunteer/shifts/generate-from-event — 400 on missing event_id, 404 on unknown event_id, 400 on empty roles",
+    "POST /api/volunteer/shifts/generate-from-event — happy path inherits event date/start_time/location_id, marks auto_generated_from_event=True",
+    "POST /api/volunteer/shifts/generate-from-event — idempotent rerun yields total_created=0, total_skipped=2",
+    "POST /api/volunteer/shifts/generate-from-event — replace=true updates slots + start_time + end_time of existing shifts",
+    "GET /api/admin/migrate/guests-to-members/preview — counts shape verified (ints, total_guests/already_mirrored/pending_to_migrate)",
+    "POST /api/admin/migrate/guests-to-members/run — second run shows 0 pending in preview (idempotent, no duplicates)",
+    "GET /api/members?kind=guest|parent — all returned rows have matching kind",
+    "POST /api/guests — auto-mirrors a row with kind=guest to members (verified via /members?kind=guest)",
+    "PUT /api/guests/{id} — name + phone changes propagate to members mirror",
+    "DELETE /api/guests/{id} — removes both guests row and the mirrored_from_guests=true members row"
+  ],
+  "frontend_coverage": [
+    "/volunteer-scheduling — `auto-generate-shifts-btn` visible in header; dialog opens",
+    "Dialog elements present: `autogen-event-select`, `autogen-add-role-btn`, `autogen-replace-checkbox`, `autogen-confirm-btn`",
+    "/locations — `unify-guests-tool` card rendered under ReassignDataTool",
+    "Preview button: clicked, response shows Total guests 33 / Already mirrored 33 / Pending 0",
+    "Run Migration & Re-mirror buttons present"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Members listing applies campus filter (correct), so a guest created without a `location_id` will not appear in /api/members?kind=guest for an admin with active_campus_id set. Backend behavior is correct; just a documentation note for downstream UI/import flows that must pass `location_id` when creating guests.",
+    "/api/members response is enveloped ({members, total}) — the test helper normalises it; if any frontend code still treats it as a bare list it would break (none observed)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration115_pass2_volunteers_unify.py (NEW)"
+  ],
+  "success_rate": {
+    "backend": "100% (31/31 incl. smoke)",
+    "frontend": "100% on UI surfaces tested"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 — login uses `identifier` field",
+  "seed_data_creation": "Each test creates throwaway guests with prefix CI-DUAL-/CI-DEL- and a single CI-PASS2-EVT-* event; all are cleaned up by fixture teardown. A pre-test sweep removed 2 orphan CI-* mirrors from a prior partial test run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pass 2 features (volunteer auto-generate + guests/parents unification) are fully green. Backend 31/31 pytest (15 new + 16 smoke). The new test file lives at /app/backend/tests/test_iteration115_pass2_volunteers_unify.py and can be re-run safely. Frontend testid contract verified: auto-generate-shifts-btn, autogen-event-select, autogen-confirm-btn, autogen-replace-checkbox, autogen-add-role-btn, unify-guests-tool, unify-guests-preview-btn, unify-guests-run-btn, unify-guests-preview (now shows '33 / 33 / 0'). Note: /api/members returns {members,total} envelope — wrap accordingly in any new tests.",
+  "rca of the issue": "No production bug. One self-inflicted test issue (test had assumed admin can list any-campus members; the endpoint correctly enforces active_campus_id filtering, so test guests must be created with a matching location_id). Fixed by injecting `location_id=primary_location` into all test POST /api/guests payloads."
+}

@@ -681,6 +681,8 @@ export const volunteerApi = {
   assignVolunteer: (shiftId, data) => api.post(`/volunteer/shifts/${shiftId}/assign`, data),
   unassignVolunteer: (shiftId, memberId) => api.delete(`/volunteer/shifts/${shiftId}/assign/${memberId}`),
   myShifts: () => api.get('/volunteer/my-shifts'),
+  roleDefaults: (eventType) => api.get('/volunteer/role-defaults', { params: { event_type: eventType } }),
+  generateFromEvent: (data) => api.post('/volunteer/shifts/generate-from-event', data),
 };
 
 // ---- EMAIL TEMPLATES ----

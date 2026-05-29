@@ -23,6 +23,7 @@ async def list_members(
     location_id: Optional[str] = None,
     staff_only: Optional[bool] = None,
     welfare_category: Optional[str] = None,  # sponsored|restricted_location|welfare_support|multiple|any
+    kind: Optional[str] = None,  # member|guest|parent|any — empty = legacy "member-or-unspecified"
     skip: int = 0,
     limit: int = 100,
     current_user: dict = Depends(get_current_user)
@@ -35,6 +36,13 @@ async def list_members(
         conditions.append(campus)
     if staff_only:
         query["role"] = {"$in": list(STAFF_ROLES)}
+    if kind and kind != "any":
+        # Match the explicit kind. For "member" also match historical rows that
+        # have no kind at all (they were members before the unification).
+        if kind == "member":
+            conditions.append({"$or": [{"kind": "member"}, {"kind": {"$exists": False}}]})
+        else:
+            conditions.append({"kind": kind})
     if search:
         conditions.append({"$or": [
             {"name": {"$regex": search, "$options": "i"}},
@@ -726,6 +734,28 @@ async def get_child_full_profile(child_id: str, current_user: dict = Depends(get
 
 # ========== GUESTS ==========
 
+async def _mirror_guest_to_members(guest_doc: dict) -> None:
+    """Create or update a guest's mirror row in `db.members` with kind='guest' or 'parent'.
+    Same id is used in both collections so existing FKs (children.parent_ids etc.) keep working.
+    Best-effort — never raises."""
+    try:
+        if not guest_doc or not guest_doc.get("id"):
+            return
+        mirror_kind = "parent" if guest_doc.get("is_parent") else "guest"
+        # Build a safe payload — strip _id / system flags
+        payload = {k: v for k, v in guest_doc.items() if k not in ("_id",)}
+        payload["kind"] = mirror_kind
+        payload["mirrored_from_guests"] = True
+        payload.setdefault("status", "active")
+        await db.members.update_one(
+            {"id": guest_doc["id"]},
+            {"$set": payload},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"mirror_guest_to_members failed for {guest_doc.get('id')}: {e}")
+
+
 @router.get("/guests")
 async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     campus = await get_campus_filter(current_user)
@@ -779,6 +809,7 @@ async def create_guest(data: GuestCreate, current_user: dict = Depends(get_curre
     }
     await db.guests.insert_one(doc)
     doc.pop("_id", None)
+    await _mirror_guest_to_members(doc)
     return doc
 
 
@@ -797,7 +828,10 @@ async def update_guest(guest_id: str, data: GuestCreate, current_user: dict = De
                 "location_id": update["resident_location_id"], "tags": [], "status": "active",
                 "assigned_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
             })
-    return await db.guests.find_one({"id": guest_id}, {"_id": 0})
+    fresh = await db.guests.find_one({"id": guest_id}, {"_id": 0})
+    if fresh:
+        await _mirror_guest_to_members(fresh)
+    return fresh
 
 
 
@@ -811,6 +845,11 @@ async def delete_guest(guest_id: str, current_user: dict = Depends(get_current_u
     guest["deleted_by"] = current_user["id"]
     await db.deleted_items.insert_one(guest)
     await db.guests.delete_one({"id": guest_id})
+    # Also remove the mirror row in members if it was added by the unification
+    try:
+        await db.members.delete_one({"id": guest_id, "mirrored_from_guests": True})
+    except Exception as e:
+        logger.warning(f"delete guest members-mirror failed: {e}")
     # Cascade: remove from children's parent_ids
     await db.children.update_many({"parent_ids": guest_id}, {"$pull": {"parent_ids": guest_id}})
     await _audit(current_user["id"], "delete", "guest", guest_id, {"name": guest.get("name")})

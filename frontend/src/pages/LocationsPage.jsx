@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapPin, Plus, Trash2, Edit2, CheckCircle, XCircle, Users, DollarSign, Building2, Shield, Globe, ChevronRight, ChevronDown, Clock } from 'lucide-react';
+import { MapPin, Plus, Trash2, Edit2, CheckCircle, XCircle, Users, DollarSign, Building2, Shield, Globe, ChevronRight, ChevronDown, Clock, UserCog } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -218,7 +218,10 @@ export default function LocationsPage() {
 
       {/* ===== REASSIGN DATA TOOL (admins only) ===== */}
       {['admin','system_admin','Executive Director'].includes(user?.role) && (
-        <ReassignDataTool locations={locations} />
+        <>
+          <ReassignDataTool locations={locations} />
+          <UnifyGuestsTool />
+        </>
       )}
 
       {/* ===== VENUE MANAGEMENT ===== */}
@@ -649,6 +652,79 @@ function ReassignDataTool({ locations }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ============== UNIFY GUESTS → MEMBERS TOOL ==============
+function UnifyGuestsTool() {
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const runPreview = async () => {
+    setPreviewing(true); setResult(null);
+    try {
+      const res = await api.get('/admin/migrate/guests-to-members/preview');
+      setPreview(res.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Preview failed');
+    } finally { setPreviewing(false); }
+  };
+
+  const runMigration = async (overwrite = false) => {
+    if (!window.confirm(overwrite
+      ? 'Re-mirror all guests into Members, overwriting any existing mirror rows. Continue?'
+      : 'Mirror all guests into the unified Members collection? Existing real members are not touched.')) return;
+    setRunning(true);
+    try {
+      const res = await api.post('/admin/migrate/guests-to-members/run', { overwrite });
+      setResult(res.data);
+      toast.success(`Migrated ${res.data.migrated} guest(s) into Members`);
+      setPreview(null);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Migration failed');
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className="space-y-3 border border-indigo-200 dark:border-indigo-900/40 rounded-xl p-4 bg-indigo-50/40 dark:bg-indigo-950/10" data-testid="unify-guests-tool">
+      <div>
+        <h2 className="text-lg font-semibold flex items-center gap-2"><UserCog size={16} className="text-indigo-600" /> Unify Guests &amp; Parents into Members</h2>
+        <p className="text-xs text-muted-foreground">
+          Mirror every Guest / Parent into the unified <code className="px-1 rounded bg-muted text-[10px]">members</code> collection
+          with <code className="px-1 rounded bg-muted text-[10px]">kind = 'guest' | 'parent'</code>.
+          Same id is reused so existing relations (parent links, residents, badges) keep working.
+          Going forward, all new guests are automatically mirrored.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={runPreview} disabled={previewing} data-testid="unify-guests-preview-btn">
+          {previewing ? 'Counting…' : 'Preview'}
+        </Button>
+        <Button size="sm" onClick={() => runMigration(false)} disabled={running} data-testid="unify-guests-run-btn">
+          {running ? 'Migrating…' : 'Run Migration'}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => runMigration(true)} disabled={running} data-testid="unify-guests-overwrite-btn">
+          Re-mirror (overwrite)
+        </Button>
+      </div>
+      {preview && (
+        <div className="text-xs bg-background/60 rounded-lg p-3 border" data-testid="unify-guests-preview">
+          <div className="grid grid-cols-3 gap-x-3 gap-y-1">
+            <div className="flex justify-between"><span className="text-muted-foreground">Total guests</span><span className="font-semibold">{preview.total_guests}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Already mirrored</span><span className="font-semibold">{preview.already_mirrored_in_members}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Pending</span><span className="font-semibold">{preview.pending_to_migrate}</span></div>
+          </div>
+        </div>
+      )}
+      {result && (
+        <div className="text-xs bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 rounded-lg p-3 border border-emerald-200 dark:border-emerald-900/30" data-testid="unify-guests-result">
+          <p>✓ Mirrored {result.migrated} · skipped {result.skipped_conflict} (id collision) · errors {result.errors}</p>
         </div>
       )}
     </div>

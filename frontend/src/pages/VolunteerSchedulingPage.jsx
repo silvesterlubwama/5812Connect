@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Users, Plus, Trash2, Edit2, UserPlus, Check, X, MapPin, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, Users, Plus, Trash2, Edit2, UserPlus, Check, X, MapPin, RefreshCw, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { volunteerApi, locationsApi, eventsApi, adminApi } from '../services/api';
@@ -42,6 +42,14 @@ export default function VolunteerSchedulingPage() {
   });
 
   const [assignForm, setAssignForm] = useState({ member_id: '', name: '' });
+
+  // ---- Auto-generate-from-event state ----
+  const [showAutoGen, setShowAutoGen] = useState(false);
+  const [autoGenEventId, setAutoGenEventId] = useState('');
+  const [autoGenRoles, setAutoGenRoles] = useState([]); // [{role, slots}]
+  const [autoGenReplace, setAutoGenReplace] = useState(false);
+  const [autoGenLoading, setAutoGenLoading] = useState(false);
+  const [autoRoleOptions, setAutoRoleOptions] = useState(ROLES);
 
   useEffect(() => {
     fetchAll();
@@ -152,6 +160,65 @@ export default function VolunteerSchedulingPage() {
   const getLocationName = (id) => locations.find(l => l.id === id)?.name || 'Unknown';
   const getEventName = (id) => events.find(e => e.id === id)?.title || '';
 
+  // ---- Auto-generate handlers ----
+  const openAutoGen = async (eventId) => {
+    setShowAutoGen(true);
+    setAutoGenEventId(eventId || '');
+    setAutoGenReplace(false);
+    setAutoGenRoles([]);
+    if (eventId) await loadRoleDefaults(eventId);
+  };
+
+  const loadRoleDefaults = async (eventId) => {
+    const ev = events.find(e => e.id === eventId);
+    try {
+      const r = await volunteerApi.roleDefaults(ev?.type || '');
+      setAutoGenRoles(r.data?.roles || []);
+      if (Array.isArray(r.data?.all_role_options) && r.data.all_role_options.length) {
+        setAutoRoleOptions(r.data.all_role_options);
+      }
+    } catch {
+      setAutoGenRoles([{ role: 'General', slots: 4 }]);
+    }
+  };
+
+  const updateAutoRole = (idx, patch) => {
+    setAutoGenRoles(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  };
+
+  const removeAutoRole = (idx) => {
+    setAutoGenRoles(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const addAutoRole = () => {
+    setAutoGenRoles(prev => [...prev, { role: 'General', slots: 2 }]);
+  };
+
+  const handleAutoGenerate = async () => {
+    if (!autoGenEventId) { toast.error('Pick an event first'); return; }
+    if (!autoGenRoles.length) { toast.error('Add at least one role'); return; }
+    setAutoGenLoading(true);
+    try {
+      const r = await volunteerApi.generateFromEvent({
+        event_id: autoGenEventId,
+        roles: autoGenRoles,
+        replace: autoGenReplace,
+      });
+      const created = r.data?.total_created || 0;
+      const updated = r.data?.total_updated || 0;
+      const skipped = r.data?.total_skipped || 0;
+      toast.success(`Generated ${created} new shift(s)${updated ? `, updated ${updated}` : ''}${skipped ? `, skipped ${skipped}` : ''}`);
+      setShowAutoGen(false);
+      setAutoGenEventId('');
+      setAutoGenRoles([]);
+      await fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to generate shifts');
+    } finally {
+      setAutoGenLoading(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6" data-testid="volunteer-scheduling-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -161,6 +228,9 @@ export default function VolunteerSchedulingPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchAll}><RefreshCw size={14} /></Button>
+          <Button variant="outline" className="gap-2" onClick={() => openAutoGen('')} data-testid="auto-generate-shifts-btn">
+            <Sparkles size={16} /> Generate from Event
+          </Button>
           <Button className="gap-2" onClick={() => setShowCreate(true)} data-testid="create-shift-btn">
             <Plus size={16} /> New Shift
           </Button>
@@ -420,6 +490,117 @@ export default function VolunteerSchedulingPage() {
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setShowAssign(null)}>Cancel</Button>
               <Button className="flex-1" onClick={handleAssign} data-testid="confirm-assign-btn">Assign</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Auto-Generate from Event Dialog */}
+      <Dialog open={showAutoGen} onOpenChange={(o) => { setShowAutoGen(o); if (!o) { setAutoGenEventId(''); setAutoGenRoles([]); } }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Sparkles size={18} /> Generate Shifts from Event</DialogTitle>
+            <DialogDescription>
+              Pick an upcoming event — we will auto-create one shift per role using the event's date, time and location.
+              Existing shifts for the same event/role are skipped unless you tick "Update existing".
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 mt-2" data-testid="auto-generate-dialog-body">
+            <div className="space-y-2">
+              <Label>Event *</Label>
+              <Select value={autoGenEventId || '_none'} onValueChange={async (v) => {
+                const id = v === '_none' ? '' : v;
+                setAutoGenEventId(id);
+                if (id) await loadRoleDefaults(id);
+                else setAutoGenRoles([]);
+              }}>
+                <SelectTrigger data-testid="autogen-event-select"><SelectValue placeholder="Select event..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">Select event...</SelectItem>
+                  {events.map(e => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.title} — {e.date} {e.time ? `· ${e.time}` : ''}{e.is_public ? ' · public' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {autoGenEventId && (() => {
+                const ev = events.find(e => e.id === autoGenEventId);
+                if (!ev) return null;
+                return (
+                  <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-1">
+                    <span className="inline-flex items-center gap-1"><Calendar size={11} /> {ev.date}</span>
+                    {ev.time && <span className="inline-flex items-center gap-1"><Clock size={11} /> {ev.time}{ev.end_time ? ` – ${ev.end_time}` : ''}</span>}
+                    {ev.location_id && <span className="inline-flex items-center gap-1"><MapPin size={11} /> {getLocationName(ev.location_id)}</span>}
+                    {ev.type && <Badge variant="outline" className="text-xs h-5">{ev.type}</Badge>}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Roles & Slots</Label>
+                <Button type="button" size="sm" variant="ghost" className="gap-1" onClick={addAutoRole} data-testid="autogen-add-role-btn">
+                  <Plus size={12} /> Add role
+                </Button>
+              </div>
+              {autoGenRoles.length === 0 ? (
+                <div className="text-sm text-muted-foreground italic px-1">
+                  Pick an event above and we'll suggest a sensible role list automatically.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1" data-testid="autogen-roles-list">
+                  {autoGenRoles.map((r, idx) => (
+                    <div key={idx} className="flex items-center gap-2 p-2 rounded-md border bg-muted/30">
+                      <div className="flex-1">
+                        <Select value={r.role} onValueChange={v => updateAutoRole(idx, { role: v })}>
+                          <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {autoRoleOptions.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="w-24">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={r.slots}
+                          onChange={e => updateAutoRole(idx, { slots: parseInt(e.target.value) || 1 })}
+                          aria-label="Slots"
+                        />
+                      </div>
+                      <Button type="button" size="sm" variant="ghost" className="h-9 w-9 p-0 text-muted-foreground hover:text-destructive" onClick={() => removeAutoRole(idx)}>
+                        <X size={14} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="rounded"
+                checked={autoGenReplace}
+                onChange={e => setAutoGenReplace(e.target.checked)}
+                data-testid="autogen-replace-checkbox"
+              />
+              <span>Update existing shifts for this event (refresh slot counts + times)</span>
+            </label>
+
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowAutoGen(false)}>Cancel</Button>
+              <Button
+                className="flex-1"
+                onClick={handleAutoGenerate}
+                disabled={autoGenLoading || !autoGenEventId || autoGenRoles.length === 0}
+                data-testid="autogen-confirm-btn"
+              >
+                {autoGenLoading ? 'Generating…' : `Generate ${autoGenRoles.length} shift${autoGenRoles.length === 1 ? '' : 's'}`}
+              </Button>
             </div>
           </div>
         </DialogContent>
