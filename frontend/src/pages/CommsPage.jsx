@@ -621,13 +621,16 @@ export default function CommsPage() {
             <SidebarItem room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'} icon={<Megaphone size={14} className="text-amber-600" />} subtitle={`${announcements.length} announcements`} badge={announcements.length > 0 ? announcements.length : null} onClick={() => selectRoom(ANNOUNCE_ROOM)} />
           </div>
 
+          {/* Unified scroll container — org chart + conversations share one wheel so
+              scrolling past the end of the chart continues into the chat list. */}
+          <div className="overflow-y-auto flex-1" data-testid="comms-sidebar-scroll">
           {/* Org Chart - Staff by Role (campus-scoped, live presence) */}
           <div className="border-b border-border">
             <button onClick={() => setShowOrgChart(!showOrgChart)} className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1 flex items-center gap-1 w-full hover:text-foreground" data-testid="org-chart-toggle">
               <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization <span className="ml-auto normal-case text-[9px] opacity-60">{allStaff.length} people</span>
             </button>
             {showOrgChart && (
-              <div className="px-2 pb-2 space-y-0.5 max-h-80 overflow-y-auto">
+              <div className="px-2 pb-2 space-y-0.5">
                 {allStaff.length === 0 && <p className="text-[10px] text-muted-foreground text-center py-3">No staff in your campus yet</p>}
                 {ORG_ROLES.map(role => {
                   const roleStaff = allStaff.filter(s => (s.role || '').toLowerCase() === role.toLowerCase());
@@ -685,7 +688,7 @@ export default function CommsPage() {
             )}
           </div>
 
-          <div className="overflow-y-auto flex-1">
+          <div>
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Conversations</p>
             {loading ? (
               <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
@@ -711,6 +714,7 @@ export default function CommsPage() {
               );
             })}
           </div>
+          </div>{/* /unified scroll container */}
 
           {/* Online count */}
           <div className="p-3 border-t border-border">

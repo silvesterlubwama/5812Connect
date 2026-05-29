@@ -833,9 +833,29 @@ export default function ProductsPage() {
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
-                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, -1)}><Minus size={10} /></button>
-                        <span className="text-xs font-semibold w-5 text-center">{item.qty}</span>
-                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, 1)}><Plus size={10} /></button>
+                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, -1)} aria-label="Decrease quantity"><Minus size={10} /></button>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={item.qty}
+                          onChange={(e) => {
+                            const raw = parseInt(e.target.value, 10);
+                            const n = Number.isFinite(raw) ? raw : 1;
+                            const key = _cartKey(item);
+                            setCart(prev => prev.map(i => _cartKey(i) === key ? { ...i, qty: Math.max(1, n) } : i));
+                          }}
+                          onBlur={(e) => {
+                            if (!e.target.value || parseInt(e.target.value, 10) < 1) {
+                              const key = _cartKey(item);
+                              setCart(prev => prev.map(i => _cartKey(i) === key ? { ...i, qty: 1 } : i));
+                            }
+                          }}
+                          className="h-5 w-10 text-xs font-semibold text-center bg-background border border-border rounded outline-none focus:ring-1 focus:ring-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          data-testid={`cart-qty-input-${_cartKey(item)}`}
+                          aria-label="Quantity"
+                        />
+                        <button className="h-5 w-5 rounded bg-secondary flex items-center justify-center hover:bg-border" onClick={() => updateQty(item, 1)} aria-label="Increase quantity"><Plus size={10} /></button>
                       </div>
                       <span className="text-xs font-bold text-primary min-w-[60px] text-right">{fmt(lineCalc.line_total, activeCurrency)}</span>
                       <button className="text-muted-foreground hover:text-destructive" onClick={() => removeFromCart(item)}><X size={12} /></button>

@@ -124,7 +124,7 @@ export default function UnifiedPeoplePage() {
   const [allLocations, setAllLocations] = useState([]);
   const [filterLocation, setFilterLocation] = useState('all');
   const [filterWelfare, setFilterWelfare] = useState('all');  // all|sponsored|restricted_location|welfare_support|multiple|any
-  const [activeTab, setActiveTab] = useState('members');
+  const [activeTab, setActiveTab] = useState('guests');
   const [saving, setSaving] = useState(false);
   const [bulkDeleteTarget, setBulkDeleteTarget] = useState(null); // { type, ids, label }
   const [editGuest, setEditGuest] = useState(null);
@@ -459,109 +459,13 @@ export default function UnifiedPeoplePage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList data-testid="people-tabs">
-          <TabsTrigger value="members" className="gap-1.5" data-testid="tab-members"><Users size={13} /> Members ({total})</TabsTrigger>
+          <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
-          <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
           {pendingMembers.length > 0 && <TabsTrigger value="pending" className="gap-1.5" data-testid="tab-pending"><Award size={13} /> Pending ({pendingMembers.length})</TabsTrigger>}
         </TabsList>
 
-        {/* MEMBERS TAB */}
-        <TabsContent value="members" className="mt-4">
-          <div className="flex gap-3 mb-4 flex-wrap">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input className="pl-9 h-9" placeholder="Search by name, email, phone..." value={search} onChange={e => setSearch(e.target.value)} data-testid="member-search-input" />
-            </div>
-            <Select value={filterGroup} onValueChange={setFilterGroup}>
-              <SelectTrigger className="w-36 h-9"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="all">All Groups</SelectItem>{MOCK_GROUPS.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
-            </Select>
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent>
-            </Select>
-            <Select value={filterWelfare} onValueChange={setFilterWelfare}>
-              <SelectTrigger className="w-40 h-9" data-testid="member-welfare-filter"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Welfare</SelectItem>
-                <SelectItem value="any">Any active case</SelectItem>
-                <SelectItem value="sponsored">Sponsored</SelectItem>
-                <SelectItem value="restricted_location">In Shelter (Restricted)</SelectItem>
-                <SelectItem value="welfare_support">Welfare Support</SelectItem>
-                <SelectItem value="multiple">Multiple</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="ghost" size="sm" className="gap-1.5" onClick={fetchMembers}><RefreshCw size={13} /> Refresh</Button>
-          </div>
-          {/* Bulk bar */}
-          {selectedMemberIds.size > 0 && (
-            <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-xl border border-primary/20 mb-3">
-              <Checkbox checked={selectedMemberIds.size === members.length} onCheckedChange={selectAllMembers} />
-              <span className="text-sm font-medium">{selectedMemberIds.size} selected</span>
-              <div className="flex gap-2 ml-auto">
-                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('activate'); setShowBulkAction(true); }}>Activate</Button>
-                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('deactivate'); setShowBulkAction(true); }}>Deactivate</Button>
-                <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('role'); setShowBulkAction(true); }}>Change Role</Button>
-                <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setShowBulkBadges(true)} data-testid="bulk-print-badges-btn">🪪 Print Badges</Button>
-                <Button size="sm" variant="destructive" className="h-7" onClick={() => { setBulkActionType('delete'); setShowBulkAction(true); }}>Delete</Button>
-                <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelectedMemberIds(new Set())}>Clear</Button>
-              </div>
-            </div>
-          )}
-          {/* Select all row */}
-          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-            <Checkbox checked={selectedMemberIds.size > 0 && selectedMemberIds.size === members.length} onCheckedChange={selectAllMembers} data-testid="select-all-members" />
-            <span>Select all</span>
-          </div>
-          {loading ? (
-            <div className="space-y-2">{[1,2,3,4,5].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded-xl" />)}</div>
-          ) : filteredMembers.length === 0 ? (
-            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Users size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No members found</p></CardContent></Card>
-          ) : (
-            <div className="space-y-2">
-              {filteredMembers.map(m => (
-                <Card key={m.id} className={`shadow-soft rounded-xl cursor-pointer hover:bg-accent/40 transition-colors ${selectedMemberIds.has(m.id) ? 'ring-2 ring-primary/30' : ''}`} onClick={() => { setDefaultMemberTab('info'); handleViewMember(m); }} data-testid={`member-card-${m.id}`}>
-                  <CardContent className="p-3 flex items-center gap-3">
-                    <Checkbox checked={selectedMemberIds.has(m.id)} onCheckedChange={() => toggleMemberSelect(m.id)} onClick={e => e.stopPropagation()} data-testid={`select-member-${m.id}`} />
-                    <Avatar className="h-10 w-10">
-                      {m.photo_url ? <img src={m.photo_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials(m.name)}</AvatarFallback>}
-                    </Avatar>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{m.name}</p>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        {m.email && <span className="flex items-center gap-1"><Mail size={10} />{m.email}</span>}
-                        {m.phone && <span className="flex items-center gap-1"><Phone size={10} />{m.phone}</span>}
-                      </div>
-                    </div>
-                    <Badge variant="outline" className="text-[10px] capitalize">{m.role}</Badge>
-                    <Badge variant="secondary" className="text-[10px]">{m.group}</Badge>
-                    <Badge className={`text-[10px] ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{m.status || 'active'}</Badge>
-                    {m.welfare_case && (
-                      <Badge variant="outline" className="text-[10px] bg-purple-50 text-purple-700 border-purple-200" title={`Active social-work case (${m.welfare_case.risk_level || 'low'} risk)`}>
-                        {(m.welfare_case.category || '').replace(/_/g, ' ')}
-                      </Badge>
-                    )}
-                    <div className="flex gap-1.5">
-                      {m.is_medical && <span title="Medical" className="text-red-500"><Heart size={12} /></span>}
-                      {m.is_resident && <span title="Resident" className="text-blue-500"><Home size={12} /></span>}
-                      {m.has_restricted_access && <span title="Restricted Access" className="text-amber-500"><Shield size={12} /></span>}
-                    </div>
-                    {isCoordinator && (
-                      <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-member-${m.id}`} onClick={async e => { e.stopPropagation(); setDefaultMemberTab('edit'); await handleViewMember(m); }} title="Edit Profile"><Eye size={13} /></Button>
-                        {canEditStaff && <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" onClick={e => { e.stopPropagation(); setResetPwUser({ ...m, _userId: m.user_id || m.id }); setShowResetPw(true); setNewPassword(''); }} title="Reset Password"><Key size={13} /></Button>}
-                        {isCoordinator && <a href={`/admin?user=${m.user_id || m.id}`} className="inline-flex items-center justify-center h-7 w-7 p-0 rounded-md hover:bg-accent text-purple-600" title="Full Admin Edit" onClick={e => e.stopPropagation()}><Shield size={13} /></a>}
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" onClick={e => { e.stopPropagation(); setBadgePerson(m); setShowBadge(true); }} title="Badge"><Printer size={13} /></Button>
-                        <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={e => { e.stopPropagation(); membersApi.delete(m.id).then(() => { toast.success('Deleted'); emitDataChanged('members', m.id); fetchMembers(); }); }}><Trash2 size={13} /></Button>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
+        {/* MEMBERS TAB removed — staff/users are managed in /admin; guests & parents below cover non-staff people */}
 
         {/* FAMILIES TAB */}
         <TabsContent value="families" className="mt-4">
