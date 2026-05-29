@@ -6,6 +6,41 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 134 (May 29, 2026)
+**Per-module access grants + Manager loses automatic finance access. Pytest 59/59, lint clean.**
+
+### (a) Generalized module access (Director+ implicit, everyone else by appointment)
+- New `GRANTABLE_MODULES` in `deps.py` covering **7 modules**: `finance`, `hr`, `sales`, `banking`, `accounting`, `social_work`, `restricted`.
+- New `has_module_access(user, module)` + `require_module_view(module)` factory. Pre-built dependencies exported for each module (`require_hr_view`, `require_sales_view`, `require_banking_view`, `require_accounting_view`, `require_social_work_view`, `require_restricted_view`).
+- `_grant_active(user, module)` honours per-module TTL via `{module}_access` (bool) + `{module}_access_expires_at` (iso).
+- HR special-cased: members of the HR role / HR department keep their pre-existing implicit access alongside Director+ auto-access.
+
+### (b) Manager EXCLUDED from automatic privileged access
+- `FINANCE_PRIVILEGED_ROLES` / `PRIVILEGED_ROLES` now contains only `admin`, `system_admin`, `Executive Director`, `Adviser`, `Director`.
+- `require_finance_admin()` now requires Director+ OR an explicit finance grant — Manager-tier no longer auto-passes.
+- Frontend sidebar gating mirrors backend (no Manager auto access; per-module `{module}_access` checked with expiry).
+
+### (c) New admin endpoints
+- `GET /api/admin/module-access/modules` → list of 7 grantable modules `[{key,label}]`.
+- `GET /api/admin/module-access/users?module=<X>` → users enriched with `access_implicit`, `access_effective`, `access_expired`, `module`.
+- `PUT /api/admin/module-access/users/{id}` body `{module, granted, ttl_days?, expires_at?, reason?}`. Audit logged.
+- Legacy `/api/admin/finance-access/*` retained as a thin shim that delegates with `module='finance'` for back-compat.
+
+### (d) Sidebar reorganised
+- `HR & Payroll` moved from **Admin** to **Finance** section.
+- Every Finance section nav item carries a `module:` key; each row hidden unless `hasModuleAccess(module)` is true.
+- Admin section keeps: Staff & Users, Campuses, Financial APIs, Email Templates, Settings, Audit Trail, Privacy & GDPR.
+
+### (e) AdminPage UI generalised
+- `FinanceAccessManager` → `ModuleAccessManager` (testid `module-access-manager-card`). Dialog has 7 chip-buttons (one per module), search, per-row Grant/Revoke, TTL nested dialog (Permanent / 30d / 90d / custom). All keyed with stable testids (`module-chip-<key>`, `module-grant-<userid>`, `module-revoke-<userid>`, `module-grant-confirm`, etc.).
+
+### Tests
+- New `/app/backend/tests/test_iteration90_module_access.py` (12 cases including the critical "Manager → 403 then 200 after grant" flow).
+- All 47 prior pytest cases (16 smoke + 15 iter115 + 16 iter116) still PASS.
+- Total: **59/59 green**. Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed** — the existing live admins of role `Manager` will see Finance routes disappear from their sidebar (and receive 403 from finance endpoints) until an admin grants them explicit access. This is intentional per user request.
+
 ## Recently Resolved — Iteration 133 (May 29, 2026)
 **5-item user batch + currency normalization. Pytest 47/47, lint clean.**
 

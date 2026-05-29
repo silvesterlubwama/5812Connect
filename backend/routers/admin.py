@@ -801,6 +801,7 @@ async def list_module_access_users(
                 implicit = True
         u["module"] = module
         u["access_implicit"] = implicit
+        u["access_expired"] = False  # Always present for shape stability — flipped True below if applicable
         explicit_active = _grant_active(u, module)
         if u.get(f"{module}_access") and u.get(f"{module}_access_expires_at"):
             if str(u[f"{module}_access_expires_at"]) <= now_iso:
@@ -811,7 +812,7 @@ async def list_module_access_users(
             u["finance_access_implicit"] = implicit
             u["finance_access_effective"] = u["access_effective"]
             u["finance_access_expires_at"] = u.get(f"{module}_access_expires_at")
-            u["finance_access_expired"] = u.get("access_expired", False)
+            u["finance_access_expired"] = u["access_expired"]
             u["finance_access"] = u.get(f"{module}_access", False)
     return users
 
