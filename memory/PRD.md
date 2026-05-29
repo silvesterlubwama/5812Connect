@@ -6,6 +6,29 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 131 (May 29, 2026)
+**Universal Activity Trail broadened across all profiles + PDF profile export.**
+
+### (a) ActivityFeed embedded everywhere
+- Member detail dialog (`UnifiedPeoplePage.jsx`): new **Activity** tab next to Info / Edit / Documents. Subject-kind auto-switches to `guest` when the member row was migrated from guests.
+- Staff/User edit dialog (`UserEditDialog.jsx`): tab grid bumped 5 → 6 with a new **Activity** tab; ActivityFeed bound to `subjectKind='user'`.
+- Customer profile dialog (`ProductsPage.jsx`): ActivityFeed appended below receipt history. Sales aggregator now captures `customer_id` per row so the feed has an id to bind to.
+- All three locations get the same "add note + attachment" + "Download PDF / JSON" affordances.
+
+### (b) PDF profile export
+- `GET /api/activity/{kind}/{id}/export?format=pdf` returns a presentation-ready WeasyPrint PDF: subject header (photo when http-resolvable), profile facts grid, full activity table (category / detail / when-who), branded footer.
+- `format=json` (default) unchanged for compliance / GDPR exports.
+- Frontend ActivityFeed now offers split **PDF** (primary) + **JSON** (ghost) buttons — testids `activity-download-pdf-btn`, `activity-download-json-btn`.
+
+### (c) Bug-fixes surfaced by the testing agent
+- Backend: `/api/activity/customer/{id}/export` now falls back to a sales-aggregator profile (`profile.source='sales_aggregator'`) when the id is referenced by sales but not yet promoted into `customer_accounts`. Fixes 404s on walk-in / synthetic customer rows.
+- Frontend: `ActivityFeed.downloadProfile` is now blob-error-aware (decodes Blob bodies to extract `detail`) and wraps the finalize step (`URL.createObjectURL` + `a.click`) in its own try/catch, so a backend error can never bubble into the React error overlay.
+
+### Tests
+- New `/app/backend/tests/test_iteration116_activity_pdf_export.py` (12 cases + 3 synthetic-customer fallback cases — 15 PASS, 1 SKIP for missing child fixture).
+- All 16 pytest smoke tests + 15 iter115 (Pass 2) tests still PASS. Total: **47/47 green**.
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+
 ## Recently Resolved — Iteration 130 (May 29, 2026)
 **Pass 2 complete: volunteer scheduling auto-populate from events + Guests/Parents unification into Members.**
 
