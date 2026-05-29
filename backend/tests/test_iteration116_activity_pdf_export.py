@@ -32,6 +32,39 @@ def session():
     return s
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_child_fixture(session):
+    """Make sure at least one child exists so parametric test_pdf_export[child] doesn't skip.
+    Inserts a sentinel child once per test module; deletes it after the suite finishes."""
+    r = session.get(f"{API}/children?limit=1", timeout=20)
+    if r.status_code == 200:
+        payload = r.json()
+        rows = payload.get("children", payload) if isinstance(payload, dict) else payload
+        if rows:
+            yield None
+            return
+    # Need a location_id; pick any campus the admin has visibility into
+    locs = session.get(f"{API}/locations", timeout=20).json() or []
+    loc_id = locs[0]["id"] if locs else None
+    created_id = None
+    if loc_id:
+        c = session.post(f"{API}/children", json={
+            "name": "_PDFExportFixtureChild",
+            "date_of_birth": "2018-01-01",
+            "gender": "other",
+            "location_id": loc_id,
+            "grade": "P1",
+        }, timeout=20)
+        if c.status_code in (200, 201):
+            created_id = (c.json() or {}).get("id")
+    yield None
+    if created_id:
+        try:
+            session.delete(f"{API}/children/{created_id}", timeout=10)
+        except Exception:
+            pass
+
+
 def _pick_subject(session, kind):
     """Find a real id of the given subject_kind. Return (id, name) or (None, None)."""
     if kind == "member":

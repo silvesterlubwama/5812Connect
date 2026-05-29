@@ -429,7 +429,7 @@ class TestFinancialToAccounting:
         # Verify a posted balanced JE was auto-generated from the donation
         entries = requests.get(
             f"{BASE_URL}/api/accounting/entries",
-            headers=_hdr(token), params={"limit": 50}, timeout=10
+            headers=_hdr(token), params={"limit": 1000}, timeout=10
         ).json()
         je = next(
             (e for e in entries
@@ -453,7 +453,7 @@ class TestFinancialToAccounting:
         exp = r.json()
         # No JE yet (pending state)
         entries = requests.get(f"{BASE_URL}/api/accounting/entries", headers=_hdr(token),
-                               params={"limit": 100}, timeout=10).json()
+                               params={"limit": 1000}, timeout=10).json()
         pre = next((e for e in entries if e.get("source_id") == exp["id"]), None)
         assert pre is None, "Pending expense must NOT auto-post"
 
@@ -464,7 +464,7 @@ class TestFinancialToAccounting:
 
         # Now a balanced JE must exist
         entries = requests.get(f"{BASE_URL}/api/accounting/entries", headers=_hdr(token),
-                               params={"limit": 100}, timeout=10).json()
+                               params={"limit": 1000}, timeout=10).json()
         je = next(
             (e for e in entries
              if e.get("auto_generated_from") == "expense" and e.get("source_id") == exp["id"]),

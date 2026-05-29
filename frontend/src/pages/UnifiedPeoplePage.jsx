@@ -801,7 +801,7 @@ export default function UnifiedPeoplePage() {
       {/* MEMBER DETAIL DIALOG */}
       <Dialog open={!!selectedMember} onOpenChange={(o) => { if (!o) { setSelectedMember(null); setMemberDetail(null); setDefaultMemberTab('info'); } }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle><DialogDescription className="sr-only">Profile, edit, documents and activity trail for this member.</DialogDescription></DialogHeader>
           {memberDetail && (
             <Tabs defaultValue={defaultMemberTab} key={defaultMemberTab}>
               <TabsList><TabsTrigger value="info">Info</TabsTrigger>{canEditStaff && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger><TabsTrigger value="activity" data-testid="member-tab-activity">Activity</TabsTrigger></TabsList>

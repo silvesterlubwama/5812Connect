@@ -597,6 +597,8 @@ async def _run_due_date_reminder_scheduler():
                 await _fire_birthday_anniversary_notifications()
                 await _fire_scheduled_customer_statements()
                 await _fire_overdue_payment_reminders()
+                await _fire_overdue_task_emails()
+                await _fire_payday_payslip_generation()
                 # Phase A: recurring journal entries / bills
                 try:
                     from routers.bank import fire_due_recurring_entries
@@ -673,6 +675,132 @@ async def _fire_scheduled_customer_statements():
                 logger.error(f"Auto-statement send for customer {s.get('customer_id')}: {e}")
     except Exception as e:
         logger.error(f"Scheduled statements error: {e}")
+
+
+async def _fire_overdue_task_emails():
+    """Daily 08:00 UTC: email assignees about tasks past their due_date that are still open.
+    Idempotent — tracked via `task_overdue_emails` collection so each (task_id, assignee) pair
+    receives at most one email per 3-day window."""
+    try:
+        from datetime import date
+        today_iso = date.today().isoformat()
+        cutoff_3d = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        # Open tasks past due
+        overdue = await db.tasks.find({
+            "due_date": {"$lt": today_iso, "$ne": ""},
+            "is_archived": {"$ne": True},
+            "status": {"$ne": "done"},
+        }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1, "board_id": 1, "description": 1}).to_list(500)
+        if not overdue:
+            return
+        import resend
+        resend.api_key = os.environ.get("RESEND_API_KEY", "")
+        sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
+        sent_count = 0
+        for task in overdue:
+            assignees = list(task.get("assignees") or [])
+            if task.get("assignee") and task["assignee"] not in assignees:
+                assignees.append(task["assignee"])
+            if not assignees:
+                continue
+            for uid in assignees:
+                # Idempotency guard
+                exists = await db.task_overdue_emails.find_one({
+                    "task_id": task["id"], "user_id": uid,
+                    "sent_at": {"$gt": cutoff_3d},
+                })
+                if exists:
+                    continue
+                user = await db.users.find_one({"id": uid}, {"_id": 0, "email": 1, "name": 1})
+                if not user or not user.get("email"):
+                    continue
+                # Always send push regardless of email outcome
+                try:
+                    await _send_push_to_user(uid, "Task Overdue", f'"{task["title"]}" is past due', "/tasks")
+                except Exception:
+                    pass
+                if not resend.api_key:
+                    continue
+                try:
+                    days_late = (date.today() - date.fromisoformat(task["due_date"])).days
+                    title = (task.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
+                    desc = (task.get("description") or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
+                    resend.Emails.send({
+                        "from": sender, "to": user["email"],
+                        "subject": f"Task overdue: {title} ({days_late}d late)",
+                        "html": (
+                            f"<p>Hi {(user.get('name') or '').split()[0] or 'there'},</p>"
+                            f"<p>Your task <strong>{title}</strong> is <strong>{days_late} day(s) past due</strong> "
+                            f"(due {task['due_date']}).</p>"
+                            f"{f'<p>{desc}</p>' if desc else ''}"
+                            f"<p>Please log in to update it or push the due date.</p>"
+                            f"<p>— 58:12 Global</p>"
+                        ),
+                    })
+                    await db.task_overdue_emails.insert_one({
+                        "id": f"toe_{uuid.uuid4().hex[:8]}",
+                        "task_id": task["id"], "user_id": uid,
+                        "user_email": user["email"], "days_late": days_late,
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    sent_count += 1
+                except Exception as e:
+                    logger.warning(f"task overdue email to {user.get('email')}: {e}")
+        if sent_count:
+            logger.info(f"Sent {sent_count} overdue-task emails")
+    except Exception as e:
+        logger.error(f"Overdue task email scheduler error: {e}")
+
+
+async def _fire_payday_payslip_generation():
+    """Daily 08:00 UTC: auto-generate draft payslips for any campus whose payday is today.
+    Idempotent — _generate_payslips_for skips salaries that already have a payslip for the period."""
+    try:
+        today = datetime.now(timezone.utc)
+        today_iso = today.strftime("%Y-%m-%d")
+        today_day = today.day
+        period = f"{today.year:04d}-{today.month:02d}"
+        # Match the same logic as POST /hr/payslips/generate-payday
+        settings = await db.hr_settings.find({
+            "hr_enabled": True,
+            "$or": [{"next_pay_date": today_iso}, {"pay_day": today_day}],
+        }, {"_id": 0, "location_id": 1, "pay_day": 1, "next_pay_date": 1}).to_list(100)
+        if not settings:
+            return
+        from routers.hr import _generate_payslips_for
+        system_user = {"id": "system_scheduler", "name": "System Scheduler", "role": "system_admin"}
+        total = 0
+        for s in settings:
+            loc_id = s.get("location_id") or ""
+            if not loc_id:
+                continue
+            try:
+                res = await _generate_payslips_for(period, loc_id, system_user)
+                total += res.get("generated", 0)
+                # Advance next_pay_date by 1 month if it matched today (avoid re-firing tomorrow)
+                if s.get("next_pay_date") == today_iso:
+                    # Compute next month same day; if day overflows, clamp to last of month.
+                    month = today.month + 1
+                    year = today.year + (1 if month > 12 else 0)
+                    if month > 12:
+                        month -= 12
+                    try:
+                        next_dt = today.replace(year=year, month=month)
+                    except ValueError:
+                        # day overflow (e.g. 31st → Feb) — fall back to last day of next month
+                        import calendar as _cal
+                        last_day = _cal.monthrange(year, month)[1]
+                        next_dt = today.replace(year=year, month=month, day=last_day)
+                    await db.hr_settings.update_one(
+                        {"location_id": loc_id},
+                        {"$set": {"next_pay_date": next_dt.strftime("%Y-%m-%d")}},
+                    )
+            except Exception as e:
+                logger.warning(f"payday payslip gen for {loc_id}: {e}")
+        if total:
+            logger.info(f"Auto-generated {total} payslips on payday {today_iso} (period {period})")
+    except Exception as e:
+        logger.error(f"Payday payslip scheduler error: {e}")
 
 
 async def _fire_overdue_payment_reminders():

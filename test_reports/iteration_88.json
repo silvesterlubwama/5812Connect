@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 88 P2-leftover validation: 4 items confirmed green. (a) DialogDescription a11y on Member & Customer dialogs — zero Radix DialogContent/aria-describedby warnings in browser console after opening both dialogs. (b) Child seed fixture works — test_pdf_export[child] now PASSES (no skip). (c) HR auto-payslip cron _fire_payday_payslip_generation imports + runs without raising; POST /api/hr/payslips/generate-payday still 200 (returned generated:0 message — today 2026-05-29 not payday). (d) Overdue-task email cron _fire_overdue_task_emails imports + runs without raising — found 5 overdue tasks for admin and attempted send (Resend testing-mode blocked non-self recipients, so idempotency rows not inserted — expected env limitation, NOT code bug). Pytest: 32 passed, 0 skipped, 0 failed (16 smoke + 16 PDF export). CI lint gate (F821/F823/F841/E722/B006) clean. ESLint clean.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_fixes": [
+    "POST /api/hr/payslips/generate-payday → 200 {generated:0,payslips:[],message:'No campuses have payday today (2026-05-29 or day-of-month=29)',period:'2026-05'} — endpoint stable.",
+    "from server import _fire_overdue_task_emails, _fire_payday_payslip_generation, _run_due_date_reminder_scheduler — all 3 import without error.",
+    "Backend supervisor startup clean: 'All modular routers loaded' + 'Application startup complete' + 'Indexes ensured' — no startup errors after server.py reload.",
+    "Member detail dialog (route /people → Members tab → click row) opens with Info/Edit Profile/Documents/Activity tabs; member-tab-activity exists and ActivityFeed renders; ZERO Radix DialogContent aria-describedby warnings in console.",
+    "Customer profile dialog (route /sales → Customers tab → click row) opens with Total Spent / Transactions / Last Visit + Receipt History; ZERO Radix DialogContent aria-describedby warnings.",
+    "pytest tests/test_smoke_recent_modules.py tests/test_iteration116_activity_pdf_export.py → 32 passed, 0 skipped, 0 failed. test_pdf_export[child] now PASSES (previously skipped per iter_87 report).",
+    "ruff check --select F821,F823,F841,E722,B006 /app/backend/server.py → All checks passed.",
+    "npx eslint --quiet UnifiedPeoplePage.jsx ProductsPage.jsx → 0 issues."
+  ],
+  "test_runs": {
+    "test_smoke_recent_modules.py": "16 passed, 0 failed",
+    "test_iteration116_activity_pdf_export.py": "16 passed, 0 failed, 0 skipped (child case fixed)",
+    "total": "32 passed, 0 skipped, 0 failed"
+  },
+  "discrepancy_note": "review_request claimed 47 cases (16 smoke + 15 iter115 Pass 2 + 16 iter116 PDF export). Actual run of the two explicitly-requested files yields 32 (16+16). The iter115 file (test_iteration115_pass2_volunteers_unify.py) was NOT in the list of files to re-run per the review_request 'Re-run /app/backend/tests/test_smoke_recent_modules.py and /app/backend/tests/test_iteration116_activity_pdf_export.py' instruction — so 32 is the correct count for the two files re-run. Math in review_request appears off by ~15 (iter115 not included in re-run).",
+  "test_report_links": [
+    "/app/backend/tests/test_smoke_recent_modules.py",
+    "/app/backend/tests/test_iteration116_activity_pdf_export.py",
+    "/app/test_reports/pytest/iter88_combined.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_fire_overdue_task_emails: Resend account is in testing mode (sender silvester@lubwamas.org can only send to self). In prod, this is fine, but in preview the helper will log WARNING + skip db.task_overdue_emails insert for every overdue task assigned to non-silvester users — so the 3-day idempotency window is never primed and the same warnings will fire daily. Consider gating on Resend success vs writing idempotency row even on failure (currently row likely only written on success, so failed sends will retry every cron tick). Not blocking — flag for production review.",
+    "Logged once on backend startup: 'Event notify failed: cannot import name send_bulk_notifications from routers.notifications'. Pre-existing (unrelated to this iteration), but main agent may want to audit deps.py imports."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "100%" },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (login uses 'identifier' field — placeholder is 'Email, phone, or national ID')",
+  "seed_data_creation": "Transient: 1 task 'TEST_overdue_<uuid>' seeded with due_date=yesterday assigned to admin user to exercise _fire_overdue_task_emails, then deleted in same script. db.task_overdue_emails entries with task_id=TEST_overdue_* also cleaned (none were created due to Resend 403).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 P2 leftovers from review_request 88 verified GREEN. Pytest baseline now 32/32 (no skips). Both new scheduler helpers (_fire_overdue_task_emails, _fire_payday_payslip_generation) are reachable from server module and run without raising. Resend is in testing mode in preview env — overdue email + payslip email sends to non-silvester@lubwamas.org will WARN and not deliver; this is env config, not a bug. Routes confirmed: /people for People (Members tab → 13 rows), /sales for Sales (Customers tab → 16 rows; NOT /products per iter_87 note)."
+}
