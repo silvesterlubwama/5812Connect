@@ -804,7 +804,7 @@ export default function UnifiedPeoplePage() {
           <DialogHeader><DialogTitle>{memberDetail?.name || 'Member Detail'}</DialogTitle></DialogHeader>
           {memberDetail && (
             <Tabs defaultValue={defaultMemberTab} key={defaultMemberTab}>
-              <TabsList><TabsTrigger value="info">Info</TabsTrigger>{canEditStaff && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger></TabsList>
+              <TabsList><TabsTrigger value="info">Info</TabsTrigger>{canEditStaff && <TabsTrigger value="edit">Edit Profile</TabsTrigger>}<TabsTrigger value="documents">Documents</TabsTrigger><TabsTrigger value="activity" data-testid="member-tab-activity">Activity</TabsTrigger></TabsList>
               <TabsContent value="info" className="space-y-4 mt-3">
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-xs text-muted-foreground">Name</span><p className="font-medium">{memberDetail.name}</p></div>
@@ -857,6 +857,9 @@ export default function UnifiedPeoplePage() {
                     </div>
                   ))}</div>
                 )}
+              </TabsContent>
+              <TabsContent value="activity" className="mt-3">
+                {memberDetail && <ActivityFeed subjectKind={memberDetail.kind === 'guest' ? 'guest' : 'member'} subjectId={memberDetail.id} showAddNote={true} showDownload={true} />}
               </TabsContent>
             </Tabs>
           )}

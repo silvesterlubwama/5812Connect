@@ -261,10 +261,12 @@ async def delete_activity(activity_id: str, current_user: dict = Depends(require
 async def export_subject_profile(
     subject_kind: str,
     subject_id: str,
+    format: str = "json",
     current_user: dict = Depends(require_staff),
 ):
-    """Download a subject's full activity feed + core profile as JSON. Useful for
-    compliance, authority requests, or the subject's own GDPR-style export."""
+    """Download a subject's full activity feed + core profile.
+    `format=json` (default) returns the raw JSON envelope — useful for GDPR / compliance.
+    `format=pdf` returns a presentation-ready PDF with profile + chronological activity."""
     if subject_kind not in SUBJECT_KINDS:
         raise HTTPException(status_code=400, detail="Invalid subject_kind")
     subject = None
@@ -280,9 +282,20 @@ async def export_subject_profile(
         subject = await db.customer_accounts.find_one({"id": subject_id}, {"_id": 0})
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
-    activity = await db.activity_log.find(
+    # Pull curated log + live-derived rows (same logic as the read endpoint).
+    curated = await db.activity_log.find(
         {"subject_kind": subject_kind, "subject_id": subject_id}, {"_id": 0},
     ).sort("created_at", -1).to_list(5000)
+    # Re-use the merging logic by calling the GET handler in-process would be neat but
+    # would re-apply auth; cheaper to call the same merge inline here.
+    activity = curated
+    try:
+        merged = await get_subject_activity(subject_kind, subject_id, None, 5000, current_user)
+        activity = merged if isinstance(merged, list) else curated
+    except Exception as e:
+        logger.warning(f"export merge fallback: {e}")
+    if (format or "json").lower() == "pdf":
+        return _render_profile_pdf(subject_kind, subject, activity, current_user)
     return {
         "subject_kind": subject_kind,
         "subject_id": subject_id,
@@ -293,3 +306,101 @@ async def export_subject_profile(
         "exported_by": current_user["id"],
         "exported_by_name": current_user.get("name", ""),
     }
+
+
+def _render_profile_pdf(subject_kind: str, subject: dict, activity: list, current_user: dict):
+    """Render a clean WeasyPrint PDF of a subject's profile + activity trail.
+    Returns a fastapi.responses.Response with content_type=application/pdf."""
+    from fastapi.responses import Response
+    import html as _html
+    name = _html.escape(str(subject.get("name") or subject.get("full_name") or subject.get("id") or "Profile"))
+    photo_url = subject.get("photo_url") or ""
+    if photo_url and not photo_url.startswith("http"):
+        # WeasyPrint can't resolve relative URLs at print time — skip photo if relative.
+        photo_url = ""
+    rows_html = []
+    for it in activity[:500]:
+        cat = _html.escape(str(it.get("category") or "")).replace("_", " ")
+        title = _html.escape(str(it.get("title") or ""))
+        body = _html.escape(str(it.get("body") or ""))
+        at = (it.get("created_at") or "")[:16].replace("T", " ")
+        actor = _html.escape(str(it.get("actor_name") or ""))
+        amount = it.get("amount")
+        cur = _html.escape(str(it.get("currency") or ""))
+        money = f" · {cur} {float(amount):,.2f}" if amount is not None else ""
+        rows_html.append(
+            f'<tr>'
+            f'<td class="cat">{cat}</td>'
+            f'<td class="title"><div class="t">{title}</div>'
+            f'{f"<div class=b>{body}</div>" if body else ""}</td>'
+            f'<td class="meta">{at}{f" · {actor}" if actor else ""}{money}</td>'
+            f"</tr>"
+        )
+    activity_html = "".join(rows_html) or "<tr><td colspan='3' class='empty'>No activity recorded.</td></tr>"
+    # Render a small profile facts box
+    facts = []
+    fact_keys = [
+        ("Email", "email"), ("Phone", "phone"), ("National ID", "national_id"),
+        ("Role", "role"), ("Group", "group"), ("Department", "department"),
+        ("Status", "status"), ("Joined", "join_date"), ("Date of birth", "date_of_birth"),
+        ("Grade", "grade"), ("School", "school_name"), ("Location", "location_id"),
+    ]
+    for label, key in fact_keys:
+        val = subject.get(key)
+        if val:
+            facts.append(f'<div class="fact"><div class="lbl">{label}</div><div class="val">{_html.escape(str(val))}</div></div>')
+    facts_html = "".join(facts) or '<div class="fact"><div class="lbl">—</div></div>'
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    org = "58:12 Connect"
+    css = """
+      @page { size: A4; margin: 18mm 14mm 16mm 14mm; @bottom-center { content: "Page " counter(page) " / " counter(pages); font-size: 8pt; color: #777; } }
+      body { font-family: 'Helvetica', 'Arial', sans-serif; color: #222; font-size: 10pt; }
+      .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #14b8a6; padding-bottom: 10px; }
+      .title { font-size: 20pt; font-weight: bold; }
+      .subkind { font-size: 9pt; color: #14b8a6; text-transform: uppercase; letter-spacing: 1.5px; }
+      .meta { font-size: 8pt; color: #888; }
+      .photo { width: 80px; height: 80px; object-fit: cover; border-radius: 12px; border: 1px solid #ddd; }
+      .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px; margin: 14px 0 16px; }
+      .fact .lbl { font-size: 7pt; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+      .fact .val { font-size: 10pt; }
+      h2 { font-size: 12pt; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; color: #0f766e; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 6px 4px; border-bottom: 1px solid #f0f0f0; vertical-align: top; font-size: 9pt; }
+      td.cat { text-transform: capitalize; color: #14b8a6; font-weight: 600; width: 18%; }
+      td.title .t { font-weight: 600; }
+      td.title .b { color: #555; margin-top: 2px; white-space: pre-wrap; font-size: 8.5pt; }
+      td.meta { color: #888; width: 22%; text-align: right; font-size: 8pt; }
+      .empty { text-align: center; color: #999; padding: 20px; font-style: italic; }
+      .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #eee; color: #888; font-size: 7.5pt; text-align: center; }
+    """
+    photo_block = f'<img class="photo" src="{photo_url}" />' if photo_url else ""
+    html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>{css}</style></head><body>
+      <div class="header">
+        <div>
+          <div class="subkind">{_html.escape(subject_kind)} profile</div>
+          <div class="title">{name}</div>
+          <div class="meta">Generated {generated_at} · {_html.escape(current_user.get('name') or 'staff')} · {org}</div>
+        </div>
+        {photo_block}
+      </div>
+      <h2>Profile</h2>
+      <div class="facts">{facts_html}</div>
+      <h2>Activity Trail ({len(activity)})</h2>
+      <table>
+        <thead><tr><td class="cat" style="font-weight:bold; border-bottom:1px solid #ccc">Category</td><td class="title" style="font-weight:bold; border-bottom:1px solid #ccc">Detail</td><td class="meta" style="font-weight:bold; border-bottom:1px solid #ccc">When / Who</td></tr></thead>
+        <tbody>{activity_html}</tbody>
+      </table>
+      <div class="footer">Confidential — for internal use. {org} · activity-trail export.</div>
+    </body></html>"""
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html_doc).write_pdf()
+    except Exception as e:
+        logger.error(f"WeasyPrint failed for activity export: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF render failed: {e}")
+    fname = f"profile-{subject_kind}-{subject.get('id')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

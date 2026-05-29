@@ -18,6 +18,7 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import VariantBarcodePrint from '../components/VariantBarcodePrint';
+import ActivityFeed from '../components/ActivityFeed';
 import VariantPickerDialog from '../components/VariantPickerDialog';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
@@ -181,7 +182,9 @@ export default function ProductsPage() {
       salesRes.data.forEach(s => {
         const name = s.customer_name || 'Walk-in Customer';
         const phone = s.customer_phone || '';
-        if (!custMap[name]) custMap[name] = { name, phone, total_spent: 0, transactions: 0, last_purchase: s.created_at, receipts: [] };
+        if (!custMap[name]) custMap[name] = { id: s.customer_id || null, name, phone, total_spent: 0, transactions: 0, last_purchase: s.created_at, receipts: [] };
+        // First sale wins the id; later sales fill in if it was missing
+        if (!custMap[name].id && s.customer_id) custMap[name].id = s.customer_id;
         custMap[name].total_spent += s.total || 0;
         custMap[name].transactions += 1;
         if (s.created_at > (custMap[name].last_purchase || '')) custMap[name].last_purchase = s.created_at;
@@ -1684,6 +1687,11 @@ export default function ProductsPage() {
                   ))}
                 </div>
               </div>
+              {customerProfile.id && (
+                <div className="pt-2 border-t">
+                  <ActivityFeed subjectKind="customer" subjectId={customerProfile.id} showAddNote={true} showDownload={true} />
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

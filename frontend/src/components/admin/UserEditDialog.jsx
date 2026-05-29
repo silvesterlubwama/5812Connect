@@ -13,6 +13,7 @@ import { documentsApi } from '../../services/api';
 import api from '../../services/api';
 import { toast } from 'sonner';
 import { useUnsavedWarning, useFormDirty } from '../../hooks/useUnsavedWarning';
+import ActivityFeed from '../ActivityFeed';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 const GROUPS = ['General', 'Staff', 'Volunteers', 'Youth', 'Women', 'Men', 'Children', 'Leadership'];
@@ -256,12 +257,13 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
           </div>
         </DialogHeader>
         <Tabs defaultValue="profile" className="mt-2">
-          <TabsList className="w-full grid grid-cols-5">
+          <TabsList className="w-full grid grid-cols-6">
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="flags">Flags</TabsTrigger>
             <TabsTrigger value="nfc">NFC Tags</TabsTrigger>
             <TabsTrigger value="documents">Documents</TabsTrigger>
+            <TabsTrigger value="activity" data-testid="user-tab-activity">Activity</TabsTrigger>
           </TabsList>
 
           <TabsContent value="profile" className="space-y-4 mt-4">
@@ -539,6 +541,10 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
                 ))}
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="activity" className="space-y-4 mt-4">
+            {selectedUser && <ActivityFeed subjectKind="user" subjectId={selectedUser.id} showAddNote={true} showDownload={true} />}
           </TabsContent>
         </Tabs>
       </DialogContent>

@@ -86,16 +86,28 @@ export default function ActivityFeed({ subjectKind, subjectId, showAddNote = tru
     } finally { setSubmitting(false); }
   };
 
-  const downloadProfile = async () => {
+  const downloadProfile = async (format = 'pdf') => {
     try {
-      const r = await api.get(`/activity/${subjectKind}/${subjectId}/export`);
-      const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      const r = await api.get(`/activity/${subjectKind}/${subjectId}/export`, {
+        params: { format },
+        responseType: format === 'pdf' ? 'blob' : 'json',
+      });
+      let blob, ext, mime;
+      if (format === 'pdf') {
+        blob = r.data;
+        ext = 'pdf';
+        mime = 'application/pdf';
+      } else {
+        blob = new Blob([JSON.stringify(r.data, null, 2)], { type: 'application/json' });
+        ext = 'json';
+        mime = 'application/json';
+      }
+      const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob], { type: mime }));
       const a = document.createElement('a');
-      a.href = url; a.download = `profile-${subjectKind}-${subjectId}.json`;
+      a.href = url; a.download = `profile-${subjectKind}-${subjectId}.${ext}`;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-      toast.success('Profile exported');
+      toast.success(`Profile exported (${ext.toUpperCase()})`);
     } catch (e) { toast.error(e.response?.data?.detail || 'Export failed'); }
   };
 
@@ -115,9 +127,14 @@ export default function ActivityFeed({ subjectKind, subjectId, showAddNote = tru
           ))}
         </div>
         {showDownload && (
-          <Button size="sm" variant="outline" onClick={downloadProfile} data-testid="activity-download-btn">
-            <Download size={13} className="mr-1" />Download Profile
-          </Button>
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => downloadProfile('pdf')} data-testid="activity-download-pdf-btn">
+              <Download size={13} className="mr-1" />PDF
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => downloadProfile('json')} title="Raw JSON export (compliance)" data-testid="activity-download-json-btn">
+              JSON
+            </Button>
+          </div>
         )}
       </div>
 
