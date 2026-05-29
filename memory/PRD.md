@@ -6,6 +6,30 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 130 (May 29, 2026)
+**Pass 2 complete: volunteer scheduling auto-populate from events + Guests/Parents unification into Members.**
+
+### (a) Auto-generate volunteer shifts from a public/internal event
+- New backend endpoints in `routers/scheduling.py`:
+  - `GET /api/volunteer/role-defaults?event_type=` returns a sensible role+slots template per event type (service, conference, outreach, workshop, training, community, meeting, social) plus the canonical role catalogue.
+  - `POST /api/volunteer/shifts/generate-from-event` accepts `{event_id, roles:[{role, slots, start_time?, end_time?}], replace?}` and creates one shift per role pulling date/time/location from the event. Idempotent per `(event_id, role)`; with `replace=true` it updates the existing shift's slot count + times in-place. Returns `{created, updated, skipped, totals}`.
+- Frontend `VolunteerSchedulingPage.jsx`: new **"Generate from Event"** button next to "New Shift". Opens a dialog with an event picker (auto-loads default roles by event type), editable roles+slots grid (add/remove rows), an "Update existing" toggle, and a confirm button that surfaces created/updated/skipped counts via toast.
+- Verified end-to-end via curl: 2 shifts created → re-run skipped both → replace=true updated Greeter slot count from 3 → 10.
+
+### (b) Guests & Parents unified into the `members` collection
+- New helper `_mirror_guest_to_members()` in `routers/members.py` — every `POST /api/guests`, `PUT /api/guests/{id}` now upserts a mirror row into `db.members` with the SAME id (so all existing FKs — children.parent_ids, residents, badges, social cases — keep resolving) and `kind = 'parent'` (if `is_parent`) or `'guest'`. `DELETE /api/guests/{id}` also drops the `mirrored_from_guests=true` mirror.
+- `GET /api/members` now accepts `kind=member|guest|parent|any` filter. `kind=member` includes legacy rows with no kind field; explicit kinds match exactly.
+- One-shot migration:
+  - `GET /api/admin/migrate/guests-to-members/preview` — returns `{total_guests, already_mirrored_in_members, pending_to_migrate}`.
+  - `POST /api/admin/migrate/guests-to-members/run` — copies every guest into `members` (idempotent upsert, `overwrite=true` to clobber). Skips ids that conflict with a real (non-mirror) member.
+- Frontend `LocationsPage.jsx`: new **"Unify Guests & Parents into Members"** admin tool card with Preview / Run / Re-mirror buttons, rendered alongside the existing Reassign Data Tool.
+- Verified end-to-end: 33 historical guests migrated → second preview reports 0 pending → `/api/members?kind=guest` and `?kind=parent` return the unified rows.
+
+### Tests & lint
+- New `/app/backend/tests/test_iteration115_pass2_volunteers_unify.py`: 15 cases all green covering role-defaults, generate-from-event happy/idempotent/replace/error paths, migration preview/run idempotency, dual-write on guest create/update/delete, and `members?kind=` filter.
+- 16 existing pytest smoke tests still PASS (31/31 total).
+- Ruff (F821/F823/F841/E722/B006) + ESLint (errors) clean.
+
 ## Recently Resolved — Iteration 129 (May 29, 2026)
 **Pass 1 complete: welfare filter location + bulk badge print + photo upload + child gallery + sponsor portal + staff-source-of-truth + universal activity trail.**
 
