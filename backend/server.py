@@ -721,8 +721,9 @@ async def _fire_overdue_task_emails():
                     pass
                 if not resend.api_key:
                     continue
+                days_late = (date.today() - date.fromisoformat(task["due_date"])).days
+                send_ok = False
                 try:
-                    days_late = (date.today() - date.fromisoformat(task["due_date"])).days
                     title = (task.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
                     desc = (task.get("description") or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
                     resend.Emails.send({
@@ -737,15 +738,23 @@ async def _fire_overdue_task_emails():
                             f"<p>— 58:12 Global</p>"
                         ),
                     })
+                    send_ok = True
+                    sent_count += 1
+                except Exception as e:
+                    logger.warning(f"task overdue email to {user.get('email')}: {e}")
+                # Always write idempotency row so we don't retry every day even when Resend
+                # rejects (e.g. testing-mode sender restrictions). Staff can re-send manually
+                # via the existing per-task UI if needed.
+                try:
                     await db.task_overdue_emails.insert_one({
                         "id": f"toe_{uuid.uuid4().hex[:8]}",
                         "task_id": task["id"], "user_id": uid,
                         "user_email": user["email"], "days_late": days_late,
                         "sent_at": datetime.now(timezone.utc).isoformat(),
+                        "delivered": send_ok,
                     })
-                    sent_count += 1
                 except Exception as e:
-                    logger.warning(f"task overdue email to {user.get('email')}: {e}")
+                    logger.warning(f"task_overdue_emails insert: {e}")
         if sent_count:
             logger.info(f"Sent {sent_count} overdue-task emails")
     except Exception as e:

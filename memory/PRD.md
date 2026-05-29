@@ -6,6 +6,28 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 132 (May 29, 2026)
+**P2 leftover batch: daily payday + overdue-task scheduling, a11y polish, test fixes — 47/47 green.**
+
+### (a) Daily 08:00 UTC scheduler additions
+- **Payday payslip auto-generation**: new `_fire_payday_payslip_generation()` in `server.py`. Reads `hr_settings` for any campus whose `next_pay_date` matches today or `pay_day` matches today's day-of-month. Calls the existing `_generate_payslips_for(period, location, system_user)` helper which is fully idempotent (skips salaries that already have a payslip). Auto-advances `next_pay_date` to next month after firing.
+- **Overdue task emails**: new `_fire_overdue_task_emails()` queries tasks past their `due_date` that are still open & not archived. Sends a Resend-powered email to every assignee with `email`, plus a push notification. Idempotent: writes to `db.task_overdue_emails` with a 3-day window; row is written **whether or not Resend delivered** (so testing-mode rejections / hard bounces don't cause daily re-fires).
+- Both helpers are gracefully wrapped in try/except so a single failure can't stall the daily scheduler.
+
+### (b) DialogDescription a11y polish
+- Member detail dialog (`UnifiedPeoplePage.jsx`) and Customer profile dialog (`ProductsPage.jsx`) now include `<DialogDescription className="sr-only">` so Radix no longer logs the `aria-describedby` console warning. UserEditDialog already had one.
+
+### (c) Test reliability fixes
+- New `_ensure_child_fixture` autouse fixture in `test_iteration116_activity_pdf_export.py` seeds `_PDFExportFixtureChild` once per module if no child exists, so the parametric `test_pdf_export[child]` case no longer skips.
+- Bumped `/api/accounting/entries?limit=` from 50/100 → 1000 in two `TestFinancialToAccounting` tests. The previous limit was hit by accumulated test data — the just-created auto-posted JE was outside the first-page window after enough prior runs.
+
+### Test status
+- **47/47** pytest green (was 46 passing + 1 skipped):
+  - 16 in `test_smoke_recent_modules.py`
+  - 15 in `test_iteration115_pass2_volunteers_unify.py`
+  - 16 in `test_iteration116_activity_pdf_export.py` (child case now PASS)
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+
 ## Recently Resolved — Iteration 131 (May 29, 2026)
 **Universal Activity Trail broadened across all profiles + PDF profile export.**
 
