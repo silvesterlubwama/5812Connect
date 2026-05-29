@@ -956,6 +956,21 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
     await db.social_child_payments.insert_one(payment)
     payment.pop("_id", None)
     await _audit(current_user["id"], "create", "social_payment", pay_id, {"case": case_id, "kind": kind, "amount": amount})
+    # Universal activity trail — show payments on the child's profile
+    try:
+        from routers.activity import log_activity
+        await log_activity(
+            "child", case.get("subject_id"), "social_payment",
+            title=f"{kind.replace('_', ' ').title()}: {payment['currency']} {amount:,.2f}",
+            body=(payment.get("notes") or ""),
+            actor_id=current_user["id"], actor_name=current_user.get("name", ""),
+            amount=amount, currency=payment["currency"],
+            ref_id=pay_id, ref_kind="social_payment",
+            location_id=case.get("location_id"),
+            visibility="public_to_subject" if kind == "child_support" else "internal",
+        )
+    except Exception as e:
+        logger.warning(f"Activity log (social payment) skipped: {e}")
     return payment
 
 

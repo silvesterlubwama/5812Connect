@@ -1,5 +1,5 @@
 """Members, Families, Children, Guests, Badges, Approvals routes"""
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from deps import (
     db, get_current_user, _audit, require_staff, require_manager, require_coordinator, require_admin, require_director,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter, hash_password
@@ -1419,6 +1419,119 @@ async def upload_child_photo(child_id: str, file: UploadFile = File(...), curren
         photo_url = f"/api/uploads/photos/child-{child_id}.{ext}"
     await db.children.update_one({"id": child_id}, {"$set": {"photo_url": photo_url}})
     return {"photo_url": photo_url}
+
+
+# ========== CHILD EXTRAS: gallery photos + welfare updates ==========
+
+@router.get("/children/{child_id}/extras")
+async def list_child_extras(child_id: str, kind: Optional[str] = None, current_user: dict = Depends(require_staff)):
+    """List extra media + updates for a child. kind in: gallery|report|receipt|update."""
+    query = {"child_id": child_id}
+    if kind:
+        query["kind"] = kind
+    return await db.child_extras.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/children/{child_id}/extras")
+async def add_child_extra(
+    child_id: str,
+    file: UploadFile = File(None),
+    kind: str = Form("update"),
+    caption: str = Form(""),
+    is_public_for_sponsor: bool = Form(True),
+    current_user: dict = Depends(require_staff),
+):
+    """Upload an extra photo / document or post a text-only welfare update."""
+    if kind not in {"gallery", "report", "receipt", "update", "school", "medical"}:
+        raise HTTPException(status_code=400, detail="Invalid kind")
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1, "name": 1, "location_id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    file_url = None
+    file_size = None
+    if file and file.filename:
+        data = await file.read()
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File must be under 10MB")
+        ext = file.filename.rsplit('.', 1)[-1] if '.' in file.filename else 'bin'
+        file_size = len(data)
+        unique_name = f"{child_id}-{uuid.uuid4().hex[:8]}.{ext}"
+        # Try object storage first, fall back to local filesystem
+        try:
+            from storage import put_object
+            result = put_object(f"child-extras/{unique_name}", data, file.content_type or 'application/octet-stream')
+            file_url = result.get("url", f"/api/storage/child-extras/{unique_name}")
+        except Exception as e:
+            logger.warning(f"Storage put failed, saving locally: {e}")
+            import os
+            os.makedirs("/app/backend/uploads/child-extras", exist_ok=True)
+            with open(f"/app/backend/uploads/child-extras/{unique_name}", "wb") as fh:
+                fh.write(data)
+            file_url = f"/api/uploads/child-extras/{unique_name}"
+    if not file_url and not caption.strip():
+        raise HTTPException(status_code=400, detail="Provide a file or a caption")
+    doc = {
+        "id": f"cex_{uuid.uuid4().hex[:10]}",
+        "child_id": child_id,
+        "child_name": child.get("name"),
+        "kind": kind,
+        "caption": caption.strip()[:1000],
+        "file_url": file_url,
+        "file_name": file.filename if file and file.filename else None,
+        "file_size": file_size,
+        "is_public_for_sponsor": bool(is_public_for_sponsor),
+        "location_id": child.get("location_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    await db.child_extras.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/children/{child_id}/extras/{extra_id}")
+async def delete_child_extra(child_id: str, extra_id: str, current_user: dict = Depends(require_staff)):
+    extra = await db.child_extras.find_one({"id": extra_id, "child_id": child_id}, {"_id": 0})
+    if not extra:
+        raise HTTPException(status_code=404, detail="Not found")
+    if extra.get("created_by") != current_user["id"] and current_user.get("role") not in {"admin", "system_admin", "Executive Director", "Director", "Manager"}:
+        raise HTTPException(status_code=403, detail="Only the author or a manager can delete")
+    await db.child_extras.delete_one({"id": extra_id})
+    return {"deleted": True}
+
+
+# ========== STAFF (USER) PHOTO UPLOAD ==========
+
+@router.post("/users/{user_id}/photo")
+async def upload_user_photo(user_id: str, file: UploadFile = File(...), current_user: dict = Depends(require_staff)) -> dict:
+    """Upload a profile photo for a staff/user record (admin-side equivalent of member photo)."""
+    if user_id != current_user["id"] and current_user.get("role") not in {"admin", "system_admin", "Executive Director", "Director", "Manager"}:
+        raise HTTPException(status_code=403, detail="Only yourself or a manager can change this user's photo")
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be under 5MB")
+    ext = file.filename.rsplit('.', 1)[-1] if '.' in (file.filename or '') else 'jpg'
+    path = f"profile-photos/user-{user_id}.{ext}"
+    try:
+        from storage import put_object
+        result = put_object(path, data, file.content_type)
+        photo_url = result.get("url", f"/api/storage/{path}")
+    except Exception as e:
+        logger.warning(f"Storage put failed, saving locally: {e}")
+        import os
+        os.makedirs("/app/backend/uploads/photos", exist_ok=True)
+        with open(f"/app/backend/uploads/photos/user-{user_id}.{ext}", "wb") as fh:
+            fh.write(data)
+        photo_url = f"/api/uploads/photos/user-{user_id}.{ext}"
+    await db.users.update_one({"id": user_id}, {"$set": {"photo_url": photo_url}})
+    # Mirror to member record if linked
+    await db.members.update_many({"user_id": user_id}, {"$set": {"photo_url": photo_url}})
+    return {"photo_url": photo_url}
+
+
 
 
 # ========== PROFILE PDF DOWNLOAD ==========

@@ -24,6 +24,7 @@ import AccountingPage from './pages/AccountingPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import SocialWorkPage from './pages/SocialWorkPage';
 import SchoolPortalPage from './pages/SchoolPortalPage';
+import SponsorPortalPage from './pages/SponsorPortalPage';
 import BankPage from './pages/BankPage';
 import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
@@ -113,6 +114,7 @@ function AppRoutes() {
       <Route path="/resource/:serial" element={<ResourceViewPage />} />
       <Route path="/quote/:quoteNumber/accept" element={<QuoteAcceptPage />} />
       <Route path="/school-portal/:portalToken" element={<SchoolPortalPage />} />
+      <Route path="/sponsor-portal/:portalToken" element={<SponsorPortalPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>

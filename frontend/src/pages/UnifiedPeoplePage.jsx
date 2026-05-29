@@ -16,6 +16,7 @@ import { Checkbox } from '../components/ui/checkbox';
 import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi, locationsApi, csvUploadApi, familiesApi, childrenApi, guestsApi, adminApi } from '../services/api';
 import { BulkActionBar, exportToCSV } from '../components/BulkActions';
 import { UnifiedBadge } from '../components/UnifiedBadge';
+import ActivityFeed from '../components/ActivityFeed';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
@@ -66,6 +67,7 @@ export default function UnifiedPeoplePage() {
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [showBulkAction, setShowBulkAction] = useState(false);
   const [bulkActionType, setBulkActionType] = useState('');
+  const [showBulkBadges, setShowBulkBadges] = useState(false);
   const [bulkRole, setBulkRole] = useState('');
 
   // Track default tab when opening member view
@@ -141,7 +143,7 @@ export default function UnifiedPeoplePage() {
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, welfare_category: filterWelfare !== 'all' ? filterWelfare : undefined, limit: 100, staff_only: true });
+      const res = await membersApi.list({ search: search || undefined, group: filterGroup !== 'all' ? filterGroup : undefined, status: filterStatus !== 'all' ? filterStatus : undefined, location_id: filterLocation !== 'all' ? filterLocation : undefined, welfare_category: filterWelfare !== 'all' ? filterWelfare : undefined, limit: 100 });
       setMembers(res.data.members || res.data || []);
       setTotal(res.data.total || (res.data.members || res.data || []).length);
     } catch { toast.error('Failed to load members'); }
@@ -457,7 +459,7 @@ export default function UnifiedPeoplePage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList data-testid="people-tabs">
-          <TabsTrigger value="members" className="gap-1.5" data-testid="tab-members"><Users size={13} /> Staff ({total})</TabsTrigger>
+          <TabsTrigger value="members" className="gap-1.5" data-testid="tab-members"><Users size={13} /> Members ({total})</TabsTrigger>
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
           <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
@@ -501,6 +503,7 @@ export default function UnifiedPeoplePage() {
                 <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('activate'); setShowBulkAction(true); }}>Activate</Button>
                 <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('deactivate'); setShowBulkAction(true); }}>Deactivate</Button>
                 <Button size="sm" variant="outline" className="h-7" onClick={() => { setBulkActionType('role'); setShowBulkAction(true); }}>Change Role</Button>
+                <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => setShowBulkBadges(true)} data-testid="bulk-print-badges-btn">🪪 Print Badges</Button>
                 <Button size="sm" variant="destructive" className="h-7" onClick={() => { setBulkActionType('delete'); setShowBulkAction(true); }}>Delete</Button>
                 <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelectedMemberIds(new Set())}>Clear</Button>
               </div>
@@ -956,6 +959,26 @@ export default function UnifiedPeoplePage() {
         </DialogContent>
       </Dialog>
 
+      {/* BULK PRINT BADGES DIALOG */}
+      <Dialog open={showBulkBadges} onOpenChange={setShowBulkBadges}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Print Badges — {selectedMemberIds.size} selected</DialogTitle>
+            <DialogDescription className="text-xs">Click "Print" to send to your printer (browser print dialog).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <Button onClick={() => window.print()} className="w-full" data-testid="bulk-badges-print">🖨 Print All Selected</Button>
+            <div className="grid grid-cols-2 gap-3 print:grid-cols-2" data-testid="bulk-badges-grid">
+              {members.filter(m => selectedMemberIds.has(m.id)).map(m => (
+                <div key={m.id} className="print:break-inside-avoid">
+                  <UnifiedBadge person={{ ...m, country: allLocations.find(l => l.id === m.location_id)?.country, country_code: allLocations.find(l => l.id === m.location_id)?.country_code }} canWriteNfc={false} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* EDIT CHILD DIALOG */}
       <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) { setEditChild(null); setParentSearch(''); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
@@ -1114,6 +1137,17 @@ export default function UnifiedPeoplePage() {
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-child-btn" onClick={saveEditChild} disabled={savingChild}>{savingChild ? 'Saving...' : 'Save'}</Button>
             </div>
+
+            {/* Sponsor Portal Link manager + Activity Feed — only for existing (saved) children */}
+            {editChild?.id && (
+              <>
+                <ChildSponsorLinkSection childId={editChild.id} childName={editChild.name} />
+                <ChildGallerySection childId={editChild.id} />
+                <div className="border-t pt-3">
+                  <ActivityFeed subjectKind="child" subjectId={editChild.id} showAddNote={true} showDownload={true} />
+                </div>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -1340,3 +1374,152 @@ export default function UnifiedPeoplePage() {
     </div>
   );
 }
+
+
+// ============== CHILD SPONSOR-LINK SECTION ==============
+function ChildSponsorLinkSection({ childId, childName }) {
+  const [passwords, setPasswords] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [issued, setIssued] = useState(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await api.get(`/sponsor-links/by-child/${childId}`); setPasswords(r.data || []); }
+    catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [childId]);
+  useEffect(() => { load(); }, [load]);
+  const issue = async () => {
+    try {
+      const r = await api.post('/sponsor-links/issue', { child_id: childId, ttl_days: 30 });
+      setIssued(r.data);
+      toast.success('Sponsor link issued — copy now!');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const revoke = async (pwId) => {
+    if (!window.confirm('Revoke this sponsor password?')) return;
+    try { await api.delete(`/sponsor-links/${pwId}`); toast.success('Revoked'); load(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  return (
+    <div className="border-t pt-3 space-y-2" data-testid="child-sponsor-section">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs uppercase font-semibold text-muted-foreground flex items-center gap-1"><Heart size={11} /> Sponsor Portal Link</h4>
+        <Button size="sm" variant="outline" onClick={issue} data-testid="child-issue-sponsor-link"><Key size={11} className="mr-1" />Issue 30-day Link</Button>
+      </div>
+      {issued && (
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded p-2.5 text-xs space-y-1">
+          <p className="font-semibold">Share these credentials with the sponsor (NOT retrievable later):</p>
+          <p className="font-mono break-all"><strong>URL:</strong> {window.location.origin}{issued.portal_url_path}</p>
+          <p className="font-mono"><strong>Password:</strong> {issued.password_plaintext}</p>
+          <p className="text-[10px]">Expires {issued.expires_at?.slice(0, 16).replace('T', ' ')} UTC</p>
+          <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => { navigator.clipboard.writeText(`URL: ${window.location.origin}${issued.portal_url_path}\nPassword: ${issued.password_plaintext}\nExpires: ${issued.expires_at}`); toast.success('Copied'); }}>Copy all</Button>
+          <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => setIssued(null)}>Dismiss</Button>
+        </div>
+      )}
+      {loading && <p className="text-xs text-muted-foreground">Loading...</p>}
+      {!loading && passwords.length === 0 && <p className="text-xs text-muted-foreground">No sponsor links issued yet.</p>}
+      {!loading && passwords.length > 0 && (
+        <div className="space-y-1">
+          {passwords.map(p => (
+            <div key={p.id} className="flex items-center justify-between p-1.5 rounded border text-xs">
+              <span>
+                Issued {p.issued_at?.slice(0, 10)} by {p.issued_by_name}
+                {p.last_used_at && ` · last used ${p.last_used_at.slice(0, 10)}`}
+              </span>
+              {p.is_active
+                ? <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Active</Badge>
+                : <Badge variant="outline" className="text-[10px]">{p.revoked ? 'Revoked' : 'Expired'}</Badge>}
+              {p.is_active && <Button size="sm" variant="ghost" className="h-6 text-[10px] text-destructive" onClick={() => revoke(p.id)}>Revoke</Button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============== CHILD GALLERY / EXTRAS SECTION ==============
+function ChildGallerySection({ childId }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [caption, setCaption] = useState('');
+  const [kind, setKind] = useState('gallery');
+  const [isPublic, setIsPublic] = useState(true);
+  const fileRef = React.useRef(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await api.get(`/children/${childId}/extras`); setItems(r.data || []); }
+    catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [childId]);
+  useEffect(() => { load(); }, [load]);
+
+  const upload = async () => {
+    const f = fileRef.current?.files?.[0];
+    if (!f && !caption.trim()) { toast.error('Add a file or caption'); return; }
+    const fd = new FormData();
+    if (f) fd.append('file', f);
+    fd.append('kind', kind);
+    fd.append('caption', caption);
+    fd.append('is_public_for_sponsor', isPublic ? 'true' : 'false');
+    try {
+      await api.post(`/children/${childId}/extras`, fd);
+      toast.success('Added');
+      setCaption(''); if (fileRef.current) fileRef.current.value = '';
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  return (
+    <div className="border-t pt-3 space-y-2" data-testid="child-gallery-section">
+      <h4 className="text-xs uppercase font-semibold text-muted-foreground flex items-center gap-1">
+        <span>📸</span> Gallery &amp; Updates ({items.length})
+      </h4>
+      <div className="border border-dashed rounded p-2 space-y-2 bg-muted/30">
+        <div className="grid grid-cols-3 gap-2">
+          <Select value={kind} onValueChange={setKind}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="gallery">📷 Gallery photo</SelectItem>
+              <SelectItem value="update">📝 Welfare update</SelectItem>
+              <SelectItem value="report">📄 Report card</SelectItem>
+              <SelectItem value="medical">🏥 Medical</SelectItem>
+              <SelectItem value="receipt">🧾 Receipt</SelectItem>
+              <SelectItem value="school">🎓 School</SelectItem>
+            </SelectContent>
+          </Select>
+          <input ref={fileRef} type="file" accept="image/*,.pdf" className="text-xs col-span-2" />
+        </div>
+        <Textarea rows={2} className="text-xs" placeholder="Caption / note for the sponsor..." value={caption} onChange={e => setCaption(e.target.value)} />
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[10px] flex items-center gap-1">
+            <Checkbox checked={isPublic} onCheckedChange={setIsPublic} />
+            <span>Share with sponsor</span>
+          </label>
+          <Button size="sm" className="h-7 text-xs" onClick={upload}>Add</Button>
+        </div>
+      </div>
+      {loading && <p className="text-xs text-muted-foreground">Loading...</p>}
+      {items.length > 0 && (
+        <div className="grid grid-cols-3 gap-2">
+          {items.slice(0, 9).map(it => (
+            <div key={it.id} className="rounded border p-1 text-[10px] space-y-1">
+              {it.file_url && /\.(jpg|jpeg|png|gif|webp)$/i.test(it.file_url) ? (
+                <img src={it.file_url.startsWith('http') ? it.file_url : `${process.env.REACT_APP_BACKEND_URL}${it.file_url}`} alt="" className="w-full h-24 object-cover rounded" />
+              ) : it.file_url ? (
+                <a href={it.file_url.startsWith('http') ? it.file_url : `${process.env.REACT_APP_BACKEND_URL}${it.file_url}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline block truncate">📎 {it.file_name || 'File'}</a>
+              ) : null}
+              <p className="truncate" title={it.caption}>{it.caption || '—'}</p>
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>{it.kind}</span>
+                {it.is_public_for_sponsor && <Badge className="text-[8px] bg-emerald-100 text-emerald-700">sponsor</Badge>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+

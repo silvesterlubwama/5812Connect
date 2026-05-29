@@ -6,6 +6,45 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 129 (May 29, 2026)
+**Pass 1 complete: welfare filter location + bulk badge print + photo upload + child gallery + sponsor portal + staff-source-of-truth + universal activity trail.**
+
+### (a) Welfare filter moved to Members tab
+- Removed `staff_only: true` from the Members tab fetch, renamed label from "Staff" to "Members". The welfare filter now correctly filters actual members/parents/guests instead of staff.
+
+### (b) Bulk-print badges
+- New "🪪 Print Badges" button in the bulk-action bar of UnifiedPeoplePage. Opens a 2-column grid of `UnifiedBadge` cards for all selected members + a "Print All Selected" button → routes to `window.print()` with `print:break-inside-avoid` so each badge prints on its own card.
+
+### (c) Photo upload fixed + staff photo upload added
+- **Root cause:** `/api/uploads/photos/...` URLs were being returned but never actually served (no StaticFiles mount). Added the mount in `server.py`.
+- New `POST /api/users/{user_id}/photo` endpoint mirrors the existing member-photo flow, writes to both `users` AND any linked `members` records.
+- Admin's UserEditDialog now falls back to `/users/{id}/photo` when no `member_id` exists, surfaces the real backend error on failure (was previously generic).
+
+### (d) Child gallery + sponsor-visible welfare updates
+- New `POST /children/{id}/extras` accepts a file + caption + kind (gallery/update/report/medical/receipt/school) + `is_public_for_sponsor` flag. Stored in `db.child_extras`.
+- Child edit dialog now has a **Gallery & Updates** section with file picker, caption, kind picker, and a "Share with sponsor" checkbox.
+
+### (e) Sponsor portal (mirrors school portal)
+- New `routers/sponsor_portal.py` — staff issue an expiring (default 30 day) one-time password tied to a child's portal_token URL.
+- Public `/sponsor-portal/:portalToken` page with login (matches school portal UX): child's name, photo, age, grade, sponsorship YTD, goals + progress bars, gallery of updates marked sponsor-public, sponsorship history.
+- Frontend: ChildSponsorLinkSection inside the child edit dialog with one-click "Issue 30-day Link" + active password list with revoke.
+
+### (f) Staff source of truth = Admin
+- UnifiedPeoplePage Members tab no longer shows staff-only users. Admin Users page remains the canonical edit screen for staff.
+
+### (g) Universal Activity Trail
+- New `routers/activity.py` — `activity_log` collection + `log_activity()` helper. `GET /api/activity/{kind}/{id}` **merges curated log entries with on-the-fly derived rows** from existing collections (checkins, sales, social-payments, social-notes, reimbursements, attendance) so historical data appears without retroactive migration.
+- `POST /api/activity/{kind}/{id}/note` accepts a body + optional file attachment — volunteer-level access. Used for event observations, home-visit notes, etc.
+- `GET /api/activity/{kind}/{id}/export` produces a JSON download of the full profile + all activity — for compliance / authority requests / GDPR-style data exports.
+- New reusable `ActivityFeed` component with category-filter chips, add-note dialog, file attachments, "Download Profile" button. Embedded in the child edit dialog.
+- High-traffic write paths (`POST /sales`, `POST /social-work/cases/{id}/payments`) now also call `log_activity()` so future entries surface immediately without depending on the read-time merge.
+
+### Deferred per user (Pass 2 — skipped)
+- Volunteer scheduling auto-populate from public events
+- Migrate guests + parents into members collection (data migration)
+
+All 16 pytest smoke tests still pass. Backend + frontend lint clean (style warnings only).
+
 ## Recently Resolved — Iteration 128 (May 27, 2026)
 **POS / Kiosk now stays on PIN entry screen on bad credentials.**
 

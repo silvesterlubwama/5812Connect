@@ -129,6 +129,21 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
             logger.warning(f"Auto-create customer failed: {e}")
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "sale", sale_id)
+    # Universal activity trail — log against the customer's profile (when linked)
+    try:
+        if doc.get("customer_id"):
+            from routers.activity import log_activity
+            await log_activity(
+                "customer", doc["customer_id"], "sale",
+                title=f"Sale {doc.get('receipt_number') or doc['id']}",
+                body=f"{len(doc.get('items', []) or [])} item(s) · {doc.get('payment_method', '?')}",
+                actor_id=current_user["id"], actor_name=current_user.get("name", ""),
+                amount=float(doc.get("total") or 0), currency=doc.get("currency", "UGX"),
+                ref_id=doc["id"], ref_kind="sale",
+                location_id=doc.get("location_id"),
+            )
+    except Exception as e:
+        logger.warning(f"Activity log (sale) skipped: {e}")
     # Auto-post a balanced journal entry if a Sales journal exists for this location
     try:
         await _auto_post_sale_journal_entry(doc, current_user)

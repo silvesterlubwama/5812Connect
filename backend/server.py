@@ -46,6 +46,16 @@ except Exception as e:
 app = FastAPI(title="58:12 Global Connect API")
 api_router = APIRouter(prefix="/api")
 
+# Mount the local uploads folder so photos saved on the filesystem fallback path
+# (`/app/backend/uploads/photos/...`) are actually retrievable via the URL
+# `/api/uploads/photos/...` returned by the upload endpoints.
+from fastapi.staticfiles import StaticFiles
+import os as _os_for_static
+_os_for_static.makedirs("/app/backend/uploads/photos", exist_ok=True)
+_os_for_static.makedirs("/app/backend/uploads/child-extras", exist_ok=True)
+_os_for_static.makedirs("/app/backend/uploads/files", exist_ok=True)
+app.mount("/api/uploads", StaticFiles(directory="/app/backend/uploads"), name="uploads")
+
 
 @app.get("/api/health")
 async def health_check():
@@ -484,6 +494,8 @@ try:
     from routers.approvals import router as approvals_router
     from routers.social_work import router as social_work_router, portal_router as school_portal_router
     from routers.bank import router as bank_router
+    from routers.activity import router as activity_router
+    from routers.sponsor_portal import router as sponsor_links_router, public_router as sponsor_portal_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -497,6 +509,9 @@ try:
     app.include_router(social_work_router)
     app.include_router(school_portal_router)
     app.include_router(bank_router)
+    app.include_router(activity_router)
+    app.include_router(sponsor_links_router)
+    app.include_router(sponsor_portal_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

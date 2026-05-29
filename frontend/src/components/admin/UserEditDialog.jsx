@@ -168,13 +168,24 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
     if (!file || !selectedUser) return;
     setUploadingPhoto(true);
     try {
-      const memberId = selectedUser.member_id || selectedUser.id;
       const fd = new FormData();
       fd.append('file', file);
-      const res = await api.post(`/members/${memberId}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Prefer the member-photo endpoint when a member_id exists (writes to both
+      // members + linked users). Fall back to /users/{id}/photo for staff-only
+      // accounts that don't have a member record.
+      const memberId = selectedUser.member_id || (selectedUser.role === 'member' ? selectedUser.id : null);
+      const endpoint = memberId
+        ? `/members/${memberId}/photo`
+        : `/users/${selectedUser.id}/photo`;
+      const res = await api.post(endpoint, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setEditForm(prev => ({ ...prev, photo_url: res.data.photo_url }));
       toast.success('Photo uploaded');
-    } catch (err) { toast.error(err.response?.data?.detail || 'Photo upload failed'); }
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : JSON.stringify(detail || {}) || err.message;
+      toast.error(`Photo upload failed: ${msg}`);
+      console.error('Photo upload error:', err.response?.data || err);
+    }
     finally { setUploadingPhoto(false); if (photoInputRef.current) photoInputRef.current.value = ''; }
   };
 
