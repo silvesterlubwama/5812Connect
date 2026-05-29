@@ -1,0 +1,44 @@
+{
+  "summary": "Retest of iteration_86 fixes: backend sales-aggregator fallback + frontend ActivityFeed.downloadProfile blob-error decoding & try/catch. All previously-failing cases now pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_fixes": [
+    "GET /api/activity/customer/cust_770af66e/export?format=pdf (id present in db.sales but NOT in db.customer_accounts) now returns 200 + application/pdf, 14KB body starting with %PDF-1.7 (previously 404).",
+    "GET /api/activity/customer/cust_770af66e/export?format=json returns profile.source == 'sales_aggregator' with activity_count >= 1.",
+    "GET /api/activity/customer/<unknown_id>/export still returns 404 — regression guard holds.",
+    "PDF body for fallback path contains 'Activity Trail' heading and customer name/identifier (pdfminer-extracted).",
+    "Real customer_accounts customer (cust_1d70058738) still returns 200 + 17KB PDF — non-regression confirmed.",
+    "Frontend /sales → Customers tab → synthetic row 'TEST_SaleTotals_e973257e' → profile dialog → click PDF: file downloads as 'profile-customer-cust_770af66e.pdf', NO React error overlay, NO pageerror events, toast 'Profile exported (PDF)' shown.",
+    "Same flow → click JSON: file downloads as 'profile-customer-cust_770af66e.json', NO error overlay, toast 'Profile exported (JSON)' shown."
+  ],
+  "test_runs": {
+    "test_iteration116_activity_pdf_export.py": "15 passed, 1 skipped (skip is for missing child fixture, unrelated to the fix)",
+    "test_smoke_recent_modules.py": "16 passed, 0 failed",
+    "total": "31 passed, 1 skipped"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration116_activity_pdf_export.py",
+    "/app/backend/tests/test_smoke_recent_modules.py",
+    "/app/test_reports/pytest/iter87_iter116_pdf_export.xml",
+    "/app/test_reports/pytest/iter87_smoke.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ProductsPage.jsx is mounted at route '/sales' (not '/products' as mentioned in review_request). Worth correcting in future request docs so testing agents don't waste time hitting /products which redirects to /login.",
+    "ActivityFeed.downloadProfile: nice defensive style — the inner try/catch around URL.createObjectURL + a.click() + the Blob-body decode in the outer catch is exactly what was needed. No further changes recommended."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration116_activity_pdf_export.py — added TestSyntheticCustomerFallback class (3 tests) that probes Mongo directly to find a customer_id in db.sales but not in db.customer_accounts, then verifies PDF (200, %PDF magic, heading, name) and JSON (profile.source=='sales_aggregator') responses."
+  ],
+  "success_rate": { "backend": "100%", "frontend": "100%" },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — reused existing TEST_SaleTotals_e973257e sale (customer_id=cust_770af66e) created in prior iterations.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 87 retest is GREEN. Synthetic customer id discovery for future tests: query Mongo db.sales.distinct('customer_id') minus db.customer_accounts.distinct('id'); current dataset has exactly 1 such id (cust_770af66e). Route note: ProductsPage = /sales, NOT /products.",
+  "rca of the issue": "Iteration 86 found two related bugs: (1) backend 404'd when a sales row referenced a synthetic customer_id (cust_<hash>) that had never been promoted into customer_accounts; (2) when the frontend ActivityFeed got that 404 with responseType:'blob', e.response.data was a Blob whose .detail was undefined, and the subsequent URL.createObjectURL/a.click code path threw, which propagated into React's render and triggered the runtime error overlay. Iteration 87 fix verified: backend falls back to a sales-aggregator profile (source='sales_aggregator') so the legitimate case now returns 200; even if a 404 happens, downloadProfile decodes the Blob body to extract detail and wraps the finalize step in try/catch so nothing escapes to React. Verified end-to-end with curl + Playwright."
+}

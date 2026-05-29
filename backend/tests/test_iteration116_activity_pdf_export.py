@@ -148,6 +148,73 @@ class TestPDFBodyContains:
             assert first in text, f"PDF text missing subject name '{first}'. Got first 400 chars: {text[:400]!r}"
 
 
+# ----- Iteration 87 retest: synthetic customer (sales-only) fallback -----
+class TestSyntheticCustomerFallback:
+    """customer_id present in db.sales but NOT in db.customer_accounts should
+    now return a PDF via the sales-aggregator fallback (was 404 before)."""
+
+    def _find_synthetic_customer(self, session):
+        # Query MongoDB directly to find a customer_id that exists in db.sales but
+        # NOT in db.customer_accounts. This is the only reliable way to guarantee
+        # we hit the sales-aggregator fallback branch.
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from dotenv import load_dotenv
+        load_dotenv("/app/backend/.env")
+
+        async def _query():
+            c = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = c[os.environ["DB_NAME"]]
+            sales_ids = set(await db.sales.distinct("customer_id"))
+            sales_ids.discard(None); sales_ids.discard("")
+            acct_ids = set(await db.customer_accounts.distinct("id"))
+            synth = sorted(sales_ids - acct_ids)
+            if not synth:
+                return None, None
+            sale = await db.sales.find_one({"customer_id": synth[0]}, {"_id": 0, "customer_name": 1})
+            return synth[0], (sale or {}).get("customer_name")
+        return asyncio.run(_query())
+
+    def test_synthetic_customer_pdf_200(self, session):
+        cid, name = self._find_synthetic_customer(session)
+        if not cid:
+            pytest.skip("no synthetic (sales-aggregator-only) customer in this env")
+        r = session.get(f"{API}/activity/customer/{cid}/export?format=pdf", timeout=60)
+        assert r.status_code == 200, f"synthetic customer PDF 200 expected, got {r.status_code}: {r.text[:300]}"
+        assert "application/pdf" in r.headers.get("content-type", "")
+        assert r.content[:5] == b"%PDF-", f"not a PDF: {r.content[:8]!r}"
+        assert len(r.content) > 1000
+
+    def test_synthetic_customer_pdf_body_has_heading_and_name(self, session):
+        cid, name = self._find_synthetic_customer(session)
+        if not cid:
+            pytest.skip("no synthetic customer in this env")
+        r = session.get(f"{API}/activity/customer/{cid}/export?format=pdf", timeout=60)
+        assert r.status_code == 200
+        from io import BytesIO
+        try:
+            from pdfminer.high_level import extract_text
+            text = extract_text(BytesIO(r.content)) or ""
+        except Exception as e:
+            pytest.skip(f"pdfminer not usable: {e}")
+        assert "Activity Trail" in text, f"missing heading. first 400: {text[:400]!r}"
+        if name:
+            first = str(name).split()[0]
+            # name in fallback may be 'Customer' if sales rows had no customer_name
+            assert first in text or "Customer" in text, f"missing name '{first}'. first 400: {text[:400]!r}"
+
+    def test_synthetic_customer_json_200(self, session):
+        cid, _ = self._find_synthetic_customer(session)
+        if not cid:
+            pytest.skip("no synthetic customer in this env")
+        r = session.get(f"{API}/activity/customer/{cid}/export?format=json", timeout=30)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["subject_kind"] == "customer"
+        assert data["subject_id"] == cid
+        assert data.get("profile", {}).get("source") == "sales_aggregator"
+
+
 # ----- 404 for unknown id -----
 class TestExportUnknownId:
     def test_unknown_member_returns_404(self, session):

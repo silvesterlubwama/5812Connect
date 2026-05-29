@@ -94,7 +94,7 @@ export default function ActivityFeed({ subjectKind, subjectId, showAddNote = tru
       });
       let blob, ext, mime;
       if (format === 'pdf') {
-        blob = r.data;
+        blob = r.data instanceof Blob ? r.data : new Blob([r.data], { type: 'application/pdf' });
         ext = 'pdf';
         mime = 'application/pdf';
       } else {
@@ -102,13 +102,32 @@ export default function ActivityFeed({ subjectKind, subjectId, showAddNote = tru
         ext = 'json';
         mime = 'application/json';
       }
-      const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob], { type: mime }));
-      const a = document.createElement('a');
-      a.href = url; a.download = `profile-${subjectKind}-${subjectId}.${ext}`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-      toast.success(`Profile exported (${ext.toUpperCase()})`);
-    } catch (e) { toast.error(e.response?.data?.detail || 'Export failed'); }
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `profile-${subjectKind}-${subjectId}.${ext}`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        toast.success(`Profile exported (${ext.toUpperCase()})`);
+      } catch (innerErr) {
+        console.error('download finalize failed', innerErr);
+        toast.error('Failed to save file');
+      }
+    } catch (e) {
+      // When responseType='blob' the error body is also a Blob — decode it for a clean message.
+      let detail = e.response?.data?.detail;
+      try {
+        if (!detail && e.response?.data instanceof Blob) {
+          const text = await e.response.data.text();
+          try {
+            const parsed = JSON.parse(text);
+            detail = parsed?.detail || parsed?.message;
+          } catch { /* keep raw text below */ }
+          if (!detail && text) detail = text.slice(0, 200);
+        }
+      } catch (_decodeErr) { /* ignore */ }
+      toast.error(detail || 'Export failed');
+    }
   };
 
   const filtered = categoryFilter === 'all' ? items : items.filter(i => i.category === categoryFilter);

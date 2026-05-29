@@ -280,6 +280,28 @@ async def export_subject_profile(
         subject = await db.guests.find_one({"id": subject_id}, {"_id": 0})
     elif subject_kind == "customer":
         subject = await db.customer_accounts.find_one({"id": subject_id}, {"_id": 0})
+        if not subject:
+            # Fall back to sales-aggregator: the /api/customers tab in ProductsPage
+            # surfaces synthetic rows that don't exist in customer_accounts. Build
+            # a minimal profile from sales so the export contract matches the read
+            # endpoint, which also aggregates from sales.
+            sales_rows = await db.sales.find(
+                {"customer_id": subject_id},
+                {"_id": 0, "customer_name": 1, "customer_phone": 1, "total": 1, "created_at": 1, "location_id": 1},
+            ).to_list(2000)
+            if sales_rows:
+                total_spent = sum(float(s.get("total") or 0) for s in sales_rows)
+                last_visit = max((s.get("created_at") or "") for s in sales_rows)
+                subject = {
+                    "id": subject_id,
+                    "name": next((s.get("customer_name") for s in sales_rows if s.get("customer_name")), "Customer"),
+                    "phone": next((s.get("customer_phone") for s in sales_rows if s.get("customer_phone")), ""),
+                    "total_spent": round(total_spent, 2),
+                    "total_purchases": len(sales_rows),
+                    "last_visit": last_visit,
+                    "location_id": next((s.get("location_id") for s in sales_rows if s.get("location_id")), ""),
+                    "source": "sales_aggregator",
+                }
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
     # Pull curated log + live-derived rows (same logic as the read endpoint).
