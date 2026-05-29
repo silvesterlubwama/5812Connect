@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="3" failures="0" skipped="0" tests="9" time="2.432" timestamp="2026-05-29T19:00:16.032570+00:00" hostname="agent-env-9a9c5984-9441-4d6f-b2b7-adde78cccd8f"><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_social_work_blocked_for_staff" time="1.231" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_social_work_allowed_for_admin" time="0.145" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_products_blocked_for_staff" time="0.126" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_products_allowed_for_admin" time="0.106" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_social_work_unlocked_after_grant" time="0.236" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_expiring_soon_shape_and_includes_user" time="0.134" /><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_snooze_sets_date" time="0.218"><error message="failed on setup with &quot;KeyError: 0&quot;">backend/tests/test_iteration91_p2_finish.py:142: in admin_task
+    lid = (lists[0]["id"] if lists else None)
+           ^^^^^^^^
+E   KeyError: 0</error></testcase><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_snooze_clear" time="0.000"><error message="failed on setup with &quot;KeyError: 0&quot;">backend/tests/test_iteration91_p2_finish.py:142: in admin_task
+    lid = (lists[0]["id"] if lists else None)
+           ^^^^^^^^
+E   KeyError: 0</error></testcase><testcase classname="backend.tests.test_iteration91_p2_finish" name="test_snooze_forbidden_for_non_assignee" time="0.147"><error message="failed on setup with &quot;KeyError: 0&quot;">backend/tests/test_iteration91_p2_finish.py:142: in admin_task
+    lid = (lists[0]["id"] if lists else None)
+           ^^^^^^^^
+E   KeyError: 0</error></testcase></testsuite></testsuites>

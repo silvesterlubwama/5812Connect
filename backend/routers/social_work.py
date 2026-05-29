@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from deps import (
     db, get_current_user, require_staff, require_manager, require_director,
     _audit, logger, get_campus_filter, is_system_admin, hash_password, verify_password,
+    require_social_work_view,
 )
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
@@ -24,7 +25,7 @@ import uuid
 import secrets
 import hashlib
 
-router = APIRouter(prefix="/api/social-work", tags=["social-work"])
+router = APIRouter(prefix="/api/social-work", tags=["social-work"], dependencies=[Depends(require_social_work_view)])
 portal_router = APIRouter(prefix="/api/school-portal", tags=["school-portal"])
 
 CASE_CATEGORIES = {"sponsored", "restricted_location", "welfare_support", "multiple"}

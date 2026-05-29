@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from deps import db, get_current_user, _audit, logger, get_campus_filter, is_system_admin
 from models import TaskCreate, TaskUpdate
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
 import json
@@ -255,6 +255,47 @@ async def move_task(task_id: str, data: dict, current_user: dict = Depends(get_c
     return moved
 
 
+@router.post("/tasks/{task_id}/snooze")
+async def snooze_task(task_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Snooze a task: suppress the daily overdue-reminder cron and the "due today/tomorrow"
+    push notifications until `snooze_until`. Body: { days: 7 } OR { until: 'YYYY-MM-DD' }.
+    Default snooze = 7 days. Caller must be the task assignee or a manager+.
+    Pass `{ clear: true }` to remove an existing snooze."""
+    data = data or {}
+    task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    # Authorisation: assignees, creator, or manager+ can snooze
+    assignees = set(task.get("assignees") or [])
+    if task.get("assignee"):
+        assignees.add(task["assignee"])
+    is_assignee = current_user["id"] in assignees or task.get("created_by") == current_user["id"]
+    privileged = (current_user.get("role") or "") in {
+        "admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager",
+    }
+    if not (is_assignee or privileged):
+        raise HTTPException(status_code=403, detail="Only assignees or managers can snooze this task")
+    if data.get("clear"):
+        await db.tasks.update_one({"id": task_id}, {"$unset": {"snooze_until": "", "snoozed_by": "", "snoozed_at": ""}})
+        return {"snoozed": False, "task_id": task_id}
+    until_iso = (data.get("until") or "").strip()
+    if not until_iso:
+        from datetime import date as _date
+        days = max(1, min(int(data.get("days") or 7), 90))
+        until_iso = (_date.today() + timedelta(days=days)).isoformat()
+    else:
+        until_iso = until_iso[:10]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.tasks.update_one(
+        {"id": task_id},
+        {"$set": {"snooze_until": until_iso, "snoozed_by": current_user["id"], "snoozed_at": now_iso, "updated_at": now_iso}},
+    )
+    fresh = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    await _broadcast_board(fresh.get("board_id"), "card_updated", {"task_id": task_id, "task": fresh}, exclude_user=current_user["id"])
+    return {"snoozed": True, "task_id": task_id, "snooze_until": until_iso}
+
+
+
 @router.post("/tasks/{task_id}/archive")
 async def archive_task(task_id: str, current_user: dict = Depends(get_current_user)):
     """Archive a card (soft delete — removed from board view)"""
@@ -387,6 +428,9 @@ async def serve_local_attachment(task_id: str, att_id: str, current_user: dict =
     import mimetypes
     mime, _ = mimetypes.guess_type(file_path)
     return FileResponse(file_path, media_type=mime or "application/octet-stream", filename=matches[0][len(att_id)+1:])
+
+
+@router.post("/tasks/import-trello")
 async def import_trello(data: dict, current_user: dict = Depends(get_current_user)):
     """Import tasks from Trello JSON export or generic kanban format."""
     cards = data.get("cards", [])

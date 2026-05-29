@@ -1,7 +1,7 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
 import secrets
@@ -870,6 +870,39 @@ async def set_module_access(user_id: str, data: dict, current_user: dict = Depen
         "finance_access": new_state if module == "finance" else None,
         "expires_at": update.get(exp_key),
     }
+
+
+@router.get("/module-access/expiring-soon")
+async def list_expiring_module_grants(
+    days: int = 7, current_user: dict = Depends(require_admin),
+):
+    """Return every active explicit grant whose expiry falls within the next `days`.
+    One row per (user, module). Used by the Access Expiring Soon banner."""
+    from deps import GRANTABLE_MODULES
+    days = max(1, min(int(days or 7), 90))
+    now = datetime.now(timezone.utc)
+    horizon = (now + timedelta(days=days)).isoformat()
+    now_iso = now.isoformat()
+    rows = []
+    for module in GRANTABLE_MODULES:
+        flag_key = f"{module}_access"
+        exp_key = f"{module}_access_expires_at"
+        async for u in db.users.find(
+            {flag_key: True, exp_key: {"$gt": now_iso, "$lte": horizon}},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1, exp_key: 1},
+        ):
+            rows.append({
+                "user_id": u["id"],
+                "name": u.get("name"),
+                "email": u.get("email"),
+                "role": u.get("role"),
+                "module": module,
+                "module_label": GRANTABLE_MODULES[module],
+                "expires_at": u.get(exp_key),
+            })
+    # Soonest first
+    rows.sort(key=lambda r: r.get("expires_at") or "")
+    return {"count": len(rows), "days": days, "rows": rows}
 
 
 

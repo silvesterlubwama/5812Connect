@@ -104,6 +104,8 @@ export const tasksApi = {
   bulkUpdate: (ids, updates) => api.put('/tasks/bulk-update', { ids, updates }),
   bulkDelete: (ids) => api.post('/tasks/bulk-delete', { ids }),
   bulkArchive: (ids, archive) => api.post('/tasks/bulk-archive', { ids, archive }),
+  snooze: (id, data) => api.post(`/tasks/${id}/snooze`, data || { days: 7 }),
+  clearSnooze: (id) => api.post(`/tasks/${id}/snooze`, { clear: true }),
 };
 
 // ---- CHECK-INS ----

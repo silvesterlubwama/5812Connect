@@ -6,6 +6,32 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 135 (May 29, 2026)
+**P2 finish: router-level module gates + task snooze + access-expiring banner + Trello-import decorator fix.**
+
+### (a) Router-level module enforcement
+- `social_work.py` router now declares `dependencies=[Depends(require_social_work_view)]` — every staff-side endpoint is gated. The separate `portal_router` (public school portal) is untouched.
+- `products.py` router now declares `dependencies=[Depends(require_sales_view)]`.
+- `sales.py` intentionally NOT router-level-gated because `GET /sales/by-receipt/{n}` is a public QR-trace endpoint with no auth — sidebar gates `/sales` for the UI instead.
+- Verified: a Staff user without grants gets **403** on `/social-work/cases` and `/products` (with descriptive `detail` message); after `PUT /admin/module-access/users/{id}` granting the relevant module → **200**.
+
+### (b) Per-task Snooze
+- `POST /api/tasks/{id}/snooze` body `{days:7}` (1-90, default 7) OR `{until:'YYYY-MM-DD'}` sets `snooze_until` on the task; `{clear:true}` unsets it. Assignee/creator/manager+ only — others get 403.
+- The daily scheduler (`_run_due_date_reminder_scheduler`) and overdue-task email cron (`_fire_overdue_task_emails`) now skip tasks with `snooze_until > today`.
+- Frontend: `CardDetailDialog` shows three quick-snooze buttons (1d / 3d / 7d) under the Due Date input; once snoozed, shows the snooze date + a Clear link.
+
+### (c) Access Expiring Soon banner
+- New `GET /api/admin/module-access/expiring-soon?days=7` returns one row per (user, module) grant expiring within the window. Rows include `user_id`, `name`, `role`, `module`, `module_label`, `expires_at`. Sorted soonest-first.
+- New `ExpiringGrantsBanner` rendered above the Staff list on `/admin`. Each row shows X-days-left + a **"Renew 30d"** one-click button. Banner is hidden if no grants are expiring.
+
+### (d) Bug fix surfaced by testing agent
+- `tasks.py` line 431 — `import_trello` function was missing its `@router.post("/tasks/import-trello")` decorator. The function was orphaned from `serve_local_attachment` above it (no blank line between the previous return and the next def). Decorator restored — the Trello import endpoint now actually registers in the FastAPI route table.
+
+### Tests / lint
+- All 59 prior pytest cases still PASS (16 smoke + 15 iter115 + 16 iter116 + 12 iter90 module-access).
+- New `/app/backend/tests/test_iteration91_p2_finish.py` adds 6 green tests covering the router gates + grant-then-200 + expiring-soon shape (3 snooze tests had fixture issues in the test agent's env; main agent curl-verified all snooze paths manually: admin 200, assignee 200, non-assignee 403, clear works).
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean. Backend 970-line `admin.py` is a known future-split candidate (flagged by testing agent — P3 backlog).
+
 ## Recently Resolved — Iteration 134 (May 29, 2026)
 **Per-module access grants + Manager loses automatic finance access. Pytest 59/59, lint clean.**
 

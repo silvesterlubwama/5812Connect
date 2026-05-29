@@ -564,6 +564,7 @@ async def _run_due_date_reminder_scheduler():
                 "due_date": tomorrow,
                 "is_archived": {"$ne": True},
                 "status": {"$ne": "done"},
+                "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
             }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
 
             for task in due_tasks:
@@ -578,6 +579,7 @@ async def _run_due_date_reminder_scheduler():
                 "due_date": today_str,
                 "is_archived": {"$ne": True},
                 "status": {"$ne": "done"},
+                "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
             }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
 
             for task in today_tasks:
@@ -685,11 +687,12 @@ async def _fire_overdue_task_emails():
         from datetime import date
         today_iso = date.today().isoformat()
         cutoff_3d = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        # Open tasks past due
+        # Open tasks past due (respects per-task snoozes)
         overdue = await db.tasks.find({
             "due_date": {"$lt": today_iso, "$ne": ""},
             "is_archived": {"$ne": True},
             "status": {"$ne": "done"},
+            "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
         }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1, "board_id": 1, "description": 1}).to_list(500)
         if not overdue:
             return

@@ -1,12 +1,12 @@
 """Product CRUD + variant management — extracted from financial.py"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, get_campus_filter, is_system_admin
+from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
-router = APIRouter(prefix="/api", tags=["products"])
+router = APIRouter(prefix="/api", tags=["products"], dependencies=[Depends(require_sales_view)])
 
 
 # ---------- Helpers ----------

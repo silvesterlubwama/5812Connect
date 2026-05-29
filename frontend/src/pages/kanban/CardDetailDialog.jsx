@@ -273,6 +273,49 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
               <Label className="text-xs text-slate-400 flex items-center gap-1.5"><Calendar size={11} /> Due Date</Label>
               <Input type="date" className="h-8 text-xs bg-[#0f172a] border-white/15 text-slate-200"
                 value={dueDate} onChange={e => setDueDate(e.target.value)} />
+              {/* Snooze controls — suppress overdue reminders until a chosen date */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                {card?.snooze_until ? (
+                  <>
+                    <span className="text-[10px] text-amber-400" data-testid="task-snoozed-until">
+                      😴 Snoozed until {String(card.snooze_until).slice(0, 10)}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[10px] text-blue-400 hover:underline"
+                      data-testid="task-snooze-clear"
+                      onClick={async () => {
+                        try {
+                          await tasksApi.clearSnooze(card.id);
+                          toast.success('Snooze cleared');
+                          onSaved?.();
+                        } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                      }}
+                    >Clear</button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[10px] text-slate-500">Pause reminders:</span>
+                    {[1, 3, 7].map(d => (
+                      <button
+                        key={d}
+                        type="button"
+                        className="text-[10px] px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10"
+                        data-testid={`task-snooze-${d}`}
+                        onClick={async () => {
+                          try {
+                            await tasksApi.snooze(card.id, { days: d });
+                            toast.success(`Snoozed for ${d} day${d === 1 ? '' : 's'}`);
+                            onSaved?.();
+                          } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                        }}
+                      >
+                        {d}d
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Recurring */}

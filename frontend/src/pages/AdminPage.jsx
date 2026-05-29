@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download } from 'lucide-react';
+import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download, Clock } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -235,6 +235,9 @@ export default function AdminPage() {
           <Button variant="outline" size="sm" onClick={fetchUsers}><RefreshCw size={14} /></Button>
         </div>
       </div>
+
+      {/* Access Expiring Soon banner — visible to admins+ if any explicit grant expires within 7 days */}
+      <ExpiringGrantsBanner />
 
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -525,4 +528,84 @@ function ModuleAccessManager() {
 // eslint-disable-next-line no-unused-vars
 function FinanceAccessManager() {
   return <ModuleAccessManager />;
+}
+
+
+// ============== EXPIRING GRANTS BANNER ==============
+// Lightweight banner above the admin page that lists module grants expiring in the
+// next 7 days. One-click re-issue (30d default) or jump to the full Module Access dialog.
+function ExpiringGrantsBanner() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [reissuing, setReissuing] = useState({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/admin/module-access/expiring-soon', { params: { days: 7 } });
+      setRows(r.data?.rows || []);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const reissue = async (row, days = 30) => {
+    const key = `${row.user_id}:${row.module}`;
+    setReissuing(prev => ({ ...prev, [key]: true }));
+    try {
+      await api.put(`/admin/module-access/users/${row.user_id}`, {
+        module: row.module, granted: true, ttl_days: days,
+      });
+      toast.success(`Re-issued ${row.module} access for ${row.name} (${days}d)`);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed');
+    } finally {
+      setReissuing(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  if (loading || rows.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-amber-200 dark:border-amber-900/40 bg-amber-50/60 dark:bg-amber-950/20 p-3" data-testid="expiring-grants-banner">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Clock size={15} className="text-amber-600" />
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            {rows.length} module {rows.length === 1 ? 'grant' : 'grants'} expiring in the next 7 days
+          </p>
+        </div>
+      </div>
+      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+        {rows.map(r => {
+          const key = `${r.user_id}:${r.module}`;
+          const daysLeft = Math.max(0, Math.ceil((new Date(r.expires_at).getTime() - Date.now()) / 86400000));
+          return (
+            <div key={key} className="flex items-center justify-between text-xs bg-background/60 rounded p-1.5 border border-amber-100 dark:border-amber-900/30" data-testid={`expiring-row-${key}`}>
+              <div className="min-w-0 flex-1">
+                <span className="font-medium">{r.name}</span>
+                <span className="text-muted-foreground"> · {r.role || '—'}</span>
+                <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-[10px] capitalize">
+                  {r.module.replace('_', ' ')}
+                </span>
+                <span className="ml-2 text-[10px] text-amber-700 dark:text-amber-400">
+                  {daysLeft === 0 ? 'expires today' : `${daysLeft}d left`} · {String(r.expires_at).slice(0, 10)}
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => reissue(r, 30)}
+                disabled={!!reissuing[key]}
+                data-testid={`reissue-${key}`}
+              >
+                {reissuing[key] ? '…' : 'Renew 30d'}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
