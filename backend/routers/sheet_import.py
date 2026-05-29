@@ -21,6 +21,46 @@ async def import_google_sheet_financial(data: dict, current_user: dict = Depends
     created = 0
     skipped = 0
     errors = []
+
+    def _parse_amount(raw):
+        """Best-effort numeric parse. Handles:
+          • Currency prefixes: $, USD, UGX, KES, etc.
+          • Thousands separators: 1,234.56  (US) and  1.234,56 (European)
+          • Parentheses for negatives: (5,000) → -5000
+          • Plain integers / floats
+          • Empty / None / non-numeric → 0.0
+        """
+        if raw is None:
+            return 0.0
+        s = str(raw).strip()
+        if not s:
+            return 0.0
+        # Strip common currency markers and whitespace
+        for tok in ("UGX", "USD", "KES", "TZS", "RWF", "GBP", "EUR", "HTG", "THB", "ZAR", "NGN", "GHS", "$", "£", "€", "\u00a0"):
+            s = s.replace(tok, "")
+        s = s.replace(" ", "").strip()
+        # Parenthesised → negative
+        sign = -1.0 if s.startswith("(") and s.endswith(")") else 1.0
+        if sign < 0:
+            s = s[1:-1].strip()
+        # If both . and , are present, the rightmost one is the decimal mark
+        if "," in s and "." in s:
+            if s.rfind(",") > s.rfind("."):
+                s = s.replace(".", "").replace(",", ".")
+            else:
+                s = s.replace(",", "")
+        elif "," in s:
+            # If exactly 1 comma and 1-2 digits after it, treat as decimal (European)
+            after = s.split(",")[-1]
+            if s.count(",") == 1 and 1 <= len(after) <= 2:
+                s = s.replace(",", ".")
+            else:
+                s = s.replace(",", "")
+        try:
+            return float(s) * sign
+        except (ValueError, TypeError):
+            return 0.0
+
     for i, row in enumerate(rows):
         try:
             # Normalize keys — accept spreadsheet column names too
@@ -40,12 +80,11 @@ async def import_google_sheet_financial(data: dict, current_user: dict = Depends
                         date_val = f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
                 except Exception:
                     pass
-            amount_raw = row.get("amount") or row.get("Amount") or row.get("TOTAL UGX") or row.get("total_ugx") or 0
-            if isinstance(amount_raw, str):
-                amount_raw = amount_raw.replace("UGX", "").replace(",", "").replace(" ", "").strip() or "0"
-            amount = float(amount_raw)
+            amount_raw = row.get("amount") or row.get("Amount") or row.get("TOTAL UGX") or row.get("total_ugx") or row.get("AMOUNT") or 0
+            amount = _parse_amount(amount_raw)
             if amount <= 0:
                 skipped += 1
+                errors.append(f"Row {i+1}: amount missing or zero (raw: {repr(amount_raw)[:40]})")
                 continue
             vendor = (row.get("vendor") or row.get("Vendor") or row.get("Donor") or row.get("donor_name") or "").strip()
             purpose = (row.get("purpose") or row.get("Purpose/Beneficiary/Notes") or row.get("notes") or row.get("Notes") or "").strip()

@@ -6,6 +6,37 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 136 (May 29, 2026)
+**Financial sheet-import: robust CSV parser + smarter amount parsing + clearer errors. Pytest 59/59.**
+
+### Bug
+User reported that financial expense/income sheet-import "wasn't working in deployed app, maybe due to missing commas or something else." Investigation showed the **backend was healthy** — naive frontend CSV parser was the culprit.
+
+### Frontend parser hardening (`FinancialPage.jsx` `handleSheetImport`)
+- Strip UTF-8 BOM (`\uFEFF`) prepended by Excel "Save As CSV".
+- Normalise CRLF / CR-only line endings to LF (Windows / Mac Excel).
+- **Auto-detect TAB-separated paste** — if a user copies cells directly from Excel/Sheets (without "Save As CSV"), the clipboard is tab-delimited. Parser now counts tabs vs commas on the first non-empty line and picks the right separator.
+- Proper state-machine tokenizer: quoted cells can contain commas AND embedded newlines; `""` correctly decoded as a literal `"`.
+- Empty rows dropped, every cell trimmed.
+
+### Backend amount-parsing hardening (`sheet_import.py` `_parse_amount`)
+- Handles currency prefixes: `UGX 50,000`, `$10.50`, `USD 1,234`, `KES`, `TZS`, `RWF`, `GBP`, `EUR`, `HTG`, `THB`, `ZAR`, `NGN`, `GHS`, `£`, `€`, NBSP.
+- Both US (`1,234.56`) and European (`1.234,56`) thousand-separator conventions auto-detected by where the rightmost `.` vs `,` sits.
+- Parenthesised values treated as negative (`(5,000)` → -5000) — but then correctly rejected as expense amounts must be > 0.
+- Non-numeric → 0 (skipped with explicit error message).
+
+### Better error surfacing
+- Every skipped row now appends a precise `errors[]` entry: e.g. `"Row 3: amount missing or zero (raw: 'foo')"`. 
+- Frontend toast now reads from the backend `errors` array: if `created === 0 && skipped > 0`, shows the **first** error inline so the user immediately knows what to fix.
+- All errors logged to `console.warn` for power users.
+
+### Tests
+- All 59 existing pytest cases still PASS.
+- Curl-verified: rows with `UGX 50,000`, `$10.50`, `1,234.56`, `1.234,56` all import correctly; `(5,000)`, empty, and `foo` are properly skipped with clear error messages.
+- Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed** to apply the parser fixes.
+
 ## Recently Resolved — Iteration 135 (May 29, 2026)
 **P2 finish: router-level module gates + task snooze + access-expiring banner + Trello-import decorator fix.**
 

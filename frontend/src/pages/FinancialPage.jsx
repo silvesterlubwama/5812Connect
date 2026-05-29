@@ -295,37 +295,82 @@ export default function FinancialPage() {
     if (!sheetCsv.trim()) return;
     setSheetImporting(true);
     try {
-      // Parse CSV (simple parser — handles quoted cells)
-      const lines = sheetCsv.trim().split('\n').filter(l => l.trim());
-      if (lines.length < 2) { toast.error('Need at least a header + one data row'); setSheetImporting(false); return; }
-      const parseLine = (line) => {
-        const cells = []; let cur = ''; let inQ = false;
-        for (const ch of line) {
-          if (ch === '"') { inQ = !inQ; continue; }
-          if (ch === ',' && !inQ) { cells.push(cur); cur = ''; continue; }
-          cur += ch;
+      // Robust CSV parser — handles common Excel quirks the previous naive parser broke on:
+      //   • UTF-8 BOM (\ufeff) prepended by Excel "Save As CSV"
+      //   • CRLF / CR-only line endings (Windows / Mac Excel)
+      //   • Quoted cells containing commas OR embedded newlines
+      //   • Escaped double-quotes inside quoted cells ("" → ")
+      let raw = sheetCsv;
+      if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // strip BOM
+      raw = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+      // Auto-detect TAB-separated paste from Excel (copy-paste from a spreadsheet
+      // sends tab-delimited text, not comma-delimited). Count delimiters on the
+      // first non-empty line; if there are more tabs than commas, treat tabs as the
+      // separator. Strings inside quotes are NOT yet protected, so this is best-effort
+      // — quoted commas still work below regardless.
+      const firstLine = raw.split('\n').find(l => l.trim()) || '';
+      const sep = (firstLine.split('\t').length - 1) > (firstLine.split(',').length - 1) ? '\t' : ',';
+
+      // Tokenise the entire blob — state machine so a quoted cell can contain \n.
+      const rows = [];
+      let row = []; let cur = ''; let inQ = false;
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (inQ) {
+          if (ch === '"') {
+            if (raw[i + 1] === '"') { cur += '"'; i++; }   // escaped quote
+            else inQ = false;
+          } else {
+            cur += ch;
+          }
+        } else {
+          if (ch === '"') inQ = true;
+          else if (ch === sep) { row.push(cur); cur = ''; }
+          else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+          else cur += ch;
         }
-        cells.push(cur);
-        return cells.map(c => c.trim());
-      };
-      const header = parseLine(lines[0]);
-      const rows = lines.slice(1).map(line => {
-        const cells = parseLine(line);
+      }
+      // Flush trailing cell + row
+      if (cur.length || row.length) { row.push(cur); rows.push(row); }
+      // Drop fully-empty rows + trim every cell
+      const cleaned = rows
+        .map(r => r.map(c => (c || '').trim()))
+        .filter(r => r.some(c => c.length > 0));
+
+      if (cleaned.length < 2) {
+        toast.error('Need at least a header + one data row');
+        setSheetImporting(false);
+        return;
+      }
+      const header = cleaned[0];
+      const dataRows = cleaned.slice(1).map(cells => {
         const row = {};
-        header.forEach((h, i) => { row[h] = cells[i] || ''; });
+        header.forEach((h, i) => { row[h] = cells[i] !== undefined ? cells[i] : ''; });
         return row;
       });
       const res = await api.post('/financial/import-sheet', {
         type: sheetType,
-        rows,
+        rows: dataRows,
         default_status: sheetStatus,
         location_id: locationFilter || undefined,
       });
-      toast.success(`Imported ${res.data.created} ${sheetType}(s) · ${res.data.skipped} skipped`);
-      if (res.data.errors?.length) console.warn('Import errors:', res.data.errors);
+      const { created = 0, skipped = 0, errors = [] } = res.data || {};
+      if (created === 0 && skipped > 0) {
+        toast.error(
+          `0 rows imported — ${skipped} skipped. ${errors.length ? `First error: ${errors[0]}` : 'Most common cause: missing or zero amount.'}`,
+          { duration: 8000 },
+        );
+      } else if (errors.length) {
+        toast.warning(`Imported ${created} ${sheetType}(s) · ${skipped} skipped · ${errors.length} row error(s) — see console`, { duration: 6000 });
+      } else {
+        toast.success(`Imported ${created} ${sheetType}(s) · ${skipped} skipped`);
+      }
+      if (errors.length) console.warn('Sheet import errors:', errors);
       setShowImportExport(false); setSheetCsv(''); fetchAll();
-    } catch (err) { toast.error(err.response?.data?.detail || err.message || 'Sheet import failed'); }
-    finally { setSheetImporting(false); }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || err.message || 'Sheet import failed');
+    } finally { setSheetImporting(false); }
   };
 
   return (
