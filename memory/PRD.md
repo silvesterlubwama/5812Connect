@@ -6,6 +6,37 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 139 (May 30, 2026)
+**Security Checkpoint Phase 2 — OCR + exit-restricted flag + WebSocket push. Pytest 96/96.**
+
+### (a) Gemini-powered ID OCR
+- New `POST /api/security/checkpoint/ocr-id` endpoint (security-mode session token required). Accepts JPEG/PNG/WEBP up to 8MB, falls back to magic-byte sniffing when MIME is `application/octet-stream` (common from camera blobs).
+- Uses `emergentintegrations.llm.chat` + **gemini-3-flash-preview** vision model with strict-JSON system prompt; tolerates ```json fences and extracts the first `{ ... }` block defensively.
+- Returns `{name, date_of_birth: YYYY-MM-DD, id_number, raw_text, confidence: high|medium|low}`. Empty fields when unreadable.
+- Curl-verified with a PIL-rendered Uganda national ID: extracted "JOHN ALI MUKASA" / "1985-03-15" / "CM85031512345" / `confidence='high'`.
+- Frontend `OneTimeGrantDialog` now runs OCR on both camera-snap AND file-upload paths. UI shows `cp-ocr-loading` then `cp-ocr-result` with confidence-coloured badge + extracted fields. **Auto-fill is soft** — only writes to empty form fields; operator's typed name always wins.
+- Graceful **503** when `EMERGENT_LLM_KEY` is missing — operator can still grant manually.
+
+### (b) `is_exit_restricted` product flag
+- Added to `ProductCreate` / `ProductUpdate` models. Persists in `db.products`.
+- Frontend product edit dialog: new amber-highlighted checkbox row (`product-exit-restricted-checkbox`) with explainer copy.
+- `POST /api/sales` enriches every cart item with the flag from its product so historical sales retain the policy even if the product flag is later toggled.
+- `POST /api/security/checkpoint/scan/receipt` now denies departure (`decision='denied'`) when any sale item carries the flag — end-to-end verified.
+
+### (c) WebSocket real-time push for paired devices
+- New `@router.websocket("/checkpoint/ws")` accepts `?session=<token>`, validates against `security_checkpoint_sessions`, joins a per-checkpoint in-memory room (`_checkpoint_rooms`).
+- `_broadcast_to_checkpoint()` hooked into `scan`, `grant-one-time`, `scan/receipt`, and `finish` — every state change pushes `{type:'event', event:{...}}` or `{type:'clear'}` to both devices instantly.
+- Frontend GuestView + SecurityView open a `wss://…/api/security/checkpoint/ws?session=…` socket alongside the existing 1.5s poll. **Polling kept as fallback** — if WS closes/errors, the page stays current silently.
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration138_ocr_exit_ws.py` — 14 cases: OCR (auth + bad-input + happy path with `pytest.skip` if LLM key missing) + product flag persistence + sale enrichment + receipt-scan denial + WS joined/event/clear lifecycle + invalid-token rejection.
+- All 82 prior pytest cases still PASS (16 smoke + 15 iter115 + 16 iter116 + 12 iter90 + 23 iter91).
+- Total: **96/96 green**. Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed**. After redeploying:
+- OCR will work automatically — `EMERGENT_LLM_KEY` is already in `backend/.env`.
+- To use the exit-restriction flow, edit any product → tick **"Flag as exit-restricted"**, then run the security checkpoint receipt exit-scan.
+
 ## Recently Resolved — Iteration 138 (May 30, 2026)
 **Security Checkpoint Kiosk MVP — paired dual-device gate access for restricted locations. Pytest 82/82.**
 
