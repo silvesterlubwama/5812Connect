@@ -6,6 +6,44 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 140 (May 30, 2026)
+**Phase 3 security-checkpoint follow-ups: staff OCR + supervisor override + dashboard widget + multi-language OCR. Pytest 110/110.**
+
+### (a) Staff-auth OCR endpoint (`/api/ocr/id`)
+- Refactored the Gemini-vision pipeline into `_ocr_id_image(image, language, log_id)` so both the security checkpoint AND any authenticated staff workflow can call it.
+- New `POST /api/ocr/id` (Bearer auth) accepts multipart `{image, language?}` and returns the same envelope `{name, date_of_birth, id_number, raw_text, confidence, language_hint}`.
+- Frontend `MemberForm` (used by `/people` Members tab → edit) gains a **"Scan ID"** button (`member-ocr-btn`). Uploading an ID photo pre-fills any empty name / date_of_birth / national_id fields — never overwrites typed values. Toast confirms with confidence + field count.
+
+### (b) Multi-language OCR hint
+- Optional `language` form field (`en|fr|es|pt|sw|lg|ar|ru|uk|zh|ja|ko|th|hi|am`) injects a script hint into Gemini's system prompt: e.g. `"The document is most likely in Arabic script (right-to-left)."` Improves accuracy on non-Latin IDs and asks the model to transliterate when a Latin variant is printed on the document.
+- The response echoes the resolved `language_hint` so the UI can persist the operator's choice.
+
+### (c) Supervisor override for denied exits
+- New `POST /api/security/checkpoint/receipt-override` (security-mode session). Body `{event_id, supervisor_pin, reason?}`.
+- Resolves the PIN against `users` where role ∈ {admin, system_admin, Executive Director, Adviser, Director, Manager} and status=active. Bad/non-supervisor PIN → 401.
+- Flips the event decision `denied → approved`, appends a `supervisor_override` audit (supervisor_id/name/role + reason + original_decision/reason + timestamp), extends `clear_at` so the guest display flips to CLEARED for 15 s, broadcasts via the WebSocket.
+- Frontend `ReceiptScanDialog` now shows a **"Supervisor override"** button whenever a scan returns denied. The reveal form takes a masked PIN + reason; on success the banner flips to CLEARED with a green supervisor-override note.
+
+### (d) Live Checkpoint Widget on Dashboard
+- New `GET /api/security/dashboard/checkpoints` (Director+) returns active checkpoints with `paired_devices`, `recent_events[≤5]`, `today_approved`, `today_denied`, `holding_ids`. **Pairing PIN is stripped from the response** so dashboard viewers can't memorise it.
+- Frontend `LiveCheckpointWidget` on the Dashboard auto-polls every 4 s. Rendered only for Director+ (admin / system_admin / Executive Director / Adviser / Director). Hides itself when there are 0 active checkpoints.
+- Each row shows location, paired-device count, today's totals, IDs being held, and the most-recent scan tile (color-coded by decision).
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration139_ocr_override_dashboard.py` — 14 cases: TestStaffOcrId × 6 (auth + bad input + happy + language echo), TestReceiptOverride × 6 (auth + bad PIN + happy + audit shape + re-override 400 + unknown event 404), TestDashboardCheckpoints × 2 (auth + shape).
+- All 96 prior pytest cases still PASS (16 smoke + 15 iter115 + 16 iter116 + 12 iter90 + 23 iter91 + 14 iter138).
+- Total: **110/110 green**. Ruff + ESLint clean. No Mongo `_id` leakage.
+
+### Testing-agent observations (informational, not blocking)
+- `DashboardPage.jsx` role gate is a hard-coded array — fine for now but ripe for a `hasDirectorAccess()` helper if RBAC roles ever shift.
+- `LiveCheckpointWidget` could pause polling when `document.visibilityState !== 'visible'` to save bandwidth on background tabs.
+- `routers/security_checkpoint.py` is now ~896 lines — a future refactor candidate (OCR helpers + override + dashboard could split into sub-routers).
+
+⚠️ **Production redeploy needed**. After redeploying:
+1. Staff can scan IDs on member profiles via `/people` → edit → **Scan ID**.
+2. Security can override denied exit-scans by entering any Manager+ supervisor PIN.
+3. Directors see live checkpoint stats on the Dashboard automatically.
+
 ## Recently Resolved — Iteration 139 (May 30, 2026)
 **Security Checkpoint Phase 2 — OCR + exit-restricted flag + WebSocket push. Pytest 96/96.**
 
