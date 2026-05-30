@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2 } from 'lucide-react';
+import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2, ShieldCheck, ShieldX } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi, locationsApi } from '../services/api';
+import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi, locationsApi, securityCheckpointApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -349,6 +349,11 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Live Checkpoint Map — Director+ only; auto-polls every 4s */}
+          {['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role) && (
+            <LiveCheckpointWidget />
+          )}
         </div>
 
         {/* Quick Actions + Group Chart */}
@@ -390,5 +395,89 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+
+// ============== LIVE CHECKPOINT WIDGET ==============
+// Polls /api/security/dashboard/checkpoints every 4 seconds.
+// Renders one row per active checkpoint with paired-device count, today's
+// approved/denied totals, # IDs being held, and the latest scan outcome.
+function LiveCheckpointWidget() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await securityCheckpointApi.dashboardSnapshot();
+        if (!alive) return;
+        setRows(r.data || []);
+      } catch { /* tolerate transient errors */ }
+      finally { if (alive) setLoading(false); }
+    };
+    tick();
+    const iv = setInterval(tick, 4000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  if (loading) return null;
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="shadow-soft rounded-xl" data-testid="dashboard-checkpoint-widget">
+      <CardHeader className="flex flex-row items-center justify-between pb-3 pt-4 px-5">
+        <CardTitle className="text-base font-semibold flex items-center gap-2">
+          <ShieldCheck size={14} className="text-emerald-600" /> Live Checkpoints
+          <span className="text-[10px] text-muted-foreground font-normal">· auto-refresh 4s</span>
+        </CardTitle>
+        <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => navigate('/admin')}>
+          Manage <ArrowRight size={12} />
+        </Button>
+      </CardHeader>
+      <CardContent className="px-5 pb-5 space-y-2">
+        {rows.map(cp => {
+          const last = cp.recent_events?.[0];
+          const lastApproved = last?.decision === 'approved';
+          const lastDenied = last?.decision === 'denied';
+          return (
+            <div key={cp.id} className="p-3 rounded-lg border bg-card hover:bg-accent/30 transition-colors" data-testid={`checkpoint-row-${cp.id}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{cp.name}</p>
+                  <p className="text-[10px] text-muted-foreground">{cp.location_name}</p>
+                </div>
+                <Badge variant="outline" className={`text-[10px] ${cp.paired_devices > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500'}`}>
+                  {cp.paired_devices} paired
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2 mt-2 text-[10px]">
+                <span className="flex items-center gap-1 text-emerald-700">
+                  <ShieldCheck size={11} /> {cp.today_approved} today
+                </span>
+                <span className="flex items-center gap-1 text-rose-700">
+                  <ShieldX size={11} /> {cp.today_denied}
+                </span>
+                {cp.holding_ids > 0 && (
+                  <span className="flex items-center gap-1 text-amber-700 ml-auto">
+                    Holding {cp.holding_ids} ID{cp.holding_ids === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+              {last && (
+                <div className={`mt-2 p-1.5 rounded text-[11px] ${lastApproved ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300' : lastDenied ? 'bg-rose-50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-300' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
+                  <span className="font-semibold uppercase">{last.decision}</span>
+                  {' · '}
+                  <span>{last.subject?.name || last.payload || 'Unknown'}</span>
+                  <span className="text-muted-foreground ml-1">— {last.created_at?.slice(11, 16)}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }

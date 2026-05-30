@@ -746,8 +746,16 @@ function ReceiptScanDialog({ open, onClose }) {
   const [receipt, setReceipt] = useState('');
   const [result, setResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showOverride, setShowOverride] = useState(false);
+  const [overrideForm, setOverrideForm] = useState({ supervisor_pin: '', reason: '' });
+  const [overriding, setOverriding] = useState(false);
 
-  useEffect(() => { if (!open) { setReceipt(''); setResult(null); } }, [open]);
+  useEffect(() => {
+    if (!open) {
+      setReceipt(''); setResult(null);
+      setShowOverride(false); setOverrideForm({ supervisor_pin: '', reason: '' });
+    }
+  }, [open]);
 
   const submit = async (e) => {
     e?.preventDefault?.();
@@ -759,6 +767,25 @@ function ReceiptScanDialog({ open, onClose }) {
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Receipt not found');
     } finally { setSubmitting(false); }
+  };
+
+  const submitOverride = async (e) => {
+    e?.preventDefault?.();
+    if (!result?.id || !overrideForm.supervisor_pin) return;
+    setOverriding(true);
+    try {
+      const r = await securityCheckpointApi.receiptOverride({
+        event_id: result.id,
+        supervisor_pin: overrideForm.supervisor_pin,
+        reason: overrideForm.reason,
+      });
+      setResult(r.data);
+      setShowOverride(false);
+      setOverrideForm({ supervisor_pin: '', reason: '' });
+      toast.success('Override applied — exit cleared');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Override failed');
+    } finally { setOverriding(false); }
   };
 
   const flagged = (result?.subject?.items || []).some(i => i.is_exit_restricted);
@@ -782,8 +809,8 @@ function ReceiptScanDialog({ open, onClose }) {
         {result && (
           <div className="mt-3 p-3 rounded border" data-testid="cp-receipt-result">
             <div className="flex items-center gap-2 mb-2">
-              <Badge className={flagged ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}>
-                {flagged ? 'BLOCKED — restricted item' : 'CLEARED'}
+              <Badge className={result.decision === 'denied' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}>
+                {result.decision === 'denied' ? 'BLOCKED — restricted item' : 'CLEARED'}
               </Badge>
               <span className="text-xs text-slate-500">{result.subject?.customer_name || 'Walk-in'}</span>
             </div>
@@ -791,12 +818,61 @@ function ReceiptScanDialog({ open, onClose }) {
             <div className="space-y-1 max-h-48 overflow-y-auto">
               {(result.subject?.items || []).map((it, i) => (
                 <div key={i} className={`text-xs flex justify-between p-1.5 rounded ${it.is_exit_restricted ? 'bg-rose-50 dark:bg-rose-950/20' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
-                  <span>{it.qty}× {it.name}</span>
+                  <span>{it.qty}× {it.name}{it.is_exit_restricted && <span className="ml-1 text-[9px] text-rose-700 font-bold">RESTRICTED</span>}</span>
                   <span>{it.unit_price?.toLocaleString()}</span>
                 </div>
               ))}
             </div>
             <p className="text-xs font-bold text-right mt-2">Total: {result.subject?.currency} {result.subject?.total?.toLocaleString()}</p>
+
+            {/* Supervisor override appears only when this scan is currently denied */}
+            {flagged && result.decision === 'denied' && (
+              <div className="mt-3 pt-3 border-t border-rose-200 dark:border-rose-900/40">
+                {!showOverride ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                    onClick={() => setShowOverride(true)}
+                    data-testid="cp-receipt-override-open"
+                  >
+                    Supervisor override
+                  </Button>
+                ) : (
+                  <form onSubmit={submitOverride} className="space-y-2" data-testid="cp-receipt-override-form">
+                    <p className="text-[11px] text-muted-foreground">A Manager+ user must enter their PIN to clear this exit.</p>
+                    <Input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      autoFocus
+                      placeholder="Supervisor PIN"
+                      value={overrideForm.supervisor_pin}
+                      onChange={e => setOverrideForm({ ...overrideForm, supervisor_pin: e.target.value.replace(/\D/g, '') })}
+                      data-testid="cp-receipt-override-pin"
+                    />
+                    <Input
+                      placeholder="Reason (logged)"
+                      value={overrideForm.reason}
+                      onChange={e => setOverrideForm({ ...overrideForm, reason: e.target.value })}
+                      data-testid="cp-receipt-override-reason"
+                    />
+                    <div className="flex gap-2">
+                      <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => setShowOverride(false)}>Cancel</Button>
+                      <Button type="submit" size="sm" disabled={overriding || overrideForm.supervisor_pin.length < 4} className="flex-1" data-testid="cp-receipt-override-submit">
+                        {overriding ? 'Verifying…' : 'Approve override'}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+            {result.supervisor_override && (
+              <div className="mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-900/40 text-[11px] text-emerald-800 dark:text-emerald-300">
+                ✓ Cleared by {result.supervisor_override.supervisor_name} ({result.supervisor_override.supervisor_role})
+                {result.supervisor_override.reason && <span className="block italic mt-0.5">"{result.supervisor_override.reason}"</span>}
+              </div>
+            )}
           </div>
         )}
       </DialogContent>

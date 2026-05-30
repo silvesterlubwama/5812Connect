@@ -26,6 +26,10 @@ import hashlib
 
 router = APIRouter(prefix="/api/security", tags=["security_checkpoint"])
 
+# A second router exposing the same shared OCR helper at `/api/ocr/id` for any
+# authenticated staff workflow (member profile pre-fill, document upload, etc.).
+ocr_router = APIRouter(prefix="/api/ocr", tags=["ocr"])
+
 CHECKPOINT_SESSION_TTL_HOURS = 12
 SCAN_RESET_SECONDS = 15
 ROLES_ALLOWED_TO_SCAN_FROM_SECURITY = {
@@ -651,17 +655,31 @@ async def list_one_time_entries_admin(checkpoint_id: str, current_user: dict = D
 # OCR — best-effort ID extraction via Gemini vision
 # ============================================================
 
-@router.post("/checkpoint/ocr-id")
-async def ocr_id_photo(
-    image: UploadFile = File(...),
-    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
-):
-    """Extract Name / Date of Birth / ID Number from a captured ID photo.
-    Returns: { name, date_of_birth, id_number, raw_text, confidence: 'high|medium|low' }.
-    Security-device only. Best-effort — operator should always confirm before saving."""
-    sess = await _resolve_session(session_token)
-    if sess.get("mode") != "security":
-        raise HTTPException(status_code=403, detail="OCR is security-device only")
+# Optional language hint → injected into the OCR system prompt so the model knows
+# what script to expect (Arabic, Cyrillic, CJK, etc.). Defaults to English/Latin.
+_OCR_LANG_HINTS = {
+    "en": "English / Latin script",
+    "fr": "French / Latin script",
+    "es": "Spanish / Latin script",
+    "pt": "Portuguese / Latin script",
+    "sw": "Swahili / Latin script",
+    "lg": "Luganda / Latin script",
+    "ar": "Arabic script (right-to-left)",
+    "ru": "Cyrillic / Russian script",
+    "uk": "Cyrillic / Ukrainian script",
+    "zh": "Simplified Chinese (Hanzi)",
+    "ja": "Japanese (Kanji + Kana)",
+    "ko": "Korean (Hangul)",
+    "th": "Thai script",
+    "hi": "Devanagari / Hindi script",
+    "am": "Amharic / Ge'ez script",
+}
+
+
+async def _ocr_id_image(image: UploadFile, language: Optional[str], session_id_for_log: str) -> dict:
+    """Shared OCR pipeline. Used by both /security/checkpoint/ocr-id (device session)
+    and the staff-auth wrapper at /ocr/id (admin auth).
+    Returns the same {name, date_of_birth, id_number, raw_text, confidence} shape."""
     data = await image.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty image")
@@ -670,7 +688,6 @@ async def ocr_id_photo(
     # Validate MIME (Gemini accepts jpeg/png/webp)
     mime = (image.content_type or "").lower()
     if mime not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
-        # Some browsers send "application/octet-stream" for camera blobs — try to detect
         if data[:3] == b"\xff\xd8\xff":
             mime = "image/jpeg"
         elif data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -679,7 +696,6 @@ async def ocr_id_photo(
             mime = "image/webp"
         else:
             raise HTTPException(status_code=400, detail="Image must be JPEG, PNG, or WEBP")
-    # Persist a tmp file for Gemini
     import os as _os
     import json as _json
     import tempfile
@@ -694,11 +710,15 @@ async def ocr_id_photo(
         api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
         if not api_key:
             raise HTTPException(status_code=503, detail="OCR not configured (no LLM key)")
+        lang_hint = _OCR_LANG_HINTS.get((language or "en").strip().lower(), "")
         chat = LlmChat(
             api_key=api_key,
-            session_id=f"ocr_{sess['id']}_{uuid.uuid4().hex[:6]}",
+            session_id=f"ocr_{session_id_for_log}_{uuid.uuid4().hex[:6]}",
             system_message=(
                 "You are an OCR assistant for government-issued ID cards (passports, national IDs, drivers licenses). "
+                f"{f'The document is most likely in {lang_hint}. ' if lang_hint else ''}"
+                "Transliterate non-Latin names into Latin script if the latin transliteration is printed on the document, "
+                "otherwise return the name in its original script.\n"
                 "Extract ONLY the following fields and return STRICT JSON — no prose, no markdown:\n"
                 "{\"name\": str, \"date_of_birth\": \"YYYY-MM-DD\" or empty, \"id_number\": str, \"raw_text\": str (everything legible), \"confidence\": \"high\"|\"medium\"|\"low\"}\n"
                 "If a field is unreadable or absent, return empty string for that field."
@@ -712,13 +732,11 @@ async def ocr_id_photo(
             file_contents=[FileContentWithMimeType(file_path=tmp_path, mime_type=mime)],
         )
         raw = await chat.send_message(msg)
-        # Tolerate models that wrap JSON in ```json fences
         s = (raw or "").strip()
         if s.startswith("```"):
             s = s.strip("`")
             if s.lower().startswith("json"):
                 s = s[4:].strip()
-        # Extract first { ... } block if model added stray prose
         first = s.find("{")
         last = s.rfind("}")
         if first >= 0 and last > first:
@@ -727,13 +745,13 @@ async def ocr_id_photo(
             parsed = _json.loads(s)
         except Exception:
             parsed = {"name": "", "date_of_birth": "", "id_number": "", "raw_text": (raw or "")[:500], "confidence": "low"}
-        # Defensive shape clamp
         out = {
             "name": str(parsed.get("name") or "").strip()[:120],
             "date_of_birth": str(parsed.get("date_of_birth") or "").strip()[:10],
             "id_number": str(parsed.get("id_number") or "").strip()[:60],
             "raw_text": str(parsed.get("raw_text") or "")[:2000],
             "confidence": str(parsed.get("confidence") or "low").lower() if parsed.get("confidence") else "low",
+            "language_hint": (language or "en").lower(),
         }
         if out["confidence"] not in {"high", "medium", "low"}:
             out["confidence"] = "low"
@@ -741,3 +759,137 @@ async def ocr_id_photo(
     finally:
         try: _os.remove(tmp_path)
         except Exception: pass
+
+
+@router.post("/checkpoint/ocr-id")
+async def ocr_id_photo(
+    image: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Extract Name / Date of Birth / ID Number from a captured ID photo.
+    Returns: { name, date_of_birth, id_number, raw_text, confidence, language_hint }.
+    Security-device only. Best-effort — operator should always confirm before saving.
+    Optional `language` hint (en|fr|es|pt|sw|lg|ar|ru|zh|ja|ko|th|hi|am) helps Gemini
+    pick the right script — defaults to English/Latin."""
+    sess = await _resolve_session(session_token)
+    if sess.get("mode") != "security":
+        raise HTTPException(status_code=403, detail="OCR is security-device only")
+    return await _ocr_id_image(image, language, sess["id"])
+
+
+# ============================================================
+# STAFF-AUTH WRAPPER — same OCR pipeline for any authenticated workflow
+# ============================================================
+
+@ocr_router.post("/id")
+async def ocr_id_staff(
+    image: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Staff-auth wrapper around the same OCR pipeline used by the security
+    checkpoint. Used by `/people` profile edit to pre-fill name + DOB + national_id
+    when an admin uploads a member's ID photo. Returns the same shape."""
+    return await _ocr_id_image(image, language, f"staff_{current_user['id']}")
+
+
+# ============================================================
+# RECEIPT-DENIAL SUPERVISOR OVERRIDE
+# ============================================================
+
+@router.post("/checkpoint/receipt-override")
+async def receipt_override(
+    data: dict,
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Supervisor override for a denied exit-scan. Body: { event_id, supervisor_pin, reason? }.
+    The supervisor PIN must match an active user with role in
+    {admin, system_admin, Executive Director, Adviser, Director, Manager} AND
+    the user must have a non-empty `pin` set. Flips the event decision from
+    'denied' → 'approved' and writes a supervisor_override audit trail on the event."""
+    sess = await _resolve_session(session_token)
+    if sess.get("mode") != "security":
+        raise HTTPException(status_code=403, detail="Only the security console can override")
+    event_id = (data.get("event_id") or "").strip()
+    supervisor_pin = (data.get("supervisor_pin") or "").strip()
+    reason = (data.get("reason") or "").strip()
+    if not event_id or not supervisor_pin:
+        raise HTTPException(status_code=400, detail="event_id and supervisor_pin are required")
+    if len(supervisor_pin) < 4:
+        raise HTTPException(status_code=400, detail="Supervisor PIN must be at least 4 digits")
+    event = await db.security_checkpoint_events.find_one(
+        {"id": event_id, "checkpoint_id": sess["checkpoint_id"]},
+        {"_id": 0},
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if event.get("kind") not in {"exit_scan", "entry_scan"}:
+        raise HTTPException(status_code=400, detail="Only exit/entry scans can be overridden")
+    if event.get("decision") != "denied":
+        raise HTTPException(status_code=400, detail="Event is not in a denied state")
+    SUPERVISOR_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager"}
+    supervisor = await db.users.find_one(
+        {"pin": supervisor_pin, "status": "active", "role": {"$in": list(SUPERVISOR_ROLES)}},
+        {"_id": 0, "id": 1, "name": 1, "role": 1},
+    )
+    if not supervisor:
+        raise HTTPException(status_code=401, detail="Invalid supervisor PIN — must belong to a Manager+ active user")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new_clear = (datetime.now(timezone.utc) + timedelta(seconds=SCAN_RESET_SECONDS)).isoformat()
+    update = {
+        "decision": "approved",
+        "reason": f"Supervisor override by {supervisor['name']} ({supervisor['role']})" + (f" — {reason}" if reason else ""),
+        "supervisor_override": {
+            "supervisor_id": supervisor["id"],
+            "supervisor_name": supervisor["name"],
+            "supervisor_role": supervisor["role"],
+            "reason": reason,
+            "at": now_iso,
+            "original_decision": "denied",
+            "original_reason": event.get("reason"),
+        },
+        "clear_at": new_clear,
+    }
+    await db.security_checkpoint_events.update_one({"id": event_id}, {"$set": update})
+    fresh = await db.security_checkpoint_events.find_one({"id": event_id}, {"_id": 0})
+    await _broadcast_to_checkpoint(sess["checkpoint_id"], {"type": "event", "event": fresh})
+    await _audit(
+        supervisor["id"], "override", "checkpoint_event", event_id,
+        {"checkpoint_id": sess["checkpoint_id"], "reason": reason or "exit denied — supervisor cleared"},
+    )
+    return fresh
+
+
+# ============================================================
+# DASHBOARD WIDGET — live checkpoint situational awareness
+# ============================================================
+
+@router.get("/dashboard/checkpoints")
+async def dashboard_checkpoints(current_user: dict = Depends(require_director)):
+    """Returns the active checkpoints in the org with last-5 events + paired-device counts.
+    Used by the Dashboard 'Live Checkpoint Map' widget."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cps = await db.security_checkpoints.find({"active": True}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # Strip the cleartext PIN so dashboard viewers can't memorise it
+    for c in cps:
+        c.pop("pairing_pin", None)
+        c["paired_devices"] = await db.security_checkpoint_sessions.count_documents(
+            {"checkpoint_id": c["id"], "expires_at": {"$gt": now_iso}, "revoked": {"$ne": True}}
+        )
+        c["recent_events"] = await db.security_checkpoint_events.find(
+            {"checkpoint_id": c["id"]}, {"_id": 0},
+        ).sort("created_at", -1).limit(5).to_list(5)
+        # Today's totals for the at-a-glance counters
+        today_iso = now_iso[:10]
+        c["today_approved"] = await db.security_checkpoint_events.count_documents(
+            {"checkpoint_id": c["id"], "decision": "approved", "created_at": {"$gte": today_iso}},
+        )
+        c["today_denied"] = await db.security_checkpoint_events.count_documents(
+            {"checkpoint_id": c["id"], "decision": "denied", "created_at": {"$gte": today_iso}},
+        )
+        c["holding_ids"] = await db.security_one_time_entries.count_documents(
+            {"checkpoint_id": c["id"], "id_returned": False},
+        )
+    return cps
+

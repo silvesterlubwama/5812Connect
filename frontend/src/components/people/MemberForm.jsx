@@ -1,10 +1,14 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Textarea } from '../ui/textarea';
 import { Switch } from '../ui/switch';
+import { Button } from '../ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { ScanLine } from 'lucide-react';
 import { MOCK_GROUPS, MOCK_ROLES } from '../../mock';
+import { ocrApi } from '../../services/api';
+import { toast } from 'sonner';
 
 // Shared form for members/staff — extracted from UnifiedPeoplePage.jsx
 export default function MemberForm({ data, onChange, locations, showDepartment }) {
@@ -19,8 +23,62 @@ export default function MemberForm({ data, onChange, locations, showDepartment }
 
   const isNonDeptRole = ['Parent', 'Customer', 'Guest', 'Child'].includes(data.role);
 
+  // ----- OCR auto-fill from ID photo (reuses /api/ocr/id) -----
+  const idFileRef = useRef(null);
+  const [ocring, setOcring] = useState(false);
+  const runOcrFromFile = async (file) => {
+    if (!file) return;
+    setOcring(true);
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const r = await ocrApi.id(fd);
+      const d = r.data || {};
+      const patch = {};
+      if (d.name && !data.name?.trim()) patch.name = d.name;
+      if (d.date_of_birth && !data.date_of_birth) patch.date_of_birth = d.date_of_birth;
+      if (d.id_number && !data.national_id?.trim()) patch.national_id = d.id_number;
+      if (Object.keys(patch).length) {
+        onChange({ ...data, ...patch });
+        toast.success(`OCR pre-filled ${Object.keys(patch).length} field(s) (${d.confidence} confidence)`);
+      } else {
+        toast.info('OCR ran but no empty fields to fill — typed values were kept');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'OCR failed');
+    } finally {
+      setOcring(false);
+      if (idFileRef.current) idFileRef.current.value = '';
+    }
+  };
+
   return (
     <div className="space-y-3">
+      {/* OCR pre-fill button */}
+      <div className="rounded-md border border-dashed bg-muted/30 p-2 flex items-center gap-2" data-testid="member-ocr-row">
+        <ScanLine size={14} className="text-primary" />
+        <span className="text-xs flex-1">Pre-fill name + DOB + ID number from an ID photo</span>
+        <input
+          ref={idFileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={e => runOcrFromFile(e.target.files?.[0])}
+          data-testid="member-ocr-file-input"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 text-[11px] gap-1"
+          disabled={ocring}
+          onClick={() => idFileRef.current?.click()}
+          data-testid="member-ocr-btn"
+        >
+          <ScanLine size={12} /> {ocring ? 'Reading…' : 'Scan ID'}
+        </Button>
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5"><Label className="text-xs">Name *</Label><Input value={data.name} onChange={e => onChange({ ...data, name: e.target.value })} required data-testid="member-name-input" /></div>
         <div className="space-y-1.5"><Label className="text-xs">Email</Label><Input type="email" value={data.email} onChange={e => onChange({ ...data, email: e.target.value })} data-testid="member-email-input" /></div>

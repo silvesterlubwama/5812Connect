@@ -183,8 +183,15 @@ export const securityCheckpointApi = {
   ocrId: (formData) => api.post('/security/checkpoint/ocr-id', formData, {
     headers: { ..._sessHeaders(), 'Content-Type': 'multipart/form-data' },
   }),
+  receiptOverride: (data) => api.post('/security/checkpoint/receipt-override', data, { headers: _sessHeaders() }),
+  dashboardSnapshot: () => api.get('/security/dashboard/checkpoints'),
   openOneTime: () => api.get('/security/checkpoint/one-time/open', { headers: _sessHeaders() }),
   returnId: (grantId) => api.post(`/security/checkpoint/one-time/${grantId}/return-id`, null, { headers: _sessHeaders() }),
+};
+
+// ---- OCR (staff auth — same Gemini pipeline used by the security checkpoint) ----
+export const ocrApi = {
+  id: (formData) => api.post('/ocr/id', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
 };
 
 // ---- KIOSK ----

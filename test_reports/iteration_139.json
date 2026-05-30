@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 139 Phase 3 verification (Security Checkpoint Kiosk follow-ups): 14 new backend tests + 96 regression tests all pass (110/110 green). UI smoke confirms LiveCheckpointWidget on dashboard, Scan ID row inside MemberForm, and source-level presence of receipt-override testids on the Security Checkpoint console.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "People → Add Person dialog (MemberForm)", "issues": ["Date of Birth field uses native browser date picker (mm/dd/yyyy) instead of shadcn Calendar component. Pre-existing; not introduced by iter139."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration139_ocr_override_dashboard.py",
+    "/app/test_reports/pytest/iter139_results.xml",
+    "/app/test_reports/pytest/iter139_regression.xml"
+  ],
+  "tests_executed": {
+    "new_iter139_tests": "14/14 passed (TestStaffOcrId × 6, TestReceiptOverride × 6, TestDashboardCheckpoints × 2)",
+    "regression_suite": "96/96 passed across test_smoke_recent_modules.py + test_iteration115_pass2_volunteers_unify.py + test_iteration116_activity_pdf_export.py + test_iteration90_module_access.py + test_iteration91_security_checkpoint.py + test_iteration138_ocr_exit_ws.py",
+    "ui_playwright": "Dashboard widget renders (1 row visible with auto-refresh 4s); Add Person dialog shows Scan ID button + hidden file-input with correct testids; /security-checkpoint pairing screen loads cleanly"
+  },
+  "endpoints_verified": [
+    "POST /api/ocr/id — 401 unauth, 400 bad MIME / empty / oversize, 200 with shape {name,date_of_birth,id_number,raw_text,confidence,language_hint}, language echo 'sw' & default 'en'",
+    "POST /api/security/checkpoint/receipt-override — 401 without security session, 400 missing fields, 404 unknown event_id, 401 bad PIN, 200 happy with decision='approved' + supervisor_override audit (supervisor_id/name/role/reason/at/original_decision), 400 re-override (not denied), no _id leak",
+    "GET /api/security/dashboard/checkpoints — 401 unauth, 200 admin returns list with paired_devices/recent_events≤5/today_approved/today_denied/holding_ids, pairing_pin stripped, no _id leak"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DashboardPage.jsx role-gate uses a hard-coded array ['admin','system_admin','Executive Director','Adviser','Director'] — duplicated logic from backend's role policy. Consider centralising into a hasDirectorAccess() helper to avoid drift if RBAC roles change.",
+    "LiveCheckpointWidget polls every 4s with setInterval; no exponential backoff on transient errors. With many open tabs this is fine, but consider visibility-API gating (only poll when document.visibilityState==='visible') to save backend load.",
+    "MemberForm OCR pre-fill only fills empty fields (good), but there's no explicit UI hint to the user that already-typed values were preserved beyond the toast — minor UX nit, not a bug.",
+    "security_checkpoint.py is 896 lines — getting close to the 700-line guideline. Consider splitting OCR helpers, override, and dashboard endpoints into separate sub-routers next iteration.",
+    "Receipt override returns the full updated event JSON — confirmed no Mongo _id leakage. Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration139_ocr_override_dashboard.py (new file, 14 tests)"
+  ],
+  "success_rate": {"backend": "100% (14/14 new + 96/96 regression)", "frontend": "100% on the smoke-checks performed (dashboard widget + MemberForm scan-id row + checkpoint page load)"},
+  "test_credentials": "Admin admin@5812uganda.org / Admin@5812 (pin '9999' confirmed working for supervisor override happy path)",
+  "seed_data_creation": "Each test class creates TEST_-prefixed checkpoints/products/sales and cleans them up via fixture teardown. No residual seed data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter139 brings the total backend regression to 110 tests (96 baseline + 14 new). The 14 new tests live in /app/backend/tests/test_iteration139_ocr_override_dashboard.py and rely on (a) PIL-rendered JPEG, (b) admin pin='9999', (c) a transient checkpoint they create+pair+destroy. They run in ~7s. The frontend LiveCheckpointWidget hides when zero checkpoints exist (correct behaviour) — when testing UI, create a checkpoint first or it will appear missing. Receipt-override testids only render after a denied receipt scan; verified at source level (lines 837/852/858/862 of SecurityCheckpointPage.jsx). DashboardPage.jsx widget is gated to admin/system_admin/Executive Director/Adviser/Director via hard-coded array — flag if RBAC list changes."
+}
