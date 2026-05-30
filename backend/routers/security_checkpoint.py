@@ -16,7 +16,7 @@ Auth model:
   • Device-pair endpoints (/pair, /scan, /state, /grant-one-time, /finish) require
     the device's session token returned by /pair.
 """
-from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Request
 from deps import db, get_current_user, require_admin, require_director, _audit, logger, has_module_access
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -112,6 +112,7 @@ async def update_checkpoint(checkpoint_id: str, data: dict, current_user: dict =
     res = await db.security_checkpoints.update_one({"id": checkpoint_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
+    await _audit(current_user["id"], "update", "security_checkpoint", checkpoint_id, {"changes": list(update.keys())})
     return await db.security_checkpoints.find_one({"id": checkpoint_id}, {"_id": 0})
 
 
@@ -138,6 +139,7 @@ async def rotate_pin(checkpoint_id: str, current_user: dict = Depends(require_di
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
     await db.security_checkpoint_sessions.update_many({"checkpoint_id": checkpoint_id}, {"$set": {"revoked": True}})
+    await _audit(current_user["id"], "rotate_pin", "security_checkpoint", checkpoint_id)
     return {"checkpoint_id": checkpoint_id, "pairing_pin": pin}
 
 
@@ -146,22 +148,45 @@ async def rotate_pin(checkpoint_id: str, current_user: dict = Depends(require_di
 # ============================================================
 
 @router.post("/checkpoint/pair")
-async def pair_device(data: dict):
+async def pair_device(data: dict, request: Request):
     """Body: { pin, mode: 'guest'|'security', device_label? }
     Returns: { session_token, checkpoint, expires_at }
     Anyone with the PIN can pair — that's by design (private security contractor).
+
+    Brute-force mitigation: a per-IP counter in `security_pair_attempts` enforces a
+    short cooldown after 5 bad PINs in 60s. Combined with the 1,000,000-PIN space,
+    this caps brute-forcing well below feasibility.
     """
+    import asyncio
     pin = (data.get("pin") or "").strip()
     mode = (data.get("mode") or "").strip().lower()
     if not pin or len(pin) != 6 or not pin.isdigit():
         raise HTTPException(status_code=400, detail="PIN must be 6 digits")
     if mode not in {"guest", "security"}:
         raise HTTPException(status_code=400, detail="mode must be 'guest' or 'security'")
+    # Identify the client (best-effort)
+    client_ip = "anon"
+    try:
+        if request is not None:
+            client_ip = (request.client.host if request.client else "") or request.headers.get("x-forwarded-for", "anon").split(",")[0].strip()
+    except Exception:
+        pass
+    now = datetime.now(timezone.utc)
+    cutoff_iso = (now - timedelta(seconds=60)).isoformat()
+    recent_bad = await db.security_pair_attempts.count_documents(
+        {"ip": client_ip, "ok": False, "at": {"$gte": cutoff_iso}},
+    )
+    if recent_bad >= 5:
+        # Hard back-off; force operator to wait.
+        raise HTTPException(status_code=429, detail="Too many failed pairing attempts — wait a minute and try again")
     cp = await db.security_checkpoints.find_one({"pairing_pin": pin, "active": True}, {"_id": 0})
     if not cp:
+        await db.security_pair_attempts.insert_one({"ip": client_ip, "at": now.isoformat(), "ok": False})
+        await asyncio.sleep(0.4)  # tarpit
         raise HTTPException(status_code=401, detail="Invalid PIN")
+    await db.security_pair_attempts.insert_one({"ip": client_ip, "at": now.isoformat(), "ok": True, "checkpoint_id": cp["id"]})
     raw_token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=CHECKPOINT_SESSION_TTL_HOURS)).isoformat()
+    expires_at = (now + timedelta(hours=CHECKPOINT_SESSION_TTL_HOURS)).isoformat()
     sess = {
         "id": f"cps_{uuid.uuid4().hex[:10]}",
         "checkpoint_id": cp["id"],

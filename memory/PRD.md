@@ -6,6 +6,66 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 138 (May 30, 2026)
+**Security Checkpoint Kiosk MVP — paired dual-device gate access for restricted locations. Pytest 82/82.**
+
+### Data model
+- `security_checkpoints` — one per gate; carries `pairing_pin` (6-digit), `location_id`, `active`, `requires_id_for_one_time`.
+- `security_checkpoint_sessions` — paired device session tokens (hashed), 12h TTL.
+- `security_checkpoint_events` — every scan + decision audit row (entry_scan, exit_scan, one_time_grant).
+- `security_one_time_entries` — physical-ID holds (name, phone, reason, id_image_url, granted_at, id_returned).
+- `security_pair_attempts` — anti-brute-force log per IP.
+
+### Backend — `routers/security_checkpoint.py`
+- **Admin** (Director+): `POST/GET/PUT/DELETE /api/security/checkpoints` + `POST /{id}/rotate-pin` + `GET /{id}/events` + `GET /{id}/one-time`. Every mutating action audited.
+- **Device pairing** (no auth): `POST /api/security/checkpoint/pair` body `{pin, mode:'guest|security', device_label?}` returns a session token; bad PIN → 401 (0.4s tarpit) → 6+ bad attempts/60s → 429.
+- **Device session** (auth via `X-Checkpoint-Session` header):
+  - `POST /scan` body `{scan_type:'nfc|qr|manual', payload}` — auto-resolves subject from `wallet_badges`, `users`, `members`, `children` (bare UUIDs, `mem_/chd_` ids, badge tokens all work), runs `_decide()` against checkpoint location, writes event with `clear_at = now + 15s`.
+  - `GET /state` — poll endpoint for both devices; returns `current` event + history (security only).
+  - `POST /finish` — manually clear the current event.
+  - `POST /grant-one-time` (security only) — multipart form with `name, phone, reason, id_image`. Stores image in cloud (or `/api/uploads/checkpoint-ids/` local fallback), creates an event with `decision=approved kind=one_time_grant`.
+  - `POST /one-time/{id}/return-id` — flips physical ID as handed back to guest.
+  - `GET /one-time/open` — lists IDs currently being held.
+  - `POST /scan/receipt` — exit-scan stub: looks up sale → returns items + `decision='denied'` if any item has `is_exit_restricted=true`.
+
+### Decision engine (`_decide`)
+- Director+ → implicit approval anywhere.
+- Active resident of the restricted location → approved.
+- Explicit `location_ids` membership → approved.
+- `has_restricted_access=true` flag → approved.
+- Else → denied with a clear reason.
+
+### Frontend — `pages/SecurityCheckpointPage.jsx`
+Single route `/security-checkpoint` (no Layout wrapper, public for paired devices) with three views:
+- **Pair view** — 6-digit PIN entry + Guest/Security mode picker + optional device label.
+- **Guest view** — full-screen approval display. Captures NFC via Web NDEFReader (Android Chrome) and keyboard-emulated barcode scanners (rapid keystrokes + Enter). Large green/red badge + subject photo + name + reason. Auto-clears 15s after a scan or on tap.
+- **Security view** — operator console: Live Scan card, Recent Activity (last 20), Holding-N-IDs sidebar (with "Return ID" button per row), Receipt Exit-Scan dialog, One-Time Entry dialog (camera capture + image upload + name/phone/reason).
+- **Lock screen** — temporary local lock (re-uses the pairing PIN as the unlock check).
+- Polls `/state` every 1.5s.
+- `securityCheckpointApi` in `services/api.js`. Axios interceptor exempts `/security/checkpoint/*` from auto-redirect to /login.
+
+### New role
+- `Security Contractor` added to `ROLE_LEVELS` (level 3.5, between Volunteer and Member) — they can be created via `/admin` (UserCreateDialog + UserEditDialog now expose the role) and PIN-login like POS cashiers. They never reach any privileged module.
+
+### Admin UI — `pages/AdminPage.jsx`
+- New **Security Checkpoints** card → dialog with create form + per-checkpoint list. PIN visible to admins (with tracking-widest font for readability), one-click **Rotate PIN** (revokes paired devices) and **Delete**.
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration91_security_checkpoint.py` — 23 cases (admin CRUD + pair good/bad PIN + scan paths + state guest vs security + finish + one-time-grant happy/forbidden/missing-id + return-id + receipt 404 + audit + rotate-pin revocation). All PASS.
+- All 59 prior pytest cases (16 smoke + 15 iter115 + 16 iter116 + 12 iter90) still PASS.
+- Total: **82/82 green**. Ruff + ESLint clean.
+
+### Phase 2 follow-ups (intentionally out of MVP scope)
+- OCR auto-fill on the ID photo (currently a stub — security types name/phone manually; image stored as evidence).
+- Per-line-item `is_exit_restricted` admin UI on products + full receipt approval flow (the data path is wired; admins just can't flag items yet).
+- WebSocket-based device sync to replace the 1.5s HTTP poll.
+- Strict per-IP rate limiting middleware (currently using a tarpit + per-IP counter; not a true sliding-window middleware).
+
+⚠️ **Production redeploy needed**. Post-deploy steps:
+1. Admin → `/admin` → **Security Checkpoints** card → Create one for each restricted location.
+2. Create a `Security Contractor` user with a PIN (optional — paired devices don't need a user account thanks to the pairing-PIN flow).
+3. On each device, open `/security-checkpoint` → enter PIN → pick Guest or Security mode.
+
 ## Recently Resolved — Iteration 137 (May 30, 2026)
 **Public marketplace: Resource (asset) booking tab. Pytest 59/59, lint clean.**
 

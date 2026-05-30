@@ -401,8 +401,8 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" className="border-slate-700 text-slate-100 hover:bg-slate-800" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
-          <Button size="sm" variant="outline" className="border-slate-700 text-slate-100 hover:bg-slate-800" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
+          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
+          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
           <Button size="sm" variant="ghost" className="text-slate-300" onClick={onLock}><Lock size={14} /></Button>
           <Button size="sm" variant="ghost" className="text-slate-400" onClick={onUnpair}><LogOut size={14} /></Button>
         </div>
