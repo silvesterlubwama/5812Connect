@@ -180,6 +180,9 @@ export const securityCheckpointApi = {
   grantOneTime: (formData) => api.post('/security/checkpoint/grant-one-time', formData, {
     headers: { ..._sessHeaders(), 'Content-Type': 'multipart/form-data' },
   }),
+  ocrId: (formData) => api.post('/security/checkpoint/ocr-id', formData, {
+    headers: { ..._sessHeaders(), 'Content-Type': 'multipart/form-data' },
+  }),
   openOneTime: () => api.get('/security/checkpoint/one-time/open', { headers: _sessHeaders() }),
   returnId: (grantId) => api.post(`/security/checkpoint/one-time/${grantId}/return-id`, null, { headers: _sessHeaders() }),
 };

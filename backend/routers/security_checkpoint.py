@@ -16,7 +16,7 @@ Auth model:
   • Device-pair endpoints (/pair, /scan, /state, /grant-one-time, /finish) require
     the device's session token returned by /pair.
 """
-from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
 from deps import db, get_current_user, require_admin, require_director, _audit, logger, has_module_access
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -32,6 +32,26 @@ ROLES_ALLOWED_TO_SCAN_FROM_SECURITY = {
     "admin", "system_admin", "Executive Director", "Adviser", "Director",
     "Security Contractor",
 }
+
+# Per-checkpoint live socket rooms — keyed by checkpoint_id, value is a set of
+# active WebSocket connections. Updates posted by scan/grant/finish are pushed
+# instantly to every device joined to the room (HTTP polling stays as fallback).
+_checkpoint_rooms: dict = {}
+
+
+async def _broadcast_to_checkpoint(checkpoint_id: str, payload: dict):
+    """Best-effort push to every WebSocket joined to a checkpoint room."""
+    sockets = list(_checkpoint_rooms.get(checkpoint_id) or [])
+    dead = []
+    for ws in sockets:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    if dead:
+        room = _checkpoint_rooms.get(checkpoint_id) or set()
+        for ws in dead:
+            room.discard(ws)
 
 
 def _hash(raw: str) -> str:
@@ -364,6 +384,7 @@ async def checkpoint_scan(
     }
     await db.security_checkpoint_events.insert_one(event)
     event.pop("_id", None)
+    await _broadcast_to_checkpoint(cp["id"], {"type": "event", "event": event})
     return event
 
 
@@ -412,6 +433,7 @@ async def checkpoint_finish(
         {"checkpoint_id": cp_id, "clear_at": {"$gt": now_iso}},
         {"$set": {"clear_at": now_iso, "finished_early": True, "finished_by_mode": sess.get("mode")}},
     )
+    await _broadcast_to_checkpoint(cp_id, {"type": "clear", "by": sess.get("mode")})
     return {"cleared": res.modified_count}
 
 
@@ -490,6 +512,7 @@ async def grant_one_time_entry(
     await db.security_checkpoint_events.insert_one(event)
     event.pop("_id", None)
     grant_doc.pop("_id", None)
+    await _broadcast_to_checkpoint(cp["id"], {"type": "event", "event": event})
     return {"grant": grant_doc, "event": event}
 
 
@@ -573,12 +596,40 @@ async def receipt_exit_scan(
     }
     await db.security_checkpoint_events.insert_one(event)
     event.pop("_id", None)
+    await _broadcast_to_checkpoint(sess["checkpoint_id"], {"type": "event", "event": event})
     return event
 
 
 # ============================================================
-# ADMIN: read-only audit access
+# WEBSOCKET — real-time push to paired devices (polling stays as fallback)
 # ============================================================
+
+@router.websocket("/checkpoint/ws")
+async def checkpoint_ws(websocket: WebSocket, session: Optional[str] = None):
+    """Connect via `wss://.../api/security/checkpoint/ws?session=<token>`.
+    Pushes `{type:'event'|'clear'}` messages to the device whenever the
+    checkpoint state changes — eliminates the 1.5s poll latency."""
+    if not session:
+        await websocket.close(code=4401)
+        return
+    sess_doc = await db.security_checkpoint_sessions.find_one({"token_hash": _hash(session)}, {"_id": 0})
+    if not sess_doc or sess_doc.get("revoked") or sess_doc.get("expires_at", "") <= datetime.now(timezone.utc).isoformat():
+        await websocket.close(code=4401)
+        return
+    cp_id = sess_doc["checkpoint_id"]
+    await websocket.accept()
+    room = _checkpoint_rooms.setdefault(cp_id, set())
+    room.add(websocket)
+    try:
+        await websocket.send_json({"type": "joined", "checkpoint_id": cp_id, "mode": sess_doc.get("mode")})
+        # Keep the socket alive — we don't expect inbound messages but tolerate pings.
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+    finally:
+        room.discard(websocket)
 
 @router.get("/checkpoints/{checkpoint_id}/events")
 async def list_checkpoint_events(checkpoint_id: str, limit: int = 200, current_user: dict = Depends(require_director)):
@@ -594,3 +645,99 @@ async def list_one_time_entries_admin(checkpoint_id: str, current_user: dict = D
         {"checkpoint_id": checkpoint_id}, {"_id": 0},
     ).sort("granted_at", -1).to_list(500)
     return rows
+
+
+# ============================================================
+# OCR — best-effort ID extraction via Gemini vision
+# ============================================================
+
+@router.post("/checkpoint/ocr-id")
+async def ocr_id_photo(
+    image: UploadFile = File(...),
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Extract Name / Date of Birth / ID Number from a captured ID photo.
+    Returns: { name, date_of_birth, id_number, raw_text, confidence: 'high|medium|low' }.
+    Security-device only. Best-effort — operator should always confirm before saving."""
+    sess = await _resolve_session(session_token)
+    if sess.get("mode") != "security":
+        raise HTTPException(status_code=403, detail="OCR is security-device only")
+    data = await image.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image")
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be under 8MB")
+    # Validate MIME (Gemini accepts jpeg/png/webp)
+    mime = (image.content_type or "").lower()
+    if mime not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
+        # Some browsers send "application/octet-stream" for camera blobs — try to detect
+        if data[:3] == b"\xff\xd8\xff":
+            mime = "image/jpeg"
+        elif data[:8] == b"\x89PNG\r\n\x1a\n":
+            mime = "image/png"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            mime = "image/webp"
+        else:
+            raise HTTPException(status_code=400, detail="Image must be JPEG, PNG, or WEBP")
+    # Persist a tmp file for Gemini
+    import os as _os
+    import json as _json
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(suffix="." + mime.split("/")[-1])
+    try:
+        with _os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"OCR unavailable: {e}")
+        api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+        if not api_key:
+            raise HTTPException(status_code=503, detail="OCR not configured (no LLM key)")
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"ocr_{sess['id']}_{uuid.uuid4().hex[:6]}",
+            system_message=(
+                "You are an OCR assistant for government-issued ID cards (passports, national IDs, drivers licenses). "
+                "Extract ONLY the following fields and return STRICT JSON — no prose, no markdown:\n"
+                "{\"name\": str, \"date_of_birth\": \"YYYY-MM-DD\" or empty, \"id_number\": str, \"raw_text\": str (everything legible), \"confidence\": \"high\"|\"medium\"|\"low\"}\n"
+                "If a field is unreadable or absent, return empty string for that field."
+            ),
+        ).with_model("gemini", "gemini-3-flash-preview")
+        msg = UserMessage(
+            text=(
+                "Extract the holder's full name, date of birth, and primary ID/document number from this ID card. "
+                "Return strict JSON as instructed. If the image is not an ID card, set confidence='low' and all fields empty."
+            ),
+            file_contents=[FileContentWithMimeType(file_path=tmp_path, mime_type=mime)],
+        )
+        raw = await chat.send_message(msg)
+        # Tolerate models that wrap JSON in ```json fences
+        s = (raw or "").strip()
+        if s.startswith("```"):
+            s = s.strip("`")
+            if s.lower().startswith("json"):
+                s = s[4:].strip()
+        # Extract first { ... } block if model added stray prose
+        first = s.find("{")
+        last = s.rfind("}")
+        if first >= 0 and last > first:
+            s = s[first:last + 1]
+        try:
+            parsed = _json.loads(s)
+        except Exception:
+            parsed = {"name": "", "date_of_birth": "", "id_number": "", "raw_text": (raw or "")[:500], "confidence": "low"}
+        # Defensive shape clamp
+        out = {
+            "name": str(parsed.get("name") or "").strip()[:120],
+            "date_of_birth": str(parsed.get("date_of_birth") or "").strip()[:10],
+            "id_number": str(parsed.get("id_number") or "").strip()[:60],
+            "raw_text": str(parsed.get("raw_text") or "")[:2000],
+            "confidence": str(parsed.get("confidence") or "low").lower() if parsed.get("confidence") else "low",
+        }
+        if out["confidence"] not in {"high", "medium", "low"}:
+            out["confidence"] = "low"
+        return out
+    finally:
+        try: _os.remove(tmp_path)
+        except Exception: pass

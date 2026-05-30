@@ -209,7 +209,7 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
   const keystrokeBuffer = useRef('');
   const keystrokeTimer = useRef(null);
 
-  // Poll backend state
+  // Poll backend state (fallback when WebSocket isn't available)
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -223,6 +223,32 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
     tick();
     const iv = setInterval(tick, POLL_MS);
     return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  // Real-time WebSocket push (instant) — falls back to polling above if it fails.
+  useEffect(() => {
+    const token = localStorage.getItem('checkpoint_session');
+    if (!token || typeof WebSocket === 'undefined') return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const base = process.env.REACT_APP_BACKEND_URL || window.location.origin;
+    const wsUrl = `${base.replace(/^https?:/, proto)}/api/security/checkpoint/ws?session=${encodeURIComponent(token)}`;
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'event' && msg.event) {
+            setCurrent(msg.event);
+            setServerNow(new Date().toISOString());
+          } else if (msg.type === 'clear') {
+            setCurrent(null);
+          }
+        } catch { /* ignore */ }
+      };
+      ws.onerror = () => { /* fall back to polling silently */ };
+    } catch { /* ignore */ }
+    return () => { try { ws?.close(); } catch { /* ignore */ } };
   }, []);
 
   // Keyboard-emulating barcode scanner: capture rapid keystrokes ending in Enter
@@ -352,7 +378,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [showReceipt, setShowReceipt] = useState(false);
   const [openOneTime, setOpenOneTime] = useState([]);
 
-  // Poll
+  // Poll (fallback)
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -369,6 +395,35 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
     tick();
     const iv = setInterval(tick, POLL_MS);
     return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  // Real-time WebSocket push (instant) — keeps polling alive as a safety net.
+  useEffect(() => {
+    const token = localStorage.getItem('checkpoint_session');
+    if (!token || typeof WebSocket === 'undefined') return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const base = process.env.REACT_APP_BACKEND_URL || window.location.origin;
+    const wsUrl = `${base.replace(/^https?:/, proto)}/api/security/checkpoint/ws?session=${encodeURIComponent(token)}`;
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'event' && msg.event) {
+            setState(prev => ({
+              ...prev,
+              current: msg.event,
+              history: [msg.event, ...(prev.history || []).slice(0, 19)],
+            }));
+          } else if (msg.type === 'clear') {
+            setState(prev => ({ ...prev, current: null }));
+          }
+        } catch { /* ignore */ }
+      };
+      ws.onerror = () => { /* polling will cover */ };
+    } catch { /* ignore */ }
+    return () => { try { ws?.close(); } catch { /* ignore */ } };
   }, []);
 
   const finish = async () => {
@@ -527,13 +582,37 @@ function OneTimeGrantDialog({ open, onClose, requireId }) {
   const [form, setForm] = useState({ name: '', phone: '', reason: '' });
   const [file, setFile] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [ocring, setOcring] = useState(false);
+  const [ocrResult, setOcrResult] = useState(null);
   const camRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
 
   // Reset on close
-  useEffect(() => { if (!open) { setForm({ name: '', phone: '', reason: '' }); setFile(null); stopCam(); } }, [open]);
+  useEffect(() => { if (!open) { setForm({ name: '', phone: '', reason: '' }); setFile(null); setOcrResult(null); stopCam(); } }, [open]);
+
+  const runOcr = async (blob) => {
+    setOcring(true); setOcrResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('image', blob);
+      const r = await securityCheckpointApi.ocrId(fd);
+      const d = r.data || {};
+      setOcrResult(d);
+      // Soft auto-fill — only populate empty fields, never overwrite typed values
+      setForm(prev => ({
+        name: prev.name || d.name || '',
+        phone: prev.phone,
+        reason: prev.reason,
+      }));
+      if (d.name) toast.success(`OCR: detected "${d.name}" (${d.confidence})`);
+      else toast.info('OCR could not extract a name — please type it manually');
+    } catch (e) {
+      // OCR failure is non-blocking; operator can still type manually
+      toast.error(e.response?.data?.detail || 'OCR unavailable — type details manually');
+    } finally { setOcring(false); }
+  };
 
   const startCam = useCallback(async () => {
     try {
@@ -558,7 +637,11 @@ function OneTimeGrantDialog({ open, onClose, requireId }) {
     c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext('2d').drawImage(v, 0, 0);
     c.toBlob((blob) => {
-      if (blob) setFile(new File([blob], `id_${Date.now()}.jpg`, { type: 'image/jpeg' }));
+      if (blob) {
+        const f = new File([blob], `id_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        setFile(f);
+        runOcr(f);
+      }
       stopCam();
     }, 'image/jpeg', 0.85);
   };
@@ -618,7 +701,10 @@ function OneTimeGrantDialog({ open, onClose, requireId }) {
                   <Camera size={13} className="mr-1" /> Use camera
                 </Button>
                 <label className="flex-1">
-                  <input type="file" accept="image/*" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="cp-otg-file" />
+                  <input type="file" accept="image/*" className="hidden" onChange={e => {
+                    const f = e.target.files?.[0];
+                    if (f) { setFile(f); runOcr(f); }
+                  }} data-testid="cp-otg-file" />
                   <Button type="button" size="sm" variant="outline" className="w-full" onClick={(e) => e.currentTarget.previousSibling.click()}>Upload</Button>
                 </label>
               </div>
@@ -626,7 +712,24 @@ function OneTimeGrantDialog({ open, onClose, requireId }) {
             <canvas ref={canvasRef} className="hidden" />
           </div>
 
-          <p className="text-[10px] text-slate-500 italic">OCR auto-fill from ID photo coming soon (Phase 2). For now, type name + phone manually; image is stored as evidence.</p>
+          {/* OCR feedback */}
+          {ocring && (
+            <p className="text-[11px] text-blue-600 dark:text-blue-400 italic" data-testid="cp-ocr-loading">
+              Reading ID… extracting name + DOB + ID number via AI
+            </p>
+          )}
+          {ocrResult && !ocring && (
+            <div className="text-[11px] p-2 rounded border bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40" data-testid="cp-ocr-result">
+              <p className="font-semibold flex items-center gap-1 mb-0.5">
+                <Camera size={11} /> OCR result — <span className={`capitalize ${ocrResult.confidence === 'high' ? 'text-emerald-600' : ocrResult.confidence === 'medium' ? 'text-amber-600' : 'text-rose-600'}`}>{ocrResult.confidence} confidence</span>
+              </p>
+              {ocrResult.name && <p>Name: <strong>{ocrResult.name}</strong></p>}
+              {ocrResult.date_of_birth && <p>DOB: <strong>{ocrResult.date_of_birth}</strong></p>}
+              {ocrResult.id_number && <p>ID#: <strong>{ocrResult.id_number}</strong></p>}
+              {!ocrResult.name && !ocrResult.id_number && <p className="text-muted-foreground italic">No fields extracted — type manually</p>}
+              <p className="text-[10px] text-muted-foreground italic mt-1">Auto-fill only writes to empty fields — your typing always wins.</p>
+            </div>
+          )}
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>

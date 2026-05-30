@@ -79,6 +79,9 @@ class ProductCreate(BaseModel):
     # Bulk discount tiers — list of {min_qty, discount_pct} sorted by min_qty asc
     qty_discount_tiers: Optional[List[dict]] = None
     max_discount_pct: Optional[float] = 20
+    # Security checkpoint flag — if true, the receipt exit-scan denies departure
+    # until a supervisor approves. See routers/security_checkpoint.py:receipt_exit_scan.
+    is_exit_restricted: bool = False
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -88,6 +91,7 @@ class ProductUpdate(BaseModel):
     variants: Optional[List[dict]] = None
     qty_discount_tiers: Optional[List[dict]] = None
     max_discount_pct: Optional[float] = None
+    is_exit_restricted: Optional[bool] = None
 
 # ========== PRODUCTS ==========
 

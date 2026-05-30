@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 138 tested: Gemini OCR endpoint, product is_exit_restricted flag (+ sale enrichment + receipt scan deny path), and WebSocket /checkpoint/ws push channel. Backend: 14/14 new tests + 82/82 regression = 96/96 passed. Frontend: UI source review confirms all new testids (product-exit-restricted-row/checkbox, cp-ocr-loading, cp-ocr-result) at expected lines; live Playwright UI automation was blocked by the Emergent 'Frontend Preview Only — wake servers' iframe shim (env-level, not an app defect).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration138_ocr_exit_ws.py",
+    "/app/test_reports/pytest/iter138_results.xml",
+    "/app/test_reports/pytest/iter138_regression.xml"
+  ],
+  "action_items": [
+    "Main agent: please self-verify the SecurityCheckpointPage OneTimeGrantDialog OCR UI (cp-ocr-loading -> cp-ocr-result with soft-fill of Name) and the ProductsPage exit-restricted checkbox toggle/persist in a live browser session, because the Emergent preview shim prevented Playwright from interacting with the running React app. All backing APIs are confirmed working via pytest."
+  ],
+  "critical_code_review_comments": [
+    "OCR endpoint correctly validates: 401 on missing session, 403 on guest session, 400 on empty/oversize/bad-MIME, falls back to magic-byte sniffing for application/octet-stream, returns {name, dob, id_number, raw_text, confidence}. Graceful 503 path exists if EMERGENT_LLM_KEY is missing.",
+    "Product is_exit_restricted: ProductCreate/Update accepts the field, GET returns it, PUT can flip it both directions — verified.",
+    "Sale enrichment is correctly applied at POST /api/sales: each item gets is_exit_restricted=true if its product carries the flag (and is left absent/false otherwise) — verified end-to-end with a mixed cart.",
+    "Receipt exit-scan returns decision='denied' when ANY sale item is flagged — verified using a freshly-created sale.",
+    "WebSocket /api/security/checkpoint/ws: valid session receives {type:'joined'} immediately, then {type:'event', event:{...}} on POST /scan, and {type:'clear'} on /finish — all observed. Invalid/missing session is rejected via close(4401) or Starlette HTTP 403 handshake reject (both are valid auth-denial signals; behavior is correct).",
+    "Frontend source review (no live UI run): /app/frontend/src/pages/ProductsPage.jsx:1169-1175 has data-testid='product-exit-restricted-row' + 'product-exit-restricted-checkbox'; /app/frontend/src/pages/SecurityCheckpointPage.jsx:717,722 has 'cp-ocr-loading' and 'cp-ocr-result'. All testids match what the main agent declared.",
+    "No code-quality regressions observed; no MongoDB _id leakage in new endpoints."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration138_ocr_exit_ws.py (new)"
+  ],
+  "success_rate": {"backend": "100% (96/96)", "frontend": "not measured (preview-shim blocked Playwright; source review OK)"},
+  "test_credentials": "Admin: admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test fixtures auto-create + auto-clean: TEST_Iter138_CP checkpoint, TEST_Iter138_RestrictedItem product, TEST_Iter138_NormalItem product, one TEST_Buyer sale. All cleaned up via fixture teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest for iter138 lives at /app/backend/tests/test_iteration138_ocr_exit_ws.py — covers OCR (auth + bad-input + happy path), product flag persistence, sale enrichment, receipt-scan denial, and the WebSocket joined/event/clear lifecycle (incl. invalid-token rejection). The OCR happy-path test gracefully pytest.skips if EMERGENT_LLM_KEY is missing (503 response). The Emergent preview URL serves a 'wake servers' iframe shim until the user activates it — backend API calls work fine through it, but Playwright clicking the React app does NOT until servers are woken. If you need live UI testing, expect to manually click 'Wake up servers' first OR rely on source review + backend tests as done here.",
+  "rca_of_the_issue": "N/A — no defects found. Live Playwright UI verification was deferred because the preview URL is in 'sleep' mode (serves an iframe to app.emergent.sh/loading-preview). This is an environment characteristic, not an app issue."
+}

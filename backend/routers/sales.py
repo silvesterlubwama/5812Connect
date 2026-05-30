@@ -82,6 +82,23 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         # Fall back: use the user's primary store location, NOT their active_campus
         # (active_campus may be a parent campus while sales happen at a specific sub-location)
         doc["location_id"] = current_user.get("location_id") or current_user.get("active_campus_id") or ""
+    # Enrich each cart item with `is_exit_restricted` from the product so the
+    # security checkpoint's receipt-scan can see the flag without an extra lookup later.
+    try:
+        product_ids = list({it.get("product_id") for it in (doc.get("items") or []) if it.get("product_id")})
+        if product_ids:
+            restricted_map = {}
+            async for p in db.products.find(
+                {"id": {"$in": product_ids}, "is_exit_restricted": True},
+                {"_id": 0, "id": 1},
+            ):
+                restricted_map[p["id"]] = True
+            if restricted_map:
+                for it in doc["items"]:
+                    if it.get("product_id") in restricted_map and not it.get("is_exit_restricted"):
+                        it["is_exit_restricted"] = True
+    except Exception as _e:
+        pass
     # Capture store name on the sale for the receipt header.
     # Priority: store_settings.store_name (custom branded name) → location.name → blank.
     if doc.get("location_id"):

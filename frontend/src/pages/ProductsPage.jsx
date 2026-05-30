@@ -46,7 +46,7 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '' };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false };
 
 export default function ProductsPage() {
   const { user } = useAuth();
@@ -547,7 +547,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20 });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted });
     setShowProductModal(true);
   };
 
@@ -1165,6 +1165,20 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
             </div>
+            {/* Exit-restriction flag — used by the Security Checkpoint receipt exit-scan */}
+            <label className="flex items-start gap-2 text-xs cursor-pointer p-2 rounded border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40" data-testid="product-exit-restricted-row">
+              <input
+                type="checkbox"
+                className="accent-amber-600 mt-0.5"
+                checked={!!productForm.is_exit_restricted}
+                onChange={e => setProductForm({ ...productForm, is_exit_restricted: e.target.checked })}
+                data-testid="product-exit-restricted-checkbox"
+              />
+              <span>
+                <strong>Flag as exit-restricted</strong>
+                <span className="block text-[10px] text-muted-foreground">When a security checkpoint scans a receipt containing this item, the exit is denied until a supervisor approves. Use for high-value or controlled goods.</span>
+              </span>
+            </label>
             {/* Variants Section */}
             <div className="border-t pt-3 space-y-2">
               <div className="flex items-center justify-between">
