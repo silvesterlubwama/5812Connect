@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi } from '../services/api';
+import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi, badgesApi, storeSettingsApi } from '../services/api';
 import PinNumpad from '../components/PinNumpad';
 import { enterKioskFullscreen } from '../utils/kioskMode';
 import api from '../services/api';
@@ -248,12 +248,43 @@ export default function KioskPage() {
       playSound(true);
       toast.success(`${res.data.member?.name} checked in!`);
       setTodayStats(prev => ({ ...prev, checkIns: prev.checkIns + 1 }));
+      // Fire auto-issue badge (no-op if the kiosk's store_settings.auto_issue_badge is false)
+      kioskAutoIssueBadge(res.data.member);
     } catch (err) {
       playSound(false);
       toast.error(err.response?.data?.detail || 'Check-in failed - try signup');
       setShowSignup(true);
     }
     finally { setLookupLoading(false); }
+  };
+
+  // Auto-issue + auto-print a wallet badge when:
+  //   • the kiosk's location has `auto_issue_badge` enabled on its store_settings, AND
+  //   • the subject was identified (we have an id + kind) but doesn't already have a badge.
+  // Idempotent (backend `/badges/auto-issue` checks for existing first).
+  const kioskAutoIssueBadge = async (subject) => {
+    if (!subject?.id) return;
+    const kind = subject.kind || (subject.role === 'Child' ? 'child' : 'member');
+    let storeSettings = {};
+    try {
+      if (selectedLocation) {
+        const r = await storeSettingsApi.get(selectedLocation);
+        storeSettings = r.data || {};
+      }
+    } catch { /* if settings missing, skip silently */ }
+    if (!storeSettings.auto_issue_badge) return;
+    try {
+      const r = await badgesApi.autoIssue(kind, subject.id);
+      const badge = r.data;
+      if (badge?.token) {
+        const base = process.env.REACT_APP_BACKEND_URL || window.location.origin;
+        const popup = window.open(`${base}/badge/${badge.token}?print=1`, 'kiosk_badge_print', 'width=420,height=640');
+        if (!popup) toast.info('Pop-up blocked — badge ready but not printed');
+        else toast.success(`Badge ${badge.was_created ? 'issued' : 're-printed'}: ${badge.name}`);
+      }
+    } catch (e) {
+      console.warn('kiosk auto-issue-badge failed:', e.response?.data?.detail || e.message);
+    }
   };
 
   const handleQuickSignup = async () => {

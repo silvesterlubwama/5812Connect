@@ -536,6 +536,14 @@ export default function ProductsPage() {
         kickCashDrawer().catch(() => {});
       }
       toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`);
+      // Auto-print: when the store has `auto_print_receipt` enabled, fire window.print()
+      // 600ms after the receipt panel renders. window.print() prints whatever is on screen,
+      // and the receipt panel uses .print-area + print CSS rules to render the receipt clean.
+      if (storeSettings.auto_print_receipt) {
+        setTimeout(() => {
+          try { window.print(); } catch (err) { console.warn('auto-print failed:', err); }
+        }, 600);
+      }
       fetchAll();
     } catch (e) {
       SOUNDS.saleError();
@@ -1417,6 +1425,44 @@ export default function ProductsPage() {
                   Show tracking QR code
                 </label>
               </div>
+            </div>
+
+            {/* PERIPHERALS — auto-print receipts on sale completion, badge size when issuing kiosk badges. */}
+            <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/20 space-y-2" data-testid="peripheral-settings-block">
+              <p className="text-xs font-semibold flex items-center gap-2">🖨️ Peripherals (auto-print + auto-badge)</p>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" checked={!!storeSettings.auto_print_receipt} onChange={e => setStoreSettings({...storeSettings, auto_print_receipt: e.target.checked})} data-testid="auto-print-receipt-checkbox" />
+                Auto-print receipt the moment a POS sale completes
+              </label>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" checked={!!storeSettings.auto_issue_badge} onChange={e => setStoreSettings({...storeSettings, auto_issue_badge: e.target.checked})} data-testid="auto-issue-badge-checkbox" />
+                Auto-issue + print kiosk / check-in badges for visitors without one
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] uppercase">Badge label size</Label>
+                  <Select value={storeSettings.badge_label_size || 'business_card'} onValueChange={v => setStoreSettings({...storeSettings, badge_label_size: v})}>
+                    <SelectTrigger data-testid="badge-label-size-select" className="h-8"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="business_card">Business card (85×54mm)</SelectItem>
+                      <SelectItem value="lanyard">Lanyard (54×86mm portrait)</SelectItem>
+                      <SelectItem value="adhesive_label">Adhesive label (62×29mm)</SelectItem>
+                      <SelectItem value="A6">A6 paper</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] uppercase">Default print mode</Label>
+                  <Select value={storeSettings.print_mode || 'browser'} onValueChange={v => setStoreSettings({...storeSettings, print_mode: v})}>
+                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="browser">Browser print dialog</SelectItem>
+                      <SelectItem value="silent">Silent (kiosk mode)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground italic">Silent mode requires the browser to be launched with --kiosk-printing on Chrome/Edge.</p>
             </div>
             <div className="space-y-2">
               <Label>API Integrations (JSON)</Label>

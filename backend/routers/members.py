@@ -986,6 +986,79 @@ async def get_wallet_badge(token: str):
 
 
 
+# ============================================================
+# AUTO-ISSUE BADGE — unified helper used by Check-in Kiosk + Security Checkpoint
+# ============================================================
+
+@router.post("/badges/auto-issue")
+async def auto_issue_badge(data: dict, current_user: dict = Depends(require_staff)) -> dict:
+    """Idempotent: returns an existing wallet_badge for the subject OR creates one.
+    Body: { subject_kind: 'member'|'child'|'guest'|'user', subject_id }
+    Returns the full badge document plus a `was_created` flag so the frontend
+    can decide whether to spool the printer."""
+    subject_kind = (data.get("subject_kind") or "").lower()
+    subject_id = (data.get("subject_id") or "").strip()
+    if not subject_kind or not subject_id:
+        raise HTTPException(status_code=400, detail="subject_kind and subject_id are required")
+    if subject_kind not in {"member", "child", "guest", "user"}:
+        raise HTTPException(status_code=400, detail="Unsupported subject_kind")
+    # Try existing badge first
+    existing = await db.wallet_badges.find_one({"member_id": subject_id}, {"_id": 0})
+    if existing and existing.get("status") != "invalidated":
+        return {**existing, "was_created": False}
+    # Resolve the subject record
+    if subject_kind == "child":
+        subj = await db.children.find_one({"id": subject_id}, {"_id": 0})
+        role = "Child"
+    elif subject_kind == "guest":
+        subj = await db.guests.find_one({"id": subject_id}, {"_id": 0})
+        if not subj:
+            subj = await db.members.find_one({"id": subject_id, "kind": {"$in": ["guest", "parent"]}}, {"_id": 0})
+        role = (subj or {}).get("role") or "Guest"
+    elif subject_kind == "user":
+        subj = await db.users.find_one({"id": subject_id}, {"_id": 0, "password_hash": 0, "pin_hash": 0})
+        role = (subj or {}).get("role") or "Staff"
+    else:
+        subj = await db.members.find_one({"id": subject_id}, {"_id": 0})
+        role = (subj or {}).get("role") or (subj or {}).get("membership_type") or "Member"
+    if not subj:
+        raise HTTPException(status_code=404, detail=f"{subject_kind} not found")
+    loc_id = subj.get("location_id") or (subj.get("location_ids") or [None])[0]
+    loc = await db.locations.find_one({"id": loc_id}, {"_id": 0, "name": 1, "country": 1, "country_code": 1, "contact_phone": 1}) if loc_id else None
+    token = uuid.uuid4().hex[:16]
+    badge = {
+        "id": f"wbadge_{token}",
+        "token": token,
+        "qr_token": token,
+        "member_id": subject_id,
+        "subject_kind": subject_kind,
+        "name": subj.get("name") or subj.get("full_name") or "",
+        "role": role,
+        "title": subj.get("title", ""),
+        "department": subj.get("department", ""),
+        "photo_url": subj.get("photo_url", ""),
+        "location_id": loc_id,
+        "location_name": loc.get("name") if loc else "",
+        "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+        "campus_phone": loc.get("contact_phone") if loc else "",
+        "qr_data": subject_id,
+        "status": "active",
+        "issued_via": "auto_kiosk",
+        "issued_by": current_user["id"],
+        "issued_by_name": current_user.get("name", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.wallet_badges.update_one(
+        {"member_id": subject_id},
+        {"$set": badge},
+        upsert=True,
+    )
+    await _audit(current_user["id"], "auto_issue_badge", subject_kind, subject_id, {"badge_id": badge["id"]})
+    return {**badge, "was_created": True}
+
+
+
 # ========== MEMBER APPROVALS ==========
 
 @router.put("/members/{member_id}/approve")

@@ -453,6 +453,7 @@ export const badgesApi = {
   delete: (id) => api.delete(`/badges/${id}`),
   issueTo: (memberId, badgeId) => api.post(`/members/${memberId}/issue-badge?badge_id=${badgeId}`),
   memberBadges: (memberId) => api.get(`/members/${memberId}/badges`),
+  autoIssue: (subjectKind, subjectId) => api.post('/badges/auto-issue', { subject_kind: subjectKind, subject_id: subjectId }),
 };
 
 // ---- MEMBER APPROVALS ----

@@ -17,7 +17,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { securityCheckpointApi } from '../services/api';
+import { securityCheckpointApi, badgesApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
 
 const POLL_MS = 1500;
@@ -431,6 +431,32 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
     catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
+  // Issue a wallet badge for the current subject if they don't have one, then open
+  // the printable badge in a popup and trigger window.print().
+  const [issuing, setIssuing] = useState(false);
+  const issueAndPrintBadge = async () => {
+    const subject = cur?.subject;
+    if (!subject?.id || !subject?.kind) return;
+    setIssuing(true);
+    try {
+      const r = await badgesApi.autoIssue(subject.kind, subject.id);
+      const badge = r.data;
+      toast.success(badge.was_created ? `Badge issued + queued for print: ${badge.name}` : `Existing badge re-printed: ${badge.name}`);
+      const base = process.env.REACT_APP_BACKEND_URL || window.location.origin;
+      // Open in a new window so the popup print doesn't blow away the security console
+      const url = `${base}/badge/${badge.token}?print=1`;
+      const popup = window.open(url, 'badge_print', 'width=420,height=640');
+      if (popup) {
+        // Best effort — the badge page itself reads ?print=1 and auto-fires window.print()
+        setTimeout(() => { try { popup.focus(); } catch { /* ignore */ } }, 500);
+      } else {
+        toast.info('Pop-up blocked — open it manually from the link in the dialog');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to issue badge');
+    } finally { setIssuing(false); }
+  };
+
   const returnId = async (grantId) => {
     try {
       await securityCheckpointApi.returnId(grantId);
@@ -490,8 +516,13 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
                     {subject.role && <p className="text-xs text-slate-500">{subject.role}{subject.email ? ` · ${subject.email}` : ''}</p>}
                     {subject.phone && <p className="text-xs text-slate-500">📞 {subject.phone}</p>}
                     <p className="text-sm italic text-slate-700 dark:text-slate-300 mt-2">{cur.reason}</p>
-                    <div className="flex gap-2 pt-2">
+                    <div className="flex gap-2 pt-2 flex-wrap">
                       <Button size="sm" variant="outline" onClick={finish} data-testid="cp-finish-btn"><X size={13} className="mr-1" /> Clear</Button>
+                      {decision === 'approved' && ['member', 'child', 'guest', 'user'].includes(subject.kind) && (
+                        <Button size="sm" variant="outline" disabled={issuing} onClick={issueAndPrintBadge} data-testid="cp-issue-badge-btn">
+                          {issuing ? 'Printing…' : '🖨️ Issue + Print Badge'}
+                        </Button>
+                      )}
                       {decision === 'denied' && (
                         <Button size="sm" className="bg-amber-500 hover:bg-amber-400 text-slate-900" onClick={() => setShowGrant(true)} data-testid="cp-grant-from-denied">
                           <UserPlus size={13} className="mr-1" /> Grant one-time entry instead

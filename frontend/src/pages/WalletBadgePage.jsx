@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 import api from '../services/api';
 import { getCountryOutline } from '../components/countryOutlines';
@@ -20,6 +20,8 @@ function genInitials(name, bg = '#fbbf24', fg = '#1a1a2e', sz = 128) {
 
 export default function WalletBadgePage() {
   const { token } = useParams();
+  const [searchParams] = useSearchParams();
+  const autoPrint = searchParams.get('print') === '1';
   const [badge, setBadge] = useState(null);
   const [error, setError] = useState(null);
 
@@ -33,8 +35,13 @@ export default function WalletBadgePage() {
           urls: [`/api/wallet-badge/${token}`, `/badge/${token}`],
         });
       }
+      // Kiosk auto-print: when opened with ?print=1, fire the browser print dialog
+      // after a short delay so the QR + photo have a chance to render.
+      if (autoPrint) {
+        setTimeout(() => { try { window.print(); } catch (e) { console.warn('auto-print:', e); } }, 700);
+      }
     }).catch(() => setError('Badge not found or expired'));
-  }, [token]);
+  }, [token, autoPrint]);
 
   if (error) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-4">

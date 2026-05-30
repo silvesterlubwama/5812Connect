@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { dashboardApi, eventsApi, tasksApi, financialApi, familiesApi, childrenApi, parentApi, productsApi, locationsApi, securityCheckpointApi } from '../services/api';
+import { hasDirectorAccess, useDocumentVisible } from '../utils/access';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -351,9 +352,7 @@ export default function DashboardPage() {
           )}
 
           {/* Live Checkpoint Map — Director+ only; auto-polls every 4s */}
-          {['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role) && (
-            <LiveCheckpointWidget />
-          )}
+          {hasDirectorAccess(user) && <LiveCheckpointWidget />}
         </div>
 
         {/* Quick Actions + Group Chart */}
@@ -407,8 +406,10 @@ function LiveCheckpointWidget() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const visible = useDocumentVisible();
 
   useEffect(() => {
+    if (!visible) return undefined;  // pause polling when tab is hidden
     let alive = true;
     const tick = async () => {
       try {
@@ -421,7 +422,7 @@ function LiveCheckpointWidget() {
     tick();
     const iv = setInterval(tick, 4000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
+  }, [visible]);
 
   if (loading) return null;
   if (rows.length === 0) return null;
