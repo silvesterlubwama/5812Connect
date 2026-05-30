@@ -23,6 +23,8 @@ const LOGIN_PATHS_SKIP_REDIRECT = [
   '/auth/forgot-password',
   '/kiosk/unlock',
   '/kiosk/pin-checkin',  // public kiosk lookup — 401 here means bad PIN, NOT session expiry
+  '/security/checkpoint/pair',  // bad pairing PIN — handled on the lock screen
+  '/security/checkpoint/',  // device-scoped sessions use X-Checkpoint-Session, not Bearer
 ];
 api.interceptors.response.use(
   res => res,
@@ -143,11 +145,43 @@ export const dashboardApi = {
 export const publicApi = {
   events: (params) => api.get('/public/events', { params }),
   venues: (params) => api.get('/public/venues', { params }),
+  resources: (params) => api.get('/public/resources', { params }),
   products: (params) => api.get('/public/products', { params }),
   createOrder: (data) => api.post('/public/orders', data),
   bookEvent: (data) => api.post('/public/bookings/event', data),
   bookSpace: (data) => api.post('/public/bookings/space', data),
+  bookResource: (data) => api.post('/public/bookings/resource', data),
   checkStatus: (params) => api.get('/public/bookings/status', { params }),
+};
+
+// ---- SECURITY CHECKPOINT ----
+// Two-API surfaces: admin (Bearer auth) and device (X-Checkpoint-Session header).
+const _sess = () => {
+  try { return localStorage.getItem('checkpoint_session') || ''; } catch { return ''; }
+};
+const _sessHeaders = () => ({ 'X-Checkpoint-Session': _sess() });
+export const securityCheckpointApi = {
+  // Admin / Director
+  list: () => api.get('/security/checkpoints'),
+  create: (data) => api.post('/security/checkpoints', data),
+  update: (id, data) => api.put(`/security/checkpoints/${id}`, data),
+  remove: (id) => api.delete(`/security/checkpoints/${id}`),
+  rotatePin: (id) => api.post(`/security/checkpoints/${id}/rotate-pin`),
+  events: (id, limit = 200) => api.get(`/security/checkpoints/${id}/events`, { params: { limit } }),
+  oneTime: (id) => api.get(`/security/checkpoints/${id}/one-time`),
+  // Device pairing (no auth)
+  pair: (data) => api.post('/security/checkpoint/pair', data),
+  unpair: () => api.post('/security/checkpoint/unpair', null, { headers: _sessHeaders() }),
+  // Device session calls
+  scan: (data) => api.post('/security/checkpoint/scan', data, { headers: _sessHeaders() }),
+  state: () => api.get('/security/checkpoint/state', { headers: _sessHeaders() }),
+  finish: () => api.post('/security/checkpoint/finish', {}, { headers: _sessHeaders() }),
+  scanReceipt: (data) => api.post('/security/checkpoint/scan/receipt', data, { headers: _sessHeaders() }),
+  grantOneTime: (formData) => api.post('/security/checkpoint/grant-one-time', formData, {
+    headers: { ..._sessHeaders(), 'Content-Type': 'multipart/form-data' },
+  }),
+  openOneTime: () => api.get('/security/checkpoint/one-time/open', { headers: _sessHeaders() }),
+  returnId: (grantId) => api.post(`/security/checkpoint/one-time/${grantId}/return-id`, null, { headers: _sessHeaders() }),
 };
 
 // ---- KIOSK ----

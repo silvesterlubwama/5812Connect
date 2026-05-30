@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 import { useUnsavedWarning, useFormDirty } from '../../hooks/useUnsavedWarning';
 import ActivityFeed from '../ActivityFeed';
 
-const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
+const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Security Contractor', 'Member', 'Parent', 'Customer', 'Guest'];
 const GROUPS = ['General', 'Staff', 'Volunteers', 'Youth', 'Women', 'Men', 'Children', 'Leadership'];
 const ID_TYPE_LABELS = {
   national_id: 'National ID', state_id: 'State ID', drivers_license: "Driver's Licence",

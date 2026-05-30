@@ -6,6 +6,31 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 137 (May 30, 2026)
+**Public marketplace: Resource (asset) booking tab. Pytest 59/59, lint clean.**
+
+### Backend
+- New `GET /api/public/resources?country=` — returns only resources where `is_bookable=true`, `staff_only != true`, `available != false`, and not consumables. Country filter walks the location parent chain just like `/public/venues`.
+- New `POST /api/public/bookings/resource` body `{name, email, phone?, resource_id, booking_date, start_time, end_time, purpose?}`:
+  - Validates the resource exists + is publicly bookable.
+  - Detects overlap conflicts on the same `resource_id + date` → **409** with friendly message.
+  - Inserts into `public_bookings` with `type='resource', status='pending'` AND mirrors into `resource_bookings` (with `source: 'public'`) so staff see the hold immediately on `/resources`.
+- Curl-verified: empty → bookable resource created → public list shows it → booking succeeds → overlapping booking returns 409.
+
+### Frontend (`PublicBookingsPage.jsx`)
+- New **"Book Resource"** TabsTrigger placed between Book Space and My Orders (testid `public-tab-resources`).
+- Resource cards display name, type, category, capacity/quantity, hourly rate (when set).
+- Resource booking dialog mirrors the venue flow: name/email/phone + date/start/end + purpose. Toast confirms with booking ID.
+- New `publicApi.resources()` + `publicApi.bookResource()` in `services/api.js`.
+
+### Why production "looked" missing
+On production, **no resource has `is_bookable=true`** flagged on it (the 4 seed resources — Conference Room A, Main Auditorium, PA System, Youth Hall — all have `is_bookable=null`). The tab now renders the empty state "No bookable resources available." Once staff edit a resource and tick "Bookable" via `/resources`, it will appear on the public marketplace.
+
+⚠️ **Production redeploy needed**. After redeploy:
+1. Open `/resources` as admin/director.
+2. Edit any resource you want publicly bookable → tick **"Bookable"** → Save.
+3. Visit `/marketplace` → **Book Resource** tab will list it.
+
 ## Recently Resolved — Iteration 136 (May 29, 2026)
 **Financial sheet-import: robust CSV parser + smarter amount parsing + clearer errors. Pytest 59/59.**
 

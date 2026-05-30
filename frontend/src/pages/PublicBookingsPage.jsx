@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Ticket, Building, Search, Calendar, Clock, Users, MapPin, CreditCard, ChevronDown, ExternalLink, Globe, Shield, Lock, ChevronRight, ShoppingCart } from 'lucide-react';
+import { Ticket, Building, Search, Calendar, Clock, Users, MapPin, CreditCard, ChevronDown, ExternalLink, Globe, Shield, Lock, ChevronRight, ShoppingCart, Package } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -35,11 +35,14 @@ const PAYMENT_METHODS = [
 export default function PublicBookingsPage() {
   const [events, setEvents] = useState([]);
   const [venues, setVenues] = useState([]);
+  const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedVenue, setSelectedVenue] = useState(null);
+  const [selectedResource, setSelectedResource] = useState(null);
   const [regData, setRegData] = useState({ name: '', email: '', phone: '', num_tickets: 1, payment_method: 'card', agreed_to_terms: false, tier_id: '' });
   const [spaceData, setSpaceData] = useState({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
+  const [resourceData, setResourceData] = useState({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
   const [statusQuery, setStatusQuery] = useState({ booking_id: '', email: '', phone: '' });
   const [statusResults, setStatusResults] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -74,8 +77,16 @@ export default function PublicBookingsPage() {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.venues({ country: countryFilter !== 'ALL' ? countryFilter : undefined }), publicApi.products()])
-      .then(([evRes, venRes, prodRes]) => { setEvents(evRes.data); setVenues(venRes.data); setShopProducts(prodRes.data || []); })
+    Promise.all([
+      publicApi.events({ country: countryFilter !== 'ALL' ? countryFilter : undefined }),
+      publicApi.venues({ country: countryFilter !== 'ALL' ? countryFilter : undefined }),
+      publicApi.resources({ country: countryFilter !== 'ALL' ? countryFilter : undefined }),
+      publicApi.products(),
+    ])
+      .then(([evRes, venRes, resRes, prodRes]) => {
+        setEvents(evRes.data); setVenues(venRes.data);
+        setResources(resRes.data || []); setShopProducts(prodRes.data || []);
+      })
       .catch(() => toast.error('Failed to load data'))
       .finally(() => setLoading(false));
   }, [countryFilter]);
@@ -162,6 +173,19 @@ export default function PublicBookingsPage() {
       const res = await publicApi.bookSpace({ ...spaceData, venue_id: selectedVenue.id });
       toast.success(`Space booking submitted! ID: ${res.data.id}`);
       setSelectedVenue(null);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to book'); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleResourceBooking = async (e) => {
+    e.preventDefault();
+    if (!selectedResource) return;
+    setSubmitting(true);
+    try {
+      const res = await publicApi.bookResource({ ...resourceData, resource_id: selectedResource.id });
+      toast.success(`Resource booking submitted! ID: ${res.data.id}`);
+      setSelectedResource(null);
+      setResourceData({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' });
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to book'); }
     finally { setSubmitting(false); }
   };
@@ -266,6 +290,7 @@ export default function PublicBookingsPage() {
             <TabsTrigger value="events" className="gap-2"><Ticket size={15} />Events</TabsTrigger>
             <TabsTrigger value="shop" className="gap-2"><ShoppingCart size={15} />Shop</TabsTrigger>
             <TabsTrigger value="venues" className="gap-2"><Building size={15} />Book Space</TabsTrigger>
+            <TabsTrigger value="resources" className="gap-2" data-testid="public-tab-resources"><Package size={15} />Book Resource</TabsTrigger>
             <TabsTrigger value="status" className="gap-2"><Search size={15} />My Orders</TabsTrigger>
           </TabsList>
 
@@ -382,6 +407,35 @@ export default function PublicBookingsPage() {
                       <div className="flex gap-2 text-xs">
                         <Badge variant="outline"><Users size={10} className="mr-1" />{venue.capacity}</Badge>
                         {venue.hourly_rate && <Badge variant="outline">{venue.hourly_rate?.toLocaleString()}/hr</Badge>}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* RESOURCES TAB — bookable assets (chairs, equipment, vehicles, etc.) */}
+          <TabsContent value="resources" data-testid="public-resources-tab">
+            {loading ? <div className="h-48 bg-card border rounded-xl animate-pulse" /> : resources.length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">No bookable resources available{countryFilter !== 'ALL' ? ' in this country' : ''}.</p>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {resources.map(r => (
+                  <Card
+                    key={r.id}
+                    className="rounded-xl hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => { setSelectedResource(r); setResourceData({ name: '', email: '', phone: '', booking_date: '', start_time: '', end_time: '', purpose: '' }); }}
+                    data-testid={`public-resource-card-${r.id}`}
+                  >
+                    <CardContent className="p-4">
+                      <h4 className="font-semibold text-sm mb-1 flex items-center gap-1.5"><Package size={13} className="text-primary" />{r.name}</h4>
+                      {r.description && <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{r.description}</p>}
+                      <div className="flex flex-wrap gap-1.5 text-xs">
+                        {r.type && <Badge variant="outline" className="text-[10px] capitalize">{r.type}</Badge>}
+                        {r.category && <Badge variant="outline" className="text-[10px]">{r.category}</Badge>}
+                        {(r.capacity || r.quantity) && <Badge variant="outline" className="text-[10px]"><Users size={9} className="mr-0.5" />{r.capacity || r.quantity}</Badge>}
+                        {r.hourly_rate ? <Badge variant="outline" className="text-[10px]">{r.hourly_rate.toLocaleString()}/hr</Badge> : null}
                       </div>
                     </CardContent>
                   </Card>
@@ -528,6 +582,34 @@ export default function PublicBookingsPage() {
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Purpose</Label><Input value={spaceData.purpose} onChange={e => setSpaceData({...spaceData, purpose: e.target.value})} /></div>
             <Button type="submit" className="w-full" disabled={submitting}>{submitting ? 'Submitting...' : 'Request Booking'}</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Resource Booking Dialog */}
+      <Dialog open={!!selectedResource} onOpenChange={(open) => !open && setSelectedResource(null)}>
+        <DialogContent className="max-w-md" data-testid="public-resource-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Package size={16} className="text-primary" /> Book: {selectedResource?.name}</DialogTitle>
+            <DialogDescription>
+              {selectedResource?.type && <span className="capitalize">{selectedResource.type}</span>}
+              {selectedResource?.hourly_rate ? ` · ${selectedResource.hourly_rate.toLocaleString()}/hr` : ''}
+              {selectedResource?.description && <span className="block mt-1 text-[11px]">{selectedResource.description}</span>}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleResourceBooking} className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1.5"><Label className="text-xs">Name *</Label><Input value={resourceData.name} onChange={e => setResourceData({...resourceData, name: e.target.value})} required data-testid="rb-name" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Email *</Label><Input type="email" value={resourceData.email} onChange={e => setResourceData({...resourceData, email: e.target.value})} required data-testid="rb-email" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={resourceData.phone} onChange={e => setResourceData({...resourceData, phone: e.target.value})} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Date *</Label><Input type="date" value={resourceData.booking_date} onChange={e => setResourceData({...resourceData, booking_date: e.target.value})} required data-testid="rb-date" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Start *</Label><Input type="time" value={resourceData.start_time} onChange={e => setResourceData({...resourceData, start_time: e.target.value})} required data-testid="rb-start" /></div>
+              <div className="space-y-1.5"><Label className="text-xs">End *</Label><Input type="time" value={resourceData.end_time} onChange={e => setResourceData({...resourceData, end_time: e.target.value})} required data-testid="rb-end" /></div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Purpose</Label><Input placeholder="What will you use it for?" value={resourceData.purpose} onChange={e => setResourceData({...resourceData, purpose: e.target.value})} /></div>
+            <Button type="submit" className="w-full" disabled={submitting} data-testid="rb-submit">{submitting ? 'Submitting...' : 'Request Booking'}</Button>
           </form>
         </DialogContent>
       </Dialog>

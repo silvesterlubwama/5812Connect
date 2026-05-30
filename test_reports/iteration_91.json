@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 91 Security Checkpoint Kiosk — backend + frontend both verified. Created /app/backend/tests/test_iteration91_security_checkpoint.py (23 tests, 100% pass). Regression suite (smoke + iter115 + iter116 + iter90) still 59/59. UI verified: pair view loads, guest pair → cp-guest-view, security pair → cp-security-view, grant + receipt dialogs open with all testids, 401 from /security/checkpoint/* does NOT redirect to /login, admin /admin → SecurityCheckpoints card opens dialog with cp-create-* fields.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "/security-checkpoint (Security console header)",
+        "issues": [
+          "Receipt Exit-Scan button label appears with very low contrast (almost invisible white text) in the top-right header bar at viewport 1280px. The One-Time Entry button beside it renders correctly. Likely a Button variant='outline' inheriting wrong text class on the slate-100 toolbar. Visible in screenshot cp_security_view.png."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration91_security_checkpoint.py",
+    "/app/test_reports/pytest/iter91_security.xml"
+  ],
+  "action_items": [
+    "Optional: tighten contrast of the 'Receipt Exit-Scan' Button in the security console header (text barely visible against slate-100 background).",
+    "Phase 2 follow-up flagged by main agent: OCR auto-fill on one-time grants and full per-item receipt approval logic + WebSocket replacing 1.5s polling — intentionally deferred."
+  ],
+  "critical_code_review_comments": [
+    "security_checkpoint.py L160: `db.security_checkpoints.find_one({'pairing_pin': pin, 'active': True})` — PIN comparison is plaintext + unindexed. With only 1M possible 6-digit values, an attacker can brute force pair endpoints. Recommend (a) add unique index on pairing_pin, (b) add per-IP rate limiting on /checkpoint/pair (currently unlimited 401 attempts), and (c) consider storing pairing_pin hashed with a lookup-id field — but PIN-cleartext is acknowledged as needed by admin UI for display, so at minimum add rate limiting.",
+    "security_checkpoint.py L209-222: payload lookup tries wallet_badges twice (once for nfc, once for qr) with same shape — minor DRY duplication.",
+    "_resolve_subject lower()s the email in the fallback search (L235) but does not lower-case the bare-string match in earlier branches — case-sensitivity inconsistency.",
+    "/checkpoint/scan (L304) does not validate that the checkpoint is still active in time-sensitive way; cp.active is checked but a session bound to a checkpoint that was deactivated then reactivated still works — acceptable but worth documenting.",
+    "_audit() is called on create but not on delete/update/rotate-pin (L130/105/118 has only delete) — partial audit coverage; rotate-pin should be audited (high-value security action).",
+    "Frontend SecurityCheckpointPage receipt button contrast bug noted above.",
+    "Local fallback for ID image uses /app/backend/uploads/checkpoint-ids but route is documented as /api/uploads/ — confirm a static mount exists for that path or images become unviewable in low-cloud-availability mode."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration91_security_checkpoint.py"
+  ],
+  "success_rate": {
+    "backend": "100% (23/23 new + 59/59 regression)",
+    "frontend": "100% (all critical flows + interceptor)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Test fixtures create + delete checkpoints scoped per test (TEST_Checkpoint_Iter91, TEST_Rotate, UI_TEST_Checkpoint). All cleaned up via fixture teardown / explicit DELETE.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend file /app/backend/tests/test_iteration91_security_checkpoint.py covers admin CRUD, pair (good/bad pin), scan (admin UUID approval + denial), state guest-vs-security, finish, one-time grant (security/guest/missing-id/with-image), open list, return-id, receipt 404, admin audit endpoints, and rotate-pin revocation. Re-run with: pytest tests/test_iteration91_security_checkpoint.py -v. The pair endpoint uses cleartext PIN lookup; if rate-limiting is later added, the bad-PIN tests may need throttling-aware retries.",
+  "rca of the issue": "No bugs requiring RCA — feature works end-to-end. Sole observation is a low-contrast button text in the security console header (visual only, not functional)."
+}

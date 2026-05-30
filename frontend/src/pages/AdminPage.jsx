@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import api, { adminApi, documentsApi, locationsApi } from '../services/api';
+import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
@@ -340,7 +340,10 @@ export default function AdminPage() {
 
       {/* Module Access Management — admin only — finance, HR, sales, banking, accounting, social work, restricted */}
       {['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
-        <ModuleAccessManager />
+        <>
+          <ModuleAccessManager />
+          <SecurityCheckpointsManager />
+        </>
       )}
     </div>
   );
@@ -607,5 +610,132 @@ function ExpiringGrantsBanner() {
         })}
       </div>
     </div>
+  );
+}
+
+
+// ============== SECURITY CHECKPOINTS MANAGER ==============
+function SecurityCheckpointsManager() {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ name: '', location_id: '', description: '', requires_id_for_one_time: true });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [r, locs] = await Promise.all([securityCheckpointApi.list(), locationsApi.list()]);
+      setRows(r.data || []);
+      setLocations(locs.data || []);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load checkpoints'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { if (open) load(); }, [open, load]);
+
+  const create = async (e) => {
+    e?.preventDefault?.();
+    if (!form.name.trim() || !form.location_id) { toast.error('Name and location are required'); return; }
+    setCreating(true);
+    try {
+      await securityCheckpointApi.create(form);
+      toast.success(`Checkpoint created. PIN visible in the list.`);
+      setForm({ name: '', location_id: '', description: '', requires_id_for_one_time: true });
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    finally { setCreating(false); }
+  };
+
+  const rotate = async (cp) => {
+    if (!window.confirm(`Rotate PIN for "${cp.name}"? Paired devices will need to re-pair.`)) return;
+    try {
+      const r = await securityCheckpointApi.rotatePin(cp.id);
+      toast.success(`New PIN: ${r.data.pairing_pin}`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const remove = async (cp) => {
+    if (!window.confirm(`Delete checkpoint "${cp.name}"? All paired devices will be revoked.`)) return;
+    try {
+      await securityCheckpointApi.remove(cp.id);
+      toast.success('Deleted');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  return (
+    <>
+      <Card className="rounded-xl mt-4 cursor-pointer hover:border-primary/40" onClick={() => setOpen(true)} data-testid="security-checkpoints-card">
+        <CardContent className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Shield size={18} className="text-emerald-600" />
+            <div>
+              <p className="font-medium text-sm">Security Checkpoints</p>
+              <p className="text-xs text-muted-foreground">Create gate-access kiosks for restricted locations. Each checkpoint has a 6-digit pairing PIN for the guest + security devices.</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline">Manage</Button>
+        </CardContent>
+      </Card>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Shield size={16} className="text-emerald-600" /> Security Checkpoints</DialogTitle>
+            <DialogDescription className="text-xs">
+              Each checkpoint pairs a guest-facing display with a security-contractor console using the same 6-digit PIN.
+              Open <code className="px-1 rounded bg-muted">/security-checkpoint</code> on each device to pair.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Create form */}
+          <form onSubmit={create} className="space-y-3 p-3 rounded border bg-muted/30 mt-3" data-testid="cp-create-form">
+            <p className="text-xs font-semibold">Create new checkpoint</p>
+            <div className="grid sm:grid-cols-2 gap-2">
+              <div className="space-y-1"><Label className="text-xs">Name *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Shelter Main Gate" required data-testid="cp-create-name" /></div>
+              <div className="space-y-1">
+                <Label className="text-xs">Location (restricted) *</Label>
+                <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={form.location_id} onChange={e => setForm({ ...form, location_id: e.target.value })} required data-testid="cp-create-location">
+                  <option value="">Select location…</option>
+                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}{l.is_restricted ? ' (restricted)' : ''}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1 sm:col-span-2"><Label className="text-xs">Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></div>
+              <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                <input type="checkbox" checked={form.requires_id_for_one_time} onChange={e => setForm({ ...form, requires_id_for_one_time: e.target.checked })} />
+                <span>Require ID photo when granting one-time entries</span>
+              </label>
+            </div>
+            <Button type="submit" size="sm" disabled={creating} data-testid="cp-create-submit">{creating ? 'Creating…' : 'Create checkpoint + PIN'}</Button>
+          </form>
+
+          {/* List */}
+          <div className="space-y-2 mt-3">
+            {loading ? <div className="space-y-2">{[1, 2].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div> : rows.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">No checkpoints yet — create one above.</p>
+            ) : rows.map(cp => (
+              <div key={cp.id} className="p-3 rounded border bg-card" data-testid={`cp-row-${cp.id}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold">{cp.name} <Badge variant="outline" className="text-[10px] ml-1">{cp.location_name}</Badge></p>
+                    {cp.description && <p className="text-[11px] text-muted-foreground">{cp.description}</p>}
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-[10px] uppercase text-muted-foreground">Pairing PIN</span>
+                      <code className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 text-sm font-mono tracking-widest">{cp.pairing_pin}</code>
+                      <span className="text-[10px] text-muted-foreground">· {cp.paired_devices ?? 0} paired device{cp.paired_devices === 1 ? '' : 's'}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1.5 shrink-0">
+                    <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => rotate(cp)} data-testid={`cp-rotate-${cp.id}`}><Key size={11} className="mr-1" /> Rotate PIN</Button>
+                    <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => remove(cp)} data-testid={`cp-delete-${cp.id}`}><Trash2 size={11} className="mr-1" /> Delete</Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

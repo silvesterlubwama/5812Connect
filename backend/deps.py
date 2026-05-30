@@ -134,6 +134,9 @@ ROLE_LEVELS = {
     "Executive Director": 9, "Adviser": 8.5, "Director": 8,
     "Manager": 7, "Leader": 6.5, "Coordinator": 6,
     "Staff": 5, "Volunteer": 4,
+    # Security Contractor — private contractor who only mans the security checkpoint
+    # kiosk. Sits between Member and Volunteer so they can't reach any privileged data.
+    "Security Contractor": 3.5,
     "Member": 3, "Parent": 2,
     "Customer": 1, "Guest": 1,
 }

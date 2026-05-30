@@ -1,0 +1,702 @@
+/**
+ * Security Checkpoint Kiosk — public-facing lockable terminal.
+ *
+ * Single route `/security-checkpoint` with three view-states:
+ *   1. PAIR     — enter 6-digit PIN + pick mode (guest|security)
+ *   2. GUEST    — large-format approval display; auto-resets after 15s
+ *   3. SECURITY — operator console: live event, scan history, one-time-grant flow
+ *
+ * Session token persists in localStorage so the device can be locked + power-cycled
+ * without re-pairing (TTL = 12h on the backend).
+ */
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt } from 'lucide-react';
+import { Card, CardContent } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { securityCheckpointApi } from '../services/api';
+import { toast } from 'sonner';
+
+const POLL_MS = 1500;
+
+const decisionStyles = {
+  approved: { bg: 'bg-emerald-500', text: 'text-white', icon: ShieldCheck, label: 'APPROVED' },
+  denied:   { bg: 'bg-rose-600',    text: 'text-white', icon: ShieldX,    label: 'DENIED'   },
+  unknown:  { bg: 'bg-amber-500',   text: 'text-white', icon: AlertTriangle, label: 'UNKNOWN' },
+  pending:  { bg: 'bg-slate-500',   text: 'text-white', icon: Clock,      label: 'PENDING'  },
+};
+
+const _loadSession = () => {
+  try {
+    return {
+      token: localStorage.getItem('checkpoint_session') || '',
+      mode: localStorage.getItem('checkpoint_mode') || '',
+      checkpoint: JSON.parse(localStorage.getItem('checkpoint_meta') || 'null'),
+    };
+  } catch { return { token: '', mode: '', checkpoint: null }; }
+};
+
+const _saveSession = (token, mode, checkpoint) => {
+  localStorage.setItem('checkpoint_session', token);
+  localStorage.setItem('checkpoint_mode', mode);
+  localStorage.setItem('checkpoint_meta', JSON.stringify(checkpoint));
+};
+
+const _clearSession = () => {
+  localStorage.removeItem('checkpoint_session');
+  localStorage.removeItem('checkpoint_mode');
+  localStorage.removeItem('checkpoint_meta');
+};
+
+export default function SecurityCheckpointPage() {
+  const [{ token, mode, checkpoint }, setSession] = useState(_loadSession());
+  const [locked, setLocked] = useState(false);
+
+  if (!token) return <PairView onPaired={(t, m, cp) => { _saveSession(t, m, cp); setSession({ token: t, mode: m, checkpoint: cp }); }} />;
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+  const unpair = async () => {
+    try { await securityCheckpointApi.unpair(); } catch { /* ignore */ }
+    _clearSession();
+    setSession({ token: '', mode: '', checkpoint: null });
+  };
+  if (mode === 'guest') return <GuestView checkpoint={checkpoint} onUnpair={unpair} onLock={() => setLocked(true)} />;
+  return <SecurityView checkpoint={checkpoint} onUnpair={unpair} onLock={() => setLocked(true)} />;
+}
+
+// ============================================================
+// PAIR — entry screen
+// ============================================================
+function PairView({ onPaired }) {
+  const [pin, setPin] = useState('');
+  const [mode, setMode] = useState('');
+  const [label, setLabel] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (pin.length !== 6 || !mode) { toast.error('Enter the 6-digit PIN and pick a mode'); return; }
+    setSubmitting(true);
+    try {
+      const r = await securityCheckpointApi.pair({ pin, mode, device_label: label });
+      toast.success(`Paired as ${mode === 'guest' ? 'Guest display' : 'Security console'}`);
+      onPaired(r.data.session_token, r.data.mode, r.data.checkpoint);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Pairing failed');
+    } finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100 flex items-center justify-center p-6">
+      <Card className="w-full max-w-md rounded-2xl shadow-2xl border-slate-700/40 bg-slate-900/70 backdrop-blur">
+        <CardContent className="p-7 space-y-5">
+          <div className="text-center space-y-1">
+            <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400 mb-2">
+              <ShieldCheck size={28} />
+            </div>
+            <h1 className="text-xl font-bold">Security Checkpoint</h1>
+            <p className="text-xs text-slate-400">Enter the 6-digit pairing PIN provided by your administrator.</p>
+          </div>
+          <form onSubmit={submit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-slate-300">Pairing PIN</Label>
+              <Input
+                inputMode="numeric"
+                maxLength={6}
+                autoFocus
+                value={pin}
+                onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="text-center text-2xl tracking-[0.6em] font-mono h-14 bg-slate-800 border-slate-700 text-slate-100"
+                data-testid="cp-pair-pin"
+                placeholder="••••••"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-slate-300">This device is</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className={`p-3 rounded-xl border text-left transition-colors ${mode === 'guest' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'}`}
+                  onClick={() => setMode('guest')}
+                  data-testid="cp-pair-mode-guest"
+                >
+                  <p className="font-semibold text-sm">Guest Display</p>
+                  <p className="text-[10px] opacity-75 mt-0.5">Faces the visitor</p>
+                </button>
+                <button
+                  type="button"
+                  className={`p-3 rounded-xl border text-left transition-colors ${mode === 'security' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600'}`}
+                  onClick={() => setMode('security')}
+                  data-testid="cp-pair-mode-security"
+                >
+                  <p className="font-semibold text-sm">Security Console</p>
+                  <p className="text-[10px] opacity-75 mt-0.5">Contractor operator</p>
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-slate-300">Device label <span className="text-slate-500">(optional)</span></Label>
+              <Input
+                value={label}
+                onChange={e => setLabel(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-slate-100"
+                placeholder="e.g. North Gate Tablet"
+              />
+            </div>
+            <Button type="submit" disabled={submitting || pin.length !== 6 || !mode} className="w-full h-11 bg-emerald-600 hover:bg-emerald-500" data-testid="cp-pair-submit">
+              {submitting ? 'Pairing…' : 'Pair Device'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// LOCK — temporary lock screen (re-uses pairing PIN)
+// ============================================================
+function LockScreen({ onUnlock }) {
+  const [pin, setPin] = useState('');
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6" data-testid="cp-lock-screen">
+      <Card className="w-full max-w-sm rounded-2xl border-slate-700/40 bg-slate-900/80">
+        <CardContent className="p-6 space-y-4 text-center">
+          <Lock size={36} className="mx-auto text-slate-400" />
+          <h2 className="font-semibold">Device Locked</h2>
+          <Input
+            inputMode="numeric"
+            maxLength={6}
+            value={pin}
+            onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="Pairing PIN"
+            className="text-center text-2xl tracking-[0.6em] font-mono h-12 bg-slate-800 border-slate-700"
+            autoFocus
+            data-testid="cp-lock-pin"
+          />
+          <Button
+            className="w-full bg-emerald-600 hover:bg-emerald-500"
+            disabled={pin.length !== 6}
+            onClick={async () => {
+              try {
+                // Verify by attempting to call /state — but we don't actually rotate session here.
+                // The lock is local-only; PIN check happens against the active checkpoint via re-pair.
+                const r = await securityCheckpointApi.pair({ pin, mode: 'guest', device_label: 'lock-test' });
+                if (r.data.checkpoint?.id) { onUnlock(); }
+              } catch (e) {
+                toast.error(e.response?.data?.detail || 'Wrong PIN');
+              }
+            }}
+            data-testid="cp-lock-unlock"
+          >
+            <Unlock size={14} className="mr-2" /> Unlock
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// GUEST — large display facing the visitor
+// ============================================================
+function GuestView({ checkpoint, onUnpair, onLock }) {
+  const [current, setCurrent] = useState(null);
+  const [serverNow, setServerNow] = useState(null);
+  const nfcRef = useRef(null);
+  const keystrokeBuffer = useRef('');
+  const keystrokeTimer = useRef(null);
+
+  // Poll backend state
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await securityCheckpointApi.state();
+        if (!alive) return;
+        setCurrent(r.data.current);
+        setServerNow(r.data.now);
+      } catch { /* tolerate transient errors */ }
+    };
+    tick();
+    const iv = setInterval(tick, POLL_MS);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  // Keyboard-emulating barcode scanner: capture rapid keystrokes ending in Enter
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Enter') {
+        const payload = keystrokeBuffer.current.trim();
+        keystrokeBuffer.current = '';
+        if (payload.length >= 3) submitScan('qr', payload);
+        return;
+      }
+      if (e.key.length === 1) {
+        keystrokeBuffer.current += e.key;
+        clearTimeout(keystrokeTimer.current);
+        keystrokeTimer.current = setTimeout(() => { keystrokeBuffer.current = ''; }, 250);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Web NFC — best-effort (Android Chrome only)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('NDEFReader' in window)) return;
+    let reader;
+    (async () => {
+      try {
+        reader = new window.NDEFReader();
+        await reader.scan();
+        reader.onreading = (ev) => {
+          const dec = new TextDecoder();
+          for (const rec of ev.message.records || []) {
+            try {
+              const data = dec.decode(rec.data);
+              if (data) { submitScan('nfc', data); break; }
+            } catch { /* ignore */ }
+          }
+        };
+        nfcRef.current = reader;
+      } catch (e) { console.warn('NFC unavailable:', e.message || e); }
+    })();
+    return () => { /* NDEFReader auto-cleans */ };
+  }, []);
+
+  const submitScan = async (scan_type, payload) => {
+    try {
+      const r = await securityCheckpointApi.scan({ scan_type, payload });
+      setCurrent(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Scan failed');
+    }
+  };
+
+  const tap = () => {
+    securityCheckpointApi.finish().catch(() => {});
+    setCurrent(null);
+  };
+
+  // Auto-clear on the client when clear_at expires (in case backend hasn't been polled yet)
+  useEffect(() => {
+    if (!current?.clear_at || !serverNow) return;
+    const remain = new Date(current.clear_at).getTime() - new Date(serverNow).getTime();
+    if (remain <= 0) { setCurrent(null); return; }
+    const t = setTimeout(() => setCurrent(null), remain);
+    return () => clearTimeout(t);
+  }, [current?.clear_at, serverNow]);
+
+  const decision = current?.decision || 'pending';
+  const style = decisionStyles[decision] || decisionStyles.pending;
+  const Icon = style.icon;
+  const subject = current?.subject || {};
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col" data-testid="cp-guest-view">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={18} className="text-emerald-400" />
+          <span className="text-sm font-semibold">{checkpoint?.name}</span>
+          <span className="text-[11px] text-slate-500">· {checkpoint?.location_name}</span>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="ghost" className="text-slate-300 hover:text-slate-100" onClick={onLock} data-testid="cp-lock-btn"><Lock size={14} /></Button>
+          <Button size="sm" variant="ghost" className="text-slate-400" onClick={onUnpair} data-testid="cp-unpair"><LogOut size={14} /></Button>
+        </div>
+      </header>
+
+      <main className="flex-1 flex flex-col items-center justify-center p-8 cursor-pointer" onClick={current ? tap : undefined}>
+        {!current ? (
+          <div className="text-center space-y-5">
+            <div className="inline-flex h-32 w-32 items-center justify-center rounded-full bg-slate-800/70 border-2 border-dashed border-slate-700">
+              <ScanLine size={56} className="text-slate-400" />
+            </div>
+            <h2 className="text-3xl font-bold">Tap your badge or scan your QR</h2>
+            <p className="text-sm text-slate-400 max-w-md">Hold your NFC badge to the reader, or scan your QR code with the barcode scanner. The system will identify you automatically.</p>
+          </div>
+        ) : (
+          <div className="text-center space-y-6 w-full max-w-2xl">
+            <div className={`inline-flex h-36 w-36 items-center justify-center rounded-full ${style.bg} ${style.text} shadow-2xl`} data-testid="cp-decision-badge">
+              <Icon size={72} />
+            </div>
+            <h2 className={`text-5xl font-extrabold ${decision === 'approved' ? 'text-emerald-400' : decision === 'denied' ? 'text-rose-400' : 'text-amber-400'}`}>
+              {style.label}
+            </h2>
+            {subject?.photo_url && (
+              <img src={subject.photo_url.startsWith('http') ? subject.photo_url : `${process.env.REACT_APP_BACKEND_URL}${subject.photo_url}`}
+                   alt="" className="h-32 w-32 rounded-full object-cover mx-auto border-4 border-slate-700" />
+            )}
+            <div className="space-y-1">
+              <p className="text-3xl font-bold" data-testid="cp-subject-name">{subject.name || 'Unknown'}</p>
+              {subject.role && <p className="text-sm text-slate-400">{subject.role}</p>}
+            </div>
+            <p className="text-sm text-slate-300 italic">{current.reason}</p>
+            <p className="text-[11px] text-slate-500">Tap anywhere to finish, or auto-clears in {Math.max(0, Math.ceil((new Date(current.clear_at).getTime() - Date.now()) / 1000))}s</p>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ============================================================
+// SECURITY — operator console
+// ============================================================
+function SecurityView({ checkpoint, onUnpair, onLock }) {
+  const [state, setState] = useState({ current: null, history: [], now: null });
+  const [showGrant, setShowGrant] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [openOneTime, setOpenOneTime] = useState([]);
+
+  // Poll
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const [s, ot] = await Promise.all([
+          securityCheckpointApi.state(),
+          securityCheckpointApi.openOneTime().catch(() => ({ data: [] })),
+        ]);
+        if (!alive) return;
+        setState(s.data);
+        setOpenOneTime(ot.data || []);
+      } catch { /* ignore */ }
+    };
+    tick();
+    const iv = setInterval(tick, POLL_MS);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  const finish = async () => {
+    try { await securityCheckpointApi.finish(); setState(prev => ({ ...prev, current: null })); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const returnId = async (grantId) => {
+    try {
+      await securityCheckpointApi.returnId(grantId);
+      toast.success('ID marked returned');
+      setOpenOneTime(prev => prev.filter(o => o.id !== grantId));
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const cur = state.current;
+  const decision = cur?.decision;
+  const style = cur ? (decisionStyles[decision] || decisionStyles.pending) : null;
+  const Icon = style?.icon || ScanLine;
+  const subject = cur?.subject || {};
+
+  return (
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100" data-testid="cp-security-view">
+      <header className="bg-slate-900 text-slate-100 px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={18} className="text-emerald-400" />
+          <div>
+            <p className="text-sm font-semibold">{checkpoint?.name} — Security Console</p>
+            <p className="text-[11px] text-slate-400">{checkpoint?.location_name}</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="border-slate-700 text-slate-100 hover:bg-slate-800" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
+          <Button size="sm" variant="outline" className="border-slate-700 text-slate-100 hover:bg-slate-800" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
+          <Button size="sm" variant="ghost" className="text-slate-300" onClick={onLock}><Lock size={14} /></Button>
+          <Button size="sm" variant="ghost" className="text-slate-400" onClick={onUnpair}><LogOut size={14} /></Button>
+        </div>
+      </header>
+
+      <div className="grid lg:grid-cols-3 gap-4 p-4">
+        {/* CURRENT SCAN */}
+        <div className="lg:col-span-2 space-y-4">
+          <Card className="rounded-xl">
+            <CardContent className="p-5">
+              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><ScanLine size={14} /> Live Scan</h3>
+              {!cur ? (
+                <div className="py-16 text-center text-slate-500 dark:text-slate-400">
+                  <ScanLine size={48} className="mx-auto opacity-30 mb-3" />
+                  <p className="text-sm">Waiting for the next scan…</p>
+                  <p className="text-[11px] mt-1">Guest device handles NFC/QR pickup. Scans appear here within a second.</p>
+                </div>
+              ) : (
+                <div className="flex items-start gap-5">
+                  <div className={`h-24 w-24 shrink-0 rounded-full flex items-center justify-center ${style.bg} ${style.text}`}>
+                    <Icon size={42} />
+                  </div>
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge className={`${style.bg} ${style.text} text-[10px]`}>{style.label}</Badge>
+                      <Badge variant="outline" className="text-[10px] capitalize">{cur.kind?.replace('_', ' ')}</Badge>
+                      <span className="text-[10px] text-slate-500">{cur.scan_type}</span>
+                    </div>
+                    <p className="text-lg font-bold">{subject.name || 'Unknown subject'}</p>
+                    {subject.role && <p className="text-xs text-slate-500">{subject.role}{subject.email ? ` · ${subject.email}` : ''}</p>}
+                    {subject.phone && <p className="text-xs text-slate-500">📞 {subject.phone}</p>}
+                    <p className="text-sm italic text-slate-700 dark:text-slate-300 mt-2">{cur.reason}</p>
+                    <div className="flex gap-2 pt-2">
+                      <Button size="sm" variant="outline" onClick={finish} data-testid="cp-finish-btn"><X size={13} className="mr-1" /> Clear</Button>
+                      {decision === 'denied' && (
+                        <Button size="sm" className="bg-amber-500 hover:bg-amber-400 text-slate-900" onClick={() => setShowGrant(true)} data-testid="cp-grant-from-denied">
+                          <UserPlus size={13} className="mr-1" /> Grant one-time entry instead
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* HISTORY */}
+          <Card className="rounded-xl">
+            <CardContent className="p-5">
+              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><History size={14} /> Recent activity</h3>
+              {state.history.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-6">No events yet today.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                  {state.history.map(ev => {
+                    const sty = decisionStyles[ev.decision] || decisionStyles.pending;
+                    return (
+                      <div key={ev.id} className="flex items-center gap-3 text-xs p-2 rounded border bg-slate-50 dark:bg-slate-800/50">
+                        <Badge className={`${sty.bg} ${sty.text} text-[10px]`}>{sty.label}</Badge>
+                        <span className="flex-1 min-w-0 truncate">
+                          <span className="font-medium">{ev.subject?.name || ev.payload || 'Unknown'}</span>
+                          <span className="text-slate-500"> · {ev.reason}</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 shrink-0">{ev.created_at?.slice(11, 16)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* OPEN ONE-TIME ENTRIES */}
+        <Card className="rounded-xl h-fit">
+          <CardContent className="p-5">
+            <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+              <Clock size={14} className="text-amber-500" /> Holding {openOneTime.length} ID{openOneTime.length === 1 ? '' : 's'}
+            </h3>
+            {openOneTime.length === 0 ? (
+              <p className="text-xs text-slate-500 text-center py-6">No physical IDs currently held.</p>
+            ) : (
+              <div className="space-y-2">
+                {openOneTime.map(o => (
+                  <div key={o.id} className="p-2 rounded border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40" data-testid={`cp-otg-${o.id}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">{o.name}</p>
+                        <p className="text-[10px] text-slate-500">{o.phone || '—'}</p>
+                        <p className="text-[10px] text-slate-500 italic">{o.reason}</p>
+                        {o.id_image_url && (
+                          <a href={o.id_image_url.startsWith('http') ? o.id_image_url : `${process.env.REACT_APP_BACKEND_URL}${o.id_image_url}`}
+                             target="_blank" rel="noopener noreferrer"
+                             className="text-[10px] text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 mt-1">
+                            <Camera size={10} /> ID photo
+                          </a>
+                        )}
+                      </div>
+                      <Button size="sm" className="h-7 text-[11px]" onClick={() => returnId(o.id)} data-testid={`cp-return-${o.id}`}>
+                        <CheckCircle size={11} className="mr-1" /> Return ID
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ONE-TIME GRANT DIALOG */}
+      <OneTimeGrantDialog open={showGrant} onClose={() => setShowGrant(false)} requireId={checkpoint?.requires_id_for_one_time !== false} />
+
+      {/* RECEIPT EXIT SCAN DIALOG */}
+      <ReceiptScanDialog open={showReceipt} onClose={() => setShowReceipt(false)} />
+    </div>
+  );
+}
+
+// ----- one-time grant dialog -----
+function OneTimeGrantDialog({ open, onClose, requireId }) {
+  const [form, setForm] = useState({ name: '', phone: '', reason: '' });
+  const [file, setFile] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const camRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [streaming, setStreaming] = useState(false);
+
+  // Reset on close
+  useEffect(() => { if (!open) { setForm({ name: '', phone: '', reason: '' }); setFile(null); stopCam(); } }, [open]);
+
+  const startCam = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      camRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      setStreaming(true);
+    } catch (e) { toast.error(e.message || 'Camera unavailable'); }
+  }, []);
+
+  const stopCam = () => {
+    if (camRef.current) {
+      camRef.current.getTracks().forEach(t => t.stop());
+      camRef.current = null;
+    }
+    setStreaming(false);
+  };
+
+  const snapPhoto = () => {
+    const v = videoRef.current; const c = canvasRef.current;
+    if (!v || !c) return;
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    c.toBlob((blob) => {
+      if (blob) setFile(new File([blob], `id_${Date.now()}.jpg`, { type: 'image/jpeg' }));
+      stopCam();
+    }, 'image/jpeg', 0.85);
+  };
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (!form.name.trim()) { toast.error('Guest name is required'); return; }
+    if (requireId && !file) { toast.error('Capture or attach an ID photo'); return; }
+    setSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append('name', form.name);
+      fd.append('phone', form.phone);
+      fd.append('reason', form.reason);
+      if (file) fd.append('id_image', file);
+      await securityCheckpointApi.grantOneTime(fd);
+      toast.success(`One-time entry granted to ${form.name}`);
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed');
+    } finally { setSubmitting(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md" data-testid="cp-grant-dialog">
+        <DialogHeader>
+          <DialogTitle>Grant one-time entry</DialogTitle>
+          <DialogDescription>Hold the physical ID until the guest leaves. The system logs every step.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3 mt-2">
+          <div className="space-y-1.5"><Label className="text-xs">Guest name *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required autoFocus data-testid="cp-otg-name" /></div>
+          <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} data-testid="cp-otg-phone" /></div>
+          <div className="space-y-1.5"><Label className="text-xs">Reason / Visiting</Label><Input value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="e.g. Family visit / Delivery" /></div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">ID Photo {requireId ? '*' : '(optional)'}</Label>
+            {file ? (
+              <div className="flex items-center gap-2 text-xs p-2 rounded border bg-emerald-50 dark:bg-emerald-950/20">
+                <CheckCircle size={14} className="text-emerald-600" />
+                <span className="flex-1">{file.name} · {(file.size / 1024).toFixed(0)} KB</span>
+                <button type="button" className="text-rose-600" onClick={() => setFile(null)}><X size={12} /></button>
+              </div>
+            ) : streaming ? (
+              <div className="space-y-2">
+                <video ref={videoRef} aria-label="ID camera preview" className="w-full rounded bg-black aspect-video" playsInline>
+                  <track kind="captions" />
+                </video>
+                <div className="flex gap-2">
+                  <Button type="button" size="sm" className="flex-1" onClick={snapPhoto} data-testid="cp-otg-snap"><Camera size={13} className="mr-1" /> Snap</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={stopCam}>Cancel</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" className="flex-1" onClick={startCam} data-testid="cp-otg-camera">
+                  <Camera size={13} className="mr-1" /> Use camera
+                </Button>
+                <label className="flex-1">
+                  <input type="file" accept="image/*" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="cp-otg-file" />
+                  <Button type="button" size="sm" variant="outline" className="w-full" onClick={(e) => e.currentTarget.previousSibling.click()}>Upload</Button>
+                </label>
+              </div>
+            )}
+            <canvas ref={canvasRef} className="hidden" />
+          </div>
+
+          <p className="text-[10px] text-slate-500 italic">OCR auto-fill from ID photo coming soon (Phase 2). For now, type name + phone manually; image is stored as evidence.</p>
+
+          <div className="flex gap-2 pt-2">
+            <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={submitting} className="flex-1" data-testid="cp-otg-submit">{submitting ? 'Granting…' : 'Grant Entry'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ----- receipt exit-scan dialog -----
+function ReceiptScanDialog({ open, onClose }) {
+  const [receipt, setReceipt] = useState('');
+  const [result, setResult] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { if (!open) { setReceipt(''); setResult(null); } }, [open]);
+
+  const submit = async (e) => {
+    e?.preventDefault?.();
+    if (!receipt.trim()) return;
+    setSubmitting(true);
+    try {
+      const r = await securityCheckpointApi.scanReceipt({ receipt_number: receipt.trim() });
+      setResult(r.data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Receipt not found');
+    } finally { setSubmitting(false); }
+  };
+
+  const flagged = (result?.subject?.items || []).some(i => i.is_exit_restricted);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md" data-testid="cp-receipt-dialog">
+        <DialogHeader>
+          <DialogTitle>Receipt Exit-Scan</DialogTitle>
+          <DialogDescription>Scan or type the receipt number to verify items leaving the premises.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3 mt-2">
+          <Input
+            autoFocus
+            value={receipt}
+            onChange={e => setReceipt(e.target.value)}
+            placeholder="INV-20260530-0001 or sale id"
+            data-testid="cp-receipt-input"
+          />
+          <Button type="submit" className="w-full" disabled={submitting || !receipt.trim()}>{submitting ? 'Looking up…' : 'Look up receipt'}</Button>
+        </form>
+        {result && (
+          <div className="mt-3 p-3 rounded border" data-testid="cp-receipt-result">
+            <div className="flex items-center gap-2 mb-2">
+              <Badge className={flagged ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}>
+                {flagged ? 'BLOCKED — restricted item' : 'CLEARED'}
+              </Badge>
+              <span className="text-xs text-slate-500">{result.subject?.customer_name || 'Walk-in'}</span>
+            </div>
+            <p className="text-xs italic text-slate-500 mb-2">{result.reason}</p>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {(result.subject?.items || []).map((it, i) => (
+                <div key={i} className={`text-xs flex justify-between p-1.5 rounded ${it.is_exit_restricted ? 'bg-rose-50 dark:bg-rose-950/20' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
+                  <span>{it.qty}× {it.name}</span>
+                  <span>{it.unit_price?.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs font-bold text-right mt-2">Total: {result.subject?.currency} {result.subject?.total?.toLocaleString()}</p>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

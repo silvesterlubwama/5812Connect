@@ -80,6 +80,7 @@ import ReconciliationReportsPage from './pages/ReconciliationReportsPage';
 import CustomerStatementsPage from './pages/CustomerStatementsPage';
 import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
+import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StaffRoute } from './components/RouteGuards';
 
@@ -117,6 +118,7 @@ function AppRoutes() {
       <Route path="/sponsor-portal/:portalToken" element={<SponsorPortalPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
+      <Route path="/security-checkpoint" element={<SecurityCheckpointPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />

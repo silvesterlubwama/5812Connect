@@ -1386,6 +1386,126 @@ async def public_book_space(data: SpaceBookingCreate):
     return booking
 
 
+# ========== PUBLIC RESOURCE (ASSET) BOOKING ==========
+# Mirrors the /public/venues flow but for the resources/assets collection.
+# Only resources flagged `is_bookable=True` AND `staff_only != True` AND `available=True` are exposed.
+
+@router.get("/public/resources")
+async def public_resources(country: Optional[str] = None):
+    """Return resources that are publicly bookable. Excludes consumables, staff-only items,
+    and resources currently marked unavailable. Country filter mirrors /public/venues."""
+    query = {
+        "is_bookable": True,
+        "available": {"$ne": False},
+        "$and": [
+            {"$or": [{"staff_only": {"$exists": False}}, {"staff_only": False}, {"staff_only": None}]},
+            {"$or": [{"is_consumable": {"$exists": False}}, {"is_consumable": False}, {"is_consumable": None}]},
+        ],
+    }
+    resources = await db.resources.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    if not country or country == "ALL":
+        return resources
+    target = _normalize_country_code(country) or country.upper()
+    # Walk location chain to resolve country (same pattern as venues)
+    loc_ids = list({r.get("location_id") for r in resources if r.get("location_id")})
+    loc_map = {}
+    if loc_ids:
+        locs = await db.locations.find(
+            {"id": {"$in": loc_ids}},
+            {"_id": 0, "id": 1, "country": 1, "parent_id": 1},
+        ).to_list(500)
+        for L in locs:
+            loc_map[L["id"]] = L
+        parent_ids = list({L.get("parent_id") for L in locs if L.get("parent_id") and not L.get("country")})
+        if parent_ids:
+            parents = await db.locations.find({"id": {"$in": parent_ids}}, {"_id": 0, "id": 1, "country": 1}).to_list(500)
+            for p in parents:
+                loc_map[p["id"]] = p
+    out = []
+    for r in resources:
+        code = _normalize_country_code(r.get("country"))
+        if not code and r.get("location_id"):
+            loc = loc_map.get(r["location_id"]) or {}
+            code = _normalize_country_code(loc.get("country"))
+            if not code and loc.get("parent_id"):
+                code = _normalize_country_code((loc_map.get(loc["parent_id"]) or {}).get("country"))
+        r["country_code"] = code
+        if code == target:
+            out.append(r)
+    return out
+
+
+@router.post("/public/bookings/resource")
+async def public_book_resource(data: dict):
+    """Public resource booking. Body: { name, email, phone?, resource_id, booking_date, start_time, end_time, purpose? }.
+    Validates the resource exists AND is_bookable. Creates a `public_bookings` row with type='resource' (status=pending)
+    and a mirror entry in `resource_bookings` so staff see the hold immediately on /resources."""
+    required = ("name", "email", "resource_id", "booking_date", "start_time", "end_time")
+    missing = [k for k in required if not (data or {}).get(k)]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required field(s): {', '.join(missing)}")
+    resource = await db.resources.find_one({"id": data["resource_id"]}, {"_id": 0})
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not resource.get("is_bookable"):
+        raise HTTPException(status_code=400, detail="This resource is not publicly bookable")
+    if resource.get("staff_only"):
+        raise HTTPException(status_code=403, detail="This resource is reserved for staff use")
+    if resource.get("available") is False:
+        raise HTTPException(status_code=400, detail="This resource is currently unavailable")
+    if data["end_time"] <= data["start_time"]:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+    # Conflict check — overlapping confirmed/pending bookings on the same resource/date
+    overlap = await db.resource_bookings.find_one({
+        "resource_id": data["resource_id"],
+        "date": data["booking_date"],
+        "status": {"$ne": "cancelled"},
+        "start_time": {"$lt": data["end_time"]},
+        "end_time": {"$gt": data["start_time"]},
+    })
+    if overlap:
+        raise HTTPException(status_code=409, detail="That time slot is already booked. Please pick a different time.")
+    booking_id = f"book_{str(uuid.uuid4())[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    booking = {
+        "id": booking_id,
+        "name": data.get("name", "").strip(),
+        "email": (data.get("email") or "").strip().lower(),
+        "phone": data.get("phone", "").strip(),
+        "resource_id": data["resource_id"],
+        "resource_name": resource.get("name"),
+        "booking_date": data["booking_date"],
+        "start_time": data["start_time"],
+        "end_time": data["end_time"],
+        "purpose": (data.get("purpose") or "").strip(),
+        "type": "resource",
+        "status": "pending",
+        "location_id": resource.get("location_id"),
+        "created_at": now_iso,
+    }
+    await db.public_bookings.insert_one(booking)
+    # Mirror to internal resource_bookings so staff /resources sees the hold immediately
+    await db.resource_bookings.insert_one({
+        "id": f"rb_{str(uuid.uuid4())[:8]}",
+        "resource_id": data["resource_id"],
+        "resource_name": resource.get("name"),
+        "booked_by": booking["name"],
+        "booker_email": booking["email"],
+        "booker_phone": booking["phone"],
+        "date": data["booking_date"],
+        "start_time": data["start_time"],
+        "end_time": data["end_time"],
+        "notes": booking["purpose"],
+        "status": "pending",
+        "source": "public",
+        "public_booking_id": booking_id,
+        "location_id": resource.get("location_id"),
+        "created_at": now_iso,
+    })
+    booking.pop("_id", None)
+    return booking
+
+
 @router.get("/public/bookings/status")
 async def check_booking_status(booking_id: Optional[str] = None, email: Optional[str] = None, phone: Optional[str] = None):
     query = {}
