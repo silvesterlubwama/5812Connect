@@ -23,6 +23,7 @@ import VariantPickerDialog from '../components/VariantPickerDialog';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
+import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
@@ -766,6 +767,9 @@ export default function ProductsPage() {
 
         {/* POS TAB */}
         <TabsContent value="pos" className="mt-4">
+          <div className="mb-3">
+            <PeripheralPermissionBanner needs={['camera', 'scanner']} context="the POS terminal" testid="pos-perm-banner" />
+          </div>
           <div className="grid lg:grid-cols-3 gap-5 h-[calc(100vh-320px)] min-h-[500px]">
             <div className="lg:col-span-2 flex flex-col gap-4">
               <div className="flex gap-2">

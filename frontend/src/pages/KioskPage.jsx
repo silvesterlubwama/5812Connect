@@ -7,6 +7,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi, badgesApi, storeSettingsApi } from '../services/api';
@@ -636,6 +637,11 @@ export default function KioskPage() {
             <Card className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className="text-xs text-muted-foreground">Check-ins</p><p className="text-3xl font-bold mt-1" data-testid="kiosk-checkins-count">{todayStats.checkIns}</p></CardContent></Card>
             <Card className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className="text-xs text-muted-foreground">Visitors</p><p className="text-3xl font-bold mt-1">{todayStats.visitors}</p></CardContent></Card>
             <Card className="shadow-soft rounded-xl"><CardContent className="p-4 text-center"><p className="text-xs text-muted-foreground">Access Scans</p><p className="text-3xl font-bold mt-1">{todayStats.scans}</p></CardContent></Card>
+          </div>
+
+          {/* Peripheral permission banner */}
+          <div className="mb-4">
+            <PeripheralPermissionBanner needs={['camera', 'nfc', 'scanner']} context="the check-in kiosk" testid="kiosk-perm-banner" />
           </div>
 
           {/* Action Buttons */}

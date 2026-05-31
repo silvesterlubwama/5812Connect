@@ -19,6 +19,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { securityCheckpointApi, badgesApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
+import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 
 const POLL_MS = 1500;
 
@@ -336,6 +337,10 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
       </header>
 
       <main className="flex-1 flex flex-col items-center justify-center p-8 cursor-pointer" onClick={current ? tap : undefined}>
+        {/* Peripheral permission banner — silent probe on mount + explicit Enable buttons */}
+        <div className="w-full max-w-xl mb-4" onClick={e => e.stopPropagation()}>
+          <PeripheralPermissionBanner needs={['camera', 'nfc', 'scanner']} context="this checkpoint" testid="cp-guest-perm-banner" />
+        </div>
         {!current ? (
           <div className="text-center space-y-5">
             <div className="inline-flex h-32 w-32 items-center justify-center rounded-full bg-slate-800/70 border-2 border-dashed border-slate-700">
@@ -492,6 +497,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
       <div className="grid lg:grid-cols-3 gap-4 p-4">
         {/* CURRENT SCAN */}
         <div className="lg:col-span-2 space-y-4">
+          <PeripheralPermissionBanner needs={['camera']} context="the security console" testid="cp-security-perm-banner" />
           <Card className="rounded-xl">
             <CardContent className="p-5">
               <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><ScanLine size={14} /> Live Scan</h3>

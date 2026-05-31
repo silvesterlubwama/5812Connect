@@ -6,6 +6,49 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 143 (May 31, 2026)
+**Kiosk peripheral permission UX: silent probe + explicit "Enable" button. Lint clean, regression 16/16.**
+
+### Reported issue
+*"If scanner or camera is missing in security or kiosk, system should ask permission to use device peripherals if available like cameras etc built in."*
+
+### Design — option `c` chosen by user
+Silent probe on page load **+** explicit "Enable camera/NFC" button when permission isn't yet granted **+** subtle fallback when hardware is missing.
+
+### New shared module
+**`/app/frontend/src/utils/peripheralPermissions.js`** — covers the standard permissions model (camera, microphone, geolocation, NFC) — orthogonal to the existing `posPeripherals.js` which already handled user-initiated Web Serial / HID / USB / Bluetooth selection. Exports:
+- `detectPeripheralAvailability()` — silently enumerates cameras + reports NFC/Serial/HID support
+- `getPermissionState(name)` — wraps `navigator.permissions.query`
+- `requestCameraAccess()` — fires `getUserMedia({video:true})` then releases the stream
+- `requestNfcAccess()` — initialises `NDEFReader` (Android Chrome only)
+- `wasAsked() / markAsked()` — `localStorage` flags so we never nag
+
+**`/app/frontend/src/components/PeripheralPermissionBanner.jsx`** — reusable React component. Props: `needs: ['camera'|'nfc'|'scanner'], context, onCameraGranted, onNfcGranted, testid`. Renders 0..N stacked status cards:
+- ✅ All peripherals ready → green dismissible "Peripherals ready"
+- ℹ️ Camera available + permission `prompt` → blue card + **Enable camera** button
+- ⚠️ Camera completely missing → amber "Connect a webcam or use phone" card
+- 🛡️ Camera `denied` → rose card with re-enable instructions
+- ℹ️ NFC supported on Chrome-Android only — subtle informational note on non-Android
+- 🔍 No scanner detected → subtle fallback message pointing to manual entry
+
+Listens to `navigator.permissions.query({name:'camera'}).onchange` so the banner auto-clears the moment the operator grants access via the browser's native prompt.
+
+### Mounted into all three kiosks
+- **Security Checkpoint Guest view** (`testid="cp-guest-perm-banner"`) — needs camera + NFC + scanner. Rendered above the "Tap your badge or scan your QR" main panel.
+- **Security Checkpoint Security console** (`testid="cp-security-perm-banner"`) — needs camera (for the one-time-entry ID capture). Rendered above the Live Scan card.
+- **Check-in Kiosk** (`testid="kiosk-perm-banner"`) — needs camera + NFC + scanner. Rendered between the stats row and the action buttons.
+- **POS** (`testid="pos-perm-banner"`) — needs camera + scanner. Rendered above the POS grid.
+
+### Tests / lint
+- Backend regression sample 16/16 still green.
+- Ruff + ESLint clean.
+- Screenshot-confirmed end-to-end: paired a checkpoint as Guest in a headless browser with no camera → the banner correctly rendered the amber "No camera detected" card + the subtle "NFC only on Chrome Android" card, stacked above the main UI.
+
+⚠️ **Production redeploy needed**. Behaviour after redeploy:
+- On first visit, kiosks silently probe. If a camera is present but permission was never asked, a blue card appears with the **Enable camera** button — clicking fires the native browser permission prompt.
+- Once granted, the banner auto-collapses (Chrome) or simply hides on next mount (other browsers).
+- Hardware-missing copy is informational, not a blocker — operators can still use NFC tap, USB scanner, or the manual entry field below.
+
 ## Recently Resolved — Iteration 142 (May 31, 2026)
 **Security hardening: closed URL-typing bypass + locked Security Contractors out of main app. Pytest 57/57 (regression).**
 
