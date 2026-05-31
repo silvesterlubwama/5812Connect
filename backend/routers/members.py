@@ -1025,6 +1025,16 @@ async def auto_issue_badge(data: dict, current_user: dict = Depends(require_staf
         raise HTTPException(status_code=404, detail=f"{subject_kind} not found")
     loc_id = subj.get("location_id") or (subj.get("location_ids") or [None])[0]
     loc = await db.locations.find_one({"id": loc_id}, {"_id": 0, "name": 1, "country": 1, "country_code": 1, "contact_phone": 1}) if loc_id else None
+    # Resident flag — embed on the badge payload so a checkpoint that doesn't know the
+    # member can still recognise them as "lives here" via the badge itself.
+    is_resident = bool(subj.get("is_resident"))
+    resident_location_id = subj.get("resident_location_id") if is_resident else None
+    resident_location_name = None
+    if resident_location_id and resident_location_id != loc_id:
+        rloc = await db.locations.find_one({"id": resident_location_id}, {"_id": 0, "name": 1})
+        resident_location_name = (rloc or {}).get("name")
+    elif resident_location_id and loc:
+        resident_location_name = loc.get("name")
     token = uuid.uuid4().hex[:16]
     badge = {
         "id": f"wbadge_{token}",
@@ -1043,6 +1053,9 @@ async def auto_issue_badge(data: dict, current_user: dict = Depends(require_staf
         "country_code": loc.get("country_code") if loc else "",
         "campus_phone": loc.get("contact_phone") if loc else "",
         "qr_data": subject_id,
+        "is_resident": is_resident,
+        "resident_location_id": resident_location_id,
+        "resident_location_name": resident_location_name,
         "status": "active",
         "issued_via": "auto_kiosk",
         "issued_by": current_user["id"],
@@ -1062,38 +1075,52 @@ async def auto_issue_badge(data: dict, current_user: dict = Depends(require_staf
 @router.post("/badges/auto-issue/residents")
 async def auto_issue_resident_badges(data: dict, current_user: dict = Depends(require_staff)) -> dict:
     """Bulk auto-issue wallet badges for every resident of a restricted location.
-    Body: { location_id }. Includes both adult `members` AND `children` whose
-    `resident_location_id` matches. Idempotent — already-badged subjects come back
-    with was_created=false. Used by the Admin → Campuses page on restricted shelters."""
+    Body: { location_id }. Pass `location_id='all'` to sweep EVERY restricted location
+    in the org. Includes both adult `members` AND `children` whose `resident_location_id`
+    matches. Idempotent — already-badged subjects come back as `existing`."""
     location_id = (data.get("location_id") or "").strip()
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id required")
-    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "id": 1, "name": 1})
-    if not loc:
-        raise HTTPException(status_code=404, detail="Location not found")
+    # Resolve the set of target locations
+    if location_id == "all":
+        loc_docs = await db.locations.find(
+            {"is_restricted": True, "active": {"$ne": False}},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(500)
+        if not loc_docs:
+            raise HTTPException(status_code=404, detail="No restricted locations found")
+        target_loc_ids = [L["id"] for L in loc_docs]
+        loc_name_map = {L["id"]: L.get("name") for L in loc_docs}
+        loc_label = f"all {len(loc_docs)} restricted location(s)"
+    else:
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "id": 1, "name": 1})
+        if not loc:
+            raise HTTPException(status_code=404, detail="Location not found")
+        target_loc_ids = [loc["id"]]
+        loc_name_map = {loc["id"]: loc.get("name")}
+        loc_label = loc.get("name") or location_id
+
     members = await db.members.find(
-        {"is_resident": True, "resident_location_id": location_id, "status": {"$ne": "inactive"}},
-        {"_id": 0, "id": 1},
-    ).to_list(5000)
+        {"is_resident": True, "resident_location_id": {"$in": target_loc_ids}, "status": {"$ne": "inactive"}},
+        {"_id": 0, "id": 1, "resident_location_id": 1},
+    ).to_list(20000)
     children = await db.children.find(
-        {"resident_location_id": location_id},
-        {"_id": 0, "id": 1},
-    ).to_list(5000)
+        {"resident_location_id": {"$in": target_loc_ids}},
+        {"_id": 0, "id": 1, "resident_location_id": 1},
+    ).to_list(20000)
     targets = (
-        [("member", m["id"]) for m in members]
-        + [("child", c["id"]) for c in children]
+        [("member", m["id"], m.get("resident_location_id")) for m in members]
+        + [("child", c["id"], c.get("resident_location_id")) for c in children]
     )
     created = 0
     existing = 0
     errors = 0
-    for kind, sid in targets:
+    for kind, sid, rloc_id in targets:
         try:
-            # Re-use the same logic as POST /badges/auto-issue
             badge_existing = await db.wallet_badges.find_one({"member_id": sid}, {"_id": 0, "status": 1})
             if badge_existing and badge_existing.get("status") != "invalidated":
                 existing += 1
                 continue
-            # Resolve subject + create
             if kind == "child":
                 subj = await db.children.find_one({"id": sid}, {"_id": 0})
                 role = "Child"
@@ -1103,6 +1130,7 @@ async def auto_issue_resident_badges(data: dict, current_user: dict = Depends(re
             if not subj:
                 continue
             token = uuid.uuid4().hex[:16]
+            loc_name = loc_name_map.get(rloc_id) or ""
             badge = {
                 "id": f"wbadge_{token}",
                 "token": token,
@@ -1112,9 +1140,12 @@ async def auto_issue_resident_badges(data: dict, current_user: dict = Depends(re
                 "name": subj.get("name") or subj.get("full_name") or "",
                 "role": role,
                 "photo_url": subj.get("photo_url", ""),
-                "location_id": location_id,
-                "location_name": loc.get("name"),
+                "location_id": rloc_id,
+                "location_name": loc_name,
                 "qr_data": sid,
+                "is_resident": True,
+                "resident_location_id": rloc_id,
+                "resident_location_name": loc_name,
                 "status": "active",
                 "issued_via": "bulk_resident_issue",
                 "issued_by": current_user["id"],
@@ -1131,11 +1162,11 @@ async def auto_issue_resident_badges(data: dict, current_user: dict = Depends(re
     await _audit(
         current_user["id"], "bulk_auto_issue_badges", "location", location_id,
         {"created": created, "existing": existing, "errors": errors,
-         "total_residents": len(targets)},
+         "total_residents": len(targets), "scope": loc_label},
     )
     return {
         "location_id": location_id,
-        "location_name": loc.get("name"),
+        "location_name": loc_label,
         "total_residents": len(targets),
         "created": created,
         "existing": existing,

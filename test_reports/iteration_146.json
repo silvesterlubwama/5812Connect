@@ -1,0 +1,34 @@
+{
+  "summary": "Iter146 verification: separate Residents Log (blue-themed), stray_home detection, org-wide bulk resident badges, resident wallet_badge persistence, security_checkpoint package refactor. 78/78 backend pytest passed (69 baseline + 9 new). All frontend testids present and rendering correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Residents Log dialog", "issues": ["Could not visually confirm the per-row blue 'Inside' badge color because no resident-scan rows existed during test. Backend payload + code path verified. Header pill colors (entries today, inside now) render correctly in blue/green."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration146_residents_log.py",
+    "/app/test_reports/pytest/iter146_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "security_checkpoint/__init__.py is 949 lines — still above the 700-line guideline. Main agent already flagged this for future refinement; suggest splitting endpoints by concern (scan/handoff/logs/checkpoints CRUD) next iteration.",
+    "/api/badges/list endpoint applies a campus filter that excludes bulk-issued resident wallet_badges from the response (verified — DB has 7 is_resident=true rows, /badges/list returned 0). Not a regression for iter146 (data persistence is correct), but worth tracking: consumers wanting to see resident badges in admin listing currently can't.",
+    "Frontend wallet badge token surface: members detail endpoint does not return wallet_badge_token; only /badges/list does. Acceptable but worth documenting for future testers (we used direct DB read to verify persistence)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration146_residents_log.py (NEW — 9 tests)"
+  ],
+  "success_rate": {"backend": "100% (78/78)", "frontend": "100% (all required testids + behaviors verified)"},
+  "test_credentials": "Admin: admin@5812uganda.org / Admin@5812 — works.",
+  "seed_data_creation": "TEST_Iter146_HOMEA_*, TEST_Iter146_HOMEB_*, TEST_Iter146 CP_A/CP_B, TEST_Iter146 Resident * — fixtures self-cleanup via DELETE in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Baseline is now 78 tests. The 4 suites previously in play (smoke + iter91 + iter141 + iter90 = 69) plus the new iter146 suite (9). _pair_session helper in iter146 uses /rotate-pin (admin) → /checkpoint/pair (no auth, must include mode:'security'). Frontend stores device session at localStorage.checkpoint_session+checkpoint_mode+checkpoint_meta — paired-console UI is only visible when these are set. The wallet_badge resident-flags verification uses direct mongo read because /badges/list applies a campus filter that hides bulk-issued resident badges.",
+  "rca of the issue": "N/A — no bugs. Verified: (1) Stray-home: backend stamps event.stray_home={id,name,is_restricted} when resident.resident_location_id != checkpoint.location_id, and frontend renders amber pill 'Resident of <name> (restricted)' via cp-stray-home testid. (2) Residents-log: device and admin endpoints both return envelope {date, rows, counts:{visitors_entered, residents_entered, …}, include_residents:false} with rows filtered to subject_type=='resident'. (3) Org-wide bulk: location_id='all' sweeps every restricted location, second call returns 0 created / all existing (idempotent). (4) wallet_badge: is_resident=true + resident_location_id + resident_location_name confirmed in DB. (5) Refactor: __init__.py=949 lines (was 1304); _common.py and ocr.py exist; legacy imports still work."
+}

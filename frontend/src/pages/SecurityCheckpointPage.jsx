@@ -10,7 +10,7 @@
  * without re-pairing (TTL = 12h on the backend).
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt, Search, Users as UsersIcon } from 'lucide-react';
+import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt, Search, Users as UsersIcon, Home, MapPin } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -382,6 +382,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [showGrant, setShowGrant] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [showLogbook, setShowLogbook] = useState(false);
+  const [showResidents, setShowResidents] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
   const [openOneTime, setOpenOneTime] = useState([]);
   const isSingleDevice = checkpoint?.device_mode === 'single_device';
@@ -506,7 +507,8 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLookup(true)} data-testid="cp-lookup-open"><Search size={14} className="mr-1" /> Lookup / Household</Button>
-          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLogbook(true)} data-testid="cp-logbook-open"><History size={14} className="mr-1" /> Logbook</Button>
+          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLogbook(true)} data-testid="cp-logbook-open"><History size={14} className="mr-1" /> Visitors Log</Button>
+          <Button size="sm" variant="outline" className="bg-blue-900/40 border-blue-500/40 text-blue-100 hover:bg-blue-900/70" onClick={() => setShowResidents(true)} data-testid="cp-residents-log-open"><Home size={14} className="mr-1" /> Residents Log</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
           <Button size="sm" variant="ghost" className="text-slate-300" onClick={onLock}><Lock size={14} /></Button>
@@ -545,6 +547,12 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
                     <p className="text-lg font-bold">{subject.name || 'Unknown subject'}</p>
                     {subject.role && <p className="text-xs text-slate-500">{subject.role}{subject.email ? ` · ${subject.email}` : ''}</p>}
                     {subject.phone && <p className="text-xs text-slate-500">📞 {subject.phone}</p>}
+                    {/* Stray-resident indicator — they live SOMEWHERE ELSE in the org */}
+                    {cur.stray_home && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-[11px] text-amber-800 dark:text-amber-200" data-testid="cp-stray-home">
+                        <MapPin size={11} /> Resident of <strong className="ml-0.5">{cur.stray_home.name}</strong>{cur.stray_home.is_restricted && <span className="ml-1 opacity-75">(restricted)</span>}
+                      </div>
+                    )}
                     <p className="text-sm italic text-slate-700 dark:text-slate-300 mt-2">{cur.reason}</p>
                     <div className="flex gap-2 pt-2 flex-wrap">
                       <Button size="sm" variant="outline" onClick={finish} data-testid="cp-finish-btn"><X size={13} className="mr-1" /> Clear</Button>
@@ -637,6 +645,9 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
 
       {/* VISITOR LOGBOOK (today's entries + exits) */}
       <LogbookDialog open={showLogbook} onClose={() => setShowLogbook(false)} />
+
+      {/* RESIDENTS LOG — blue-themed, dedicated to people who live at this checkpoint's location */}
+      <ResidentsLogDialog open={showResidents} onClose={() => setShowResidents(false)} />
 
       {/* HOUSEHOLD LOOKUP — phone / first name → multi-select household members */}
       <LookupDialog open={showLookup} onClose={() => setShowLookup(false)} singleDevice={isSingleDevice} />
@@ -1145,6 +1156,76 @@ function LookupDialog({ open, onClose, singleDevice }) {
             </Button>
           </div>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// ============================================================
+// RESIDENTS LOG DIALOG — blue-themed, dedicated to in/out scans of people who LIVE here
+// ============================================================
+function ResidentsLogDialog({ open, onClose }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await securityCheckpointApi.residentsLog(date);
+      setRows(r.data?.rows || []);
+      setCounts(r.data?.counts || null);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load residents log'); }
+    finally { setLoading(false); }
+  }, [date]);
+  useEffect(() => { if (open) load(); }, [open, load]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto bg-blue-50/30 dark:bg-blue-950/10 border-blue-200 dark:border-blue-900/40" data-testid="cp-residents-log-dialog">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-blue-900 dark:text-blue-200"><Home size={16} /> Residents Log</DialogTitle>
+          <DialogDescription className="text-xs">
+            People who LIVE at this location, scanning in / out of their own premises. Distinct from the daily visitor book.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Label className="text-xs">Date</Label>
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 w-44" data-testid="cp-residents-log-date" />
+            {counts && (
+              <div className="ml-auto flex gap-1.5">
+                <Badge className="bg-blue-100 text-blue-700 text-[10px] border-blue-200">{counts.residents_entered} entries today</Badge>
+                <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">{counts.residents_inside} inside now</Badge>
+              </div>
+            )}
+          </div>
+          {loading ? <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-blue-100/40 animate-pulse rounded" />)}</div>
+            : rows.length === 0 ? <p className="text-xs text-blue-700 dark:text-blue-300 text-center py-6">No resident scans logged for this date.</p>
+              : (
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] uppercase text-blue-700 dark:text-blue-400 border-b border-blue-200 dark:border-blue-900/40">
+                    <tr><th className="text-left py-2">Resident</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.entry_event_id} className="border-b last:border-b-0 border-blue-100 dark:border-blue-900/30" data-testid={`cp-residents-row-${r.entry_event_id}`}>
+                        <td className="py-1.5">
+                          <div className="font-medium">{r.name}</div>
+                          {(r.role || r.phone) && <div className="text-[10px] text-blue-600 dark:text-blue-400/70">{[r.role, r.phone].filter(Boolean).join(' · ')}</div>}
+                        </td>
+                        <td className="capitalize text-[10px] text-blue-700 dark:text-blue-300">{r.subject_kind?.replace('_', ' ') || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.entry_at?.slice(11, 16) || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.exit_at?.slice(11, 16) || '—'}</td>
+                        <td>{r.still_inside ? <Badge className="bg-blue-100 text-blue-700 text-[9px] border-blue-200">Inside</Badge> : <Badge variant="outline" className="text-[9px]">Departed</Badge>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+        </div>
       </DialogContent>
     </Dialog>
   );

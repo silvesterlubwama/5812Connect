@@ -151,6 +151,16 @@ export default function LocationsPage() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Bulk issue failed'); }
   };
 
+  const issueResidentBadgesAll = async () => {
+    const restricted = locations.filter(l => l.is_restricted).length;
+    if (!window.confirm(`Auto-issue wallet badges for residents of all ${restricted} restricted location(s)? Existing badges are kept.`)) return;
+    try {
+      const r = await api.post('/badges/auto-issue/residents', { location_id: 'all' });
+      const { created, existing, errors, total_residents } = r.data || {};
+      toast.success(`${created} new badge${created === 1 ? '' : 's'} issued · ${existing} already had one · ${errors} error${errors === 1 ? '' : 's'} · ${total_residents} resident${total_residents === 1 ? '' : 's'} total`, { duration: 6000 });
+    } catch (e) { toast.error(e.response?.data?.detail || 'Bulk issue failed'); }
+  };
+
   const addDept = () => {
     if (deptInput.trim() && !form.departments.includes(deptInput.trim())) {
       setForm(prev => ({ ...prev, departments: [...prev.departments, deptInput.trim()] }));
@@ -206,9 +216,16 @@ export default function LocationsPage() {
             {mainLocs.length} main · {campusLocs.length} campuses · {subLocs.length} sub-locations
           </p>
         </div>
-        <Button className="gap-2" onClick={() => openAdd()} data-testid="add-location-btn">
-          <Plus size={16} /> Add Location
-        </Button>
+        <div className="flex gap-2">
+          {locations.some(l => l.is_restricted) && (
+            <Button variant="outline" className="gap-2" onClick={() => issueResidentBadgesAll()} data-testid="issue-all-resident-badges-btn">
+              🪪 Issue all resident badges
+            </Button>
+          )}
+          <Button className="gap-2" onClick={() => openAdd()} data-testid="add-location-btn">
+            <Plus size={16} /> Add Location
+          </Button>
+        </div>
       </div>
 
       {loading ? (
