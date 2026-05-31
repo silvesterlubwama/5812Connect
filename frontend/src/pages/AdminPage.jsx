@@ -17,6 +17,7 @@ import { dataEvents, emitDataChanged } from '../services/dataEvents';
 import { UserCreateDialog } from '../components/admin/UserCreateDialog';
 import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
+import KioskLinksManager from '../components/KioskLinksManager';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 
@@ -343,6 +344,7 @@ export default function AdminPage() {
         <>
           <ModuleAccessManager />
           <SecurityCheckpointsManager />
+          <KioskLinksManager />
         </>
       )}
     </div>

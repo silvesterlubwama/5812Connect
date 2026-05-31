@@ -6,6 +6,34 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 147 (May 31, 2026)
+**Kiosk Links & Setup admin tool — central index of every kiosk URL + pairing PIN.**
+
+### What the user asked for
+*"What and where is the link to set up security devices? Post a link finder page in the admin panel for all important kiosks and setup links."*
+
+### Built
+New `KioskLinksManager` card on `/admin` (alongside Module Access + Security Checkpoints + Expiring Grants Banner). Clicking **Open** reveals a dialog with five sections, each showing the QR code + copyable URL + open-in-new-tab button + setup notes:
+1. **Security Checkpoint** — `/security-checkpoint` URL + a list of every configured checkpoint with its 6-digit pairing PIN (hidden behind a "Show pairing PINs" toggle so they don't leak when sharing the screen).
+2. **Check-in Kiosk** — `/kiosk` URL + tablet setup notes (PIN-protected setup screen, campus binding, lock).
+3. **POS Kiosk** — one card per location showing `/pos/<location_id>` — slim shell, no tabs.
+4. **Public Surfaces** — `/marketplace` and `/sales-portal`.
+5. **User Portals** — `/portal` for members/parents + an info card explaining the per-token Sponsor + School portals.
+
+Every URL uses `window.location.origin` so when an admin opens this dialog on production it renders production URLs, and on preview it renders preview URLs — no env mismatch.
+
+### Implementation
+- New `components/KioskLinksManager.jsx` (single self-contained file, ~210 lines).
+- Re-uses `react-qrcode-logo` (already in `package.json`) to render QR codes — kiosk operators scan the QR with the device camera to open the URL.
+- Reuses `locationsApi.list()` for POS instances and `securityCheckpointApi.list()` for checkpoint PINs.
+- Pulled in as a card on `/admin` (testid `kiosk-links-card`); dialog testid `kiosk-links-dialog`.
+
+### Tests / lint
+- ESLint clean. No backend changes — purely a new frontend admin tool.
+- Visual smoke-confirmed: dialog opens, renders QR codes + URLs + 7 existing checkpoint PINs, "Show/Hide pairing PINs" toggle masks/unmasks the codes.
+
+⚠️ **Production redeploy needed**. After redeploy, admins simply open `/admin → Kiosk Links & Setup` to get every device URL + every pairing PIN in one place.
+
 ## Recently Resolved — Iteration 146 (May 31, 2026)
 **Separate Residents Log (blue-themed) + all 4 carry-over backlog items. Pytest 78/78.**
 
