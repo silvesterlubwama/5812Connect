@@ -6,6 +6,57 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 144 (May 31, 2026)
+**Unified Security Checkpoint + Check-in system. Pytest 57/57.**
+
+### What the user asked for
+1. Drop the guest-facing tablet — single-device mode where the visitor scans on the same reader the operator runs (kept dual-device available too).
+2. Visitor logbook showing entry + exit times per person per day.
+3. Slim standalone POS at `/pos/:storeId` — no surrounding app shell.
+4. Admin can pick checkpoint **kind**: *strict* (current restricted-location gate), *hybrid* (also recognises event ticket QR codes and auto-checks attendees in), or *check_in_only* (no gate, just log presence).
+5. Phone / first-name search → pulls up the household, multi-select for batch check-in by the security operator.
+
+### Implementation
+
+**Backend `security_checkpoint.py`**
+- New checkpoint fields: `kind` (`strict|hybrid|check_in_only`) + `device_mode` (`dual_device|single_device`). Pair endpoint rejects `guest` mode on single-device with a clear 400.
+- `_resolve_subject` now recognises **event-ticket payloads** (`TKT-XXXX`) by matching `public_bookings.ticket_ids`; returns `subject.kind='event_ticket'` with `event_id`, `event_title`, `booking_id`.
+- `_decide` adds two branches: event_ticket→approved on hybrid/check_in_only; `check_in_only` kind approves any active subject without restricted-location check.
+- Scan endpoint now stamps **direction** (`entry` / `exit`). Same subject scanned twice today → second scan is detected as exit and linked back to the entry row via `exit_event_id` + `exit_at` (uses `find_one_and_update(sort=…)` because motor's `update_one` doesn't accept sort).
+- Hybrid event-ticket approved scans mirror into `db.checkins` so they show up on `/check-ins` and the event's attendee list.
+- New `GET /api/security/checkpoint/visitor-log` (device session) + `GET /api/security/checkpoints/{id}/visitor-log` (admin) — one row per (subject, entry) with entry_at + exit_at + still_inside.
+- New `POST /api/security/checkpoint/lookup` body `{q}` — searches members + children by name/phone/email/national_id and returns each match with its `household[]` siblings (resolved via `family_id`).
+- New `POST /api/security/checkpoint/check-in-batch` body `{members:[{kind,id}]}` — creates one checkpoint event per person + mirrors to db.checkins; broadcasts the last event over the WebSocket.
+
+**Frontend `SecurityCheckpointPage.jsx`**
+- Two new toolbar buttons on the security console: **Lookup / Household** + **Logbook**.
+- `LogbookDialog` — date picker + table of today's entries with In/Out columns + Inside/Departed badge.
+- `LookupDialog` — search input + expanding result cards. Each match shows checkboxes for the matched person AND every household sibling. Submit fires `check-in-batch`.
+- Empty-state copy switches based on `checkpoint.device_mode` — single-device shows "Scan a visitor's badge via the reader attached to this device" instead of "Guest device handles NFC/QR pickup".
+
+**Frontend `AdminPage.jsx`**
+- Create form gains **Checkpoint mode** + **Device layout** dropdowns.
+- Checkpoint rows show pills for kind + device_mode and a new **📋 Logbook** button → `AdminLogbookDialog` with date picker + entry/exit table.
+- Fixed minor React hydration warning (`<Badge>` was nested inside a `<p>` — switched the wrapper to a `<div>`).
+
+**Frontend `ProductsPage.jsx`**
+- `TabsList` hidden when `isPosKiosk === true` so `/pos/:storeId` URLs render a **POS-only slim shell**. Cashiers can't switch to Products / Invoices / Sales History / Customers tabs from a kiosk-bound device.
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration141_security_unification.py` — 18 cases (mode validation, ticket-QR scan flow, hybrid auto-check-in, entry/exit pairing, visitor-log shape, household lookup, batch check-in, single-device pair-guest rejection, etc.). All PASS.
+- Backend regression 51/51 still green (smoke + iter91). Combined: **57/57**.
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+
+⚠️ **Production redeploy needed**. After redeploy:
+1. `/admin → Security Checkpoints` → either edit existing checkpoints (set `kind`/`device_mode`) or create new ones with the new dropdowns.
+2. Single-device checkpoints: just open `/security-checkpoint` on the operator device, pair as "Security" — visitor scans via the connected reader.
+3. Hybrid checkpoints: at events, simply scan attendee tickets — they're auto-checked into the event.
+4. `/pos/:storeId` URLs render as slim POS-only kiosks.
+
+### Carryovers (P3 backlog)
+- `routers/security_checkpoint.py` is now 1201 lines — past the 700-line guideline. Worth a refactor pass splitting subject resolution / decision / logbook / lookup into sub-modules.
+- ProductsPage isPosKiosk flag persists in localStorage globally — a user who first visits `/pos/loc_X` then goes back to `/sales` on the same device will still see the slim shell until they clear storage. Not a bug per se, just a UX nuance.
+
 ## Recently Resolved — Iteration 143 (May 31, 2026)
 **Kiosk peripheral permission UX: silent probe + explicit "Enable" button. Lint clean, regression 16/16.**
 
