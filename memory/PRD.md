@@ -6,6 +6,43 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 146 (May 31, 2026)
+**Separate Residents Log (blue-themed) + all 4 carry-over backlog items. Pytest 78/78.**
+
+### Built per user request
+
+1. **Separate Residents Log** (blue-themed, distinct from the Visitor Logbook)
+   - Backend: `GET /api/security/checkpoint/residents-log` (device session) and `GET /api/security/checkpoints/{id}/residents-log` (admin Director+). Both reuse `_build_visitor_log()` with `residents_only=true`. Counts always include both visitor + resident totals.
+   - Frontend Security Console: new blue **"Residents Log"** toolbar button (testid `cp-residents-log-open`) + dedicated `ResidentsLogDialog` (blue-tinted background, blue "Inside" badges).
+
+### Backlog cleared
+
+2. **Org-wide resident badges** — `POST /api/badges/auto-issue/residents` now accepts `location_id:'all'` to sweep every restricted location in one call. New header button `🪪 Issue all resident badges` on `/locations`.
+
+3. **Resident badge payload** — `wallet_badges` now embed `is_resident`, `resident_location_id`, and `resident_location_name`. A checkpoint that doesn't know the member can still recognise them via the badge itself. Verified via direct DB query.
+
+4. **Stray-resident indicator** — when a resident of location A scans at a checkpoint at location B, the scan event gets `stray_home: {id, name, is_restricted}`. The live security tile renders an amber `cp-stray-home` pill: **"Resident of <home location>"** so security knows where they should be.
+
+5. **`security_checkpoint.py` refactor** — the 1,304-line monolith is now a Python package:
+   - `security_checkpoint/__init__.py` (949 lines) — all endpoints + router/ocr_router exports.
+   - `security_checkpoint/_common.py` (271 lines) — `_hash`, `_gen_pin`, `_resolve_session`, `_broadcast_to_checkpoint`, `_resolve_subject`, `_hydrate_subject`, `_shape_subject`, `_decide`, `_build_visitor_log`, `_checkpoint_rooms` + constants.
+   - `security_checkpoint/ocr.py` (115 lines) — `_OCR_LANG_HINTS` + `_ocr_id_image`.
+   - Server-side imports (`from routers.security_checkpoint import router, ocr_router`) are unchanged thanks to the package surface.
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration146_residents_log.py` — 9 cases covering stray-home detection (local vs stray), residents-log endpoints (device + admin), org-wide bulk badge issue (idempotent), resident wallet_badge persistence (is_resident + resident_location_id+name).
+- All 69 prior pytest cases still PASS after the refactor. Total: **78/78 green**.
+- Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed**. After redeploy:
+- `/security-checkpoint` paired console → click **Residents Log** for the blue-themed in/out roster.
+- `/locations` admin → **Issue all resident badges** sweeps the whole org in one click.
+- Any resident scanning at a checkpoint that isn't their home now triggers a clear amber tile telling security where they should be.
+
+### Known carryover (P3)
+- `security_checkpoint/__init__.py` is still 949 lines — better than 1,304 but worth a second pass to split into endpoint-group modules (admin, pairing, scan, grants, logbook, lookup, dashboard).
+- `/badges/list` applies a campus filter that hides bulk-issued resident wallet_badges — observed in iter146 testing but data persistence is correct; only the admin listing is affected. Worth a follow-up.
+
 ## Recently Resolved — Iteration 145 (May 31, 2026)
 **Resident vs visitor split + Inside-Now tile + bulk-issue resident badges. Pytest 57/57.**
 
