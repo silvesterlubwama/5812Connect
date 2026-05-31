@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { securityCheckpointApi, badgesApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
+import BarcodeScanDialog from '../components/BarcodeScanDialog';
 
 const POLL_MS = 1500;
 
@@ -206,6 +207,7 @@ function LockScreen({ onUnlock }) {
 function GuestView({ checkpoint, onUnpair, onLock }) {
   const [current, setCurrent] = useState(null);
   const [serverNow, setServerNow] = useState(null);
+  const [showCamScan, setShowCamScan] = useState(false);
   const nfcRef = useRef(null);
   const keystrokeBuffer = useRef('');
   const keystrokeTimer = useRef(null);
@@ -348,6 +350,15 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
             </div>
             <h2 className="text-3xl font-bold">Tap your badge or scan your QR</h2>
             <p className="text-sm text-slate-400 max-w-md">Hold your NFC badge to the reader, or scan your QR code with the barcode scanner. The system will identify you automatically.</p>
+            <Button
+              size="lg"
+              onClick={(e) => { e.stopPropagation(); setShowCamScan(true); }}
+              className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white"
+              data-testid="cp-guest-camera-scan-btn"
+            >
+              <Camera size={18} /> Scan with this device's camera
+            </Button>
+            <p className="text-[11px] text-slate-500">If you don't have a USB barcode scanner or NFC reader, tap the button above to use the built-in camera.</p>
           </div>
         ) : (
           <div className="text-center space-y-6 w-full max-w-2xl">
@@ -370,6 +381,13 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
           </div>
         )}
       </main>
+      {/* Camera-based QR/barcode scanner — works on any device with a webcam */}
+      <BarcodeScanDialog
+        open={showCamScan}
+        onOpenChange={setShowCamScan}
+        title="Scan visitor badge / QR"
+        onScan={(value) => submitScan('qr', value)}
+      />
     </div>
   );
 }
@@ -384,6 +402,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [showLogbook, setShowLogbook] = useState(false);
   const [showResidents, setShowResidents] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
+  const [showCamScan, setShowCamScan] = useState(false);
   const [openOneTime, setOpenOneTime] = useState([]);
   const isSingleDevice = checkpoint?.device_mode === 'single_device';
 
@@ -438,6 +457,14 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const finish = async () => {
     try { await securityCheckpointApi.finish(); setState(prev => ({ ...prev, current: null })); }
     catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  // Send a scan from the operator side (used by the in-page camera dialog).
+  const submitScan = async (scan_type, payload) => {
+    try {
+      const r = await securityCheckpointApi.scan({ scan_type, payload });
+      setState(prev => ({ ...prev, current: r.data, history: [r.data, ...(prev.history || []).slice(0, 19)] }));
+    } catch (e) { toast.error(e.response?.data?.detail || 'Scan failed'); }
   };
 
   // Issue a wallet badge for the current subject if they don't have one, then open
@@ -506,6 +533,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           )}
         </div>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-700/70" onClick={() => setShowCamScan(true)} data-testid="cp-security-camera-scan-btn"><Camera size={14} className="mr-1" /> Camera Scan</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLookup(true)} data-testid="cp-lookup-open"><Search size={14} className="mr-1" /> Lookup / Household</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLogbook(true)} data-testid="cp-logbook-open"><History size={14} className="mr-1" /> Visitors Log</Button>
           <Button size="sm" variant="outline" className="bg-blue-900/40 border-blue-500/40 text-blue-100 hover:bg-blue-900/70" onClick={() => setShowResidents(true)} data-testid="cp-residents-log-open"><Home size={14} className="mr-1" /> Residents Log</Button>
@@ -651,6 +679,23 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
 
       {/* HOUSEHOLD LOOKUP — phone / first name → multi-select household members */}
       <LookupDialog open={showLookup} onClose={() => setShowLookup(false)} singleDevice={isSingleDevice} />
+
+      {/* CAMERA SCAN — built-in device camera fallback when no USB scanner is connected */}
+      <BarcodeScanDialog
+        open={showCamScan}
+        onOpenChange={setShowCamScan}
+        title="Camera scan — badge / QR / receipt"
+        onScan={(value) => {
+          // Heuristic: receipt numbers begin with INV- or look like sale ids; route to receipt-scan
+          if (/^(INV-|RCPT-)/i.test(value) || /^sale_/i.test(value)) {
+            securityCheckpointApi.scanReceipt({ receipt_number: value })
+              .then(r => setState(prev => ({ ...prev, current: r.data, history: [r.data, ...(prev.history || []).slice(0, 19)] })))
+              .catch(e => toast.error(e.response?.data?.detail || 'Receipt not found'));
+          } else {
+            submitScan('qr', value);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -693,12 +738,56 @@ function OneTimeGrantDialog({ open, onClose, requireId }) {
   };
 
   const startCam = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      toast.error('This device/browser does not expose a camera (getUserMedia unavailable). Upload an ID photo instead.', { duration: 7000 });
+      return;
+    }
+    // Require HTTPS for getUserMedia (except localhost)
+    if (typeof window !== 'undefined' && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      toast.error('Camera requires HTTPS. Open this page over https:// or use Upload.', { duration: 7000 });
+      return;
+    }
     try {
+      // Probe what's available — if no camera at all, fail loudly instead of silently.
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const cams = devs.filter(d => d.kind === 'videoinput');
+        if (cams.length === 0) {
+          toast.error('No camera detected on this device. Upload an ID photo instead.', { duration: 7000 });
+          return;
+        }
+      } catch { /* enumerateDevices is non-blocking; carry on to getUserMedia */ }
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       camRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        // play() must follow srcObject assignment and may need a click context — we're already in one (button onClick).
+        try { await videoRef.current.play(); } catch (e) { console.warn('video.play() rejected:', e); }
+      }
       setStreaming(true);
-    } catch (e) { toast.error(e.message || 'Camera unavailable'); }
+    } catch (e) {
+      // Translate common DOMException names into operator-friendly copy.
+      const name = e?.name || '';
+      let msg = e?.message || 'Camera unavailable';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        msg = 'Camera permission was denied. Tap the camera icon in your browser\'s address bar to re-allow, or upload an ID photo instead.';
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        msg = 'No rear/environment camera found. Switching to any available camera…';
+        // Retry without facingMode constraint
+        try {
+          const stream2 = await navigator.mediaDevices.getUserMedia({ video: true });
+          camRef.current = stream2;
+          if (videoRef.current) { videoRef.current.srcObject = stream2; try { await videoRef.current.play(); } catch { /* ignore */ } }
+          setStreaming(true);
+          return;
+        } catch (e2) {
+          msg = e2?.message || msg;
+        }
+      } else if (name === 'NotReadableError' || name === 'AbortError') {
+        msg = 'Camera is in use by another app. Close other apps using the camera and try again.';
+      }
+      toast.error(msg, { duration: 8000 });
+    }
   }, []);
 
   const stopCam = () => {

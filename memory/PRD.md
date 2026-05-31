@@ -6,6 +6,32 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 148 (May 31, 2026)
+**Built-in camera scanning + hardened ID camera errors.**
+
+### Reported issues (on production)
+1. The built-in camera doesn't open when uploading an ID (One-Time Entry → Use Camera).
+2. There's no way to use the built-in camera for regular QR scans — only USB barcode scanners + NFC.
+
+### Fixed
+- **New "📷 Camera Scan" button** on the Security Console toolbar (top-left, emerald) + **"Scan with this device's camera"** button on the Guest view's idle state. Opens the existing `BarcodeScanDialog` which handles QR/barcode detection via `html5-qrcode` plus a manual-entry fallback for keyboard-wedge scanners.
+   - Smart routing on the security side: payloads starting with `INV-`, `RCPT-`, or `sale_` are auto-routed to the receipt exit-scan endpoint; everything else hits the standard scan endpoint.
+- **Hardened the ID-photo camera path** in `OneTimeGrantDialog`:
+   - Pre-check `navigator.mediaDevices.getUserMedia` availability before attempting.
+   - HTTPS-only enforcement (with a clear message, since production runs HTTPS but a local non-HTTPS environment would silently fail).
+   - `enumerateDevices()` probe — if zero cameras are present, toast "No camera detected — upload an ID photo instead" instead of failing silently.
+   - Translated `DOMException` names to operator-friendly copy: `NotAllowedError` → "Permission denied — tap the camera icon in your browser's address bar", `NotFoundError`/`OverconstrainedError` → retry without `facingMode='environment'` constraint, `NotReadableError`/`AbortError` → "Camera in use by another app".
+   - `video.play()` wrapped in try/catch since some browsers reject it without a user gesture.
+
+### Tests / lint
+- ESLint clean. No backend changes.
+- Visual smoke-confirmed in headless Playwright: Security Console shows the new Camera Scan button; clicking opens the dialog; "Requested device not found" message renders (correct for a no-camera environment); manual Type / Keyboard wedge tab is selectable as fallback.
+
+⚠️ **Production redeploy needed**. Post-redeploy on production (HTTPS):
+- Security operators can hit **Camera Scan** to use the device's webcam to scan any badge/QR/receipt without USB hardware.
+- Guests can tap **Scan with this device's camera** on the visitor view if no NFC reader / USB scanner is attached.
+- One-Time Entry ID camera now surfaces clear, actionable error messages when the camera can't open — every common failure mode is named.
+
 ## Recently Resolved — Iteration 147 (May 31, 2026)
 **Kiosk Links & Setup admin tool — central index of every kiosk URL + pairing PIN.**
 
