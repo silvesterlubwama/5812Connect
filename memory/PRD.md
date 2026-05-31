@@ -6,6 +6,78 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 142 (May 31, 2026)
+**Security hardening: closed URL-typing bypass + locked Security Contractors out of main app. Pytest 57/57 (regression).**
+
+### Reported issues
+1. *"Users are able to see pages they aren't allowed to see as long as they type in the right address."* — Sidebar gates were enforced but the React Router routes themselves had no role/module check. Anyone could deep-link `/financial`, `/hr`, `/admin`, etc. and at least see the page shell.
+2. *"Security personnel should not be able to log into the main app."* — `Security Contractor` accounts could log in normally and see the standard staff layout, defeating the purpose of the dedicated checkpoint terminal.
+
+### Fixes
+
+**Route-level access guard (`components/Layout.jsx`)**
+- New `routeRules` map built by flattening `NAV_SECTIONS` + a curated list of non-sidebar routes (`/sales-analytics`, `/pos-setup`, `/customer-statements`, `/accounts-receivable`, `/reconciliation`, `/location-analytics`, `/access`, etc.).
+- New `useEffect` watches `location.pathname`. When the current path has a rule that fails (`roles` array doesn't include the user's role, OR `module` access missing), it `navigate('/dashboard', {replace:true})` and surfaces a toast. Reacts to changes in all 7 module-access flags (`finance_access`, `hr_access`, …, `restricted_access`).
+- Fails OPEN for unlisted routes (since the parent `<StaffRoute>` already keeps guests/security-contractors out).
+
+**Security Contractor pinned to checkpoint (`components/RouteGuards.jsx` + `App.js`)**
+- New `KIOSK_ONLY_ROLES` set covering `Security Contractor` / `security_contractor`.
+- `StaffRoute`, `AdminRoute`, AND the App-level `ProtectedRoute` (which wraps `/portal`) all redirect kiosk-only roles to `/security-checkpoint` — every entry point covered.
+- Post-login `navigate('/dashboard')` is still issued, but the `StaffRoute` guard immediately bounces them; effect is the same as a direct redirect.
+
+### Verification
+- **Self-test**: created a Volunteer user via the live API, logged in as them, typed `/financial` in the address bar → redirected to `/dashboard` with toast "You do not have access to that page". Screenshot confirms the sidebar only shows Ministry/Operations/Comms.
+- **Backend defence-in-depth**: a Security Contractor token still gets `403` from `/api/financial/donations`, `/api/hr/salaries`, etc. so the frontend redirect is purely UX — the API is the source of truth.
+- Pytest regression 57/57 still green (sampled smoke + iter90 module access + iter91 security checkpoint + iter140 peripherals).
+- Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed**. After redeploy:
+- Any existing `Manager` user without explicit module grants will be redirected away from finance/hr/etc. URLs (already true at the API level since iter 134). Grant access via Admin → Module Access → per-user.
+- Any `Security Contractor` user will be force-redirected to `/security-checkpoint` whenever they hit `/`, `/login`, `/portal`, or `/dashboard`.
+
+### Known carryover
+- `bank.py` (28 endpoints) and `accounting.py` (16 endpoints) still gate on `require_finance_view`/`admin` rather than the dedicated `require_banking_view` / `require_accounting_view`. This means a user with ONLY a `banking_access` grant (no finance) gets 403 on banking endpoints today. Per-module-only grants will need a follow-up that switches those routers to `require_finance_or_banking_view` helpers. Not a security hole — only restricts a fine-grained delegation pattern.
+
+## Recently Resolved — Iteration 141 (May 30, 2026)
+**Kiosk peripherals + auto-badge + dashboard backlog cleanups. Pytest 116/116.**
+
+### (a) Backlog cleanups
+- **`hasDirectorAccess()` / `hasManagerAccess()` / `hasStaffAccess()`** centralised in `/app/frontend/src/utils/access.js` — mirrors backend's PRIVILEGED_ROLES so future role-list changes only touch one place. DashboardPage migrated.
+- **`useDocumentVisible()`** hook in the same module. `LiveCheckpointWidget` now pauses its 4 s poll when the tab is hidden (saves backend load on background tabs).
+
+### (b) Kiosk peripherals — admin configurable
+- New peripheral block in the POS Store Settings dialog (testid `peripheral-settings-block`):
+  - `auto_print_receipt` — auto-fires `window.print()` 600 ms after a sale completes
+  - `auto_issue_badge` — automatically issues + prints a kiosk/check-in/security badge for visitors without one
+  - `badge_label_size` — business_card / lanyard / adhesive_label / A6
+  - `print_mode` — browser dialog OR silent (requires `--kiosk-printing` Chrome flag)
+- Persists in the existing `store_settings` collection (no schema migration — Mongo is permissive). Settable per-location.
+
+### (c) Backend — unified auto-issue endpoint
+- New `POST /api/badges/auto-issue` (require_staff). Body `{subject_kind: member|child|guest|user, subject_id}`.
+- Idempotent: returns the existing badge with `was_created=false` if one exists; creates a fresh one with `was_created=true`, `issued_via='auto_kiosk'`, full audit otherwise. Resolves photo, role, location, country from the appropriate collection.
+
+### (d) Frontend wiring
+- **POS** (`ProductsPage.jsx`): post-sale `setTimeout(() => window.print(), 600)` when the store has `auto_print_receipt`.
+- **Security Checkpoint** (`SecurityCheckpointPage.jsx`): security console gains an **"Issue + Print Badge"** button (testid `cp-issue-badge-btn`) on approved scans where the subject is a real person. Opens `/badge/<token>?print=1` in a popup → WalletBadgePage auto-fires `window.print()`.
+- **Check-in Kiosk** (`KioskPage.jsx`): new `kioskAutoIssueBadge()` runs after a successful QR check-in, gated by the active location's `store_settings.auto_issue_badge`. Errors now toast clearly so kiosk staff can diagnose printer/auth issues.
+- **WalletBadgePage**: `?print=1` query param triggers automatic `window.print()` 700 ms after render.
+
+### Tests / lint
+- New `/app/backend/tests/test_iteration140_peripherals_autobadge.py` — 6 cases: auth, missing/unsupported fields, unknown subject (404), first-call creates with audit shape, idempotent re-call, store-settings persistence (incl. toggle-off).
+- All 110 prior pytest cases still PASS. Total: **116/116 green**. Ruff + ESLint clean.
+- UI smoke-confirmed: Peripherals block renders with all 4 controls, badge auto-print triggers only with `?print=1`, visibility-API dispatch handled cleanly, /api/badges/auto-issue idempotent over the wire.
+
+⚠️ **Production redeploy needed**. After redeploy:
+1. /sales → **Store Settings** → tick *Auto-print receipt* and/or *Auto-issue + print kiosk badges* per location.
+2. Silent printing requires running Chrome with `--kiosk-printing` on the kiosk device.
+3. Auto-issued badges are stored in `wallet_badges` like any other — re-printable from the member's profile anytime.
+
+### Known carryovers (P3 backlog)
+- `routers/members.py` is now 1846 lines and `routers/security_checkpoint.py` is 913 — both flagged by the testing agent for a dedicated split-into-sub-routers iteration.
+- WalletBadgePage fires `window.print()` twice in dev StrictMode (cosmetic — production unaffected). A `useRef` guard could clean this up.
+- Auto-issue endpoint returns an existing badge even if the underlying member record was deleted (orphan); low priority.
+
 ## Recently Resolved — Iteration 140 (May 30, 2026)
 **Phase 3 security-checkpoint follow-ups: staff OCR + supervisor override + dashboard widget + multi-language OCR. Pytest 110/110.**
 

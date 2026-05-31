@@ -283,7 +283,9 @@ export default function KioskPage() {
         else toast.success(`Badge ${badge.was_created ? 'issued' : 're-printed'}: ${badge.name}`);
       }
     } catch (e) {
-      console.warn('kiosk auto-issue-badge failed:', e.response?.data?.detail || e.message);
+      const msg = e.response?.data?.detail || e.message || 'unknown';
+      console.warn('kiosk auto-issue-badge failed:', msg);
+      toast.error(`Badge auto-print failed — ${msg}`);
     }
   };
 

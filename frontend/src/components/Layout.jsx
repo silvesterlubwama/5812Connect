@@ -318,6 +318,82 @@ export default function Layout() {
     return section.items.some(item => canAccess(item));
   };
 
+  // -------- ROUTE-LEVEL ACCESS GUARD (closes the "type-the-URL bypass") --------
+  // Build a flat path → rule map from NAV_SECTIONS so a user typing /financial in the
+  // address bar can't escape the same gate that hides the sidebar entry.
+  // Routes NOT in this map are treated as "any staff allowed" (since the parent <StaffRoute>
+  // already keeps guests/security-contractors out of the main app).
+  const routeRules = (() => {
+    const out = {};
+    for (const section of NAV_SECTIONS) {
+      for (const item of section.items) {
+        // Effective roles: item.roles wins; otherwise inherit section.roles.
+        const effRoles = item.roles || section.roles || null;
+        out[item.to] = { roles: effRoles, module: item.module || null };
+      }
+    }
+    // Non-sidebar routes that still need a role gate
+    Object.assign(out, {
+      '/admin': { roles: ADMIN_ROLES, module: null },
+      '/audit': { roles: ADMIN_ROLES, module: null },
+      '/locations': { roles: ADMIN_ROLES, module: null },
+      '/financial-apis': { roles: ADMIN_ROLES, module: null },
+      '/email-templates': { roles: ADMIN_ROLES, module: null },
+      '/settings': { roles: ADMIN_ROLES, module: null },
+      '/gdpr': { roles: ADMIN_ROLES, module: null },
+      '/hr': { roles: null, module: 'hr' },
+      '/financial': { roles: null, module: 'finance' },
+      '/accounting': { roles: null, module: 'accounting' },
+      '/banking': { roles: null, module: 'banking' },
+      '/approvals': { roles: null, module: 'finance' },
+      '/sales': { roles: null, module: 'sales' },
+      '/social-work': { roles: STAFF_PLUS, module: 'social_work' },
+      // Sub-pages that piggy-back off finance/accounting/sales modules
+      '/accounts-receivable': { roles: null, module: 'finance' },
+      '/customer-statements': { roles: null, module: 'finance' },
+      '/reconciliation': { roles: null, module: 'banking' },
+      '/sales-analytics': { roles: null, module: 'sales' },
+      '/pos-setup': { roles: null, module: 'sales' },
+      '/barcode-reissue': { roles: null, module: 'sales' },
+      '/location-analytics': { roles: MANAGER_PLUS, module: null },
+      '/campus-reports': { roles: MANAGER_PLUS, module: null },
+      '/reports': { roles: MANAGER_PLUS, module: null },
+      '/report-builder': { roles: MANAGER_PLUS, module: null },
+      '/analytics': { roles: MANAGER_PLUS, module: null },
+      '/access': { roles: COORDINATOR_PLUS, module: null },
+      '/volunteer-scheduling': { roles: COORDINATOR_PLUS, module: null },
+      '/attendance': { roles: STAFF_PLUS, module: null },
+      '/check-ins': { roles: STAFF_PLUS, module: null },
+      '/members': { roles: STAFF_PLUS, module: null },
+      '/people': { roles: STAFF_PLUS, module: null },
+      '/outreach': { roles: STAFF_PLUS, module: null },
+      '/resources': { roles: STAFF_PLUS, module: null },
+      '/call-history': { roles: STAFF_PLUS, module: null },
+      '/app-settings': { roles: ADMIN_ROLES, module: null },
+    });
+    return out;
+  })();
+
+  useEffect(() => {
+    if (!user) return;
+    // Normalize path (strip leading slash variants and query/hash)
+    const path = location.pathname.replace(/\/$/, '') || '/';
+    const rule = routeRules[path];
+    if (!rule) return;  // No rule → fail open (staff default)
+    // Role gate
+    if (rule.roles && !rule.roles.includes(userRole) && !isAdmin) {
+      toast.error('You do not have access to that page');
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    // Module gate
+    if (rule.module && !hasModuleAccess(rule.module)) {
+      toast.error(`This page requires ${rule.module.replace('_', ' ')} access — ask an admin to grant it.`);
+      navigate('/dashboard', { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, user?.role, user?.finance_access, user?.hr_access, user?.sales_access, user?.banking_access, user?.accounting_access, user?.social_work_access, user?.restricted_access]);
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       {sidebarOpen && <div className="fixed inset-0 bg-black/30 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />}

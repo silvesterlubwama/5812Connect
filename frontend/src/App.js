@@ -84,6 +84,8 @@ import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StaffRoute } from './components/RouteGuards';
 
+const KIOSK_ONLY_ROLES = new Set(['Security Contractor', 'security_contractor']);
+
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
   if (loading) return (
@@ -92,6 +94,8 @@ const ProtectedRoute = ({ children }) => {
     </div>
   );
   if (!user) return <Navigate to="/login" replace />;
+  // Security Contractors are pinned to the checkpoint terminal — never the main app or portal.
+  if (KIOSK_ONLY_ROLES.has(user.role)) return <Navigate to="/security-checkpoint" replace />;
   return children;
 };
 
