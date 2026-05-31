@@ -48,6 +48,10 @@ class MemberCreate(BaseModel):
     is_parent: bool = False
     is_customer: bool = False
     is_donor: bool = False
+    is_resident: bool = False
+    resident_location_id: Optional[str] = None
+    is_medical: bool = False
+    has_restricted_access: bool = False
     pin: Optional[str] = None
 
 class MemberUpdate(BaseModel):

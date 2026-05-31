@@ -6,6 +6,41 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 145 (May 31, 2026)
+**Resident vs visitor split + Inside-Now tile + bulk-issue resident badges. Pytest 57/57.**
+
+### What the user asked for
+1. **Improvement (iter 144 suggestion)**: live "Inside Now" tile on the Security Console header.
+2. **NEW**: when a restricted-space resident scans at a checkpoint located IN their own residence, the system should recognise them as a returning/departing resident — NOT track them as a daily guest in the visitor log.
+3. **NEW**: all residents (including children) get badges issued.
+
+### Backend changes (`routers/security_checkpoint.py` + `routers/members.py` + `models.py`)
+- **Subject classification**: scan handler now stamps `subject_type` on every event — `'resident'` when `subject.is_resident=true` AND `subject.resident_location_id === checkpoint.location_id`, else `'visitor'`. The reason text gets a `(resident)` suffix so the audit trail is unambiguous.
+- **Visitor log envelope** changed shape from `[rows]` to `{date, rows, counts, include_residents}`. Counts split into `visitors_entered`, `visitors_inside`, `residents_entered`, `residents_inside` — always returned, regardless of filter. Default filter is `include_residents=false` so visitor-log rolls don't pollute with residents.
+- **State endpoint** now returns `counts: {visitors_inside, residents_inside}` so the security console's Inside-Now tile updates every 1.5 s without a separate request.
+- **`POST /api/badges/auto-issue/residents`** body `{location_id}` — bulk auto-issues wallet badges for every adult member AND child whose `resident_location_id` matches. Idempotent (already-badged subjects come back with `was_created=false`). Audited.
+- **`MemberCreate` Pydantic model** now accepts `is_resident`, `resident_location_id`, `is_medical`, `has_restricted_access` (the create endpoint was previously stripping these — `MemberUpdate` did accept them, but new-resident creation needed it too).
+
+### Frontend changes
+- **Security Console header** (`SecurityCheckpointPage.jsx`) — new `cp-inside-now-tile` showing "INSIDE N visitor[s] · M resident[s]" in real time.
+- **LogbookDialog + AdminLogbookDialog** — added an "Include residents" checkbox + counts pills (visitors / residents / inside now). Each row shows a **RESIDENT** badge when applicable.
+- **LocationsPage.jsx** — restricted locations now show a 🪪 button on each row → confirms then calls `/api/badges/auto-issue/residents` and reports `{created, existing, errors, total_residents}`.
+
+### Tests / lint
+- Updated `test_iteration141_security_unification.py` to handle the new envelope shape on `/visitor-log`. Both tests that broke (`test_admin_visitor_log_shape`, `test_double_scan_creates_entry_then_exit`) now pass.
+- All 57 prior pytest cases still PASS. Ruff + ESLint clean.
+- Self-verified end-to-end: created a resident at `loc_59a87857`, scanned them → `subject_type='resident'`, default logbook returned 0 visitor rows + `residents_entered=1`. State counts showed `residents_inside=1`. Bulk badge issue created 1 badge.
+
+### Carryovers / P3 backlog (deferred from this iteration)
+- `routers/security_checkpoint.py` is now 1,260 lines — still well past the 700-line guideline. **Refactor needs its own iteration** (split subject/decision/logbook/lookup/batch into sub-modules + integration tests). Not done here to keep this iteration focused on user-visible behaviour.
+- Auto-issue is per-location only; could be extended to per-campus / org-wide / "all residents missing badges" with a single click.
+- Resident badge could embed `is_resident=true` so even a misconfigured checkpoint still recognises them via the badge payload itself.
+
+⚠️ **Production redeploy needed**. After redeploy:
+- Open `/admin → Security Checkpoints → 📋 Logbook` for any restricted-location checkpoint and verify the new "Include residents" toggle + counts pills.
+- Go to `/locations`, find a restricted location (red shield), click the 🪪 button on its row → mass-issue badges.
+- Open `/security-checkpoint` on a paired security device — the "INSIDE N visitor · M resident" tile appears next to the checkpoint name in the header.
+
 ## Recently Resolved — Iteration 144 (May 31, 2026)
 **Unified Security Checkpoint + Check-in system. Pytest 57/57.**
 

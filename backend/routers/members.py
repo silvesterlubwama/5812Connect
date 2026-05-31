@@ -1059,6 +1059,92 @@ async def auto_issue_badge(data: dict, current_user: dict = Depends(require_staf
 
 
 
+@router.post("/badges/auto-issue/residents")
+async def auto_issue_resident_badges(data: dict, current_user: dict = Depends(require_staff)) -> dict:
+    """Bulk auto-issue wallet badges for every resident of a restricted location.
+    Body: { location_id }. Includes both adult `members` AND `children` whose
+    `resident_location_id` matches. Idempotent — already-badged subjects come back
+    with was_created=false. Used by the Admin → Campuses page on restricted shelters."""
+    location_id = (data.get("location_id") or "").strip()
+    if not location_id:
+        raise HTTPException(status_code=400, detail="location_id required")
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "id": 1, "name": 1})
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    members = await db.members.find(
+        {"is_resident": True, "resident_location_id": location_id, "status": {"$ne": "inactive"}},
+        {"_id": 0, "id": 1},
+    ).to_list(5000)
+    children = await db.children.find(
+        {"resident_location_id": location_id},
+        {"_id": 0, "id": 1},
+    ).to_list(5000)
+    targets = (
+        [("member", m["id"]) for m in members]
+        + [("child", c["id"]) for c in children]
+    )
+    created = 0
+    existing = 0
+    errors = 0
+    for kind, sid in targets:
+        try:
+            # Re-use the same logic as POST /badges/auto-issue
+            badge_existing = await db.wallet_badges.find_one({"member_id": sid}, {"_id": 0, "status": 1})
+            if badge_existing and badge_existing.get("status") != "invalidated":
+                existing += 1
+                continue
+            # Resolve subject + create
+            if kind == "child":
+                subj = await db.children.find_one({"id": sid}, {"_id": 0})
+                role = "Child"
+            else:
+                subj = await db.members.find_one({"id": sid}, {"_id": 0})
+                role = (subj or {}).get("role") or (subj or {}).get("membership_type") or "Member"
+            if not subj:
+                continue
+            token = uuid.uuid4().hex[:16]
+            badge = {
+                "id": f"wbadge_{token}",
+                "token": token,
+                "qr_token": token,
+                "member_id": sid,
+                "subject_kind": kind,
+                "name": subj.get("name") or subj.get("full_name") or "",
+                "role": role,
+                "photo_url": subj.get("photo_url", ""),
+                "location_id": location_id,
+                "location_name": loc.get("name"),
+                "qr_data": sid,
+                "status": "active",
+                "issued_via": "bulk_resident_issue",
+                "issued_by": current_user["id"],
+                "issued_by_name": current_user.get("name", ""),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.wallet_badges.update_one(
+                {"member_id": sid}, {"$set": badge}, upsert=True,
+            )
+            created += 1
+        except Exception as e:
+            logger.warning(f"bulk badge issue failed for {kind} {sid}: {e}")
+            errors += 1
+    await _audit(
+        current_user["id"], "bulk_auto_issue_badges", "location", location_id,
+        {"created": created, "existing": existing, "errors": errors,
+         "total_residents": len(targets)},
+    )
+    return {
+        "location_id": location_id,
+        "location_name": loc.get("name"),
+        "total_residents": len(targets),
+        "created": created,
+        "existing": existing,
+        "errors": errors,
+    }
+
+
+
+
 # ========== MEMBER APPROVALS ==========
 
 @router.put("/members/{member_id}/approve")

@@ -417,6 +417,16 @@ async def checkpoint_scan(
         raise HTTPException(status_code=400, detail="payload required")
     subject = await _resolve_subject(scan_type, payload)
     decision, reason = _decide(cp, subject)
+    # Classify the subject as `resident` of this checkpoint's location vs `visitor`.
+    # Residents (and resident children) scan in/out of their own premises constantly —
+    # they belong in the audit log but should NOT clutter the daily visitor count.
+    cp_loc = cp.get("location_id")
+    is_resident_here = bool(
+        subject.get("is_resident")
+        and subject.get("resident_location_id") == cp_loc
+        and cp_loc
+    )
+    subject_type = "resident" if is_resident_here else "visitor"
     # Detect entry vs exit by checking today's open entries — if the same person already
     # has an "entry" today without an exit, this scan is recorded as their exit.
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -444,11 +454,12 @@ async def checkpoint_scan(
         "location_id": cp.get("location_id"),
         "kind": "entry_scan",
         "direction": direction,
+        "subject_type": subject_type,
         "scan_type": scan_type,
         "payload": payload,
         "subject": subject,
         "decision": decision,
-        "reason": reason,
+        "reason": reason if not is_resident_here else f"{reason} (resident)",
         "from_session_id": sess["id"],
         "from_mode": sess.get("mode"),
         "created_at": now.isoformat(),
@@ -520,12 +531,32 @@ async def checkpoint_state(
         history = await db.security_checkpoint_events.find(
             {"checkpoint_id": cp["id"]}, {"_id": 0},
         ).sort("created_at", -1).to_list(20)
+    # Live "still inside" tile — quick counts that the operator wants up top.
+    today_iso = now_iso[:10]
+    pipeline = [
+        {"$match": {
+            "checkpoint_id": cp["id"],
+            "created_at": {"$gte": today_iso},
+            "decision": "approved",
+            "kind": "entry_scan",
+            "direction": "entry",
+            "exit_event_id": {"$exists": False},
+        }},
+        {"$group": {"_id": "$subject_type", "n": {"$sum": 1}}},
+    ]
+    cur_counts = {"visitors_inside": 0, "residents_inside": 0}
+    async for row in db.security_checkpoint_events.aggregate(pipeline):
+        if row["_id"] == "resident":
+            cur_counts["residents_inside"] = row["n"]
+        else:
+            cur_counts["visitors_inside"] = row["n"]
     cp.pop("pairing_pin", None)
     return {
         "checkpoint": cp,
         "mode": sess.get("mode"),
         "current": current,
         "history": history,
+        "counts": cur_counts,
         "now": now_iso,
     }
 
@@ -761,10 +792,15 @@ async def list_one_time_entries_admin(checkpoint_id: str, current_user: dict = D
 # VISITOR LOGBOOK — paired entry/exit times per person per day
 # ============================================================
 
-async def _build_visitor_log(checkpoint_id: str, date_iso: str) -> list:
+async def _build_visitor_log(checkpoint_id: str, date_iso: str, include_residents: bool = False) -> dict:
     """Collapse all approved entry/exit events for a checkpoint on a single day
     into one row per (subject, entry). Each row carries first-entry time + last-exit time
-    so the operator sees who is still inside."""
+    so the operator sees who is still inside.
+
+    By default RESIDENTS of the checkpoint's own location are excluded from the visitor
+    rolls — they're not "guests" needing to be logged — but their counts are summarised
+    on the returned envelope so dashboards can show resident-vs-visitor breakdown.
+    """
     if not date_iso:
         date_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     day_start = date_iso
@@ -779,15 +815,32 @@ async def _build_visitor_log(checkpoint_id: str, date_iso: str) -> list:
         {"_id": 0},
     ).sort("created_at", 1).to_list(5000)
     rows = []
+    counts = {
+        "visitors_entered": 0, "visitors_inside": 0,
+        "residents_entered": 0, "residents_inside": 0,
+    }
     for ev in events:
         subj = ev.get("subject") or {}
         if ev.get("direction") == "exit":
-            continue  # exit data is attached via exit_event_id on the entry row
+            continue
+        stype = ev.get("subject_type") or "visitor"
+        still_in = not bool(ev.get("exit_event_id"))
+        if stype == "resident":
+            counts["residents_entered"] += 1
+            if still_in:
+                counts["residents_inside"] += 1
+            if not include_residents:
+                continue
+        else:
+            counts["visitors_entered"] += 1
+            if still_in:
+                counts["visitors_inside"] += 1
         rows.append({
             "entry_event_id": ev["id"],
             "entry_at": ev.get("created_at"),
             "subject_kind": subj.get("kind"),
             "subject_id": subj.get("id"),
+            "subject_type": stype,  # resident | visitor
             "name": subj.get("name") or "Unknown",
             "role": subj.get("role"),
             "phone": subj.get("phone"),
@@ -798,31 +851,33 @@ async def _build_visitor_log(checkpoint_id: str, date_iso: str) -> list:
             "event_title": subj.get("event_title"),
             "exit_event_id": ev.get("exit_event_id"),
             "exit_at": ev.get("exit_at"),
-            "still_inside": not bool(ev.get("exit_event_id")),
+            "still_inside": still_in,
             "reason": ev.get("reason"),
         })
-    return rows
+    return {"date": date_iso, "rows": rows, "counts": counts, "include_residents": include_residents}
 
 
 @router.get("/checkpoint/visitor-log")
 async def checkpoint_visitor_log_device(
     date: Optional[str] = None,
+    include_residents: bool = False,
     session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
 ):
-    """Device-session-authed visitor log — used by the security console tab."""
+    """Device-session-authed visitor log. Returns `{date, rows, counts:{visitors_entered, visitors_inside, residents_entered, residents_inside}, include_residents}`.
+    Pass `include_residents=true` to also list residents in `rows` (their counts are always returned)."""
     sess = await _resolve_session(session_token)
-    return await _build_visitor_log(sess["checkpoint_id"], date or "")
+    return await _build_visitor_log(sess["checkpoint_id"], date or "", include_residents=include_residents)
 
 
 @router.get("/checkpoints/{checkpoint_id}/visitor-log")
 async def checkpoint_visitor_log_admin(
     checkpoint_id: str,
     date: Optional[str] = None,
+    include_residents: bool = False,
     current_user: dict = Depends(require_director),
 ):
-    """Admin-authed visitor log — same shape as the device endpoint. Used by the
-    Admin → Security Checkpoints → View Logbook flow."""
-    return await _build_visitor_log(checkpoint_id, date or "")
+    """Admin-authed visitor log — same shape as the device endpoint."""
+    return await _build_visitor_log(checkpoint_id, date or "", include_residents=include_residents)
 
 
 # ============================================================

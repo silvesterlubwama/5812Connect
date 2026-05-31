@@ -765,43 +765,59 @@ function SecurityCheckpointsManager() {
 // ============== ADMIN LOGBOOK DIALOG ==============
 function AdminLogbookDialog({ cp, onClose }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [includeResidents, setIncludeResidents] = useState(false);
   const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!cp) return;
     setLoading(true);
-    securityCheckpointApi.visitorLogAdmin(cp.id, date)
-      .then(r => setRows(r.data || []))
+    securityCheckpointApi.visitorLogAdmin(cp.id, date, includeResidents)
+      .then(r => { setRows(r.data?.rows || []); setCounts(r.data?.counts || null); })
       .catch(e => toast.error(e.response?.data?.detail || 'Failed to load logbook'))
       .finally(() => setLoading(false));
-  }, [cp, date]);
+  }, [cp, date, includeResidents]);
 
   return (
     <Dialog open={!!cp} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto" data-testid="admin-logbook-dialog">
         <DialogHeader>
           <DialogTitle>{cp?.name} — Visitor Logbook</DialogTitle>
-          <DialogDescription className="text-xs">Entry / exit times per person, by day. Times in UTC.</DialogDescription>
+          <DialogDescription className="text-xs">
+            Entry / exit times per person, by day. Residents are filtered out by default — they live at this location so they aren't tracked as daily guests.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 mt-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Label className="text-xs">Date</Label>
             <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 w-44" data-testid="admin-logbook-date" />
-            <Badge variant="outline" className="text-[10px] ml-auto">{rows.length} visitor{rows.length === 1 ? '' : 's'}</Badge>
+            <label className="flex items-center gap-1.5 text-[11px] cursor-pointer ml-2">
+              <input type="checkbox" checked={includeResidents} onChange={e => setIncludeResidents(e.target.checked)} data-testid="admin-logbook-residents-toggle" />
+              <span>Include residents</span>
+            </label>
+            {counts && (
+              <div className="ml-auto flex gap-1.5">
+                <Badge variant="outline" className="text-[10px]">{counts.visitors_entered} visitors</Badge>
+                <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{counts.residents_entered} residents</Badge>
+                <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">{counts.visitors_inside + counts.residents_inside} inside now</Badge>
+              </div>
+            )}
           </div>
           {loading ? <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}</div>
-            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No visitors logged for this date.</p>
+            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No {includeResidents ? 'entries' : 'visitors'} logged for this date.</p>
               : (
                 <table className="w-full text-xs">
                   <thead className="text-[10px] uppercase text-muted-foreground border-b">
-                    <tr><th className="text-left py-2">Visitor</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
+                    <tr><th className="text-left py-2">Person</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
                   </thead>
                   <tbody>
                     {rows.map(r => (
                       <tr key={r.entry_event_id} className="border-b last:border-b-0" data-testid={`logbook-row-${r.entry_event_id}`}>
                         <td className="py-1.5">
-                          <div className="font-medium">{r.name}</div>
+                          <div className="font-medium flex items-center gap-1">{r.name}
+                            {r.subject_type === 'resident' && <Badge variant="outline" className="text-[9px] bg-blue-50 text-blue-700 border-blue-200">RESIDENT</Badge>}
+                          </div>
                           {(r.role || r.phone) && <div className="text-[10px] text-muted-foreground">{[r.role, r.phone].filter(Boolean).join(' · ')}</div>}
                           {r.event_title && <div className="text-[10px] text-blue-700 dark:text-blue-400">🎟 {r.event_title}</div>}
                         </td>

@@ -488,6 +488,21 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
             <p className="text-sm font-semibold">{checkpoint?.name} — Security Console</p>
             <p className="text-[11px] text-slate-400">{checkpoint?.location_name}</p>
           </div>
+          {/* Live "inside now" tile — at-a-glance situational awareness */}
+          {state.counts && (
+            <div className="ml-3 flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-[10px] text-emerald-200" data-testid="cp-inside-now-tile">
+              <span className="uppercase tracking-wider">Inside</span>
+              <span className="font-bold text-base text-emerald-100">{state.counts.visitors_inside ?? 0}</span>
+              <span className="text-emerald-400/70">visitor{state.counts.visitors_inside === 1 ? '' : 's'}</span>
+              {(state.counts.residents_inside ?? 0) > 0 && (
+                <>
+                  <span className="text-slate-500">·</span>
+                  <span className="font-semibold text-emerald-100">{state.counts.residents_inside}</span>
+                  <span className="text-emerald-400/70">resident{state.counts.residents_inside === 1 ? '' : 's'}</span>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLookup(true)} data-testid="cp-lookup-open"><Search size={14} className="mr-1" /> Lookup / Household</Button>
@@ -937,45 +952,64 @@ function ReceiptScanDialog({ open, onClose }) {
 // ============================================================
 function LogbookDialog({ open, onClose }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [includeResidents, setIncludeResidents] = useState(false);
   const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await securityCheckpointApi.visitorLog(date);
-      setRows(r.data || []);
+      const r = await securityCheckpointApi.visitorLog(date, includeResidents);
+      // Envelope shape: { date, rows, counts, include_residents }
+      setRows(r.data?.rows || []);
+      setCounts(r.data?.counts || null);
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load logbook'); }
     finally { setLoading(false); }
-  }, [date]);
+  }, [date, includeResidents]);
   useEffect(() => { if (open) load(); }, [open, load]);
 
-  const insideCount = rows.filter(r => r.still_inside).length;
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto" data-testid="cp-logbook-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><History size={16} /> Visitor Logbook</DialogTitle>
-          <DialogDescription className="text-xs">Entry / exit times per person, per day. Same scan or badge again counts as the exit.</DialogDescription>
+          <DialogDescription className="text-xs">
+            Entry / exit times per person, per day. Residents of this location are filtered out by default —
+            they live here so they aren't tracked as daily guests.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 mt-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Label className="text-xs">Date</Label>
             <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 w-44" data-testid="cp-logbook-date" />
-            <Badge variant="outline" className="text-[10px] ml-auto">{rows.length} total · {insideCount} inside</Badge>
+            <label className="flex items-center gap-1.5 text-[11px] cursor-pointer ml-2" data-testid="cp-logbook-residents-toggle-label">
+              <input type="checkbox" checked={includeResidents} onChange={e => setIncludeResidents(e.target.checked)} data-testid="cp-logbook-residents-toggle" />
+              <span>Include residents</span>
+            </label>
+            {counts && (
+              <div className="ml-auto flex gap-1.5">
+                <Badge variant="outline" className="text-[10px]">{counts.visitors_entered} visitors</Badge>
+                <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{counts.residents_entered} residents</Badge>
+                <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">{counts.visitors_inside + counts.residents_inside} inside now</Badge>
+              </div>
+            )}
           </div>
           {loading ? <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}</div>
-            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No entries logged for this date.</p>
+            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No {includeResidents ? 'entries' : 'visitors'} logged for this date.</p>
               : (
                 <table className="w-full text-xs">
                   <thead className="text-[10px] uppercase text-muted-foreground border-b">
-                    <tr><th className="text-left py-2">Visitor</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
+                    <tr><th className="text-left py-2">Person</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
                   </thead>
                   <tbody>
                     {rows.map(r => (
                       <tr key={r.entry_event_id} className="border-b last:border-b-0" data-testid={`cp-logbook-row-${r.entry_event_id}`}>
                         <td className="py-1.5">
-                          <div className="font-medium">{r.name}</div>
+                          <div className="font-medium flex items-center gap-1">
+                            {r.name}
+                            {r.subject_type === 'resident' && <Badge variant="outline" className="text-[9px] bg-blue-50 text-blue-700 border-blue-200">RESIDENT</Badge>}
+                          </div>
                           {(r.role || r.phone) && <div className="text-[10px] text-muted-foreground">{[r.role, r.phone].filter(Boolean).join(' · ')}</div>}
                           {r.event_title && <div className="text-[10px] text-blue-700 dark:text-blue-400">🎟 {r.event_title}</div>}
                         </td>

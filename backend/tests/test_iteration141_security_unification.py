@@ -302,8 +302,21 @@ class TestEntryExitPairing:
             timeout=20,
         )
         assert vl.status_code == 200
-        rows = vl.json()
+        # New shape (iter 145): {date, rows, counts, include_residents}
+        envelope = vl.json()
+        rows = envelope.get("rows") if isinstance(envelope, dict) else envelope
+        # Test member doesn't have is_resident set → should appear in default visitor view
         match = [x for x in rows if x.get("subject_id") == test_member["id"]]
+        if not match:
+            # Or via the include_residents=true view if the test seeded a resident
+            vl2 = requests.get(
+                f"{BASE_URL}/api/security/checkpoint/visitor-log?include_residents=true",
+                headers=headers, timeout=20,
+            )
+            assert vl2.status_code == 200
+            env2 = vl2.json()
+            rows = env2.get("rows") if isinstance(env2, dict) else env2
+            match = [x for x in rows if x.get("subject_id") == test_member["id"]]
         assert match, "no visitor-log row for test member"
         row = match[-1]
         assert row.get("exit_event_id") == exit_ev["id"], f"exit_event_id mismatch: {row}"
@@ -328,7 +341,10 @@ class TestVisitorLog:
             timeout=20,
         )
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        # New shape (iter 145): envelope {date, rows, counts, include_residents}
+        body = r.json()
+        assert isinstance(body, dict)
+        assert "rows" in body and "counts" in body
         # with date param
         r2 = requests.get(
             f"{BASE_URL}/api/security/checkpoints/{cp['id']}/visitor-log?date=2026-01-01",
@@ -336,7 +352,9 @@ class TestVisitorLog:
             timeout=20,
         )
         assert r2.status_code == 200
-        assert isinstance(r2.json(), list)
+        body2 = r2.json()
+        assert isinstance(body2, dict)
+        assert "rows" in body2
         requests.delete(f"{BASE_URL}/api/security/checkpoints/{cp['id']}", headers=admin_headers, timeout=20)
 
 

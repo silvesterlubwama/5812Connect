@@ -142,6 +142,15 @@ export default function LocationsPage() {
     } catch { toast.error('Failed to delete'); }
   };
 
+  const issueResidentBadges = async (loc) => {
+    if (!window.confirm(`Auto-issue wallet badges for every resident (incl. children) of "${loc.name}"? Existing badges are kept.`)) return;
+    try {
+      const r = await api.post('/badges/auto-issue/residents', { location_id: loc.id });
+      const { created, existing, errors, total_residents } = r.data || {};
+      toast.success(`${created} new badge${created === 1 ? '' : 's'} issued · ${existing} already had one · ${errors} error${errors === 1 ? '' : 's'} · ${total_residents} resident${total_residents === 1 ? '' : 's'} total`);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Bulk issue failed'); }
+  };
+
   const addDept = () => {
     if (deptInput.trim() && !form.departments.includes(deptInput.trim())) {
       setForm(prev => ({ ...prev, departments: [...prev.departments, deptInput.trim()] }));
@@ -173,6 +182,7 @@ export default function LocationsPage() {
           onEdit={() => openEdit(parent)}
           onDelete={() => deleteLocation(parent.id)}
           onAddChild={() => openAdd(parent.id, parent.type === 'main' ? 'campus' : 'sub-location')}
+          onIssueResidentBadges={parent.is_restricted ? () => issueResidentBadges(parent) : null}
           directorName={getDirectorName(parent.director_id)}
         />
         {isExpanded && children.length > 0 && (
@@ -491,7 +501,7 @@ export default function LocationsPage() {
   );
 }
 
-function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete, onAddChild, directorName }) {
+function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete, onAddChild, directorName, onIssueResidentBadges }) {
   return (
     <Card className={`shadow-soft rounded-xl transition-all hover:shadow-md ${loc.type === 'main' ? 'border-primary/30 border-2' : ''}`} data-testid="location-card">
       <CardContent className="p-4">
@@ -538,6 +548,18 @@ function LocationCard({ loc, childCount, isExpanded, onToggle, onEdit, onDelete,
             </div>
           </div>
           <div className="flex gap-1 shrink-0">
+            {onIssueResidentBadges && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-blue-600"
+                onClick={onIssueResidentBadges}
+                title="Auto-issue badges for all residents of this restricted location"
+                data-testid={`issue-resident-badges-${loc.id}`}
+              >
+                🪪
+              </Button>
+            )}
             <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={onAddChild} title={loc.type === 'main' ? 'Add Campus' : 'Add Sub-Location'} data-testid="add-child-btn">
               <Plus size={12} />
             </Button>
