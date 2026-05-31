@@ -10,7 +10,7 @@
  * without re-pairing (TTL = 12h on the backend).
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt } from 'lucide-react';
+import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt, Search, Users as UsersIcon } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -381,7 +381,10 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [state, setState] = useState({ current: null, history: [], now: null });
   const [showGrant, setShowGrant] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
+  const [showLogbook, setShowLogbook] = useState(false);
+  const [showLookup, setShowLookup] = useState(false);
   const [openOneTime, setOpenOneTime] = useState([]);
+  const isSingleDevice = checkpoint?.device_mode === 'single_device';
 
   // Poll (fallback)
   useEffect(() => {
@@ -487,6 +490,8 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLookup(true)} data-testid="cp-lookup-open"><Search size={14} className="mr-1" /> Lookup / Household</Button>
+          <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLogbook(true)} data-testid="cp-logbook-open"><History size={14} className="mr-1" /> Logbook</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
           <Button size="sm" variant="ghost" className="text-slate-300" onClick={onLock}><Lock size={14} /></Button>
@@ -505,7 +510,11 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
                 <div className="py-16 text-center text-slate-500 dark:text-slate-400">
                   <ScanLine size={48} className="mx-auto opacity-30 mb-3" />
                   <p className="text-sm">Waiting for the next scan…</p>
-                  <p className="text-[11px] mt-1">Guest device handles NFC/QR pickup. Scans appear here within a second.</p>
+                  <p className="text-[11px] mt-1">
+                    {isSingleDevice
+                      ? 'Scan a visitor\'s badge, QR, event ticket, or receipt via the reader attached to this device.'
+                      : 'Guest device handles NFC/QR pickup. Scans appear here within a second.'}
+                  </p>
                 </div>
               ) : (
                 <div className="flex items-start gap-5">
@@ -610,6 +619,12 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
 
       {/* RECEIPT EXIT SCAN DIALOG */}
       <ReceiptScanDialog open={showReceipt} onClose={() => setShowReceipt(false)} />
+
+      {/* VISITOR LOGBOOK (today's entries + exits) */}
+      <LogbookDialog open={showLogbook} onClose={() => setShowLogbook(false)} />
+
+      {/* HOUSEHOLD LOOKUP — phone / first name → multi-select household members */}
+      <LookupDialog open={showLookup} onClose={() => setShowLookup(false)} singleDevice={isSingleDevice} />
     </div>
   );
 }
@@ -916,3 +931,188 @@ function ReceiptScanDialog({ open, onClose }) {
     </Dialog>
   );
 }
+
+// ============================================================
+// LOGBOOK DIALOG — today's entries with entry/exit times
+// ============================================================
+function LogbookDialog({ open, onClose }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await securityCheckpointApi.visitorLog(date);
+      setRows(r.data || []);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load logbook'); }
+    finally { setLoading(false); }
+  }, [date]);
+  useEffect(() => { if (open) load(); }, [open, load]);
+
+  const insideCount = rows.filter(r => r.still_inside).length;
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto" data-testid="cp-logbook-dialog">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><History size={16} /> Visitor Logbook</DialogTitle>
+          <DialogDescription className="text-xs">Entry / exit times per person, per day. Same scan or badge again counts as the exit.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div className="flex items-center gap-2">
+            <Label className="text-xs">Date</Label>
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 w-44" data-testid="cp-logbook-date" />
+            <Badge variant="outline" className="text-[10px] ml-auto">{rows.length} total · {insideCount} inside</Badge>
+          </div>
+          {loading ? <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}</div>
+            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No entries logged for this date.</p>
+              : (
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] uppercase text-muted-foreground border-b">
+                    <tr><th className="text-left py-2">Visitor</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.entry_event_id} className="border-b last:border-b-0" data-testid={`cp-logbook-row-${r.entry_event_id}`}>
+                        <td className="py-1.5">
+                          <div className="font-medium">{r.name}</div>
+                          {(r.role || r.phone) && <div className="text-[10px] text-muted-foreground">{[r.role, r.phone].filter(Boolean).join(' · ')}</div>}
+                          {r.event_title && <div className="text-[10px] text-blue-700 dark:text-blue-400">🎟 {r.event_title}</div>}
+                        </td>
+                        <td className="capitalize text-[10px]">{r.subject_kind?.replace('_', ' ') || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.entry_at?.slice(11, 16) || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.exit_at?.slice(11, 16) || '—'}</td>
+                        <td>{r.still_inside ? <Badge className="bg-emerald-100 text-emerald-700 text-[9px]">Inside</Badge> : <Badge variant="outline" className="text-[9px]">Departed</Badge>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// LOOKUP DIALOG — phone / name search → household multi-select check-in
+// ============================================================
+function LookupDialog({ open, onClose, singleDevice }) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedFor, setSelectedFor] = useState(null); // which household is expanded
+  const [picks, setPicks] = useState({});               // {personId: true}
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { if (!open) { setQ(''); setResults([]); setSelectedFor(null); setPicks({}); } }, [open]);
+
+  const runSearch = async (e) => {
+    e?.preventDefault?.();
+    if (q.trim().length < 2) { toast.error('Type at least 2 characters'); return; }
+    setSearching(true);
+    try {
+      const r = await securityCheckpointApi.lookup(q.trim());
+      setResults(r.data?.results || []);
+      if ((r.data?.results || []).length === 0) toast.info('No matches');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Search failed'); }
+    finally { setSearching(false); }
+  };
+
+  const togglePick = (kind, id) => setPicks(prev => ({ ...prev, [`${kind}:${id}`]: !prev[`${kind}:${id}`] }));
+
+  const checkIn = async () => {
+    const members = Object.entries(picks).filter(([, v]) => v).map(([k]) => {
+      const [kind, id] = k.split(':');
+      return { kind, id };
+    });
+    if (!members.length) { toast.error('Tick at least one person'); return; }
+    setSubmitting(true);
+    try {
+      const r = await securityCheckpointApi.checkInBatch(members);
+      toast.success(`Checked in ${r.data?.checked_in || 0} member${r.data?.checked_in === 1 ? '' : 's'}`);
+      onClose();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Check-in failed'); }
+    finally { setSubmitting(false); }
+  };
+
+  const selectedCount = Object.values(picks).filter(Boolean).length;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto" data-testid="cp-lookup-dialog">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><UsersIcon size={16} /> Lookup &amp; Household Check-in</DialogTitle>
+          <DialogDescription className="text-xs">
+            {singleDevice
+              ? 'Type a visitor\'s phone or first name. Pick the right match — their household will appear with checkboxes so you can tick everyone present.'
+              : 'Phone or first-name search. Pick the right match — their household appears below for multi-select check-in.'}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={runSearch} className="flex gap-2 mt-2">
+          <Input autoFocus placeholder="Phone, first name, last name, or email…" value={q} onChange={e => setQ(e.target.value)} data-testid="cp-lookup-input" />
+          <Button type="submit" disabled={searching || q.trim().length < 2} data-testid="cp-lookup-submit">{searching ? 'Searching…' : 'Search'}</Button>
+        </form>
+        {results.length > 0 && (
+          <div className="space-y-2 mt-3 max-h-96 overflow-y-auto">
+            {results.map(r => {
+              const expanded = selectedFor === r.id;
+              return (
+                <div key={`${r.kind}:${r.id}`} className="border rounded-lg" data-testid={`cp-lookup-result-${r.id}`}>
+                  <button
+                    type="button"
+                    className="w-full p-2.5 text-left hover:bg-accent/30 flex items-center gap-2"
+                    onClick={() => { setSelectedFor(expanded ? null : r.id); setPicks(prev => ({ ...prev, [`${r.kind}:${r.id}`]: !expanded ? true : prev[`${r.kind}:${r.id}`] })); }}
+                  >
+                    <Badge variant="outline" className="text-[9px] capitalize">{r.kind}</Badge>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{r.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{[r.phone, r.email, r.role].filter(Boolean).join(' · ')}{r.family_name ? ` · 🏠 ${r.family_name}` : ''}</p>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">{(r.household || []).length} household</span>
+                  </button>
+                  {expanded && (
+                    <div className="p-2.5 border-t bg-muted/30 space-y-1" data-testid={`cp-lookup-household-${r.id}`}>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!picks[`${r.kind}:${r.id}`]}
+                          onChange={() => togglePick(r.kind, r.id)}
+                          data-testid={`cp-pick-${r.id}`}
+                        />
+                        <span className="font-medium">{r.name}</span>
+                        <span className="text-[10px] text-muted-foreground">({r.kind})</span>
+                      </label>
+                      {(r.household || []).map(h => (
+                        <label key={h.id} className="flex items-center gap-2 text-sm cursor-pointer pl-4">
+                          <input
+                            type="checkbox"
+                            checked={!!picks[`${h.kind}:${h.id}`]}
+                            onChange={() => togglePick(h.kind, h.id)}
+                            data-testid={`cp-pick-${h.id}`}
+                          />
+                          <span>{h.name}</span>
+                          <span className="text-[10px] text-muted-foreground">{h.kind === 'child' ? (h.grade || 'child') : (h.role || 'member')}</span>
+                        </label>
+                      ))}
+                      {(r.household || []).length === 0 && <p className="text-[11px] text-muted-foreground italic pl-4">No household siblings on file.</p>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {selectedCount > 0 && (
+          <div className="flex gap-2 pt-3 border-t mt-3">
+            <Button variant="ghost" className="flex-1" onClick={() => { setPicks({}); setSelectedFor(null); }}>Clear</Button>
+            <Button className="flex-1" disabled={submitting} onClick={checkIn} data-testid="cp-lookup-checkin-submit">
+              {submitting ? 'Checking in…' : `Check in ${selectedCount} person${selectedCount === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+

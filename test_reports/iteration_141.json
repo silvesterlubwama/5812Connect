@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 141 — Security Checkpoint + Check-in unification. Comprehensive backend + frontend validation. 18 new pytest cases (all green) + 57/57 combined with prior smoke + iter91 suites. Frontend UI validated for admin checkpoint kind/device_mode dropdowns, admin Logbook dialog, security console Lookup + Logbook toolbar buttons, single-device empty-state copy, and /pos/:storeId kiosk-mode TabsList hiding. All requested behaviors confirmed working.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AdminPage > Security Checkpoints dialog (row card)", "issues": ["React hydration warning: <Badge> (renders a <div>) is nested inside a <p> in the row name area (AdminPage.jsx line ~737). Does not break behavior but produces console error. Suggest changing the <p> wrapper to a <div>/<span> with appropriate styling."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration141_security_unification.py",
+    "/app/test_reports/pytest/iter141_results.xml"
+  ],
+  "action_items": [
+    "Optional cleanup: replace the <p className='text-sm font-semibold'> wrapper around the kind/device_mode Badges in the checkpoint row (AdminPage.jsx ~L737) with a <div>/<span> to remove the React hydration error about a <div> nested in a <p>. Cosmetic only."
+  ],
+  "critical_code_review_comments": [
+    "security_checkpoint.py is now 1201 lines — past the 700-line guideline. Consider splitting (subject resolution, decision, visitor-log/lookup/batch) into sub-modules for maintainability.",
+    "Public POST /api/security/checkpoint/pair, /scan, /lookup, /check-in-batch all rely on the device session header — confirmed unauth returns 401 and short query returns 400.",
+    "check_in_only branch correctly bypasses location restriction and confirms via 'no access restriction' / 'check-in only' reason text.",
+    "Entry/exit pairing using find_one_and_update with sort (instead of motor's plain update_one) correctly sets exit_at + exit_event_id on the entry row — verified end-to-end via /visitor-log."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration141_security_unification.py (created — 18 tests, 16 pass + 2 skipped pre-fix → fixed to 18 pass)"
+  ],
+  "success_rate": {"backend": "100% (18/18 new, 57/57 with regression)", "frontend": "100% (all 8 UI assertions pass)"},
+  "test_credentials": "Admin: admin@5812uganda.org / Admin@5812 (sourced from review_request + /app/memory/test_credentials.md)",
+  "seed_data_creation": "Each test creates and cleans up its own checkpoints + members. Event-ticket tests create a TEST_Iter141_Event_* event and one public booking via /api/public/bookings/event then delete the checkpoint (event/booking not cleaned — minor, prefixed TEST_).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pytest baseline is now 57/57 (test_iteration91_security_checkpoint.py + test_smoke_recent_modules.py + test_iteration141_security_unification.py). Two early skips were due to public booking payload using the wrong field name (`guests` vs `num_tickets`) — fixed in-test. The scan resolver only resolves member-by-ID when scan_type='qr' (or member-card/badge); 'manual' scan_type falls through to phone/email/national_id search — keep that in mind for any future tests.",
+  "rca of the issue": "N/A — no bugs found in the feature under review. Two test-file issues caught + fixed during this run (event payload field names + scan_type used for member id)."
+}

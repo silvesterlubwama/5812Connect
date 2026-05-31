@@ -185,6 +185,10 @@ export const securityCheckpointApi = {
   }),
   receiptOverride: (data) => api.post('/security/checkpoint/receipt-override', data, { headers: _sessHeaders() }),
   dashboardSnapshot: () => api.get('/security/dashboard/checkpoints'),
+  visitorLog: (date) => api.get('/security/checkpoint/visitor-log', { params: { date }, headers: _sessHeaders() }),
+  visitorLogAdmin: (cpId, date) => api.get(`/security/checkpoints/${cpId}/visitor-log`, { params: { date } }),
+  lookup: (q) => api.post('/security/checkpoint/lookup', { q }, { headers: _sessHeaders() }),
+  checkInBatch: (members) => api.post('/security/checkpoint/check-in-batch', { members }, { headers: _sessHeaders() }),
   openOneTime: () => api.get('/security/checkpoint/one-time/open', { headers: _sessHeaders() }),
   returnId: (grantId) => api.post(`/security/checkpoint/one-time/${grantId}/return-id`, null, { headers: _sessHeaders() }),
 };

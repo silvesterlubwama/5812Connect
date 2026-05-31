@@ -756,14 +756,16 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
-          <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
-          <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
-          <TabsTrigger value="history" data-testid="tab-history">Sales History</TabsTrigger>
-          <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
-        </TabsList>
+      <Tabs value={isPosKiosk ? 'pos' : activeTab} onValueChange={setActiveTab}>
+        {!isPosKiosk && (
+          <TabsList>
+            <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
+            <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
+            <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-history">Sales History</TabsTrigger>
+            <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
+          </TabsList>
+        )}
 
         {/* POS TAB */}
         <TabsContent value="pos" className="mt-4">

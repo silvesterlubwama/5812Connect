@@ -621,7 +621,8 @@ function SecurityCheckpointsManager() {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: '', location_id: '', description: '', requires_id_for_one_time: true });
+  const [form, setForm] = useState({ name: '', location_id: '', description: '', requires_id_for_one_time: true, kind: 'strict', device_mode: 'dual_device' });
+  const [logbookFor, setLogbookFor] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -641,7 +642,7 @@ function SecurityCheckpointsManager() {
     try {
       await securityCheckpointApi.create(form);
       toast.success(`Checkpoint created. PIN visible in the list.`);
-      setForm({ name: '', location_id: '', description: '', requires_id_for_one_time: true });
+      setForm({ name: '', location_id: '', description: '', requires_id_for_one_time: true, kind: 'strict', device_mode: 'dual_device' });
       load();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setCreating(false); }
@@ -702,6 +703,21 @@ function SecurityCheckpointsManager() {
                 </select>
               </div>
               <div className="space-y-1 sm:col-span-2"><Label className="text-xs">Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></div>
+              <div className="space-y-1">
+                <Label className="text-xs">Checkpoint mode</Label>
+                <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })} data-testid="cp-create-kind">
+                  <option value="strict">Strict — restricted location access only</option>
+                  <option value="hybrid">Hybrid — also accepts event tickets + checks attendees in</option>
+                  <option value="check_in_only">Check-in only — no access gate, just log presence</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Device layout</Label>
+                <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={form.device_mode} onChange={e => setForm({ ...form, device_mode: e.target.value })} data-testid="cp-create-device-mode">
+                  <option value="dual_device">Dual device — guest tablet + security console</option>
+                  <option value="single_device">Single device — operator scans on behalf of visitor</option>
+                </select>
+              </div>
               <label className="flex items-center gap-2 text-xs sm:col-span-2">
                 <input type="checkbox" checked={form.requires_id_for_one_time} onChange={e => setForm({ ...form, requires_id_for_one_time: e.target.checked })} />
                 <span>Require ID photo when granting one-time entries</span>
@@ -720,13 +736,16 @@ function SecurityCheckpointsManager() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold">{cp.name} <Badge variant="outline" className="text-[10px] ml-1">{cp.location_name}</Badge></p>
                     {cp.description && <p className="text-[11px] text-muted-foreground">{cp.description}</p>}
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <Badge variant="outline" className="text-[9px] capitalize">{(cp.kind || 'strict').replace('_', ' ')}</Badge>
+                      <Badge variant="outline" className="text-[9px]">{cp.device_mode === 'single_device' ? 'Single device' : 'Dual device'}</Badge>
                       <span className="text-[10px] uppercase text-muted-foreground">Pairing PIN</span>
                       <code className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 text-sm font-mono tracking-widest">{cp.pairing_pin}</code>
                       <span className="text-[10px] text-muted-foreground">· {cp.paired_devices ?? 0} paired device{cp.paired_devices === 1 ? '' : 's'}</span>
                     </div>
                   </div>
                   <div className="flex flex-col gap-1.5 shrink-0">
+                    <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setLogbookFor(cp)} data-testid={`cp-logbook-${cp.id}`}>📋 Logbook</Button>
                     <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => rotate(cp)} data-testid={`cp-rotate-${cp.id}`}><Key size={11} className="mr-1" /> Rotate PIN</Button>
                     <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => remove(cp)} data-testid={`cp-delete-${cp.id}`}><Trash2 size={11} className="mr-1" /> Delete</Button>
                   </div>
@@ -736,6 +755,68 @@ function SecurityCheckpointsManager() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ADMIN LOGBOOK DIALOG */}
+      <AdminLogbookDialog cp={logbookFor} onClose={() => setLogbookFor(null)} />
     </>
   );
 }
+
+// ============== ADMIN LOGBOOK DIALOG ==============
+function AdminLogbookDialog({ cp, onClose }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!cp) return;
+    setLoading(true);
+    securityCheckpointApi.visitorLogAdmin(cp.id, date)
+      .then(r => setRows(r.data || []))
+      .catch(e => toast.error(e.response?.data?.detail || 'Failed to load logbook'))
+      .finally(() => setLoading(false));
+  }, [cp, date]);
+
+  return (
+    <Dialog open={!!cp} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto" data-testid="admin-logbook-dialog">
+        <DialogHeader>
+          <DialogTitle>{cp?.name} — Visitor Logbook</DialogTitle>
+          <DialogDescription className="text-xs">Entry / exit times per person, by day. Times in UTC.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div className="flex items-center gap-2">
+            <Label className="text-xs">Date</Label>
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 w-44" data-testid="admin-logbook-date" />
+            <Badge variant="outline" className="text-[10px] ml-auto">{rows.length} visitor{rows.length === 1 ? '' : 's'}</Badge>
+          </div>
+          {loading ? <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}</div>
+            : rows.length === 0 ? <p className="text-xs text-muted-foreground text-center py-6">No visitors logged for this date.</p>
+              : (
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] uppercase text-muted-foreground border-b">
+                    <tr><th className="text-left py-2">Visitor</th><th className="text-left">Type</th><th className="text-left">In</th><th className="text-left">Out</th><th className="text-left">Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.entry_event_id} className="border-b last:border-b-0" data-testid={`logbook-row-${r.entry_event_id}`}>
+                        <td className="py-1.5">
+                          <div className="font-medium">{r.name}</div>
+                          {(r.role || r.phone) && <div className="text-[10px] text-muted-foreground">{[r.role, r.phone].filter(Boolean).join(' · ')}</div>}
+                          {r.event_title && <div className="text-[10px] text-blue-700 dark:text-blue-400">🎟 {r.event_title}</div>}
+                        </td>
+                        <td className="capitalize text-[10px]">{r.subject_kind?.replace('_', ' ') || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.entry_at?.slice(11, 16) || '—'}</td>
+                        <td className="font-mono text-[10px]">{r.exit_at?.slice(11, 16) || '—'}</td>
+                        <td>{r.still_inside ? <Badge className="bg-emerald-100 text-emerald-700 text-[9px]">Inside</Badge> : <Badge variant="outline" className="text-[9px]">Departed</Badge>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

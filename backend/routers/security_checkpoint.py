@@ -87,7 +87,9 @@ async def _resolve_session(session_token: Optional[str]) -> dict:
 
 @router.post("/checkpoints")
 async def create_checkpoint(data: dict, current_user: dict = Depends(require_director)):
-    """Body: { name, location_id, requires_id_for_one_time?: true, description? }"""
+    """Body: { name, location_id, requires_id_for_one_time?: true, description?,
+              kind?: 'strict'|'hybrid'|'check_in_only', device_mode?: 'dual_device'|'single_device',
+              auto_check_in_event_id?: str }"""
     name = (data.get("name") or "").strip()
     location_id = (data.get("location_id") or "").strip()
     if not name or not location_id:
@@ -95,6 +97,12 @@ async def create_checkpoint(data: dict, current_user: dict = Depends(require_dir
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "id": 1, "name": 1})
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
+    kind = (data.get("kind") or "strict").lower()
+    if kind not in {"strict", "hybrid", "check_in_only"}:
+        raise HTTPException(status_code=400, detail="kind must be strict | hybrid | check_in_only")
+    device_mode = (data.get("device_mode") or "dual_device").lower()
+    if device_mode not in {"dual_device", "single_device"}:
+        raise HTTPException(status_code=400, detail="device_mode must be dual_device | single_device")
     pin = _gen_pin()
     doc = {
         "id": f"cpk_{uuid.uuid4().hex[:10]}",
@@ -104,13 +112,16 @@ async def create_checkpoint(data: dict, current_user: dict = Depends(require_dir
         "location_name": loc.get("name"),
         "pairing_pin": pin,  # cleartext intentionally — admin sees + can rotate
         "active": True,
+        "kind": kind,                # strict = restricted-loc gate, hybrid = also accepts event tickets, check_in_only = no gating just log
+        "device_mode": device_mode,  # dual_device = guest tablet + security console pair, single_device = operator-only
+        "auto_check_in_event_id": (data.get("auto_check_in_event_id") or "").strip(),
         "requires_id_for_one_time": bool(data.get("requires_id_for_one_time", True)),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
     await db.security_checkpoints.insert_one(doc)
     doc.pop("_id", None)
-    await _audit(current_user["id"], "create", "security_checkpoint", doc["id"], {"location": loc.get("name")})
+    await _audit(current_user["id"], "create", "security_checkpoint", doc["id"], {"location": loc.get("name"), "kind": kind, "device_mode": device_mode})
     return doc
 
 
@@ -128,10 +139,14 @@ async def list_checkpoints(current_user: dict = Depends(require_director)):
 
 @router.put("/checkpoints/{checkpoint_id}")
 async def update_checkpoint(checkpoint_id: str, data: dict, current_user: dict = Depends(require_director)):
-    allowed = {"name", "description", "active", "requires_id_for_one_time"}
+    allowed = {"name", "description", "active", "requires_id_for_one_time", "kind", "device_mode", "auto_check_in_event_id"}
     update = {k: v for k, v in (data or {}).items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No editable fields supplied")
+    if "kind" in update and update["kind"] not in {"strict", "hybrid", "check_in_only"}:
+        raise HTTPException(status_code=400, detail="kind must be strict | hybrid | check_in_only")
+    if "device_mode" in update and update["device_mode"] not in {"dual_device", "single_device"}:
+        raise HTTPException(status_code=400, detail="device_mode must be dual_device | single_device")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.security_checkpoints.update_one({"id": checkpoint_id}, {"$set": update})
     if res.matched_count == 0:
@@ -208,6 +223,9 @@ async def pair_device(data: dict, request: Request):
         await db.security_pair_attempts.insert_one({"ip": client_ip, "at": now.isoformat(), "ok": False})
         await asyncio.sleep(0.4)  # tarpit
         raise HTTPException(status_code=401, detail="Invalid PIN")
+    # Single-device checkpoints only allow `security` mode — guest tablet is not used.
+    if cp.get("device_mode") == "single_device" and mode == "guest":
+        raise HTTPException(status_code=400, detail="This checkpoint is single-device — pair as 'security' instead")
     await db.security_pair_attempts.insert_one({"ip": client_ip, "at": now.isoformat(), "ok": True, "checkpoint_id": cp["id"]})
     raw_token = secrets.token_urlsafe(32)
     expires_at = (now + timedelta(hours=CHECKPOINT_SESSION_TTL_HOURS)).isoformat()
@@ -253,6 +271,26 @@ async def _resolve_subject(scan_type: str, payload: str) -> dict:
     payload = (payload or "").strip()
     if not payload:
         return {"kind": "unknown", "payload": ""}
+    # Event ticket QR — format `TKT-XXXX` (issued by /events/.../register). Match early so
+    # hybrid checkpoints can auto-check-in.
+    if payload.startswith("TKT-") or payload.startswith("TKT_"):
+        booking = await db.public_bookings.find_one(
+            {"ticket_ids": payload}, {"_id": 0},
+        )
+        if booking:
+            event = await db.events.find_one({"id": booking.get("event_id")}, {"_id": 0, "id": 1, "title": 1, "date": 1})
+            return {
+                "kind": "event_ticket",
+                "id": payload,
+                "name": booking.get("name") or "Ticket holder",
+                "email": booking.get("email"),
+                "phone": booking.get("phone"),
+                "event_id": booking.get("event_id"),
+                "event_title": (event or {}).get("title"),
+                "event_date": (event or {}).get("date"),
+                "booking_id": booking.get("id"),
+                "num_tickets": booking.get("num_tickets") or 1,
+            }
     if scan_type == "nfc":
         # Existing badge issuance writes the wallet_badges.token as the NFC payload.
         badge = await db.wallet_badges.find_one({"$or": [{"token": payload}, {"qr_token": payload}]}, {"_id": 0})
@@ -326,6 +364,16 @@ def _decide(checkpoint: dict, subject: dict) -> tuple:
     Returns (decision, reason). decision ∈ {approved, denied, unknown}."""
     if subject.get("kind") == "unknown":
         return "denied", "Could not identify this badge/QR"
+    # Event ticket — always approved on hybrid checkpoints, denied on strict-only ones
+    if subject.get("kind") == "event_ticket":
+        if (checkpoint.get("kind") or "strict") in {"hybrid", "check_in_only"}:
+            return "approved", f"Event ticket: {subject.get('event_title') or subject.get('event_id')}"
+        return "denied", "Event tickets are not accepted at this checkpoint"
+    # check_in_only checkpoints log everyone without restricted-location gating
+    if (checkpoint.get("kind") or "strict") == "check_in_only":
+        if (subject.get("status") or "active") != "active":
+            return "denied", f"Profile is {subject.get('status') or 'inactive'}"
+        return "approved", "Check-in only — no access restriction"
     if (subject.get("status") or "active") != "active":
         return "denied", f"Profile is {subject.get('status') or 'inactive'}"
     loc_id = checkpoint.get("location_id")
@@ -369,6 +417,25 @@ async def checkpoint_scan(
         raise HTTPException(status_code=400, detail="payload required")
     subject = await _resolve_subject(scan_type, payload)
     decision, reason = _decide(cp, subject)
+    # Detect entry vs exit by checking today's open entries — if the same person already
+    # has an "entry" today without an exit, this scan is recorded as their exit.
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    direction = "entry"
+    if subject.get("id"):
+        # An "entry" event is the most recent today-entry for this subject that has NO matching exit yet.
+        prior = await db.security_checkpoint_events.find_one(
+            {
+                "checkpoint_id": cp["id"],
+                "created_at": {"$gte": today_iso},
+                "subject.id": subject["id"],
+                "direction": "entry",
+                "exit_event_id": {"$exists": False},
+                "decision": "approved",
+            },
+            sort=[("created_at", -1)],
+        )
+        if prior:
+            direction = "exit"
     now = datetime.now(timezone.utc)
     clear_at = (now + timedelta(seconds=SCAN_RESET_SECONDS)).isoformat()
     event = {
@@ -376,6 +443,7 @@ async def checkpoint_scan(
         "checkpoint_id": cp["id"],
         "location_id": cp.get("location_id"),
         "kind": "entry_scan",
+        "direction": direction,
         "scan_type": scan_type,
         "payload": payload,
         "subject": subject,
@@ -387,6 +455,44 @@ async def checkpoint_scan(
         "clear_at": clear_at,
     }
     await db.security_checkpoint_events.insert_one(event)
+    # If this is an exit scan, link it back to the matching entry so logbook can render the pair
+    if direction == "exit" and subject.get("id"):
+        try:
+            # motor's update_one does NOT accept a `sort` arg — use find_one_and_update.
+            await db.security_checkpoint_events.find_one_and_update(
+                {
+                    "checkpoint_id": cp["id"],
+                    "created_at": {"$gte": today_iso},
+                    "subject.id": subject["id"],
+                    "direction": "entry",
+                    "exit_event_id": {"$exists": False},
+                    "decision": "approved",
+                },
+                {"$set": {"exit_event_id": event["id"], "exit_at": now.isoformat()}},
+                sort=[("created_at", -1)],
+            )
+        except Exception as _e:
+            logger.warning(f"exit linking failed: {_e}")
+    # Hybrid: auto-mark event check-in on db.checkins so Events page shows it
+    if subject.get("kind") == "event_ticket" and decision == "approved" and direction == "entry":
+        try:
+            await db.checkins.insert_one({
+                "id": f"chk_{uuid.uuid4().hex[:10]}",
+                "member_name": subject.get("name"),
+                "member_email": subject.get("email"),
+                "member_phone": subject.get("phone"),
+                "type": "event_ticket",
+                "method": "security_checkpoint",
+                "event_id": subject.get("event_id"),
+                "event_title": subject.get("event_title"),
+                "ticket_id": subject.get("id"),
+                "booking_id": subject.get("booking_id"),
+                "location_id": cp.get("location_id"),
+                "checkpoint_id": cp["id"],
+                "checked_in_at": now.isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f"event ticket auto-checkin failed: {e}")
     event.pop("_id", None)
     await _broadcast_to_checkpoint(cp["id"], {"type": "event", "event": event})
     return event
@@ -649,6 +755,206 @@ async def list_one_time_entries_admin(checkpoint_id: str, current_user: dict = D
         {"checkpoint_id": checkpoint_id}, {"_id": 0},
     ).sort("granted_at", -1).to_list(500)
     return rows
+
+
+# ============================================================
+# VISITOR LOGBOOK — paired entry/exit times per person per day
+# ============================================================
+
+async def _build_visitor_log(checkpoint_id: str, date_iso: str) -> list:
+    """Collapse all approved entry/exit events for a checkpoint on a single day
+    into one row per (subject, entry). Each row carries first-entry time + last-exit time
+    so the operator sees who is still inside."""
+    if not date_iso:
+        date_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day_start = date_iso
+    day_end = (datetime.fromisoformat(date_iso) + timedelta(days=1)).strftime("%Y-%m-%d")
+    events = await db.security_checkpoint_events.find(
+        {
+            "checkpoint_id": checkpoint_id,
+            "created_at": {"$gte": day_start, "$lt": day_end},
+            "decision": "approved",
+            "kind": "entry_scan",
+        },
+        {"_id": 0},
+    ).sort("created_at", 1).to_list(5000)
+    rows = []
+    for ev in events:
+        subj = ev.get("subject") or {}
+        if ev.get("direction") == "exit":
+            continue  # exit data is attached via exit_event_id on the entry row
+        rows.append({
+            "entry_event_id": ev["id"],
+            "entry_at": ev.get("created_at"),
+            "subject_kind": subj.get("kind"),
+            "subject_id": subj.get("id"),
+            "name": subj.get("name") or "Unknown",
+            "role": subj.get("role"),
+            "phone": subj.get("phone"),
+            "email": subj.get("email"),
+            "photo_url": subj.get("photo_url"),
+            "scan_type": ev.get("scan_type"),
+            "event_id": subj.get("event_id"),
+            "event_title": subj.get("event_title"),
+            "exit_event_id": ev.get("exit_event_id"),
+            "exit_at": ev.get("exit_at"),
+            "still_inside": not bool(ev.get("exit_event_id")),
+            "reason": ev.get("reason"),
+        })
+    return rows
+
+
+@router.get("/checkpoint/visitor-log")
+async def checkpoint_visitor_log_device(
+    date: Optional[str] = None,
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Device-session-authed visitor log — used by the security console tab."""
+    sess = await _resolve_session(session_token)
+    return await _build_visitor_log(sess["checkpoint_id"], date or "")
+
+
+@router.get("/checkpoints/{checkpoint_id}/visitor-log")
+async def checkpoint_visitor_log_admin(
+    checkpoint_id: str,
+    date: Optional[str] = None,
+    current_user: dict = Depends(require_director),
+):
+    """Admin-authed visitor log — same shape as the device endpoint. Used by the
+    Admin → Security Checkpoints → View Logbook flow."""
+    return await _build_visitor_log(checkpoint_id, date or "")
+
+
+# ============================================================
+# HOUSEHOLD LOOKUP — phone / first-name search → member + family members
+# ============================================================
+
+@router.post("/checkpoint/lookup")
+async def checkpoint_household_lookup(
+    data: dict,
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Body: { q }. Searches members + children and returns each match alongside
+    its household siblings. Security operator picks the right person and ticks the
+    family members actually present."""
+    await _resolve_session(session_token)
+    q = (data.get("q") or "").strip()
+    if len(q) < 2:
+        raise HTTPException(status_code=400, detail="Search needs at least 2 characters")
+    rx = {"$regex": q, "$options": "i"}
+    member_matches = await db.members.find(
+        {"$or": [{"name": rx}, {"phone": rx}, {"email": rx}, {"national_id": rx}]},
+        {"_id": 0, "password_hash": 0, "pin_hash": 0},
+    ).limit(20).to_list(20)
+    child_matches = await db.children.find(
+        {"$or": [{"name": rx}, {"phone": rx}]},
+        {"_id": 0},
+    ).limit(20).to_list(20)
+    family_ids = list({m.get("family_id") for m in member_matches if m.get("family_id")})
+    family_ids += list({c.get("family_id") for c in child_matches if c.get("family_id")})
+    families = {}
+    if family_ids:
+        async for fam in db.families.find({"id": {"$in": list(set(family_ids))}}, {"_id": 0}):
+            families[fam["id"]] = fam
+    out = []
+    seen = set()
+    member_ids = {m.get("id") for m in member_matches}
+    for who in member_matches + child_matches:
+        wid = who.get("id")
+        if not wid or wid in seen:
+            continue
+        seen.add(wid)
+        fam_id = who.get("family_id")
+        family_members = []
+        if fam_id:
+            siblings_m = await db.members.find(
+                {"family_id": fam_id, "id": {"$ne": wid}},
+                {"_id": 0, "id": 1, "name": 1, "phone": 1, "role": 1, "photo_url": 1},
+            ).to_list(20)
+            siblings_c = await db.children.find(
+                {"family_id": fam_id, "id": {"$ne": wid}},
+                {"_id": 0, "id": 1, "name": 1, "date_of_birth": 1, "photo_url": 1, "grade": 1},
+            ).to_list(20)
+            for s in siblings_m:
+                family_members.append({**s, "kind": "member"})
+            for s in siblings_c:
+                family_members.append({**s, "kind": "child"})
+        kind = "member" if wid in member_ids else "child"
+        out.append({
+            "kind": kind,
+            "id": wid,
+            "name": who.get("name"),
+            "phone": who.get("phone"),
+            "email": who.get("email"),
+            "role": who.get("role"),
+            "photo_url": who.get("photo_url"),
+            "family_id": fam_id,
+            "family_name": (families.get(fam_id) or {}).get("name") if fam_id else None,
+            "household": family_members,
+        })
+    return {"q": q, "results": out, "count": len(out)}
+
+
+@router.post("/checkpoint/check-in-batch")
+async def checkpoint_check_in_batch(
+    data: dict,
+    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
+):
+    """Body: { members: [{kind, id}, ...] }
+    Manually check in a batch of selected household members. Writes one checkpoint event
+    per person + a checkins row per person so they show on /check-ins."""
+    sess = await _resolve_session(session_token)
+    cp = await db.security_checkpoints.find_one({"id": sess["checkpoint_id"]}, {"_id": 0})
+    if not cp:
+        raise HTTPException(status_code=404, detail="Checkpoint missing")
+    members = data.get("members") or []
+    if not isinstance(members, list) or not members:
+        raise HTTPException(status_code=400, detail="members[] required")
+    now = datetime.now(timezone.utc)
+    clear_at = (now + timedelta(seconds=SCAN_RESET_SECONDS)).isoformat()
+    created = []
+    for m in members:
+        subject = await _hydrate_subject(m.get("kind") or "member", m.get("id") or "")
+        if subject.get("kind") == "unknown":
+            continue
+        decision, reason = _decide(cp, subject)
+        event = {
+            "id": f"cev_{uuid.uuid4().hex[:10]}",
+            "checkpoint_id": cp["id"],
+            "location_id": cp.get("location_id"),
+            "kind": "entry_scan",
+            "direction": "entry",
+            "scan_type": "manual_household",
+            "payload": subject.get("id"),
+            "subject": subject,
+            "decision": decision,
+            "reason": reason + " (household batch check-in)",
+            "from_session_id": sess["id"],
+            "from_mode": sess.get("mode"),
+            "created_at": now.isoformat(),
+            "clear_at": clear_at,
+        }
+        await db.security_checkpoint_events.insert_one(event)
+        event.pop("_id", None)
+        if decision == "approved":
+            try:
+                await db.checkins.insert_one({
+                    "id": f"chk_{uuid.uuid4().hex[:10]}",
+                    "member_id": subject.get("id"),
+                    "member_name": subject.get("name"),
+                    "type": subject.get("kind"),
+                    "method": "checkpoint_household",
+                    "location_id": cp.get("location_id"),
+                    "checkpoint_id": cp["id"],
+                    "checked_in_at": now.isoformat(),
+                })
+            except Exception as e:
+                logger.warning(f"household checkin mirror failed: {e}")
+        created.append(event)
+    if created:
+        await _broadcast_to_checkpoint(cp["id"], {"type": "event", "event": created[-1]})
+    return {"checked_in": len(created), "events": created}
+
 
 
 # ============================================================
