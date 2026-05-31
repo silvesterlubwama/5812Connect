@@ -6,6 +6,47 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 149 (May 31, 2026)
+**Comprehensive Device Diagnostics + Kiosk PIN-unlock via QR.**
+
+### What the user asked for
+*"Yes, and allow to detect other attached or usable hardware."* — plus implementing the iter-148 suggestion (kiosk PIN-unlock via QR).
+
+### Built
+
+**1. `DeviceDiagnosticsDialog` — full hardware/runtime panel**
+- New component `frontend/src/components/DeviceDiagnosticsDialog.jsx` (~210 lines).
+- Detects + reports:
+  - **Media**: cameras (count + labels + permission state), microphones, speakers
+  - **Wireless**: NFC (NDEFReader), Bluetooth (paired devices via `bluetooth.getDevices()`)
+  - **USB/Serial**: Web Serial paired ports, Web HID paired devices (with vendor/product IDs + product names), Web USB paired devices (with manufacturer/product strings)
+  - **Runtime**: Geolocation, Battery (level + charging), Network (online/effectiveType/downlink/RTT/saveData), Storage quota (used / total MB), Screen size + DPI + touch capability + standalone-PWA flag, Wake Lock support, Service Worker availability, Clipboard availability, HTTPS context
+- One-click **Pair port / Pair HID / Pair USB / Pair Bluetooth** buttons that trigger the browser's native picker (user-gesture required) and re-probe after pairing.
+- One-click **Enable** buttons for camera / NFC / geolocation to fire the standard permission prompts.
+
+**2. `peripheralPermissions.js` greatly expanded**
+- New `detectFullDiagnostics()` — one-shot probe of all of the above into a single object.
+- New `requestGeoAccess()` — geolocation permission helper.
+- Private helpers for `serial.getPorts()`, `hid.getDevices()`, `usb.getDevices()`, `bluetooth.getDevices()`, `getBattery()`, `navigator.connection`, `navigator.storage.estimate()`, `screen`.
+- Backwards-compatible — existing `PeripheralPermissionBanner` keeps working unchanged.
+
+**3. Diagnostics wired into the kiosks**
+- **Security Console** — new 🔧 Diagnostics icon button (testid `cp-diagnostics-open`) next to Lock + Logout in the header. Opens the full panel.
+- **Admin /admin → Kiosk Links** — new **Device diagnostics** button in the dialog toolbar (testid `kiosk-links-diagnostics-btn`). Admins can pre-flight a device from the same place they get the URLs.
+
+**4. Kiosk PIN-unlock via QR** (iter-148 suggested improvement)
+- **LockScreen** gains a camera-icon button next to the Unlock button — opens `BarcodeScanDialog` (camera or keyboard-wedge). Accepts both `CPK_UNLOCK:<6-digit>` payloads and bare 6-digit PINs. Successful scan re-uses the existing pair endpoint to unlock.
+- **KioskLinksManager** now renders a small QR next to each checkpoint's pairing PIN when "Show pairing PINs" is on. The QR encodes `CPK_UNLOCK:<pin>` so a locked kiosk can scan it directly to unlock.
+
+### Tests / lint
+- ESLint clean. No backend changes — entirely client-side.
+- Visual smoke-confirmed in headless Playwright: Device Diagnostics dialog renders all six sections (Media / Wireless / USB-Serial / Runtime / sub-rows), shows `Unsupported`/`Unknown` correctly when running headless without hardware, **Pair** buttons present, **Refresh** button present.
+
+⚠️ **Production redeploy needed**. Post-deploy on a real device:
+- `/admin → Kiosk Links → Device diagnostics` lets you check what cameras / printers / scanners are visible to the browser before deploying a kiosk.
+- `/security-checkpoint` (paired) → 🔧 icon in the header opens the same diagnostics on the kiosk itself.
+- Locked kiosk: tap the camera icon next to Unlock → scan the QR from `/admin → Kiosk Links` → instant unlock without typing.
+
 ## Recently Resolved — Iteration 148 (May 31, 2026)
 **Built-in camera scanning + hardened ID camera errors.**
 

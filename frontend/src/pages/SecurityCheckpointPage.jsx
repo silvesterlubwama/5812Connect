@@ -10,7 +10,7 @@
  * without re-pairing (TTL = 12h on the backend).
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt, Search, Users as UsersIcon, Home, MapPin } from 'lucide-react';
+import { ShieldCheck, ShieldX, ScanLine, KeyRound, LogOut, Lock, Unlock, Clock, Camera, X, AlertTriangle, CheckCircle, History, UserPlus, Receipt, Search, Users as UsersIcon, Home, MapPin, Cable } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -21,6 +21,7 @@ import { securityCheckpointApi, badgesApi, locationsApi } from '../services/api'
 import { toast } from 'sonner';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
+import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 
 const POLL_MS = 1500;
 
@@ -162,6 +163,19 @@ function PairView({ onPaired }) {
 // ============================================================
 function LockScreen({ onUnlock }) {
   const [pin, setPin] = useState('');
+  const [showCam, setShowCam] = useState(false);
+
+  const tryUnlock = async (candidate) => {
+    if (!candidate || candidate.length !== 6) return false;
+    try {
+      const r = await securityCheckpointApi.pair({ pin: candidate, mode: 'guest', device_label: 'lock-test' });
+      if (r.data.checkpoint?.id) { onUnlock(); return true; }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Wrong PIN');
+    }
+    return false;
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6" data-testid="cp-lock-screen">
       <Card className="w-full max-w-sm rounded-2xl border-slate-700/40 bg-slate-900/80">
@@ -178,25 +192,43 @@ function LockScreen({ onUnlock }) {
             autoFocus
             data-testid="cp-lock-pin"
           />
-          <Button
-            className="w-full bg-emerald-600 hover:bg-emerald-500"
-            disabled={pin.length !== 6}
-            onClick={async () => {
-              try {
-                // Verify by attempting to call /state — but we don't actually rotate session here.
-                // The lock is local-only; PIN check happens against the active checkpoint via re-pair.
-                const r = await securityCheckpointApi.pair({ pin, mode: 'guest', device_label: 'lock-test' });
-                if (r.data.checkpoint?.id) { onUnlock(); }
-              } catch (e) {
-                toast.error(e.response?.data?.detail || 'Wrong PIN');
-              }
-            }}
-            data-testid="cp-lock-unlock"
-          >
-            <Unlock size={14} className="mr-2" /> Unlock
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500"
+              disabled={pin.length !== 6}
+              onClick={() => tryUnlock(pin)}
+              data-testid="cp-lock-unlock"
+            >
+              <Unlock size={14} className="mr-2" /> Unlock
+            </Button>
+            <Button
+              variant="outline"
+              className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700"
+              onClick={() => setShowCam(true)}
+              data-testid="cp-lock-qr-unlock"
+              title="Scan unlock QR"
+            >
+              <Camera size={14} />
+            </Button>
+          </div>
+          <p className="text-[10px] text-slate-500">Scan the unlock QR (Admin → Kiosk Links → Show pairing PINs) instead of typing.</p>
         </CardContent>
       </Card>
+      <BarcodeScanDialog
+        open={showCam}
+        onOpenChange={setShowCam}
+        title="Scan unlock QR"
+        onScan={async (value) => {
+          // Accept either `CPK_UNLOCK:<pin>` or a bare 6-digit PIN
+          const m = /^CPK_UNLOCK:(\d{6})$/.exec((value || '').trim()) || /^(\d{6})$/.exec((value || '').trim());
+          if (m) {
+            const ok = await tryUnlock(m[1]);
+            if (!ok) toast.error('QR is valid but the PIN no longer matches a checkpoint (rotated?).');
+          } else {
+            toast.error('That QR does not encode a checkpoint pairing PIN');
+          }
+        }}
+      />
     </div>
   );
 }
@@ -403,6 +435,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [showResidents, setShowResidents] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
   const [showCamScan, setShowCamScan] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [openOneTime, setOpenOneTime] = useState([]);
   const isSingleDevice = checkpoint?.device_mode === 'single_device';
 
@@ -540,6 +573,9 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowGrant(true)} data-testid="cp-grant-open"><UserPlus size={14} className="mr-1" /> One-Time Entry</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowReceipt(true)} data-testid="cp-receipt-open"><Receipt size={14} className="mr-1" /> Receipt Exit-Scan</Button>
           <Button size="sm" variant="ghost" className="text-slate-300" onClick={onLock}><Lock size={14} /></Button>
+          <Button size="sm" variant="ghost" className="text-slate-300" onClick={() => setShowDiagnostics(true)} title="Device diagnostics" data-testid="cp-diagnostics-open">
+            <Cable size={14} />
+          </Button>
           <Button size="sm" variant="ghost" className="text-slate-400" onClick={onUnpair}><LogOut size={14} /></Button>
         </div>
       </header>
@@ -696,6 +732,9 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           }
         }}
       />
+
+      {/* DEVICE DIAGNOSTICS — full hardware/runtime overview + Web Serial/HID/USB/BT pairing */}
+      <DeviceDiagnosticsDialog open={showDiagnostics} onClose={() => setShowDiagnostics(false)} />
     </div>
   );
 }

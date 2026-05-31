@@ -6,7 +6,7 @@
  * Used as a card on /admin alongside the other admin tools.
  */
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Link2, Copy, ExternalLink, ShieldCheck, ShoppingBag, ScanLine, Globe, Briefcase, UserCircle, RefreshCw, Eye, EyeOff } from 'lucide-react';
+import { Link2, Copy, ExternalLink, ShieldCheck, ShoppingBag, ScanLine, Globe, Briefcase, UserCircle, RefreshCw, Eye, EyeOff, Cable } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { QRCode } from 'react-qrcode-logo';
 import { toast } from 'sonner';
 import { locationsApi, securityCheckpointApi } from '../services/api';
+import DeviceDiagnosticsDialog from './DeviceDiagnosticsDialog';
 
 const _origin = () => {
   if (typeof window === 'undefined') return '';
@@ -68,6 +69,7 @@ export default function KioskLinksManager() {
   const [locations, setLocations] = useState([]);
   const [checkpoints, setCheckpoints] = useState([]);
   const [showPins, setShowPins] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -115,12 +117,15 @@ export default function KioskLinksManager() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex items-center gap-2 mt-2 mb-4">
+          <div className="flex items-center gap-2 mt-2 mb-4 flex-wrap">
             <Button size="sm" variant="outline" onClick={load} disabled={loading}>
               <RefreshCw size={11} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
             <Button size="sm" variant="outline" onClick={() => setShowPins(s => !s)} data-testid="kiosk-links-toggle-pins">
               {showPins ? <EyeOff size={11} className="mr-1" /> : <Eye size={11} className="mr-1" />} {showPins ? 'Hide' : 'Show'} pairing PINs
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowDiag(true)} data-testid="kiosk-links-diagnostics-btn">
+              <Cable size={11} className="mr-1" /> Device diagnostics
             </Button>
           </div>
 
@@ -138,9 +143,9 @@ export default function KioskLinksManager() {
             />
             {checkpoints.length > 0 ? (
               <div className="ml-4 space-y-2">
-                <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Pairing PINs</p>
+                <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Pairing PINs (also scannable as unlock QR)</p>
                 {checkpoints.map(cp => (
-                  <div key={cp.id} className="flex items-center justify-between p-2 rounded border bg-muted/30" data-testid={`kiosk-cp-pin-${cp.id}`}>
+                  <div key={cp.id} className="flex items-center justify-between p-2 rounded border bg-muted/30 gap-3" data-testid={`kiosk-cp-pin-${cp.id}`}>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-medium truncate">{cp.name}</p>
                       <p className="text-[10px] text-muted-foreground">{cp.location_name} · {(cp.kind || 'strict').replace('_', ' ')} · {cp.device_mode === 'single_device' ? 'single device' : 'dual device'}</p>
@@ -148,6 +153,11 @@ export default function KioskLinksManager() {
                     <code className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 text-sm font-mono tracking-widest">
                       {showPins ? cp.pairing_pin : '••••••'}
                     </code>
+                    {showPins && (
+                      <div className="shrink-0 bg-white p-0.5 rounded border" title="Scan to unlock kiosk">
+                        <QRCode value={`CPK_UNLOCK:${cp.pairing_pin}`} size={48} ecLevel="L" quietZone={1} qrStyle="squares" />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -240,6 +250,7 @@ export default function KioskLinksManager() {
           </section>
         </DialogContent>
       </Dialog>
+      <DeviceDiagnosticsDialog open={showDiag} onClose={() => setShowDiag(false)} />
     </>
   );
 }
