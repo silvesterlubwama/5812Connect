@@ -1,0 +1,93 @@
+/* ============================================================
+ * Centralised print stylesheet — used by every printable surface
+ * (receipts, badges, invoices, payslips, profile PDFs).
+ *
+ * Conventions:
+ *   • Mark the element you actually want printed with .print-area.
+ *     Everything outside it gets hidden during print.
+ *   • Pick a paper size by adding ONE of these classes to the
+ *     wrapping element: .print-58mm  .print-80mm  .print-A5  .print-A6  .print-A4
+ *   • For multi-page A4 printouts (payslips, profile PDFs) use
+ *     .print-A4-clean — slightly looser margins for staple/bind.
+ *
+ * Don't sprinkle component-local @media print rules anymore.
+ * Use these classes instead so paper size + margin behaviour is consistent.
+ * ============================================================ */
+
+@media print {
+  /* Hide everything outside the print-area by default */
+  body * { visibility: hidden !important; }
+  .print-area, .print-area * { visibility: visible !important; }
+  .print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Standard utilities */
+  .no-print, .no-print * { display: none !important; }
+  .page-break-before { page-break-before: always; break-before: page; }
+  .page-break-after  { page-break-after: always;  break-after: page;  }
+  .keep-together     { page-break-inside: avoid;  break-inside: avoid; }
+
+  /* Force-on color printing for receipts / badges (CSS print color adjust) */
+  .print-area {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Disable animations / transitions during print */
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+
+  /* Links: print the href next to short text links, hide for icons */
+  .print-area a[href]:not(.no-href)::after { content: " (" attr(href) ")"; font-size: 9pt; color: #555; }
+  .print-area a.no-href::after { content: ''; }
+}
+
+/* ===== Paper-size presets (apply to the .print-area itself) ===== */
+@media print {
+  /* Thermal POS rolls */
+  .print-area.print-58mm  { width: 58mm !important; }
+  .print-area.print-80mm  { width: 80mm !important; }
+  /* Card stock for badges */
+  .print-area.print-A6    { width: 105mm !important; }
+  /* Half-letter / large receipt */
+  .print-area.print-A5    { width: 148mm !important; }
+  /* Standard office paper */
+  .print-area.print-A4,
+  .print-area.print-A4-clean {
+    width: 210mm !important;
+  }
+}
+
+@page {
+  margin: 6mm;
+}
+
+/* Per-paper @page declarations — set BEFORE @media print so they're respected */
+@page .receipt-58mm  { size: 58mm auto;  margin: 3mm; }
+@page .receipt-80mm  { size: 80mm auto;  margin: 4mm; }
+@page .badge-A6      { size: A6;         margin: 4mm; }
+@page .doc-A5        { size: A5;         margin: 8mm; }
+@page .doc-A4        { size: A4;         margin: 12mm; }
+@page .doc-A4-clean  { size: A4;         margin: 18mm 14mm 16mm 14mm; }
+
+/* ============================================================
+ * SCREEN PREVIEW STYLES
+ * When .print-area is rendered on-screen (not printing), keep a
+ * consistent paper-like appearance so designers can preview layout.
+ * ============================================================ */
+@media screen {
+  .print-area {
+    background: white;
+    color: #111;
+    padding: 12px;
+    box-shadow: 0 0 0 1px #e5e7eb;
+    border-radius: 4px;
+  }
+}

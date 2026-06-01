@@ -14,6 +14,7 @@ import secrets  # still used by pair_device for raw_token generation
 
 # Shared primitives — see _common.py for the bodies.
 from .ocr import _ocr_id_image  # noqa: F401 — exposed for the ocr_router below
+from . import logbook_lookup as _logbook_lookup
 from ._common import (  # noqa: F401
     CHECKPOINT_SESSION_TTL_HOURS, SCAN_RESET_SECONDS, ROLES_ALLOWED_TO_SCAN_FROM_SECURITY,
     _checkpoint_rooms,
@@ -26,6 +27,9 @@ router = APIRouter(prefix="/api/security", tags=["security_checkpoint"])
 # A second router exposing the same shared OCR helper at `/api/ocr/id` for any
 # authenticated staff workflow (member profile pre-fill, document upload, etc.).
 ocr_router = APIRouter(prefix="/api/ocr", tags=["ocr"])
+
+# Attach endpoint groups that live in dedicated modules to keep this __init__ readable.
+_logbook_lookup.register(router)
 
 
 # ============================================================
@@ -621,192 +625,6 @@ async def list_one_time_entries_admin(checkpoint_id: str, current_user: dict = D
         {"checkpoint_id": checkpoint_id}, {"_id": 0},
     ).sort("granted_at", -1).to_list(500)
     return rows
-
-
-# ============================================================
-# VISITOR LOGBOOK — paired entry/exit times per person per day
-# ============================================================
-
-
-
-@router.get("/checkpoint/visitor-log")
-async def checkpoint_visitor_log_device(
-    date: Optional[str] = None,
-    include_residents: bool = False,
-    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
-):
-    """Device-session-authed visitor log. Returns `{date, rows, counts:{visitors_entered, visitors_inside, residents_entered, residents_inside}, include_residents}`.
-    Pass `include_residents=true` to also list residents in `rows` (their counts are always returned)."""
-    sess = await _resolve_session(session_token)
-    return await _build_visitor_log(sess["checkpoint_id"], date or "", include_residents=include_residents)
-
-
-@router.get("/checkpoints/{checkpoint_id}/visitor-log")
-async def checkpoint_visitor_log_admin(
-    checkpoint_id: str,
-    date: Optional[str] = None,
-    include_residents: bool = False,
-    current_user: dict = Depends(require_director),
-):
-    """Admin-authed visitor log — same shape as the device endpoint."""
-    return await _build_visitor_log(checkpoint_id, date or "", include_residents=include_residents)
-
-
-# ============================================================
-# RESIDENTS LOG — dedicated to the people who LIVE at this checkpoint's location
-# ============================================================
-
-@router.get("/checkpoint/residents-log")
-async def checkpoint_residents_log_device(
-    date: Optional[str] = None,
-    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
-):
-    """Device-session view: every resident scan (in/out) on the given date.
-    Distinct from `/visitor-log` so residents have their own clean roster (blue-themed in UI)."""
-    sess = await _resolve_session(session_token)
-    return await _build_visitor_log(sess["checkpoint_id"], date or "", residents_only=True)
-
-
-@router.get("/checkpoints/{checkpoint_id}/residents-log")
-async def checkpoint_residents_log_admin(
-    checkpoint_id: str,
-    date: Optional[str] = None,
-    current_user: dict = Depends(require_director),
-):
-    """Admin-auth view: same as the device endpoint."""
-    return await _build_visitor_log(checkpoint_id, date or "", residents_only=True)
-
-
-# ============================================================
-# HOUSEHOLD LOOKUP — phone / first-name search → member + family members
-# ============================================================
-
-@router.post("/checkpoint/lookup")
-async def checkpoint_household_lookup(
-    data: dict,
-    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
-):
-    """Body: { q }. Searches members + children and returns each match alongside
-    its household siblings. Security operator picks the right person and ticks the
-    family members actually present."""
-    await _resolve_session(session_token)
-    q = (data.get("q") or "").strip()
-    if len(q) < 2:
-        raise HTTPException(status_code=400, detail="Search needs at least 2 characters")
-    rx = {"$regex": q, "$options": "i"}
-    member_matches = await db.members.find(
-        {"$or": [{"name": rx}, {"phone": rx}, {"email": rx}, {"national_id": rx}]},
-        {"_id": 0, "password_hash": 0, "pin_hash": 0},
-    ).limit(20).to_list(20)
-    child_matches = await db.children.find(
-        {"$or": [{"name": rx}, {"phone": rx}]},
-        {"_id": 0},
-    ).limit(20).to_list(20)
-    family_ids = list({m.get("family_id") for m in member_matches if m.get("family_id")})
-    family_ids += list({c.get("family_id") for c in child_matches if c.get("family_id")})
-    families = {}
-    if family_ids:
-        async for fam in db.families.find({"id": {"$in": list(set(family_ids))}}, {"_id": 0}):
-            families[fam["id"]] = fam
-    out = []
-    seen = set()
-    member_ids = {m.get("id") for m in member_matches}
-    for who in member_matches + child_matches:
-        wid = who.get("id")
-        if not wid or wid in seen:
-            continue
-        seen.add(wid)
-        fam_id = who.get("family_id")
-        family_members = []
-        if fam_id:
-            siblings_m = await db.members.find(
-                {"family_id": fam_id, "id": {"$ne": wid}},
-                {"_id": 0, "id": 1, "name": 1, "phone": 1, "role": 1, "photo_url": 1},
-            ).to_list(20)
-            siblings_c = await db.children.find(
-                {"family_id": fam_id, "id": {"$ne": wid}},
-                {"_id": 0, "id": 1, "name": 1, "date_of_birth": 1, "photo_url": 1, "grade": 1},
-            ).to_list(20)
-            for s in siblings_m:
-                family_members.append({**s, "kind": "member"})
-            for s in siblings_c:
-                family_members.append({**s, "kind": "child"})
-        kind = "member" if wid in member_ids else "child"
-        out.append({
-            "kind": kind,
-            "id": wid,
-            "name": who.get("name"),
-            "phone": who.get("phone"),
-            "email": who.get("email"),
-            "role": who.get("role"),
-            "photo_url": who.get("photo_url"),
-            "family_id": fam_id,
-            "family_name": (families.get(fam_id) or {}).get("name") if fam_id else None,
-            "household": family_members,
-        })
-    return {"q": q, "results": out, "count": len(out)}
-
-
-@router.post("/checkpoint/check-in-batch")
-async def checkpoint_check_in_batch(
-    data: dict,
-    session_token: Optional[str] = Header(None, alias="X-Checkpoint-Session"),
-):
-    """Body: { members: [{kind, id}, ...] }
-    Manually check in a batch of selected household members. Writes one checkpoint event
-    per person + a checkins row per person so they show on /check-ins."""
-    sess = await _resolve_session(session_token)
-    cp = await db.security_checkpoints.find_one({"id": sess["checkpoint_id"]}, {"_id": 0})
-    if not cp:
-        raise HTTPException(status_code=404, detail="Checkpoint missing")
-    members = data.get("members") or []
-    if not isinstance(members, list) or not members:
-        raise HTTPException(status_code=400, detail="members[] required")
-    now = datetime.now(timezone.utc)
-    clear_at = (now + timedelta(seconds=SCAN_RESET_SECONDS)).isoformat()
-    created = []
-    for m in members:
-        subject = await _hydrate_subject(m.get("kind") or "member", m.get("id") or "")
-        if subject.get("kind") == "unknown":
-            continue
-        decision, reason = _decide(cp, subject)
-        event = {
-            "id": f"cev_{uuid.uuid4().hex[:10]}",
-            "checkpoint_id": cp["id"],
-            "location_id": cp.get("location_id"),
-            "kind": "entry_scan",
-            "direction": "entry",
-            "scan_type": "manual_household",
-            "payload": subject.get("id"),
-            "subject": subject,
-            "decision": decision,
-            "reason": reason + " (household batch check-in)",
-            "from_session_id": sess["id"],
-            "from_mode": sess.get("mode"),
-            "created_at": now.isoformat(),
-            "clear_at": clear_at,
-        }
-        await db.security_checkpoint_events.insert_one(event)
-        event.pop("_id", None)
-        if decision == "approved":
-            try:
-                await db.checkins.insert_one({
-                    "id": f"chk_{uuid.uuid4().hex[:10]}",
-                    "member_id": subject.get("id"),
-                    "member_name": subject.get("name"),
-                    "type": subject.get("kind"),
-                    "method": "checkpoint_household",
-                    "location_id": cp.get("location_id"),
-                    "checkpoint_id": cp["id"],
-                    "checked_in_at": now.isoformat(),
-                })
-            except Exception as e:
-                logger.warning(f"household checkin mirror failed: {e}")
-        created.append(event)
-    if created:
-        await _broadcast_to_checkpoint(cp["id"], {"type": "event", "event": created[-1]})
-    return {"checked_in": len(created), "events": created}
-
 
 
 # ============================================================

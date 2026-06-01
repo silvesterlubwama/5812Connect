@@ -6,6 +6,39 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 154 (Jun 1, 2026)
+**Batch D — centralised print stylesheet + security_checkpoint sub-module split.**
+
+### Shipped
+
+**1. Centralised `print.css` (P2-14)**
+- New `/app/frontend/src/styles/print.css` — single source of truth for every printable surface (receipts, badges, payslips, invoices, profile PDFs).
+- Defines reusable utility classes: `.print-area`, `.no-print`, `.page-break-before/after`, `.keep-together`, paper-size presets `.print-58mm / .print-80mm / .print-A6 / .print-A5 / .print-A4` + page-rule names `receipt-58mm/receipt-80mm/badge-A6/doc-A4-clean`.
+- Forces `-webkit-print-color-adjust: exact` (so receipts/badges keep their colors), kills animations during print, prints links' hrefs in inline text (skippable with `.no-href`).
+- Imported from `index.js` so it loads globally. Component-local `@media print` blocks (Receipt.jsx etc.) keep working — the global rules give designers a consistent baseline.
+
+**2. `security_checkpoint/__init__.py` further split (P2-13)**
+- Extracted the **logbook + household-lookup + batch-check-in** endpoints (~187 lines) into `security_checkpoint/logbook_lookup.py`.
+- Pattern: each sub-module exports a `register(router)` function that attaches its endpoints to the shared router from `__init__.py`. Imports + path prefixes unchanged → external callers see no difference.
+- New file sizes:
+  - `__init__.py` — **767 lines** (was 949, was 1304 pre-iter146)
+  - `logbook_lookup.py` — 177 lines
+  - `_common.py` — 271 lines
+  - `ocr.py` — 115 lines
+- `members.py` left untouched this iteration — it's 1900 lines but every endpoint is tightly coupled to local helpers; a clean split needs its own refactor pass.
+
+### Tests / lint
+- 57/57 pytest still green.
+- Ruff + ESLint clean.
+- Curl-verified `/api/security/checkpoints` and the moved logbook + lookup endpoints still respond.
+
+⚠️ **Production redeploy needed** to pick up the print stylesheet + refactor. Behaviour unchanged from the user's perspective.
+
+### Continuing per your plan
+- **Batch E** (next): PWA offline shell + React.lazy code-splitting on the heavy pages.
+- Then **Batch F** (empty states + mobile audit).
+- Then **Y** (UI customisation), then **Z** (Tauri).
+
 ## Recently Resolved — Iteration 153 (Jun 1, 2026)
 **Batch C — Org country/currency setting + uniform kiosk peripheral treatment.**
 
