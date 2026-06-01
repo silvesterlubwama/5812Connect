@@ -6,6 +6,40 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 155 (Jun 1, 2026)
+**Batch E — PWA offline UX + code-split heavy pages.**
+
+### Shipped
+
+**1. OfflineBanner component (P2-15)**
+- New `components/OfflineBanner.jsx` — pinned amber banner at the top of the app whenever `navigator.onLine === false`. Pairs with the existing service worker (`public/sw.js`) which already serves cached pages + queues writes when offline.
+- On recovery, briefly shows a green "Back online — syncing…" confirmation for 4s.
+- Mounted globally in `App.js` so every route (incl. kiosks) gets it.
+- Visually confirmed in Playwright: dispatching `offline` event shows the banner; Financial page still renders fully from cache.
+
+**2. Code-split heavy pages (P2-16)**
+- `App.js` now uses `React.lazy()` + `<Suspense>` to load these 5 pages on-demand:
+  - `UnifiedPeoplePage` (1,500 lines)
+  - `ProductsPage` (1,910 lines — POS + Products + Sales History + Customers)
+  - `FinancialPage` (1,335 lines)
+  - `AccountingPage` (799 lines)
+  - `SocialWorkPage` (950 lines)
+- Total deferred: ~6,500 LOC + their transitive deps (recharts, qrcode-logo, html5-qrcode, etc.). First-load bundle shrinks substantially; pages load on first navigation with a clean spinner fallback.
+
+### Tests / lint
+- 57/57 pytest still green.
+- Ruff + ESLint clean.
+- Visual smoke: Offline banner renders correctly when `navigator.onLine` is forced false; Financial page renders fully after lazy chunk loads.
+
+⚠️ **Production redeploy needed**. After redeploy:
+- First page-load is noticeably lighter (chunks load on-demand).
+- Kiosks that go offline show the clear amber banner — users + operators know the state instantly.
+- Service Worker already handles offline fetch fallback (cached pages, queued POSTs).
+
+### Continuing per your plan
+- **Batch F** (next): empty-state illustrations across the app + mobile-responsiveness audit on staff pages.
+- Then **Y** (UI customisation: nav rename + reorder + brand), then **Z** (Tauri + Cloudflare Tunnel).
+
 ## Recently Resolved — Iteration 154 (Jun 1, 2026)
 **Batch D — centralised print stylesheet + security_checkpoint sub-module split.**
 

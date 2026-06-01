@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { I18nProvider } from './context/I18nContext';
 import { Toaster } from './components/ui/sonner';
+import OfflineBanner from './components/OfflineBanner';
 import './App.css';
 
 import LoginPage from './pages/LoginPage';
@@ -13,20 +14,21 @@ import KioskPage from './pages/KioskPage';
 import PublicBookingsPage from './pages/PublicBookingsPage';
 import DashboardPage from './pages/DashboardPage';
 import MembersPage from './pages/MembersPage';
-import UnifiedPeoplePage from './pages/UnifiedPeoplePage';
+// Lazy-load heavy pages — code-split per route so first load is small.
+const UnifiedPeoplePage = lazy(() => import('./pages/UnifiedPeoplePage'));
+const ProductsPage = lazy(() => import('./pages/ProductsPage'));
+const FinancialPage = lazy(() => import('./pages/FinancialPage'));
+const AccountingPage = lazy(() => import('./pages/AccountingPage'));
+const SocialWorkPage = lazy(() => import('./pages/SocialWorkPage'));
 import EventsPage from './pages/EventsPage';
 import TasksPage from './pages/TasksPage';
 import CalendarPage from './pages/CalendarPage';
 import CheckInsPage from './pages/CheckInsPage';
 import SettingsPage from './pages/SettingsPage';
-import FinancialPage from './pages/FinancialPage';
-import AccountingPage from './pages/AccountingPage';
 import ApprovalsPage from './pages/ApprovalsPage';
-import SocialWorkPage from './pages/SocialWorkPage';
 import SchoolPortalPage from './pages/SchoolPortalPage';
 import SponsorPortalPage from './pages/SponsorPortalPage';
 import BankPage from './pages/BankPage';
-import ProductsPage from './pages/ProductsPage';
 import PeoplePage from './pages/PeoplePage';
 import AuditPage from './pages/AuditPage';
 import LocationsPage from './pages/LocationsPage';
@@ -106,7 +108,8 @@ function AppRoutes() {
     return <AuthCallback />;
   }
   return (
-    <Routes>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-background"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>}>
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -183,7 +186,8 @@ function AppRoutes() {
         <Route path="profile" element={<PortalProfile />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
+      </Routes>
+    </Suspense>
   );
 }
 
@@ -195,6 +199,7 @@ function App() {
           <WebSocketProvider>
             <CallProvider>
               <BrowserRouter>
+                <OfflineBanner />
                 <ErrorBoundary>
                   <AppRoutes />
                 </ErrorBoundary>
