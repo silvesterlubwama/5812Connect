@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { I18nProvider } from './context/I18nContext';
+import { BrandingProvider } from './context/BrandingContext';
 import { Toaster } from './components/ui/sonner';
 import OfflineBanner from './components/OfflineBanner';
 import './App.css';
@@ -195,6 +196,7 @@ function App() {
   return (
     <ErrorBoundary>
       <I18nProvider>
+        <BrandingProvider>
         <AuthProvider>
           <WebSocketProvider>
             <CallProvider>
@@ -210,6 +212,7 @@ function App() {
             </CallProvider>
           </WebSocketProvider>
         </AuthProvider>
+        </BrandingProvider>
       </I18nProvider>
     </ErrorBoundary>
   );

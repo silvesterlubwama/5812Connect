@@ -43,6 +43,17 @@ _DEFAULTS = {
         "primary_country": "Uganda",
         "primary_currency": "UGX",
     },
+    "branding": {
+        # App-wide white-labelling. `nav_overrides` is a flat map from route path
+        # → {label, hidden, order} so admins can rename / hide / reorder sidebar
+        # entries without code changes. Travels with the backup tarball.
+        "app_name": "58:12 Connect",
+        "tagline": "",
+        "logo_url": "",
+        "primary_color": "",        # e.g. "#10b981" — empty = keep theme default
+        "nav_overrides": {},        # { "/path": {label?, hidden?, order?} }
+        "section_overrides": {},    # { "Operations": {label?, hidden?, order?} }
+    },
 }
 
 
@@ -101,19 +112,30 @@ def _mask_for_read(doc: dict) -> dict:
         "traces_sample_rate": s.get("traces_sample_rate", 0.1),
     }
     out["org"] = doc.get("org") or {}
+    out["branding"] = doc.get("branding") or {}
     return out
 
 
 @router.get("/public")
 async def public_system_settings():
     """Non-secret, public-readable subset of system settings — used by the app shell
-    to pick the org's primary country/currency without an admin auth round-trip."""
+    to pick the org's primary country/currency + branding overrides without an
+    admin auth round-trip."""
     raw = await _load_raw()
     org = raw.get("org") or {}
+    branding = raw.get("branding") or {}
     return {
         "org": {
             "primary_country": org.get("primary_country") or "Uganda",
             "primary_currency": org.get("primary_currency") or "UGX",
+        },
+        "branding": {
+            "app_name": branding.get("app_name") or "58:12 Connect",
+            "tagline": branding.get("tagline") or "",
+            "logo_url": branding.get("logo_url") or "",
+            "primary_color": branding.get("primary_color") or "",
+            "nav_overrides": branding.get("nav_overrides") or {},
+            "section_overrides": branding.get("section_overrides") or {},
         },
         "email_provider": (raw.get("email") or {}).get("provider", "resend"),
     }
@@ -139,7 +161,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     """
     raw = await _load_raw()
     # Top-level keys we accept
-    for top in ("email", "sentry", "org"):
+    for top in ("email", "sentry", "org", "branding"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
             for k, v in data[top].items():
@@ -155,7 +177,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     await db.system_settings.update_one({"id": SETTINGS_ID}, {"$set": raw}, upsert=True)
     await _audit(
         current_user["id"], "update", "system_settings", SETTINGS_ID,
-        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org"})},
+        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding"})},
     )
     return _mask_for_read(raw)
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useBranding } from '../context/BrandingContext';
 import useIdleTimeout from '../utils/kioskMode';
 import {
   LayoutDashboard, Users, Calendar, CheckSquare, CalendarDays,
@@ -110,6 +111,39 @@ const notifTypeColor = { error: 'bg-red-500', warning: 'bg-yellow-500', info: 'b
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const { branding } = useBranding();
+  // Apply admin overrides on top of the base nav config so labels/order/hidden
+  // can be customised at runtime (Admin → Branding).
+  const overriddenSections = (() => {
+    const sectionO = branding?.section_overrides || {};
+    const navO = branding?.nav_overrides || {};
+    const sections = NAV_SECTIONS
+      .map((sec, idx) => {
+        const so = sectionO[sec.label] || {};
+        const items = sec.items
+          .map((it, i) => {
+            const o = navO[it.to] || {};
+            return {
+              ...it,
+              label: o.label || it.label,
+              hidden: !!o.hidden,
+              _order: o.order ?? i,
+            };
+          })
+          .filter(it => !it.hidden)
+          .sort((a, b) => a._order - b._order);
+        return {
+          ...sec,
+          label: so.label || sec.label,
+          hidden: !!so.hidden,
+          _order: so.order ?? idx,
+          items,
+        };
+      })
+      .filter(s => !s.hidden)
+      .sort((a, b) => a._order - b._order);
+    return sections;
+  })();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -482,7 +516,7 @@ export default function Layout() {
         )}
 
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          {NAV_SECTIONS.map((section, si) => {
+          {overriddenSections.map((section, si) => {
             if (!canSeeSection(section)) return null;
             const isExpanded = expandedSections[si] === true;
             const hasActiveChild = section.items.some(item => location.pathname.startsWith(item.to));
