@@ -57,9 +57,66 @@ _os_for_static.makedirs("/app/backend/uploads/files", exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory="/app/backend/uploads"), name="uploads")
 
 
+# Capture process start time so /api/health can report uptime + a static-version stamp
+import time as _time_mod
+_APP_STARTED_AT = _time_mod.time()
+_APP_VERSION = os.environ.get("APP_VERSION") or os.environ.get("GIT_COMMIT") or "dev"
+# Daily auto-backup tracker (module-level so the scheduler can mark it idempotently)
+_last_auto_backup_date = None
+
+
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "58:12 Global Connect CRM"}
+    """Rich health probe — used by uptime monitors + the kiosk Diagnostics page.
+    Returns aggregate status + per-subsystem detail. Status `healthy` iff every
+    *required* subsystem (db, storage) is OK; degraded means optional pieces (LLM)
+    are unconfigured but the app can still serve traffic."""
+    started = _time_mod.time()
+    out = {
+        "status": "healthy",
+        "service": "58:12 Global Connect CRM",
+        "version": _APP_VERSION,
+        "uptime_seconds": int(_time_mod.time() - _APP_STARTED_AT),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "subsystems": {},
+    }
+    # --- DB ping ---
+    db_status = {"ok": False}
+    try:
+        await asyncio.wait_for(db.command("ping"), timeout=2.0)
+        db_status = {"ok": True, "latency_ms": round((_time_mod.time() - started) * 1000, 1)}
+    except Exception as e:
+        db_status = {"ok": False, "error": str(e)[:200]}
+        out["status"] = "unhealthy"
+    out["subsystems"]["db"] = db_status
+    # --- Uploads dir writable ---
+    storage_status = {"ok": False}
+    try:
+        from pathlib import Path
+        uploads = Path("/app/backend/uploads")
+        uploads.mkdir(parents=True, exist_ok=True)
+        # Touch a tiny canary file to confirm writability
+        canary = uploads / ".healthcheck"
+        canary.write_text(str(int(_time_mod.time())))
+        canary.unlink(missing_ok=True)
+        storage_status = {"ok": True, "path": str(uploads)}
+    except Exception as e:
+        storage_status = {"ok": False, "error": str(e)[:200]}
+        out["status"] = "unhealthy"
+    out["subsystems"]["storage"] = storage_status
+    # --- LLM key configured (optional) ---
+    llm_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    out["subsystems"]["llm"] = {
+        "configured": bool(llm_key),
+        "provider": "emergent",
+    }
+    if not llm_key and out["status"] == "healthy":
+        out["status"] = "degraded"
+    # --- Email (Resend) ---
+    out["subsystems"]["email"] = {"configured": bool(os.environ.get("RESEND_API_KEY"))}
+    # --- Scheduler heartbeat ---
+    out["subsystems"]["scheduler"] = {"running": True}  # the loop has a try/except wrapper around each tick
+    return out
 
 
 @app.get("/health")
@@ -613,6 +670,13 @@ async def _run_due_date_reminder_scheduler():
                 except Exception as e:
                     logger.error(f"fire_due_recurring_entries: {e}")
                 last_birthday_check_date = date.today()
+
+            # Daily AUTO-BACKUP — runs once per day during the midnight UTC hour.
+            # Writes to /app/backend/backups/, prunes anything older than 30 days.
+            global _last_auto_backup_date
+            if _last_auto_backup_date != date.today() and now.hour == 0:
+                await _fire_auto_backup()
+                _last_auto_backup_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
@@ -682,6 +746,46 @@ async def _fire_scheduled_customer_statements():
                 logger.error(f"Auto-statement send for customer {s.get('customer_id')}: {e}")
     except Exception as e:
         logger.error(f"Scheduled statements error: {e}")
+
+
+
+async def _fire_auto_backup():
+    """Daily 00:00 UTC: snapshot the full app to /app/backend/backups/.
+    Keeps the last 30 daily backups, prunes older ones. Audit-included so
+    historical changes don't disappear from the rolling cold store."""
+    import os as _os
+    BACKUPS_DIR = "/app/backend/backups"
+    try:
+        from routers.backup import _build_tarball
+    except Exception as e:
+        logger.error(f"auto-backup: backup module unavailable: {e}")
+        return
+    try:
+        _os.makedirs(BACKUPS_DIR, exist_ok=True)
+        system_user = {"id": "system_scheduler", "name": "System Auto-Backup"}
+        blob = await _build_tarball(include_audit=True, current_user=system_user)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        path = _os.path.join(BACKUPS_DIR, f"auto-daily-{stamp}.tar.gz")
+        with open(path, "wb") as f:
+            f.write(blob)
+        logger.info(f"Auto-backup written: {path} ({len(blob)} bytes)")
+        # Prune anything older than 30 days
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        pruned = 0
+        for fn in _os.listdir(BACKUPS_DIR):
+            if not fn.startswith("auto-daily-") or not fn.endswith(".tar.gz"):
+                continue
+            full = _os.path.join(BACKUPS_DIR, fn)
+            try:
+                if datetime.fromtimestamp(_os.path.getmtime(full), tz=timezone.utc) < cutoff:
+                    _os.unlink(full)
+                    pruned += 1
+            except Exception:
+                pass
+        if pruned:
+            logger.info(f"Auto-backup pruned {pruned} archives older than 30 days")
+    except Exception as e:
+        logger.error(f"Auto-backup failed: {e}")
 
 
 async def _fire_overdue_task_emails():

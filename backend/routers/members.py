@@ -1952,11 +1952,21 @@ async def reactivate_badge(badge_id: str, current_user: dict = Depends(require_a
 
 @router.get("/badges/list")
 async def list_wallet_badges(current_user: dict = Depends(require_staff)) -> list:
-    """List all issued wallet badges (different from /badges which lists badge types)."""
-    campus = await get_campus_filter(current_user)
-    query = {}
-    if campus:
-        query.update(campus)
-    return await db.wallet_badges.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    """List all issued wallet badges (different from /badges which lists badge types).
+    Campus filter accepts EITHER location_id (issued-at) OR resident_location_id
+    (the badge holder's home location) — needed so bulk-issued resident badges
+    show up regardless of where the admin happens to be sitting today."""
+    from deps import is_system_admin
+    # Admin-tier sees everything; non-admin staff sees their campus + adjacent.
+    if is_system_admin(current_user):
+        return await db.wallet_badges.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    loc_filter = await get_campus_filter(current_user, field="location_id")
+    res_filter = await get_campus_filter(current_user, field="resident_location_id")
+    # Both filters are dicts like {"location_id": {"$in": [...]}}; OR them.
+    if loc_filter and res_filter:
+        query = {"$or": [loc_filter, res_filter]}
+    else:
+        query = loc_filter or res_filter or {}
+    return await db.wallet_badges.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 

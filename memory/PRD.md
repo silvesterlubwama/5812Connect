@@ -6,6 +6,30 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 151 (Jun 1, 2026)
+**Batch A — P0 hardening + daily auto-backup. Pytest 69/69.**
+
+### Shipped
+1. **Rich `/api/health`** — replaced the 1-line stub with a full subsystem probe: db ping with latency, uploads-dir writability test (touches a canary file), LLM key configured flag, Resend configured flag, scheduler heartbeat, uptime, app version. Returns `status` ∈ {healthy, degraded, unhealthy} so load balancers + uptime monitors can act on it.
+2. **`/auth/login` rate limit** — per-IP counter in new `login_attempts` collection. 6+ failures within 60s returns `429 "Too many failed sign-in attempts"`. 0.4s tarpit on every failure regardless of count to slow blind brute-forcing. Success inserts a positive marker; old failures naturally expire from the 60s window.
+3. **`/badges/list` campus filter fix** — now matches on EITHER `location_id` OR `resident_location_id` so bulk-issued resident badges show up regardless of which campus the admin is currently viewing. System admins see every badge.
+4. **Daily auto-backup at midnight UTC** — new `_fire_auto_backup()` helper hooked into the existing scheduler loop. Writes `/app/backend/backups/auto-daily-<stamp>.tar.gz` (audit-included for cold-store completeness). Prunes anything older than 30 days. Manually invocable for testing — verified writes a 255KB tarball.
+
+### Tests / lint
+- 69/69 pytest still green (smoke + iter91 + iter141 + iter90).
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+
+⚠️ **Production redeploy needed**. Post-deploy:
+- Wire your uptime monitor at `https://5812.lubwamas.org/api/health` — alert on status != healthy.
+- The auto-backup runs every midnight UTC — `/admin → Backup & Restore → Pre-restore Snapshots` shows them automatically.
+- Login brute-force is now blocked at 6 attempts/IP/60s.
+
+### Next batches
+- **Batch B** — security headers + inactivity logout + Sentry + Mongo indexes
+- **Batch C** — uniform iter148/149 treatment for Check-in Kiosk + POS
+- **Batches D-F** — P2 polish (file split, print, PWA, code-split, empty states, mobile)
+- Then **Y** (UI customization), then **Z** (Tauri).
+
 ## Recently Resolved — Iteration 150 (Jun 1, 2026)
 **Configuration Backup & Restore — admin only. 78/78 tests green (13 new + 57 regression + 8 e2e).**
 

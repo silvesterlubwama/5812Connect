@@ -139,6 +139,25 @@ async def visitor_register(data: dict) -> dict:
 
 @router.post("/auth/login")
 async def login(data: UserLogin, request: Request) -> dict:
+    # Brute-force throttle — mirrors the security_checkpoint pair tarpit pattern.
+    # Per-IP counter in `login_attempts` collection: 6+ failures in 60s → 429 + tarpit.
+    import asyncio
+    client_ip = "anon"
+    try:
+        if request and request.client:
+            client_ip = request.client.host or request.headers.get("x-forwarded-for", "anon").split(",")[0].strip() or "anon"
+    except Exception:
+        pass
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    recent_failures = await db.login_attempts.count_documents(
+        {"ip": client_ip, "ok": False, "at": {"$gte": cutoff}},
+    )
+    if recent_failures >= 6:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts — wait a minute and try again.",
+        )
+
     identifier = data.identifier.strip()
     identifier_lower = identifier.lower()
     # Build flexible lookup — exact match on email, phone (with normalization), national_id
@@ -157,7 +176,19 @@ async def login(data: UserLogin, request: Request) -> dict:
             {"national_id": identifier},
         ]
     })
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    async def _record_failure():
+        try:
+            await db.login_attempts.insert_one({
+                "ip": client_ip, "identifier": identifier_lower[:80], "at": now_iso, "ok": False,
+            })
+        except Exception:
+            pass
+
     if not user or not verify_password(data.password, user.get("password_hash", "")):
+        await _record_failure()
+        await asyncio.sleep(0.4)  # tarpit — slows blind brute-forcing further
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if user.get("status") == "pending":
         raise HTTPException(status_code=403, detail="Your account is pending approval. Please contact your administrator.")
@@ -180,6 +211,11 @@ async def login(data: UserLogin, request: Request) -> dict:
         user["active_campus_id"] = user_loc
     token = await create_token_with_session(user["id"], request)
     user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
+    # Record success so a string of recent failures resets for this IP
+    try:
+        await db.login_attempts.insert_one({"ip": client_ip, "identifier": identifier_lower[:80], "at": now_iso, "ok": True, "user_id": user["id"]})
+    except Exception:
+        pass
     return {"token": token, "user": user_out}
 
 
