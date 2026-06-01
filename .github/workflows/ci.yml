@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, master]
 
+# Opt into Node 24 for v4 actions
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -31,12 +35,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
-          cache-dependency-path: frontend/yarn.lock
+          # cache:'yarn' deliberately omitted — yarn.lock may not be committed
+          # on bootstrap branches. The frontend deps step below handles both.
 
       - name: Install frontend deps
         working-directory: frontend
-        run: yarn install --frozen-lockfile
+        run: |
+          if [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile
+          else
+            echo "::warning::yarn.lock missing — installing without --frozen-lockfile"
+            yarn install
+          fi
 
       - name: JavaScript — errors only
         working-directory: frontend

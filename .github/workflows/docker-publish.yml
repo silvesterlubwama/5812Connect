@@ -27,6 +27,10 @@ permissions:
   contents: read
   packages: write   # required to push to GHCR
 
+# Opt into Node 24 for v4 actions
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   publish:
     name: Build & publish

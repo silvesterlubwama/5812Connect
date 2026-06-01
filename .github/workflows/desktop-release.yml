@@ -16,6 +16,11 @@ on:
 permissions:
   contents: write  # needed to create the GitHub Release
 
+# Opt into Node 24 for v4 actions (silences the Node 20 deprecation warning
+# until the actions themselves ship a v5 we can pin).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   # ──────────────────────────────────────────────────────────────────────
   # Build matrix — produces native installers for macOS / Windows / Linux.
@@ -57,8 +62,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
-          cache-dependency-path: frontend/yarn.lock
+          # Note: yarn cache deliberately omitted — yarn.lock may not exist on
+          # first run (the lockfile is gitignored in some bootstrap configs).
+          # The Build-frontend step generates one if missing.
 
       - uses: actions/setup-python@v5
         with:
@@ -129,7 +135,14 @@ jobs:
         working-directory: frontend
         shell: bash
         run: |
-          yarn install --frozen-lockfile
+          # Use --frozen-lockfile only when the lockfile is committed.
+          # First-time builds bootstrap without it (non-reproducible warning).
+          if [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile --network-timeout 600000
+          else
+            echo "::warning::yarn.lock missing — installing without --frozen-lockfile"
+            yarn install --network-timeout 600000
+          fi
           yarn build
           mkdir -p ../desktop/dist
           cp -r build/* ../desktop/dist/
