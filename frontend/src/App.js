@@ -6,7 +6,6 @@ import { I18nProvider } from './context/I18nContext';
 import { BrandingProvider } from './context/BrandingContext';
 import { Toaster } from './components/ui/sonner';
 import OfflineBanner from './components/OfflineBanner';
-import LicenseStatusBanner from './components/LicenseStatusBanner';
 import './App.css';
 
 import LoginPage from './pages/LoginPage';
@@ -203,7 +202,6 @@ function App() {
             <CallProvider>
               <BrowserRouter>
                 <OfflineBanner />
-                <LicenseStatusBanner />
                 <ErrorBoundary>
                   <AppRoutes />
                 </ErrorBoundary>

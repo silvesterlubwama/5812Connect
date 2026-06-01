@@ -6,6 +6,40 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 161 (Jun 1, 2026)
+**CI lint gate adds EmptyState check + license requirement removed.**
+
+### Changes
+1. **`scripts/lint-check.sh` now runs 3 gates** (was 2): ruff → eslint → check-empty-states. Any new `<EmptyState>` JSX call without a `testid` prop fails CI. The smoke pytest stage is now `[4/4]` when invoked with `--with-tests`.
+2. **License + telemetry stack removed** per user direction. Deleted:
+   - `backend/routers/telemetry.py`
+   - `backend/tests/test_iteration160_telemetry_license.py`
+   - `frontend/src/components/LicenseManager.jsx`
+   - `frontend/src/components/LicenseStatusBanner.jsx`
+   - `_fire_telemetry_heartbeat` cron + `_last_heartbeat_date` global from `server.py`
+   - License manager card from `/admin`, banner from `App.js`
+   - Heartbeat clauses from EULA (section 3 now states "no telemetry transmitted")
+3. **Pre-existing bug fixed** in `RegisterPage.jsx` — was missing the `useBranding` import (would have been a runtime error on register flow). Caught by the new lint gate. Smoke regression confirms register page renders.
+
+### Kept (independent of license stack)
+- **EULA** (`desktop/eula/EULA.txt` + `.md`) — still wired into Tauri DMG/NSIS installers for legal acceptance at install time.
+- **Auto-updater scaffold** — `tauri-plugin-updater` in Cargo.toml, plugin block in `tauri.conf.json` with `active:false`. Recipe in README. Flip when release server is available.
+- **Code-signing scaffold** — env-var-driven (`APPLE_SIGNING_IDENTITY`, `WINDOWS_CERT_THUMBPRINT`, `TAURI_SIGNING_PRIVATE_KEY`). No-op without env vars.
+- **Cloudflare Tunnel admin UI** (`RemoteAccessManager`) — Tauri-only card.
+- **EmptyState lint script** (`scripts/check-empty-states.sh`).
+
+### Tests / lint
+- `bash /app/scripts/lint-check.sh` → all 3 gates pass.
+- 29/29 backend pytest green (smoke + branding + p2_finish).
+- Curl confirms `/api/telemetry/*` and `/api/license/*` endpoints return 404 (cleanly removed).
+- Admin page screenshot: license card absent, all other admin cards intact.
+
+⚠️ **Production redeploy needed** to pick up the changes. License feature was never active on production; removal is purely a code/cleanup change.
+
+### Continuing per your plan
+- **Release server** — when available, generate signing keys with `cargo tauri signer generate`, paste pubkey into `tauri.conf.json` `plugins.updater.pubkey`, flip `active:true`, set `endpoints` to your real release JSON URL.
+- Future features can land without ever needing a license/heartbeat layer.
+
 ## Recently Resolved — Iteration 160 (Jun 1, 2026)
 **License + Telemetry + EULA + auto-updater + code-signing + EmptyState lint.**
 

@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 failed=0
 
-echo -e "${YELLOW}[1/2] Python (ruff) — security & correctness rules${NC}"
+echo -e "${YELLOW}[1/3] Python (ruff) — security & correctness rules${NC}"
 # F841 = unused local var (often = abandoned variable, leftover logic)
 # F821 = undefined name (runtime crash)
 # F823 = local var referenced before assignment
@@ -31,7 +31,7 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}[2/2] JavaScript (eslint) — quiet mode (errors only)${NC}"
+echo -e "${YELLOW}[2/3] JavaScript (eslint) — quiet mode (errors only)${NC}"
 cd frontend
 # --quiet means ignore warnings; errors only block CI
 if yarn -s eslint --quiet "src/**/*.{js,jsx}" 2>&1; then
@@ -41,6 +41,14 @@ else
   failed=1
 fi
 cd ..
+
+echo ""
+echo -e "${YELLOW}[3/3] EmptyState testid coverage${NC}"
+if bash scripts/check-empty-states.sh 2>&1; then
+  : # already prints its own success line
+else
+  failed=1
+fi
 
 echo ""
 if [ $failed -eq 0 ]; then
@@ -57,7 +65,7 @@ fi
 # Optional: run pytest smoke if --with-tests is passed and the API is reachable
 if [ "${1:-}" = "--with-tests" ]; then
   echo ""
-  echo -e "${YELLOW}[3/3] Backend pytest smoke (--with-tests)${NC}"
+  echo -e "${YELLOW}[4/4] Backend pytest smoke (--with-tests)${NC}"
   if ! curl -fsS http://localhost:8001/docs > /dev/null 2>&1; then
     echo -e "${YELLOW}  ⚠ Skipped — no API at http://localhost:8001/docs${NC}"
     echo -e "${YELLOW}  Tip: ensure supervisor is running the backend.${NC}"
@@ -67,6 +75,16 @@ if [ "${1:-}" = "--with-tests" ]; then
   if TEST_API_URL=http://localhost:8001 REACT_APP_BACKEND_URL=http://localhost:8001 \
      python -m pytest tests/test_smoke_recent_modules.py \
        -v --maxfail=5 --tb=short -p no:cacheprovider 2>&1; then
+    echo -e "${GREEN}  ✓ Pytest smoke passed${NC}"
+  else
+    echo -e "${RED}  ✗ Pytest smoke failed${NC}"
+    exit 1
+  fi
+  cd ..
+fi
+
+exit 0
+p no:cacheprovider 2>&1; then
     echo -e "${GREEN}  ✓ Pytest smoke passed${NC}"
   else
     echo -e "${RED}  ✗ Pytest smoke failed${NC}"

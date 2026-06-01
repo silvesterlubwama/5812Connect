@@ -24,11 +24,9 @@ You may **NOT**:
   adults outside the safeguarding policies of 58:12 Global and applicable jurisdictions.
 
 ### 3. Data & Privacy
-The Software stores all operational data locally on your devices. The Software optionally
-sends an anonymous daily heartbeat to a Licensor-operated endpoint containing only an
-install identifier, version, and aggregate user count. **No personally identifiable
-information is transmitted.** You may opt out of the heartbeat at any time via
-*Admin → License & Telemetry*.
+The Software stores all operational data locally on your devices. No telemetry
+or usage data is transmitted to Licensor or any third party as part of normal
+operation.
 
 ### 4. Updates
 The Software may, with your consent, download and install updates automatically. Each

@@ -63,7 +63,6 @@ _APP_STARTED_AT = _time_mod.time()
 _APP_VERSION = os.environ.get("APP_VERSION") or os.environ.get("GIT_COMMIT") or "dev"
 # Daily auto-backup tracker (module-level so the scheduler can mark it idempotently)
 _last_auto_backup_date = None
-_last_heartbeat_date = None
 
 
 @app.get("/api/health")
@@ -582,7 +581,6 @@ try:
     from routers.security_checkpoint import router as security_checkpoint_router, ocr_router
     from routers.backup import router as backup_router
     from routers.system_settings import router as system_settings_router
-    from routers.telemetry import router as telemetry_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -603,7 +601,6 @@ try:
     app.include_router(ocr_router)
     app.include_router(backup_router)
     app.include_router(system_settings_router)
-    app.include_router(telemetry_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -707,15 +704,6 @@ async def _run_due_date_reminder_scheduler():
             if _last_auto_backup_date != date.today() and now.hour == 0:
                 await _fire_auto_backup()
                 _last_auto_backup_date = date.today()
-
-            # Daily TELEMETRY HEARTBEAT — sends an anonymous health beacon to the
-            # configured HQ endpoint (admin opted-in via /admin → License). Soft
-            # licence enforcement: failures never crash the cron, banner is set
-            # via /api/license/self for the frontend to surface.
-            global _last_heartbeat_date
-            if _last_heartbeat_date != date.today() and now.hour == 2:
-                await _fire_telemetry_heartbeat()
-                _last_heartbeat_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
@@ -825,72 +813,6 @@ async def _fire_auto_backup():
             logger.info(f"Auto-backup pruned {pruned} archives older than 30 days")
     except Exception as e:
         logger.error(f"Auto-backup error: {e}")
-
-
-async def _fire_telemetry_heartbeat():
-    """Daily 02:00 UTC: send an anonymous health beacon to the configured HQ
-    endpoint. Soft-licence — sends nothing if telemetry is opted out, and
-    failures are logged but never raised. Updates db.local_install with the
-    server's last-known license_status so the frontend banner can read it
-    via GET /api/license/self."""
-    try:
-        cfg = await db.local_install.find_one({"id": "install"}, {"_id": 0})
-        if not cfg or not cfg.get("telemetry_enabled", False):
-            return  # opted out or not configured
-        hq_url = (cfg.get("hq_url") or "").rstrip("/")
-        if not hq_url:
-            return
-        # Aggregate user_count for the beacon (no PII)
-        user_count = await db.users.count_documents({"status": "active"})
-        payload = {
-            "install_id": cfg.get("install_id"),
-            "license_key": cfg.get("license_key", ""),
-            "org_id": cfg.get("org_id", ""),
-            "version": _APP_VERSION,
-            "user_count": user_count,
-            "env": "desktop" if os.environ.get("TAURI_DESKTOP") else "cloud",
-        }
-        import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(f"{hq_url}/api/telemetry/heartbeat", json=payload)
-            if r.status_code == 200:
-                resp = r.json()
-                # Persist the server's license_status verdict locally so the UI
-                # can show an accurate banner without re-calling HQ on every request
-                await db.local_install.update_one(
-                    {"id": "install"},
-                    {"$set": {
-                        "license_status": resp.get("license_status"),
-                        "license_expires_at": resp.get("license_expires_at"),
-                        "license_message": resp.get("message"),
-                        "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                        "last_heartbeat_ok": True,
-                    }},
-                )
-                logger.info(f"Telemetry heartbeat OK — license_status={resp.get('license_status')}")
-            else:
-                logger.warning(f"Telemetry heartbeat HTTP {r.status_code}: {r.text[:200]}")
-                await db.local_install.update_one(
-                    {"id": "install"},
-                    {"$set": {
-                        "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                        "last_heartbeat_ok": False,
-                        "last_heartbeat_error": f"HTTP {r.status_code}",
-                    }},
-                )
-    except Exception as e:
-        logger.error(f"Telemetry heartbeat error: {e}")
-        try:
-            await db.local_install.update_one(
-                {"id": "install"},
-                {"$set": {
-                    "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                    "last_heartbeat_ok": False,
-                    "last_heartbeat_error": str(e)[:200],
-                }},
-            )
-        except Exception:
-            pass
 
 
 async def _fire_overdue_task_emails():

@@ -22,7 +22,6 @@ import BackupRestoreManager from '../components/BackupRestoreManager';
 import IntegrationsManager from '../components/IntegrationsManager';
 import BrandingEditor from '../components/BrandingEditor';
 import RemoteAccessManager from '../components/RemoteAccessManager';
-import LicenseManager from '../components/LicenseManager';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 
@@ -354,7 +353,6 @@ export default function AdminPage() {
           <IntegrationsManager />
           <BrandingEditor />
           <RemoteAccessManager />
-          <LicenseManager />
         </>
       )}
     </div>

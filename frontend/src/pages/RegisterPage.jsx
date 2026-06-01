@@ -6,10 +6,12 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { authApi } from '../services/api';
+import { useBranding } from '../context/BrandingContext';
 import { toast } from 'sonner';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const { branding } = useBranding();
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '' });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);

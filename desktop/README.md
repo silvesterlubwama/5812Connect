@@ -10,7 +10,7 @@ The bundle ships:
 - **EULA enforcement** — the `.exe` (NSIS) and `.dmg` installers display the agreement and refuse to install if the user does not accept.
 - **Auto-update** — Tauri updater plugin scaffolded; turn on by setting `plugins.updater.active=true` in `tauri.conf.json` and pointing `endpoints` at your release server.
 - **Code signing** — Apple Developer ID + Windows EV cert wiring is scaffolded as **no-op by default**. Set the matching env vars before `cargo tauri build` to enable signing.
-- **Anonymous heartbeat** — opt-in daily POST to your HQ deploy with `install_id`, `version`, `user_count`. **No PII**. License key validation rides the same beacon.
+- **Anonymous heartbeat** — *(not included; partner orgs install standalone)*
 
 Result on each platform:
 - macOS → `58:12 Connect.app` + `.dmg` installer (EULA shown by macOS during install)
@@ -197,45 +197,9 @@ The build will sign the `.exe` and `.msi` outputs. Untick `bundle.windows.tsp` i
 
 ## License key + telemetry heartbeat
 
-Self-hosted desktop installs report a **daily anonymous heartbeat** to a HQ
-deployment so 58:12 Global can see deployment spread + nudge stragglers to
-upgrade. The heartbeat carries:
-
-- `install_id` — UUID4 generated on first config (NOT a hardware fingerprint)
-- `license_key` — pasted by the admin (or empty for unlicensed pilots)
-- `org_id`, `version`, `user_count`, `env`
-
-**No PII.** No member names, document content, or chat data is transmitted.
-
-### How it works
-
-1. Admin opens `/admin → License & Telemetry` in the desktop app.
-2. Pastes the `license_key` HQ issued, sets `hq_url` (defaults to `https://hq.5812-global.org`), opts-in to telemetry.
-3. The desktop's scheduler runs every 24 h at 02:00 UTC and POSTs to `${hq_url}/api/telemetry/heartbeat`.
-4. HQ stores the heartbeat in `db.telemetry_heartbeats` + upserts the install in `db.telemetry_installs`.
-5. HQ returns the current license status (`valid` / `expired` / `blocked` / `invalid` / `unlicensed`). The desktop persists it locally so `/api/license/self` can serve the dashboard banner without re-calling HQ.
-
-### Soft enforcement
-
-A **blocked** or **expired** license shows an amber dismissible banner above the
-app shell — the app **never** crashes or refuses to log in. Partner orgs are not
-paying customers; we want to nudge, not punish.
-
-### Issuing license keys (HQ side)
-
-`/admin → License & Telemetry → HQ` lets system_admins issue keys:
-
-- **Org name** — required (e.g. "Hope Centre Uganda")
-- **Plan** — `standard` / `extended` / `trial`
-- **Expires at** — optional ISO date
-
-Keys are 32-char URL-safe tokens. HQ admins can also block / unblock / delete
-keys, and view the live install roster (testid `license-tab-installs`).
-
-### Privacy / opt-out
-
-Admins can disable telemetry at any time from the same dialog. The opt-in is
-also disclosed in the EULA section 3 ("Data & Privacy").
+*(Removed — partner orgs install with the EULA-only flow. No daily heartbeat,
+no license validation. If you need install analytics later, scaffold a fresh
+opt-in telemetry endpoint instead of resurrecting the license model.)*
 
 ---
 
@@ -289,13 +253,6 @@ The dashboard's existing **Audit Trail** module logs the tunnel start/stop the s
 │   ↳ data:    ${app_data_dir}/mongo-data/        │
 │   ↳ uploads: ${app_data_dir}/uploads/           │
 └────────────┬────────────────────────────────────┘
-             │ (optional: every 24 h)
-             ↓
-┌─────────────────────────────────────────────────┐
-│  HQ telemetry  →  POST /api/telemetry/heartbeat │
-│   ↳ install roster on HQ admin dashboard        │
-│   ↳ license validation                          │
-└─────────────────────────────────────────────────┘
              │ (optional: always)
              ↓
 ┌─────────────────────────────────────────────────┐
@@ -324,8 +281,7 @@ The dashboard's existing **Audit Trail** module logs the tunnel start/stop the s
 | `MONGO_URL=mongodb://prod-cluster:27017` | `MONGO_URL=mongodb://127.0.0.1:27017` (local mongod) |
 | `RESEND_API_KEY` from K8s secrets | Pasted by admin into Integrations UI (system_settings) |
 | `EMERGENT_LLM_KEY` for OCR/AI | Same — admin pastes into Integrations UI |
-| Cloudflare Workers / nginx ingress | `cloudflared` daemon spawned by the Rust shell |
+| Cloud Workers / nginx ingress | `cloudflared` daemon spawned by the Rust shell |
 | K8s liveness probe `/api/health` | Tauri's setup hook waits for the same endpoint |
-| (none) | Daily heartbeat to HQ + soft license enforcement |
 
 The same `iter-150` backup tarball moves data **either direction** so an org can pilot on desktop, then promote to cloud (or vice versa) without losing data.
