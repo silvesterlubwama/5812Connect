@@ -539,12 +539,20 @@ export default function ProductsPage() {
         kickCashDrawer().catch(() => {});
       }
       toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`);
-      // Auto-print: when the store has `auto_print_receipt` enabled, fire window.print()
-      // 600ms after the receipt panel renders. window.print() prints whatever is on screen,
-      // and the receipt panel uses .print-area + print CSS rules to render the receipt clean.
+      // Auto-print: when the store has `auto_print_receipt` enabled, prefer
+      // a paired ESC/POS Serial printer (see /admin → USB Devices & Roles).
+      // If no device is paired, fall back to window.print() so the receipt
+      // panel + print CSS still produces a usable printout.
       if (storeSettings.auto_print_receipt) {
-        setTimeout(() => {
-          try { window.print(); } catch (err) { console.warn('auto-print failed:', err); }
+        setTimeout(async () => {
+          try {
+            const { printReceiptText, buildReceiptLines } = await import('../utils/printers');
+            const r = await printReceiptText(buildReceiptLines(res.data, { storeName: storeSettings.store_name || '58:12 Sales', currency: storeSettings.currency || 'UGX' }));
+            if (!r.printed) window.print();
+          } catch (err) {
+            console.warn('auto-print failed, falling back to window.print:', err);
+            try { window.print(); } catch (e2) { console.warn(e2); }
+          }
         }, 600);
       }
       fetchAll();
