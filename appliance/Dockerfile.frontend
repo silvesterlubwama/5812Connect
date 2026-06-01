@@ -8,9 +8,21 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /src
-COPY frontend/package.json frontend/yarn.lock /src/
-# corepack/yarn 1 is already in the base image
-RUN yarn install --frozen-lockfile --network-timeout 600000
+# Copy package.json first, then yarn.lock if present (the wildcard makes
+# the COPY tolerant of a missing lockfile — the first build on a fresh repo
+# can succeed even before yarn.lock is committed. For reproducible builds,
+# commit the lockfile and the `--frozen-lockfile` flag below kicks in).
+COPY frontend/package.json /src/package.json
+COPY frontend/yarn.lock* /src/
+# corepack/yarn 1 is already in the base image. Use --frozen-lockfile when a
+# lock is present (CI builds are reproducible), fall back to plain install
+# when it's missing (first-time bootstrap).
+RUN if [ -f yarn.lock ]; then \
+        yarn install --frozen-lockfile --network-timeout 600000; \
+    else \
+        echo "WARNING: yarn.lock not committed — using non-reproducible install"; \
+        yarn install --network-timeout 600000; \
+    fi
 
 COPY frontend/ /src/
 
