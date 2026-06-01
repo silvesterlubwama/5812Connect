@@ -6,6 +6,50 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 158 (Jun 1, 2026)
+**Triple polish: EmptyState rollout + members.py modularization + overdue-task cron upgrade.**
+
+### 1. EmptyState rollout (continuation of iter 156)
+- Wired the reusable `<EmptyState>` component into 11 placeholder slots across 5 high-traffic pages:
+  - **AccountingPage** — Entries / Accounts / Ledger empty states (with "New entry" / "New account" CTAs)
+  - **BankPage** — Vendors / Bills empty states
+  - **ApprovalsPage** — Inbox / Mine / All / Workflows empty states
+  - **OutreachPage** — Programmes / Sessions empty states
+  - **SocialWorkPage** — Schools tab + case-detail Notes empty state
+- SecurityCheckpointPage + HRPage got friendlier copy + testids on their existing text-only placeholders.
+- Pattern is now well-established; remaining pages can be swapped on-touch.
+
+### 2. `routers/members.py` modularization (1973 → 8 sub-modules)
+- The 1973-line monolith was split into a `routers/members/` package with 8 focused sub-modules:
+  - `__init__.py` (39 LOC) — aggregates 8 sub-routers via `include_router`
+  - `core.py` (233 LOC) — members CRUD + approve/reject
+  - `families.py` (303 LOC) — families CRUD + guardians + portal/family + family-members linking
+  - `children.py` (417 LOC) — children CRUD + education + residency + extras + photos + move-to-guest
+  - `guests.py` (176 LOC) — guests CRUD + members-mirror helper + move-to-staff
+  - `badges.py` (372 LOC) — badge templates + wallet badges + auto-issue + invalidate / reactivate
+  - `nfc.py` (168 LOC) — NFC tag CRUD + signed payload + verify
+  - `bulk_import.py` (192 LOC) — bulk import for members + children (auto-parent + auto-family)
+  - `pdf.py` (101 LOC) — member profile PDF download
+- **Zero behavioural change** — every endpoint preserves its exact path, method, deps, and body. server.py imports unchanged: `from routers.members import router`.
+- Bonus: extracted shared photo-save helper `_save_photo()` deduplicating member/child/user photo upload paths in `children.py`.
+
+### 3. Overdue-task email cron (`server.py:_fire_overdue_task_emails`)
+- Cron itself was already implemented (daily 08:00 UTC, idempotent via `task_overdue_emails` collection, 3-day window per task+assignee).
+- Upgraded to use the dynamic email config via `email_helpers.send_notification_email` — admin can now switch Resend / SMTP via the Integrations UI without redeploying. Falls back to env vars when config is empty.
+
+### Tests / lint
+- New `tests/test_iteration158_members_refactor.py` — 15 cases covering CRUD across every sub-module. All PASS.
+- `tests/test_iteration157_branding.py` — 4/4 still PASS (regression).
+- `tests/test_smoke_recent_modules.py` — 16/16 still PASS.
+- Frontend testing agent confirmed: backend startup clean, all moved endpoints respond correctly, EmptyState renders for empty tabs (vendors/bills/approvals/outreach), branding still applies. **iteration_158.json: backend 100% / frontend 100%, no bugs.**
+- Ruff + ESLint clean for all modified files.
+
+⚠️ **Production redeploy needed**. Post-deploy: behaviour identical from the user's perspective, but the codebase is now meaningfully easier to navigate (no more 1900-line file) and emptier tabs are friendlier with proper CTAs.
+
+### Continuing per your plan
+- **Z** next: Tauri desktop wrapper + Cloudflare Tunnel for self-hosted `.exe/.dmg`.
+- Optional polish: continued EmptyState rollout to remaining pages on-touch; manual `POST /api/cron/run-overdue-task-emails` admin endpoint for QA testing the cron without waiting for 08:00 UTC.
+
 ## Recently Resolved — Iteration 157 (Jun 1, 2026)
 **Option Y — UI Customization MVP fully wired end-to-end.**
 
