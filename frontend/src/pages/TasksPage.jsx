@@ -18,6 +18,7 @@ import { KanbanList } from './kanban/KanbanList';
 import { ArchivePanel } from './kanban/ArchivePanel';
 import { CardDetailDialog } from './kanban/CardDetailDialog';
 import { TeamCalendar } from './kanban/TeamCalendar';
+import EmptyState from '../components/EmptyState';
 
 export default function TasksPage() {
   const { user } = useAuth();
@@ -414,7 +415,16 @@ export default function TasksPage() {
           )}
         </div>
         <div className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
-          {boards.length === 0 && <p className="text-xs text-slate-500 px-2 py-3 text-center">No boards yet</p>}
+          {boards.length === 0 && (
+            <EmptyState
+              compact
+              icon={LayoutGrid}
+              title="No boards yet"
+              description="Boards group cards by team, project, or campus."
+              action={{ label: 'New board', onClick: () => setShowNewBoard(true), testid: 'tasks-empty-create-board-btn' }}
+              testid="tasks-boards-empty"
+            />
+          )}
           {boards.map(b => (
             <button key={b.id} onClick={() => setActiveBoardId(b.id)} data-testid={`board-tab-${b.id}`}
               className={`flex items-center gap-2 w-full px-2 py-2 rounded-md text-sm transition-all text-left group ${b.id === activeBoardId ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/8 hover:text-slate-200'}`}>

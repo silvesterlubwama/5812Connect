@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import EmptyState from '../components/EmptyState';
 
 const SummaryCard = ({ title, value, sub, icon: Icon, color, loading }) => (
   <Card className="shadow-soft rounded-xl">
@@ -617,7 +618,7 @@ export default function FinancialPage() {
           <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
             <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">From</th><th className="p-3 text-left text-xs text-muted-foreground">To</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Date</th></tr></thead>
             <tbody>{(transfers || []).map(t => <tr key={t.id} className="border-b last:border-0"><td className="p-3">{t.from_name}</td><td className="p-3">{t.to_name}</td><td className="p-3 text-right font-medium">{(t.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground text-xs">{t.created_at?.slice(0, 10)}</td></tr>)}
-            {(!transfers || transfers.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs">No transfers yet</td></tr>}
+            {(!transfers || transfers.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs" data-testid="fin-transfers-empty">No transfers yet — click "Create Transfer" above to move funds between accounts.</td></tr>}
             </tbody></table>
           </CardContent></Card>
         </TabsContent>

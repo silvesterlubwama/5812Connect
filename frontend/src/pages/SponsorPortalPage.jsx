@@ -14,6 +14,7 @@ import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Heart, Lock, Clock, LogOut, AlertCircle, BookOpen, Camera, Award } from 'lucide-react';
 import { toast } from 'sonner';
+import EmptyState from '../components/EmptyState';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -193,7 +194,7 @@ export default function SponsorPortalPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {!updates || updates.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No updates yet — we'll share more soon.</p>
+              <EmptyState compact icon={BookOpen} title="No updates yet" description="Our social workers will share photos and progress notes about your sponsored child here. Check back soon." testid="sponsor-updates-empty" />
             ) : updates.map(u => (
               <div key={u.id} className="border rounded-lg p-3" data-testid={`sponsor-update-${u.id}`}>
                 <div className="flex items-center gap-2 mb-1">

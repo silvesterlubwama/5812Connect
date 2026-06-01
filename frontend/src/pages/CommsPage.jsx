@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { ConferenceDialog } from '../components/comms/ConferenceDialog';
 import { NewConversationDialog } from '../components/comms/NewConversationDialog';
 import { AnnouncementDialog } from '../components/comms/AnnouncementDialog';
+import EmptyState from '../components/EmptyState';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
@@ -458,10 +459,7 @@ export default function CommsPage() {
       return (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {announcements.length === 0 ? (
-            <div className="text-center py-16 text-sm text-muted-foreground">
-              <Megaphone size={40} className="mx-auto mb-3 opacity-20" />
-              <p>No announcements yet.</p>
-            </div>
+            <EmptyState icon={Megaphone} title="No announcements yet" description="Org-wide bulletins from leadership will land here. Stay tuned." testid="comms-announcements-empty" />
           ) : announcements.map(a => (
             <div key={a.id} className="flex justify-start" data-testid="announcement-msg">
               <div className="max-w-[85%] bg-secondary rounded-2xl px-4 py-3">
@@ -483,10 +481,7 @@ export default function CommsPage() {
     return (
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
-          <div className="text-center py-16 text-sm text-muted-foreground">
-            <MessageSquare size={32} className="mx-auto mb-2 opacity-20" />
-            <p>No messages yet. Say hello!</p>
-          </div>
+          <EmptyState icon={MessageSquare} title="No messages yet" description="Say hello — be the first to break the ice in this conversation." testid="comms-messages-empty" />
         )}
         {messages.map(msg => {
           const isMine = msg.sender_id === user?.id;
@@ -693,7 +688,7 @@ export default function CommsPage() {
             {loading ? (
               <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
             ) : filteredConvs.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground text-center py-6">No conversations yet</p>
+              <EmptyState compact icon={MessageSquare} title="No conversations yet" description="Start a direct message or join a channel to see threads here." testid="comms-conversations-empty" />
             ) : filteredConvs.map(conv => {
               // Get presence for participants (direct messages)
               const otherParticipant = conv.type === 'direct' ? conv.participants?.find(p => p !== user?.id) : null;
@@ -828,7 +823,7 @@ export default function CommsPage() {
             </div>
             {/* Thread replies */}
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {threadMessages.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No replies yet</p>}
+              {threadMessages.length === 0 && <p className="text-xs text-muted-foreground text-center py-4" data-testid="comms-thread-empty">No replies yet — your reply starts the thread.</p>}
               {threadMessages.map(tm => (
                 <div key={tm.id} className={`flex ${tm.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[85%] rounded-xl px-3 py-1.5 ${tm.sender_id === user?.id ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>

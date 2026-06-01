@@ -14,6 +14,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import TwoFactorSetup from '../components/TwoFactorSetup';
+import EmptyState from '../components/EmptyState';
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -409,13 +410,13 @@ export default function SettingsPage() {
                 {[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}
               </div>
             ) : venues.length === 0 ? (
-              <Card className="shadow-soft rounded-xl">
-                <CardContent className="p-8 text-center text-muted-foreground">
-                  <Building size={40} className="mx-auto mb-3 opacity-30" />
-                  <p>No venues yet</p>
-                  <Button variant="outline" className="mt-3" onClick={() => setShowAddVenue(true)}>Add your first venue</Button>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={Building}
+                title="No venues yet"
+                description="Venues are physical or virtual rooms inside a campus — used for event scheduling and booking."
+                action={{ label: 'Add your first venue', onClick: () => setShowAddVenue(true), testid: 'settings-empty-add-venue-btn' }}
+                testid="settings-venues-empty"
+              />
             ) : (
               <div className="grid sm:grid-cols-2 gap-4">
                 {venues.map(venue => (

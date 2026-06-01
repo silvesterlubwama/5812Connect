@@ -21,6 +21,7 @@ import KioskLinksManager from '../components/KioskLinksManager';
 import BackupRestoreManager from '../components/BackupRestoreManager';
 import IntegrationsManager from '../components/IntegrationsManager';
 import BrandingEditor from '../components/BrandingEditor';
+import RemoteAccessManager from '../components/RemoteAccessManager';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 
@@ -351,6 +352,7 @@ export default function AdminPage() {
           <BackupRestoreManager />
           <IntegrationsManager />
           <BrandingEditor />
+          <RemoteAccessManager />
         </>
       )}
     </div>
