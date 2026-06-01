@@ -6,6 +6,35 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 156 (Jun 1, 2026)
+**Batch F — reusable EmptyState component + mobile-responsiveness baseline.**
+
+### Shipped
+
+**1. `<EmptyState>` component (P2-17)**
+- New `components/EmptyState.jsx` — friendly "nothing here yet" panel with floating-dot illustration, title + description + optional primary/secondary CTAs. Compact + full-size variants. Stable testid contract for tests.
+- First wired-up locations in `UnifiedPeoplePage.jsx`: Families tab empty state (with "Add Family" CTA) + Guests tab empty state (with search-aware copy).
+- Pattern adopt-on-touch: every other "No X yet" placeholder across the app can be swapped to `<EmptyState>` in passing as files get edited — no big-bang rewrite needed.
+
+**2. Mobile-responsiveness baseline (P2-18)**
+- Audited `Layout.jsx`: already has the right pattern (mobile hamburger via `mobile-menu-btn`, drawer overlay, `lg:` breakpoints for the static sidebar). Nothing to change there.
+- Added global CSS catch-alls in `index.css`:
+  - Tables inside Card content scroll horizontally below 640px (saves the long tail of unwrapped tables across the app)
+  - Dialog `max-height: 92vh` on mobile so they fit on phone screens
+  - Grid `min-width: 0` resets to stop wide grids from forcing horizontal scroll
+  - Tap-target minimum 36px on coarse-pointer (touch) devices
+- The page-by-page mobile audit + EmptyState rollout can be a long-running polish sweep — the foundations are now ready.
+
+### Tests / lint
+- 39/39 sample pytest still green.
+- Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed**. Post-deploy: tables, dialogs, and tap-targets all behave sensibly on phones automatically.
+
+### Continuing per your plan
+- **Y** next: UI customisation — rename nav items, reorder, edit links, brand colour. Powered by the `branding` collection that the iter 150 backup feature was designed to carry.
+- **Z** after Y: Tauri desktop bundle + Cloudflare Tunnel for the remote-access URL.
+
 ## Recently Resolved — Iteration 155 (Jun 1, 2026)
 **Batch E — PWA offline UX + code-split heavy pages.**
 

@@ -17,6 +17,7 @@ import { membersApi, checkinsApi, approvalsApi, badgesApi, exportApi, importApi,
 import { BulkActionBar, exportToCSV } from '../components/BulkActions';
 import { UnifiedBadge } from '../components/UnifiedBadge';
 import ActivityFeed from '../components/ActivityFeed';
+import EmptyState from '../components/EmptyState';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { MOCK_GROUPS, MOCK_ROLES } from '../mock';
@@ -473,7 +474,13 @@ export default function UnifiedPeoplePage() {
             <Button size="sm" className="gap-2" onClick={() => setShowFamily(true)} data-testid="add-family-btn"><Plus size={14} /> Add Family</Button>
           </div>
           {families.length === 0 ? (
-            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Heart size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">No families yet</p></CardContent></Card>
+            <EmptyState
+              icon={Heart}
+              title="No families yet"
+              description="Group members + children into households so check-in flows can pull them all up with one search."
+              action={{ label: 'Add Family', onClick: () => setShowFamily(true), testid: 'empty-add-family-btn' }}
+              testid="families-empty"
+            />
           ) : (
             <div>
             {/* Select All + Bulk Actions for Families */}
@@ -631,7 +638,12 @@ export default function UnifiedPeoplePage() {
           {(() => {
             const filteredGuests = guestSearch.trim() ? guests.filter(g => (g.name || '').toLowerCase().includes(guestSearch.toLowerCase()) || (g.phone || '').includes(guestSearch)) : guests;
             return filteredGuests.length === 0 ? (
-            <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><UserPlus size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">{guestSearch ? 'No guests match search' : 'No guest visits recorded'}</p></CardContent></Card>
+            <EmptyState
+              icon={UserPlus}
+              title={guestSearch ? 'No guests match search' : 'No guest visits recorded'}
+              description={guestSearch ? `Nothing matched "${guestSearch}".` : 'When a first-time visitor checks in at the kiosk, they appear here.'}
+              testid="guests-empty"
+            />
           ) : (
             <div>
             {/* Select All + Bulk Actions for Guests */}

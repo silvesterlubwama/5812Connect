@@ -137,3 +137,39 @@ body {
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
+
+/* ============================================================
+ * MOBILE RESPONSIVENESS HELPERS (iter156)
+ * Catch-all rules so tables/long-content don't break narrow screens.
+ * Pages can opt into stricter mobile behaviour by adding `.responsive-table`
+ * to their table parent OR just trust the default below.
+ * ============================================================ */
+@media (max-width: 640px) {
+  /* Any direct-child table inside a Card / CardContent gets horizontal scroll */
+  .responsive-table,
+  [class*="CardContent"] > table,
+  [class*="card-content"] > table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Default dialog max-h so they fit on phone screens */
+  [role="dialog"] {
+    max-height: 92vh !important;
+  }
+
+  /* Stop super-wide grids from forcing horizontal scroll on phones */
+  .grid {
+    min-width: 0;
+  }
+}
+
+/* Tap target minimum (Apple HIG = 44pt, Material = 48dp) — applies on touch devices */
+@media (pointer: coarse) {
+  button, [role="button"], .btn, a.btn {
+    min-height: 36px;
+  }
+}
+
