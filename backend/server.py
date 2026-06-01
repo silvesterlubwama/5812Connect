@@ -161,6 +161,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 
+
+# ============================================================
+# SECURITY HEADERS MIDDLEWARE
+# Hardens every response with browser-standard security headers.
+# ============================================================
+
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    # Always-on hardening. CSP is permissive enough for the React build (inline
+    # styles via Tailwind JIT) but locks down external script/frame sources.
+    # If something breaks (e.g. third-party iframe), refine the directive.
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(self), camera=(self), microphone=(self), payment=(), "
+        "fullscreen=(self), serial=(self), hid=(self), usb=(self), bluetooth=(self)"
+    )
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # Only set HSTS over HTTPS — avoids breaking local-http dev.
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -555,6 +580,7 @@ try:
     from routers.sponsor_portal import router as sponsor_links_router, public_router as sponsor_portal_router
     from routers.security_checkpoint import router as security_checkpoint_router, ocr_router
     from routers.backup import router as backup_router
+    from routers.system_settings import router as system_settings_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -574,6 +600,7 @@ try:
     app.include_router(security_checkpoint_router)
     app.include_router(ocr_router)
     app.include_router(backup_router)
+    app.include_router(system_settings_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -1174,6 +1201,29 @@ async def startup():
         logger.info("Storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
+    # ===== Sentry init (iter152) — reads system_settings, falls back to env =====
+    try:
+        from routers.system_settings import get_sentry_config
+        s = await get_sentry_config()
+        if s.get("dsn") and s.get("enabled", True) is not False:
+            try:
+                import sentry_sdk
+                from sentry_sdk.integrations.fastapi import FastApiIntegration
+                from sentry_sdk.integrations.starlette import StarletteIntegration
+                sentry_sdk.init(
+                    dsn=s["dsn"],
+                    environment=s.get("environment") or "production",
+                    traces_sample_rate=float(s.get("traces_sample_rate") or 0.1),
+                    integrations=[FastApiIntegration(), StarletteIntegration()],
+                    send_default_pii=False,
+                )
+                logger.info(f"Sentry initialised (env={s.get('environment')})")
+            except ImportError:
+                logger.warning("Sentry DSN set but sentry-sdk not installed — skipping")
+            except Exception as se:
+                logger.warning(f"Sentry init failed: {se}")
+    except Exception as e:
+        logger.warning(f"Sentry bootstrap skipped: {e}")
     # Start background task reminder scheduler
     asyncio.create_task(_run_due_date_reminder_scheduler())
     # Defer heavy seeding so the app becomes ready immediately
@@ -1248,8 +1298,55 @@ async def _ensure_indexes():
         # Wallet
         await db.wallet_badges.create_index("token", unique=True)
         await db.wallet_badges.create_index("member_id")
+        await db.wallet_badges.create_index("resident_location_id")  # iter151 — campus filter fallback
         # Deleted items (recycle bin) — TTL cleanup after 30 days
         await db.deleted_items.create_index("deleted_at", expireAfterSeconds=2592000)
+        # ===== iter152 hot-path indexes — explicit audit pass =====
+        # Security Checkpoint events: visitor-log + state queries scan today's events for a checkpoint.
+        await db.security_checkpoint_events.create_index(
+            [("checkpoint_id", 1), ("created_at", -1)],
+            name="cpe_cp_date",
+        )
+        await db.security_checkpoint_events.create_index(
+            [("checkpoint_id", 1), ("clear_at", -1)],
+            name="cpe_cp_clear",
+        )
+        # Subject lookup for entry/exit pairing
+        await db.security_checkpoint_events.create_index(
+            [("checkpoint_id", 1), ("subject.id", 1), ("direction", 1), ("created_at", -1)],
+            name="cpe_pair",
+        )
+        await db.security_checkpoint_sessions.create_index("token_hash", unique=True)
+        await db.security_checkpoint_sessions.create_index([("checkpoint_id", 1), ("expires_at", 1)])
+        # Sales: location-scoped daily aggregates + customer history
+        await db.sales.create_index([("location_id", 1), ("created_at", -1)])
+        await db.sales.create_index("receipt_number")
+        await db.sales.create_index("customer_id")
+        # Login throttle (iter151) — per-IP recent-failure scan
+        await db.login_attempts.create_index([("ip", 1), ("ok", 1), ("at", -1)])
+        await db.login_attempts.create_index("at", expireAfterSeconds=2592000)  # TTL 30 days
+        # Pair-attempts TTL (iter134) — same pattern
+        await db.security_pair_attempts.create_index([("ip", 1), ("ok", 1), ("at", -1)])
+        await db.security_pair_attempts.create_index("at", expireAfterSeconds=2592000)
+        # Members hot path: role + active campus + status (RBAC widely uses this combo)
+        await db.members.create_index([("role", 1), ("active_campus_id", 1), ("status", 1)])
+        await db.members.create_index([("kind", 1), ("status", 1)])
+        await db.members.create_index("resident_location_id")
+        # Children
+        await db.children.create_index("id", unique=True)
+        await db.children.create_index([("location_id", 1), ("status", 1)])
+        await db.children.create_index("family_id")
+        await db.children.create_index("resident_location_id")
+        # Audit (the canonical audit collection has multiple names — index both)
+        await db.audits.create_index([("user_id", 1), ("created_at", -1)])
+        await db.audits.create_index([("entity_type", 1), ("entity_id", 1)])
+        # Audit TTL: 1-year retention (operators export before then)
+        await db.audits.create_index("created_at", expireAfterSeconds=31536000)
+        try:
+            await db.audit_log.create_index("timestamp", expireAfterSeconds=31536000)
+        except Exception as _e:
+            # Pre-existing non-TTL index on audit_log.timestamp — leave it alone.
+            pass
         logger.info("Indexes ensured (idempotent)")
     except Exception as e:
         logger.warning(f"Index ensure: {e}")

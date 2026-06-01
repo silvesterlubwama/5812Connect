@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import useIdleTimeout from '../utils/kioskMode';
 import {
   LayoutDashboard, Users, Calendar, CheckSquare, CalendarDays,
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown, ChevronRight,
@@ -123,6 +124,24 @@ export default function Layout() {
   const [expandedSections, setExpandedSections] = useState({});
   const [campuses, setCampuses] = useState([]);
   const [activeCampus, setActiveCampus] = useState(() => localStorage.getItem('5812_active_campus') || '');
+
+  // Inactivity logout — privileged roles get the strictest timeout; rank-and-file staff
+  // get a generous default. Disabled for kiosk roles (they have their own lock screen).
+  const _idleMs = (() => {
+    if (!user) return 0;
+    const role = user.role || '';
+    if (['Security Contractor', 'Guest', 'guest'].includes(role)) return 0; // no idle logout on kiosks
+    if (['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(role)) {
+      return 15 * 60 * 1000;   // 15 min for privileged
+    }
+    return 30 * 60 * 1000;     // 30 min for everyone else
+  })();
+  useIdleTimeout(() => {
+    if (!user) return;
+    toast.warning('Signed out due to inactivity', { duration: 8000 });
+    logout();
+    navigate('/login');
+  }, _idleMs, _idleMs > 0);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('5812_dark_mode') === 'true' || document.documentElement.classList.contains('dark');

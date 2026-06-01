@@ -24,23 +24,71 @@ def _base_html(body: str) -> str:
 
 
 async def send_notification_email(to_email: str, subject: str, body_html: str) -> bool:
-    """Send an email notification via Resend. Returns True on success."""
-    if not RESEND_API_KEY or not to_email:
+    """Send an email notification via the active configured provider.
+    Reads system_settings on every call so admin updates take effect instantly
+    without redeploying. Returns True on success."""
+    if not to_email:
         return False
     try:
-        import resend
-        resend.api_key = RESEND_API_KEY
-        params = {
-            "from": f"{ORG} <{SENDER_EMAIL}>",
-            "to": [to_email],
-            "subject": subject,
-            "html": _base_html(body_html),
-        }
-        await asyncio.to_thread(resend.Emails.send, params)
-        return True
+        from routers.system_settings import get_email_config
+        cfg = await get_email_config()
     except Exception as e:
-        logger.warning(f"Email notification failed to {to_email}: {e}")
-        return False
+        logger.warning(f"email config unavailable, falling back to env: {e}")
+        cfg = {
+            "provider": "resend",
+            "resend_api_key": RESEND_API_KEY,
+            "sender_email": SENDER_EMAIL,
+            "sender_name": ORG,
+        }
+    provider = (cfg.get("provider") or "resend").lower()
+    sender = cfg.get("sender_email") or SENDER_EMAIL
+    sender_name = cfg.get("sender_name") or ORG
+    if provider == "resend":
+        api_key = cfg.get("resend_api_key") or RESEND_API_KEY
+        if not api_key:
+            return False
+        try:
+            import resend
+            resend.api_key = api_key
+            params = {
+                "from": f"{sender_name} <{sender}>",
+                "to": [to_email],
+                "subject": subject,
+                "html": _base_html(body_html),
+            }
+            await asyncio.to_thread(resend.Emails.send, params)
+            return True
+        except Exception as e:
+            logger.warning(f"Resend send failed to {to_email}: {e}")
+            return False
+    elif provider == "smtp":
+        try:
+            import smtplib
+            from email.message import EmailMessage
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = f"{sender_name} <{sender}>"
+            msg["To"] = to_email
+            msg.set_content("(HTML version)")
+            msg.add_alternative(_base_html(body_html), subtype="html")
+            host = cfg.get("smtp_host"); port = cfg.get("smtp_port") or 587
+            user = cfg.get("smtp_user"); password = cfg.get("smtp_password")
+            use_tls = cfg.get("smtp_tls", True)
+            if not host:
+                return False
+            def _send_sync():
+                with smtplib.SMTP(host, port, timeout=15) as srv:
+                    if use_tls:
+                        srv.starttls()
+                    if user and password:
+                        srv.login(user, password)
+                    srv.send_message(msg)
+            await asyncio.to_thread(_send_sync)
+            return True
+        except Exception as e:
+            logger.warning(f"SMTP send failed to {to_email}: {e}")
+            return False
+    return False
 
 
 async def notify_task_assigned(assignee_email: str, assignee_name: str, task_title: str, assigned_by: str, board_name: str = ""):

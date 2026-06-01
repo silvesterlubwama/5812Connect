@@ -6,6 +6,37 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 152 (Jun 1, 2026)
+**Batch B — P1 hardening: security headers + Mongo indexes + inactivity logout + Integrations admin UI (Resend/SMTP/Sentry).**
+
+### Shipped
+1. **Security headers middleware** — every response now carries `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (allow-listing self for camera/mic/serial/HID/USB/BT/geo), `X-XSS-Protection`, and HSTS over HTTPS only. Verified via `curl -I` on `/api/health`.
+2. **Mongo hot-path indexes audited** (`_ensure_indexes`):
+   - `security_checkpoint_events`: `(checkpoint_id, created_at desc)`, `(checkpoint_id, clear_at desc)`, `(checkpoint_id, subject.id, direction, created_at desc)` — visitor-log + state + entry/exit pairing now covered
+   - `sales`: `(location_id, created_at desc)` + `receipt_number` + `customer_id`
+   - `login_attempts` (iter151): `(ip, ok, at desc)` + TTL on `at` (30 days)
+   - `members`: `(role, active_campus_id, status)` + `(kind, status)` + `resident_location_id`
+   - `children`: + `resident_location_id`
+   - `audits` / `audit_log`: 1-year TTL on `created_at`/`timestamp`
+   - `wallet_badges.resident_location_id` (supports the iter151 campus-filter fix)
+3. **Inactivity logout** for staff — `useIdleTimeout` wired into `Layout.jsx`. Privileged roles (Director+) → 15 min; everyone else → 30 min; Security Contractor / Guest kiosks → disabled (they have their own lock screens). Toast warns on auto-logout.
+4. **SystemSettings collection + admin Integrations UI**:
+   - New `routers/system_settings.py`: `GET/PUT /api/admin/system-settings`, `POST /test-email`. Stores Resend / SMTP / Sentry config in `db.system_settings` (single doc, id="default"). Secrets are masked on read (`••••XXXX` + `_set` flag); operator types to replace. Travels with the backup tarball.
+   - `email_helpers.py` now reads from `get_email_config()` on every send — config changes apply instantly without redeploying. Falls back to env vars when DB is empty.
+   - **Sentry init at boot** reads `get_sentry_config()` and initialises `sentry-sdk[fastapi]` if a DSN is set. Added `sentry-sdk==2.61.0` to `requirements.txt` (via pip-freeze).
+   - New `IntegrationsManager` admin card on `/admin` (testid `integrations-card`) → dialog with Email section (Provider / Sender / API key / Send test) + Sentry section (Enable / DSN / Environment / Sample rate).
+
+### Tests / lint
+- 69/69 pytest still green.
+- Ruff (F821/F823/F841/E722/B006) + ESLint clean.
+- Curl-verified security headers present, system-settings endpoint returns masked config.
+- Screenshot-confirmed the Integrations dialog renders with provider switcher, masked API key field, Sentry config + test-email button.
+
+⚠️ **Production redeploy needed**. Post-deploy:
+- Admin → **Integrations & Email** to paste a Resend API key (or SMTP creds) → **Send test email** to verify.
+- Admin → same dialog → tick **Enable Sentry**, paste your DSN, save, restart backend.
+- Inactivity logout fires after 15 min (admin) or 30 min (everyone else) — adjust in `Layout.jsx` if too aggressive.
+
 ## Recently Resolved — Iteration 151 (Jun 1, 2026)
 **Batch A — P0 hardening + daily auto-backup. Pytest 69/69.**
 
