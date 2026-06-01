@@ -6,7 +6,9 @@
 #
 # Catches future contributors who add an EmptyState without wiring its testid,
 # silently losing automated coverage of the empty case. Cheap dev-time check.
-set -e
+# Note: we do NOT use `set -e` because we want to count violations across all
+# files, not abort on the first one.
+set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/frontend/src"
 viol=0

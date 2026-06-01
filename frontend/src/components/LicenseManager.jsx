@@ -67,8 +67,8 @@ export default function LicenseManager() {
     setLoadingHq(true);
     try {
       const [licRes, instRes] = await Promise.all([
-        api.get('/admin/licenses'),
-        api.get('/admin/telemetry/installs'),
+        api.get('/admin/licenses').catch(() => ({ data: [] })),
+        api.get('/admin/telemetry/installs').catch(() => ({ data: { installs: [] } })),
       ]);
       setLicenses(licRes.data || []);
       setInstalls(instRes.data?.installs || []);

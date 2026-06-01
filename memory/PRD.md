@@ -6,6 +6,62 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 160 (Jun 1, 2026)
+**License + Telemetry + EULA + auto-updater + code-signing + EmptyState lint.**
+
+### 1. Telemetry & License Backend (`routers/telemetry.py`)
+- `POST /api/telemetry/heartbeat` — public, anonymous beacon: `{install_id, license_key, org_id, version, user_count, env}`. Returns license status. Per-install 8-hour rate-limit dedup.
+- `GET /api/license/self` — public, returns this install's persisted status.
+- `POST /api/license/configure` — admin only, persists license_key + hq_url + telemetry opt-in. Auto-generates UUID4 install_id on first config.
+- `POST/GET/PUT/DELETE /api/admin/licenses` — admin license CRUD (32-char URL-safe keys, optional expiry, plan, block/unblock with reason).
+- `GET /api/admin/telemetry/installs` — admin install roster with annotated `license_status_obj` + `days_since_last_seen`.
+- License statuses: `valid` / `unlicensed` / `invalid` / `expired` / `blocked` (soft enforcement — never blocks usage).
+- Daily cron at 02:00 UTC (`_fire_telemetry_heartbeat`) sends the beacon to the configured HQ endpoint, persists the server's verdict locally.
+
+### 2. License + Telemetry Admin UI
+- New `/admin → License & Telemetry` card (testid `license-card`) with 3-tab dialog:
+  - **This install** — paste license key + HQ URL, opt-in telemetry, see current status + last heartbeat.
+  - **HQ** — issue/list/block/delete licenses (system admins only — non-admins see graceful empty list).
+  - **Installs** — live roster of every install that's heartbeat'd, with status + version + user_count.
+- New `<LicenseStatusBanner>` mounted globally — shows amber/rose banner above the app shell when self.license_status is `blocked`/`expired`/`invalid`. Dismissible via session-storage. **Never** blocks login or features.
+
+### 3. End User License Agreement (EULA)
+- `/app/desktop/eula/EULA.txt` (+ Markdown copy) — 9-section agreement covering license grant, restrictions, data privacy, updates, warranty, liability, termination, governing law.
+- Wired into `tauri.conf.json`:
+  - `bundle.macOS.license` → DMG installer shows the agreement, user must accept before drag-to-install.
+  - `bundle.windows.nsis.license` → NSIS .exe installer shows mandatory "I accept" radio.
+  - `bundle.windows.wix.license` → WiX .msi shows .rtf version (operator runs `unoconv -f rtf` once).
+- The privacy disclosure (section 3) explicitly mentions the heartbeat + opt-out path, satisfying GDPR-style transparency.
+
+### 4. Auto-updater scaffold
+- `tauri-plugin-updater` added to Cargo.toml + initialized in `src/lib.rs`.
+- `tauri.conf.json` has the plugin block with `active:false` (off by default), endpoint placeholder `https://hq.5812-global.org/releases/{{target}}/{{current_version}}`, pubkey placeholder.
+- README has the full recipe: `cargo tauri signer generate` → paste pubkey → set `TAURI_SIGNING_PRIVATE_KEY` env vars at build time → release JSON shape spec.
+
+### 5. Code-signing scaffold (no-op by default)
+- `tauri.conf.json`:
+  - `bundle.macOS.signingIdentity: null` — set via `APPLE_SIGNING_IDENTITY` env var.
+  - `bundle.windows.certificateThumbprint: null` — set via `WINDOWS_CERT_THUMBPRINT` env var.
+- `desktop/scripts/build-bundle.sh` detects the env vars and exports the matching Tauri bundling vars (`TAURI_BUNDLE_WINDOWS_CERTIFICATE_THUMBPRINT`, etc.). Without them: builds run unsigned (Gatekeeper / SmartScreen warnings on first launch).
+- README documents Apple Developer ID + Windows EV cert acquisition + the full env-var matrix for both.
+
+### 6. EmptyState consistency lint
+- New `/app/scripts/check-empty-states.sh` — fails the build if any `<EmptyState>` JSX call lacks a `testid=` prop. Skips the EmptyState component definition itself (its JSDoc has a usage example). Currently clean across all 8 pages.
+
+### Tests / lint
+- New `tests/test_iteration160_telemetry_license.py` — **11/11 PASS** (heartbeat status branches × 4, rate-limit dedup, license CRUD roundtrip, expired status, admin-gating, install roster, self-status, configure-auth).
+- 31/31 pytest green (16 smoke + 4 branding + 11 telemetry).
+- `check-empty-states.sh` exits 0.
+- ESLint + Ruff clean for all modified files.
+- Testing agent (`iteration_160.json`): **backend 100% / frontend 100%, no critical bugs**. Verified end-to-end on the live preview.
+
+⚠️ **Production redeploy needed** for the License & Telemetry admin UI to land. Tauri changes are scaffold-only — separate desktop build pipeline.
+
+### Continuing per your plan
+- **HQ deployment** — pick the cloud install you want to act as HQ, run it, then issue keys via `/admin → License & Telemetry → HQ`. Hand the keys to partner orgs to paste into their desktop installs.
+- **Release server endpoint** — when you have one, flip `plugins.updater.active=true` in `tauri.conf.json`, generate the signing keypair, and update the placeholder URL.
+- **CI integration** — wire `bash /app/scripts/check-empty-states.sh` into your existing lint-check.sh so future PRs don't drift.
+
 ## Recently Resolved — Iteration 159 (Jun 1, 2026)
 **Option Z scaffold (Tauri + Cloudflare Tunnel) + EmptyState sweep round 2.**
 
