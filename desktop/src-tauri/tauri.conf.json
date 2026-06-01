@@ -37,10 +37,52 @@
     "resources": {
       "../resources/backend/": "backend/",
       "../resources/mongo/": "mongo/",
-      "../resources/cloudflared/": "cloudflared/"
+      "../resources/cloudflared/": "cloudflared/",
+      "../eula/EULA.txt": "EULA.txt"
     },
     "category": "Productivity",
     "shortDescription": "58:12 Connect — self-hosted CRM",
-    "longDescription": "Self-hosted desktop bundle of 58:12 Connect. Spawns a local FastAPI backend + portable MongoDB, optionally exposes the app over a Cloudflare Named Tunnel for remote access."
+    "longDescription": "Self-hosted desktop bundle of 58:12 Connect. Spawns a local FastAPI backend + portable MongoDB, optionally exposes the app over a Cloudflare Named Tunnel for remote access.",
+    "publisher": "58:12 Global",
+    "homepage": "https://5812-global.org",
+    "macOS": {
+      "license": "../eula/EULA.txt",
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": null,
+      "exceptionDomain": null
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US",
+        "license": "../eula/EULA.rtf"
+      },
+      "nsis": {
+        "license": "../eula/EULA.txt",
+        "displayLanguageSelector": false,
+        "languages": ["English"],
+        "installMode": "perMachine"
+      },
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "tsp": false
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "endpoints": [
+        "https://hq.5812-global.org/releases/{{target}}/{{current_version}}"
+      ],
+      "dialog": true,
+      "pubkey": "REPLACE_WITH_PUBKEY_FROM_TAURI_CLI"
+    }
   }
 }
