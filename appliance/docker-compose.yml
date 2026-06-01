@@ -1,0 +1,92 @@
+# 58:12 Connect — appliance compose stack.
+#
+# Boots a self-contained 58:12 Connect deployment on any Docker host (mini PC,
+# Raspberry Pi 5, VPS). LAN users browse to http://<host>/, remote users get a
+# Cloudflare Tunnel URL when CLOUDFLARED_TOKEN is set.
+#
+# Bring up:    docker compose up -d
+# Tear down:   docker compose down            (keeps data)
+# Wipe data:   docker compose down -v         (DESTROYS the database)
+#
+# Persistent data (survives `docker compose down`):
+#   ./data/mongo     → MongoDB datafiles
+#   ./data/uploads   → User-uploaded files (photos, documents, badges)
+#   ./data/backups   → Daily auto-backups from the iter-150 backup feature
+#   ./data/caddy     → Let's Encrypt certs + Caddy state
+
+name: connect
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - ./data/mongo:/data/db
+    # Bind to internal network only — never expose 27017 to the host
+    expose:
+      - "27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/5812-global/connect-backend:latest}
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: ${DB_NAME:-connect}
+      JWT_SECRET: ${JWT_SECRET}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SENDER_EMAIL: ${SENDER_EMAIL:-}
+      EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}
+      NFC_SECRET_KEY: ${NFC_SECRET_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_EMAIL: ${VAPID_EMAIL:-}
+      APP_VERSION: ${APP_VERSION:-appliance}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - ./data/uploads:/app/uploads
+      - ./data/backups:/app/backups
+    expose:
+      - "8001"
+    # No host-port mapping — Caddy reverse-proxies; backend stays internal.
+
+  caddy:
+    image: ${FRONTEND_IMAGE:-ghcr.io/5812-global/connect-frontend:latest}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.org}
+      BACKEND_UPSTREAM: backend:8001
+    volumes:
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+
+  # Optional — only spawned when CLOUDFLARED_TOKEN is set in .env.
+  # Replaces "open a firewall port" with an outbound-only tunnel to
+  # https://<your-subdomain>.5812-global.org or wherever.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - caddy
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN:-}
+    profiles:
+      - tunnel
+    # Profile-gated: bring up with `docker compose --profile tunnel up -d`
+    # OR set COMPOSE_PROFILES=tunnel in your .env so plain `docker compose up`
+    # also starts it.
+
+networks:
+  default:
+    name: connect-net

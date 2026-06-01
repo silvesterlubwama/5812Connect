@@ -1,0 +1,41 @@
+# Build the FastAPI backend as a slim production image.
+# Used by appliance/docker-compose.yml. Built + published to GHCR via
+# .github/workflows/docker-publish.yml on every git tag.
+#
+# Targets x86_64 + arm64 (Pi 4 / Pi 5) via Buildx in CI.
+FROM python:3.11-slim AS runtime
+
+# Native deps for weasyprint (PDF export) + pillow + pycairo
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
+        libffi-dev libssl-dev libjpeg-dev zlib1g-dev \
+        fonts-liberation curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python deps — copy requirements first so layer is cached across code changes.
+# emergentintegrations is already pinned in requirements.txt and resolves from
+# its CDN extra-index — declared via pip config below.
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir \
+        --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+        -r /app/requirements.txt
+
+# App source
+COPY backend/ /app/
+
+# Uploads + backups directories (mounted as volumes at runtime)
+RUN mkdir -p /app/uploads /app/backups
+
+ENV HOST=0.0.0.0 \
+    PORT=8001 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8001
+
+# Healthcheck — Caddy + Cloudflare both rely on this.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8001/api/health || exit 1
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001", "--log-level", "info", "--proxy-headers", "--forwarded-allow-ips", "*"]

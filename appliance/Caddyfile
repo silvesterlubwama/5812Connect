@@ -1,0 +1,101 @@
+# Caddyfile — appliance front door.
+#
+# Serves the React SPA from /srv, reverse-proxies /api/* to the backend
+# container, and (when ENABLE_TLS=true) auto-provisions a Let's Encrypt cert
+# for $SITE_DOMAIN. For pure-LAN appliances leave SITE_DOMAIN unset and Caddy
+# will bind to :80 in plain HTTP — partner orgs without a public hostname can
+# still use the system without any cert wrangling.
+#
+# Variables expanded from docker-compose env:
+#   SITE_DOMAIN       e.g. connect.5812-global.org (omit for LAN-only)
+#   ACME_EMAIL        contact email for Let's Encrypt registration
+#   BACKEND_UPSTREAM  internal upstream (defaults to backend:8001)
+
+{
+    email {$ACME_EMAIL:-admin@example.org}
+    # Disable admin endpoint in production
+    admin off
+}
+
+# ─────────────────────────────────────────────────────────────────
+# HTTPS site (only active when SITE_DOMAIN is set in .env)
+# ─────────────────────────────────────────────────────────────────
+{$SITE_DOMAIN:appliance.local} {
+    # Health endpoint — used by Docker healthcheck (returns 200 even when backend is down)
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    # API: pass-through with WebSocket upgrade support for /api/ws/*
+    handle_path /api/* {
+        reverse_proxy {$BACKEND_UPSTREAM:backend:8001} {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Raw WebSocket route (Comms / live updates)
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websocket {
+        reverse_proxy {$BACKEND_UPSTREAM:backend:8001}
+    }
+
+    # SPA: serve the built React bundle, falling back to index.html for
+    # client-side routes (/admin, /dashboard, etc.).
+    handle {
+        root * /srv
+        encode zstd gzip
+        try_files {path} /index.html
+        file_server
+    }
+
+    # Security headers — mirror the backend middleware so direct hits to
+    # static assets are also hardened.
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(self), microphone=(self), serial=(self), hid=(self), usb=(self), geolocation=(self)"
+        -Server
+    }
+
+    log {
+        output stdout
+        format console
+        level INFO
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Plain HTTP on :80 for LAN-only deployments
+# (Caddy serves the same routes without TLS when no SITE_DOMAIN is set.)
+# ─────────────────────────────────────────────────────────────────
+:80 {
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    handle_path /api/* {
+        reverse_proxy {$BACKEND_UPSTREAM:backend:8001}
+    }
+
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websocket {
+        reverse_proxy {$BACKEND_UPSTREAM:backend:8001}
+    }
+
+    handle {
+        root * /srv
+        encode zstd gzip
+        try_files {path} /index.html
+        file_server
+    }
+}

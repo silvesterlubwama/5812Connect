@@ -1,0 +1,40 @@
+# Build the React frontend + bake it into a Caddy image that also handles
+# TLS termination and the reverse-proxy to the FastAPI backend.
+#
+# Two stages:
+#   1. node:20 builds the React bundle with REACT_APP_BACKEND_URL=''
+#      (empty string → axios issues relative paths → Caddy proxies /api/* to backend)
+#   2. caddy:2-alpine serves the static bundle + acts as the front door.
+FROM node:20-alpine AS builder
+
+WORKDIR /src
+COPY frontend/package.json frontend/yarn.lock /src/
+# corepack/yarn 1 is already in the base image
+RUN yarn install --frozen-lockfile --network-timeout 600000
+
+COPY frontend/ /src/
+
+# REACT_APP_BACKEND_URL='' produces relative-path API calls — perfect for an
+# appliance where the same hostname serves both the SPA and the API. If a
+# partner-org wants to host the SPA on a separate origin, override at build:
+#   docker compose build --build-arg REACT_APP_BACKEND_URL=https://api.example.org
+ARG REACT_APP_BACKEND_URL=""
+ENV REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL}
+
+# CRA disable source maps in production (smaller image, faster deploy)
+ENV GENERATE_SOURCEMAP=false
+RUN yarn build
+
+
+FROM caddy:2-alpine AS runtime
+
+# Drop the build into Caddy's default web root
+COPY --from=builder /src/build /srv
+
+# Configuration lands here — the docker-compose service overrides it via volume mount
+COPY appliance/Caddyfile /etc/caddy/Caddyfile
+
+EXPOSE 80 443
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -q --spider http://127.0.0.1/healthz || exit 1

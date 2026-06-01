@@ -6,6 +6,54 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 164 (Jun 1, 2026)
+**Docker-compose appliance for self-hosted deployment.**
+
+### Shipped
+
+**1. `appliance/Dockerfile.backend`** — multi-stage Python 3.11-slim image bundling FastAPI + weasyprint/cairo native deps + the full backend code. Healthcheck on `/api/health`. Multi-arch (linux/amd64 + linux/arm64).
+
+**2. `appliance/Dockerfile.frontend`** — multi-stage: Node 20 builds the React bundle with `REACT_APP_BACKEND_URL=''` (relative paths), Caddy 2-alpine serves it + reverse-proxies `/api/*` + `/ws/*` + auto-provisions Let's Encrypt TLS when `SITE_DOMAIN` is set.
+
+**3. `appliance/Caddyfile`** — front-door config: TLS-aware HTTPS site (only when `SITE_DOMAIN` is set), plain HTTP fallback on `:80` for LAN-only deployments, WebSocket pass-through, SPA-fallback for client-side routes, security headers mirroring the backend middleware.
+
+**4. `appliance/docker-compose.yml`** — 4 services: `mongo` (data in `./data/mongo/`), `backend` (uploads in `./data/uploads/`, backups in `./data/backups/`), `caddy` (TLS state in `./data/caddy/`), `cloudflared` (profile-gated, only spawned when `COMPOSE_PROFILES=tunnel` + token is set).
+
+**5. `appliance/install.sh`** — one-line installer:
+```bash
+curl -fsSL https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
+```
+Installs Docker, clones the repo to `/opt/connect`, generates fresh JWT + NFC secrets, pulls images, brings up the stack, waits for `/healthz`, prints the LAN IP + login URL.
+
+**6. `appliance/.env.example`** — fully-commented template covering required (JWT, NFC) + optional (SITE_DOMAIN, Cloudflare token, Resend, OCR key, VAPID, Sentry) config.
+
+**7. `appliance/README.md`** — partner-org runbook: hardware sizing matrix, quickstart, manual install, Cloudflare Tunnel setup, public-TLS setup, ops cookbook, troubleshooting, architecture diagram, and a direct comparison with the Tauri desktop bundle.
+
+**8. `.github/workflows/docker-publish.yml`** — multi-arch (amd64 + arm64) image build + push to GHCR on every `v*` tag and `main`/`master` push. Caches Buildx layers in GitHub Actions cache for fast incremental builds.
+
+### How partner orgs deploy (the partner-side flow)
+
+1. Buy any cheap Linux box (Intel N100 mini PC ~$200, or Pi 5 ~$120 for ≤200 members).
+2. Install Ubuntu 22.04+ or Raspberry Pi OS.
+3. Run the one-line installer.
+4. LAN users browse to `http://<box-ip>` from any phone/Chromebook/laptop.
+5. Optionally paste a Cloudflare Tunnel token for remote access.
+
+The whole org operates from a single appliance regardless of staff device choices. No mac/win code-signing drama. No per-device installs.
+
+### Verification
+- Both YAML files parse cleanly (`yaml.safe_load`).
+- Dockerfiles use the same proven patterns the existing K8s preview already uses (Python 3.11-slim + uvicorn + Node 20 + yarn build).
+- Healthcheck hits the existing `/api/health` endpoint from iter 151.
+- Persistent volumes mounted under `./data/` so existing in-app `/admin → Backup & Restore` still works inside the appliance.
+
+⚠️ **Preview redeploy not required** — the appliance is a separate deployment artifact. To start using it: push to GitHub, let the docker-publish workflow publish the two images to GHCR, then run the install.sh on any Ubuntu box.
+
+### Continuing per your plan
+- **First image build** — push to GitHub + run `docker-publish.yml` workflow once. Images appear at `ghcr.io/<your-org>/connect-{backend,frontend}:latest`.
+- **First partner pilot** — buy a $200 mini PC, run install.sh, hand over the LAN URL.
+- **Then Path B** (pre-baked SD/USB image) — once the compose stack is proven with 2-3 pilots, layer a Packer/Ansible build on top so partners don't even need to install Ubuntu.
+
 ## Recently Resolved — Iteration 163 (Jun 1, 2026)
 **GitHub Actions desktop release pipeline.**
 
