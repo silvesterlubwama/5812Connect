@@ -6,6 +6,42 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 163 (Jun 1, 2026)
+**GitHub Actions desktop release pipeline.**
+
+### What shipped
+
+**1. `.github/workflows/desktop-release.yml`** — matrix build across macOS, Windows, Ubuntu. Triggered by any `v*` tag push or manual `workflow_dispatch`.
+
+Per platform the workflow:
+- Installs Rust + Node 20 + Python 3.11.
+- Linux: installs `libwebkit2gtk-4.1-dev` + GTK / appindicator dev headers.
+- PyInstaller-bundles `backend/server.py` → `desktop/resources/backend/server[.exe]`.
+- `yarn build`s the frontend → `desktop/dist/`.
+- Downloads matching portable `mongod` from fastdl.mongodb.org.
+- Downloads matching `cloudflared` from the official GitHub releases.
+- Runs `tauri-apps/tauri-action@v0` → produces installers (.dmg / .msi / .nsis / .deb / .AppImage) + `latest.json` for the auto-updater + uploads them as a **draft release**.
+
+Code-signing + auto-updater signing are env-var-driven, no-op without the secrets — same scaffold as the local `build-bundle.sh`. README lists the exact secret names for Apple Dev ID + Windows EV cert + Tauri updater key.
+
+**2. `.github/workflows/ci.yml`** — added `EmptyState testid coverage` step calling `bash scripts/check-empty-states.sh` to keep the lint gate in sync with the local `lint-check.sh` (3 stages now: ruff → eslint → check-empty-states).
+
+**3. `desktop/RELEASING.md`** — operator runbook: how to cut a release, what secrets to set, where the download link lives (GitHub Releases URL), troubleshooting matrix.
+
+### Verification
+- Both workflow YAML files parse cleanly (`python -c "import yaml; yaml.safe_load(open(p))"`).
+- The local lint gate (`bash scripts/lint-check.sh`) already exercises identical steps to step 1-2 of CI.
+
+### How partner orgs get the desktop binary
+
+1. **You**: push `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
+2. **GitHub Actions**: ~15 min later, draft release appears with 5 installers + `latest.json`.
+3. **You**: smoke-test on one box, click "Publish release" in the GitHub UI.
+4. **Partner orgs**: download from `https://github.com/<your-org>/<repo>/releases/latest`.
+5. **You**: drop that URL into your WordPress site, the cloud `/downloads` page, or hand it to ops directly.
+
+⚠️ **Production redeploy not required for this iteration** — the workflow only runs in GitHub. Repo just needs to be pushed to GitHub (use the platform's "Save to Github" feature) and the secrets configured (or left blank for unsigned dev builds).
+
 ## Recently Resolved — Iteration 162 (Jun 1, 2026)
 **USB device pairing with role assignment.**
 

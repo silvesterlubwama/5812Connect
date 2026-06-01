@@ -1,0 +1,210 @@
+name: Desktop Release
+
+# Trigger: push a semver tag (e.g. v0.1.0) to cut a release.
+# Manual: workflow_dispatch lets you also kick it off from the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to build (e.g. v0.1.0). Used only for manual runs.'
+        required: false
+        default: 'v0.0.0-manual'
+
+permissions:
+  contents: write  # needed to create the GitHub Release
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # Build matrix — produces native installers for macOS / Windows / Linux.
+  # ──────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest      # arm64 + universal slice
+            target: aarch64-apple-darwin
+            mongo_url: https://fastdl.mongodb.org/osx/mongodb-macos-arm64-7.0.14.tgz
+            mongo_inner_dir: mongodb-macos-aarch64-7.0.14
+            cloudflared_url: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz
+            cloudflared_is_tgz: 'true'
+            cloudflared_bin: cloudflared
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            mongo_url: https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-7.0.14.tgz
+            mongo_inner_dir: mongodb-linux-x86_64-ubuntu2204-7.0.14
+            cloudflared_url: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+            cloudflared_is_tgz: 'false'
+            cloudflared_bin: cloudflared
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            mongo_url: https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-7.0.14.zip
+            mongo_inner_dir: mongodb-win32-x86_64-windows-7.0.14
+            cloudflared_url: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
+            cloudflared_is_tgz: 'false'
+            cloudflared_bin: cloudflared.exe
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Toolchains ──────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+          cache-dependency-path: frontend/yarn.lock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      # ── Platform-specific build deps ────────────────────────────────
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      # ── Backend bundling (PyInstaller) ──────────────────────────────
+      - name: Install backend Python deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0
+
+      - name: Build backend binary (PyInstaller)
+        working-directory: backend
+        shell: bash
+        run: |
+          pyinstaller --onefile --name server \
+            --hidden-import "uvicorn.logging" \
+            --hidden-import "uvicorn.loops" \
+            --hidden-import "uvicorn.loops.auto" \
+            --hidden-import "uvicorn.protocols" \
+            --hidden-import "uvicorn.protocols.http" \
+            --hidden-import "uvicorn.protocols.http.auto" \
+            --hidden-import "uvicorn.protocols.websockets" \
+            --hidden-import "uvicorn.protocols.websockets.auto" \
+            --hidden-import "uvicorn.lifespan" \
+            --hidden-import "uvicorn.lifespan.on" \
+            --collect-all "emergentintegrations" \
+            --collect-all "weasyprint" \
+            --collect-all "resend" \
+            server.py
+          mkdir -p ../desktop/resources/backend
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp dist/server.exe ../desktop/resources/backend/server.exe
+          else
+            cp dist/server ../desktop/resources/backend/server
+            chmod +x ../desktop/resources/backend/server
+          fi
+
+      # ── Frontend build ──────────────────────────────────────────────
+      - name: Build frontend
+        working-directory: frontend
+        shell: bash
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+          mkdir -p ../desktop/dist
+          cp -r build/* ../desktop/dist/
+
+      # ── Portable mongod (per platform) ──────────────────────────────
+      - name: Download portable MongoDB
+        shell: bash
+        run: |
+          set -e
+          mkdir -p desktop/resources/mongo
+          curl -L "${{ matrix.mongo_url }}" -o mongo-archive
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            unzip -q mongo-archive
+            cp "${{ matrix.mongo_inner_dir }}/bin/mongod.exe" desktop/resources/mongo/mongod.exe
+          else
+            tar -xzf mongo-archive
+            cp "${{ matrix.mongo_inner_dir }}/bin/mongod" desktop/resources/mongo/mongod
+            chmod +x desktop/resources/mongo/mongod
+          fi
+          rm -rf mongo-archive "${{ matrix.mongo_inner_dir }}"
+
+      # ── Portable cloudflared (per platform) ─────────────────────────
+      - name: Download cloudflared
+        shell: bash
+        run: |
+          set -e
+          mkdir -p desktop/resources/cloudflared
+          if [ "${{ matrix.cloudflared_is_tgz }}" = "true" ]; then
+            curl -L "${{ matrix.cloudflared_url }}" -o cflared.tgz
+            tar -xzf cflared.tgz
+            mv cloudflared desktop/resources/cloudflared/${{ matrix.cloudflared_bin }}
+          else
+            curl -L "${{ matrix.cloudflared_url }}" -o desktop/resources/cloudflared/${{ matrix.cloudflared_bin }}
+          fi
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            chmod +x desktop/resources/cloudflared/${{ matrix.cloudflared_bin }}
+          fi
+
+      # ── Sanity-check the resource tree before tauri build ───────────
+      - name: List bundled resources
+        shell: bash
+        run: |
+          echo "--- desktop/resources ---"
+          ls -la desktop/resources/ desktop/resources/*/ || true
+          echo "--- desktop/dist (first 5) ---"
+          ls desktop/dist/ | head -5
+
+      # ── Tauri build (cargo tauri build + bundle + sign + upload) ────
+      - name: Build & upload Tauri bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ─── Code signing (no-op unless org secrets are set) ─────
+          # macOS:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows EV:
+          TAURI_BUNDLE_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          # Auto-updater signing (optional):
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+          releaseName: '58:12 Connect ${{ github.ref_name }}'
+          releaseBody: |
+            **Automated build.** Installers are unsigned unless org secrets for
+            Apple / Windows / Tauri-updater are configured.
+
+            See `desktop/README.md` for install instructions.
+          releaseDraft: true        # create as draft → publish manually after smoke-testing
+          prerelease: false
+          includeUpdaterJson: true  # also produces latest.json for the auto-updater
+          args: --target ${{ matrix.target }}
