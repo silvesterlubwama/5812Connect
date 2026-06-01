@@ -6,6 +6,54 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 159 (Jun 1, 2026)
+**Option Z scaffold (Tauri + Cloudflare Tunnel) + EmptyState sweep round 2.**
+
+### 1. Tauri desktop wrapper scaffold (`/app/desktop/`)
+A complete scaffold for self-hosted desktop bundles (`.exe` / `.dmg` / `.AppImage`):
+
+- **`src-tauri/Cargo.toml`** — Tauri v2 with `tauri-plugin-shell` + reqwest for backend health checks.
+- **`src-tauri/tauri.conf.json`** — declares the bundle resources (backend / mongo / cloudflared) and the bundle target matrix (msi/nsis/deb/appimage/dmg).
+- **`src-tauri/src/lib.rs`** — Rust shell that on launch:
+  1. Spawns portable `mongod` listening on `127.0.0.1:27017`
+  2. Spawns the PyInstaller-bundled FastAPI backend on `127.0.0.1:8001`
+  3. Waits for `/api/health` (20 s timeout), then opens the Tauri webview
+  4. Exposes Tauri commands `services_status`, `start_cloudflare_tunnel(config_yaml)`, `stop_cloudflare_tunnel`
+  5. Cleanly kills child processes (cloudflared → backend → mongod) on quit
+- **`scripts/build-bundle.sh`** — host-side build helper: PyInstaller-bundles the backend, runs `yarn build`, validates `mongod` + `cloudflared` resources are present, then runs `cargo tauri build`.
+- **`README.md`** — full setup recipe (install prereqs, drop platform binaries, build, install, configure Cloudflare Tunnel via the admin UI).
+
+### 2. Cloudflare Tunnel admin UI (`RemoteAccessManager.jsx`)
+- New admin card on `/admin` (testid `remote-access-card`).
+- **Auto-hides on cloud builds** — the card returns `null` when `window.__TAURI__` is absent, so the production preview is unaffected.
+- Inside Tauri: dialog with a YAML textarea for the cloudflared config + service-status row (mongo / backend / tunnel) + start/stop buttons. Persists last-used config to `localStorage` and to `${app_data_dir}/cloudflared/config.yml` on save.
+- Status polled every 4 s via the `services_status` Tauri command.
+
+### 3. EmptyState rollout — round 2 (10 more placeholders)
+- **CommsPage** — announcements / messages / conversations sidebar / thread replies (4)
+- **TasksPage** — boards sidebar with "New board" CTA
+- **SettingsPage** — venues tab with "Add your first venue" CTA
+- **SponsorPortalPage** — updates list
+- **FinancialPage** — transfers table (kept as table-row variant since table context)
+- Plus iter-158 stragglers (already shipped in this iteration's commit chain)
+
+### Build / cloud impact
+- **Cloud bundle is unaffected.** No webpack imports of `/app/desktop/`, RemoteAccessManager hides itself, no Tauri APIs statically imported.
+- **Production redeploy needed** for the EmptyState rollout to be visible.
+- Desktop bundle build is **NOT** runnable in the K8s preview — it requires a real Windows / macOS / Linux host with Rust + PyInstaller installed plus the platform-matching `mongod` + `cloudflared` binaries dropped into `desktop/resources/`. The recipe is in `desktop/README.md`.
+
+### Tests / lint
+- 20/20 regression green (4/4 branding + 16/16 smoke).
+- ESLint clean for all 7 modified frontend files + RemoteAccessManager.
+- Testing agent (`iteration_159.json`): backend 100% / frontend 100%, no bugs. Verified `remote-access-card` is correctly absent in cloud DOM. All pre-existing admin cards still render intact.
+
+⚠️ **Production redeploy needed** for the EmptyState changes. The Tauri bundle is a parallel artifact — built separately on a desktop OS and installed by partner orgs.
+
+### Continuing per your plan
+- **Per-platform build runs**: when you have a Mac/Windows/Linux host ready, drop the `mongod` + `cloudflared` binaries into `desktop/resources/{mongo,cloudflared}/` and run `bash desktop/scripts/build-bundle.sh`. The recipe will produce installers ready for code-signing.
+- **Tauri code signing** (Apple Developer ID, Windows EV cert) — organisational decisions, scaffolded as no-op for now.
+- **Tauri auto-updater** — recipe is in the README; wire up `tauri-plugin-updater` once you have a release server URL.
+
 ## Recently Resolved — Iteration 158 (Jun 1, 2026)
 **Triple polish: EmptyState rollout + members.py modularization + overdue-task cron upgrade.**
 
