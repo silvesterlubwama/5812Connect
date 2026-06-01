@@ -18,6 +18,7 @@ import { UserCreateDialog } from '../components/admin/UserCreateDialog';
 import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
 import KioskLinksManager from '../components/KioskLinksManager';
+import BackupRestoreManager from '../components/BackupRestoreManager';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 
@@ -345,6 +346,7 @@ export default function AdminPage() {
           <ModuleAccessManager />
           <SecurityCheckpointsManager />
           <KioskLinksManager />
+          <BackupRestoreManager />
         </>
       )}
     </div>

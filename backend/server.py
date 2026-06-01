@@ -497,6 +497,7 @@ try:
     from routers.activity import router as activity_router
     from routers.sponsor_portal import router as sponsor_links_router, public_router as sponsor_portal_router
     from routers.security_checkpoint import router as security_checkpoint_router, ocr_router
+    from routers.backup import router as backup_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -515,6 +516,7 @@ try:
     app.include_router(sponsor_portal_router)
     app.include_router(security_checkpoint_router)
     app.include_router(ocr_router)
+    app.include_router(backup_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

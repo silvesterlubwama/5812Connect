@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 150 — Backup & Restore (admin only). Backend pytest 13/13 passing (preview, export, import gates [missing pwd 422, wrong pwd 401, corrupt 400, future-version 400], dry-run no-write, merge round-trip {read>0, errors=0, updated dominates inserted}, snapshot list+download, replace mode drop+restore via mongo sentinel). Regression suites (test_smoke_recent_modules + test_iteration91_security_checkpoint + test_iteration141_security_unification) = 57/57 passing. Frontend playwright e2e 8/8 passing: admin login → /admin → backup-restore-card click → dialog opens → preview summary populated (108 collections / 7,357 docs / 5 upload files) → export button triggers .tar.gz download (250KB) → restore form upload+password enables submit-btn → dry-run import returns report panel with read/inserted/updated/errors totals → snapshots list shows 11 pre-restore snapshots with download buttons.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration150_backup_restore.py",
+    "/app/test_reports/pytest/iter150_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backup.py is 387 lines and self-contained — within bounds, no split needed.",
+    "Export response uses Content-Type application/gzip (correct) and the streaming attachment header.",
+    "Manifest shape matches spec including {version:1, exported_at, exported_by_id/name, include_audit, source_db, collections[], uploads_files, uploads_bytes}.",
+    "_NEVER_BACKUP correctly excludes sessions, push_subscriptions, notifications, security_pair_attempts, fingerprint_data, and fs.* prefixed collections — verified both via /preview output and via tarball contents.",
+    "Dry-run import correctly does NOT auto-save a pre-restore snapshot (snapshot_path is null/empty), whereas non-dry-run does — good safety invariant.",
+    "Replace mode verified: dropped collection re-inserts only the docs in the backup; a post-backup sentinel was confirmed removed and a pre-backup sentinel was confirmed restored.",
+    "Password gating: missing password → 422 (FastAPI form validation), wrong password → 401, valid password proceeds. Auth invariants holding.",
+    "Tarball validation: a bare 'not-a-real-tarball-just-some-bytes' payload returns 400 (not 500). A mutated manifest.version=999 returns 400.",
+    "Minor doc-friendly suggestion (non-blocking): the import report panel computes totals via Object.values(report.collections).reduce(...) — if backend ever emits a non-{} value per collection (e.g. error string), the .read/.inserted accesses on undefined would NaN; the current backend always emits {read,inserted,updated,errors} so this is fine today."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration150_backup_restore.py"
+  ],
+  "success_rate": {"backend": "100% (13/13 + 57/57 regression)", "frontend": "100% (8/8 e2e)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "TEST_iter150_A_* / TEST_iter150_B_* sentinels were inserted into the 'audits' collection and cleaned up in the test's finally block; non-admin test users registered with prefix test_iter150_nonadmin_*@example.com (Guest role). Pre-restore snapshots produced by the test runs remain in /app/backend/backups/ (intentional — used by the snapshot list/download tests).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter150 baseline is GREEN end-to-end. Backend test file is /app/backend/tests/test_iteration150_backup_restore.py — reuse for regression. Note: /api/users does NOT exist; non-admin test users must be created via /api/auth/register (they get role=Guest which is correctly rejected by require_admin → 403). Login response key is 'token' (not 'access_token'). MONGO_URL/DB_NAME are not exported into pytest's env so the test reads them from /app/backend/.env directly for the direct-mongo replace-mode test.",
+  "rca of the issue": "N/A — no defects observed. Initial round of the replace-mode test (using a pre-backup snapshot and a post-backup sentinel insert) had an unintended false-negative: the pre-restore snapshot itself contained the sentinel, so after replace+restore the collection state matched the post-sentinel state. Re-designed the test as: insert A → export → insert B → replace-restore → assert A present, B absent. This correctly validates drop-then-reinsert semantics."
+}
