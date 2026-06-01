@@ -6,6 +6,48 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 150 (Jun 1, 2026)
+**Configuration Backup & Restore — admin only. 78/78 tests green (13 new + 57 regression + 8 e2e).**
+
+### Why
+Operators need to move data between deployments — preview ↔ production, cloud ↔ self-hosted Tauri, disaster-recovery rollback. Single `.tar.gz` they can hand off / store off-site / re-import.
+
+### Backend (`routers/backup.py`)
+- `GET /api/admin/backup/preview` — per-collection doc counts + uploads size for the export sizing UI.
+- `POST /api/admin/backup/export` — streams a single `.tar.gz`:
+  - `manifest.json` (version + exporter + collection list + counts)
+  - `collections/<name>.jsonl` for every user collection (one JSON doc per line — safe for huge collections)
+  - `uploads/<path>` — every file under `/app/backend/uploads/`
+- `POST /api/admin/backup/import` (multipart) — body: `file, mode='merge'|'replace', admin_password, include_audit, dry_run`:
+  - **Re-asks for the admin password** and re-verifies via bcrypt (`verify_password`) — guards against stolen-token misuse.
+  - **`merge` mode** upserts each doc by its `id` field.
+  - **`replace` mode** drops the target collection before re-inserting — verified semantics by sentinel insertion test.
+  - **`dry_run`** parses + counts but does not write.
+  - Returns per-collection `{read, inserted, updated, errors}` + the first 30 error messages + `snapshot_path`.
+- **Pre-restore snapshot**: every non-dry-run import auto-saves a fresh tarball to `/app/backend/backups/` so the operator can roll back.
+- `GET /api/admin/backup/snapshots` + `GET /api/admin/backup/snapshots/{fn}/download` for that rollback.
+- **`_NEVER_BACKUP`** excludes `sessions`, `push_subscriptions`, `notifications`, `security_pair_attempts`, `fingerprint_data`, `fs.*` — runtime state that shouldn't (and can't safely) travel.
+- **`_AUDIT_COLLECTIONS`** opt-in via the `include_audit` flag (audits, task_overdue_emails, checkin_logs).
+
+### Frontend (`components/BackupRestoreManager.jsx`)
+- New **Backup & Restore** card on `/admin` (testid `backup-restore-card`).
+- Dialog (`backup-restore-dialog`) shows:
+  - **Preview summary**: collections / docs / uploads-bytes
+  - **Export section**: include-audit checkbox + Download backup
+  - **Restore section**: file picker + Mode (Merge / Replace) + Admin password + Dry-run checkbox
+  - **Pre-restore Snapshots**: list of auto-saved snapshots with one-click Download
+- Replace+non-dry-run prompts a `confirm()` before submission. Dry-run renders an inline report panel showing read / inserted / updated / errors.
+
+### Verified end-to-end
+- Backend round-trip: export → 236KB tarball with 122 collections + 5 upload files; merge re-import returned `{read:4930, updated:4783, inserted:147, errors:0}`.
+- Testing agent: 13/13 backend cases (auth, password gate, dry-run, merge, replace with sentinel verification, snapshots, corrupted tarball → 400, future-version manifest → 400) + 8/8 e2e (UI flow including download trigger).
+- 57/57 regression still green.
+- Ruff + ESLint clean.
+
+⚠️ **Production redeploy needed**. Post-deploy:
+- `/admin → Backup & Restore → Download backup` whenever you want a portable copy. Recommended weekly + before major changes.
+- To move data: download from one deployment, upload to the other, dry-run first, then real merge or replace.
+
 ## Recently Resolved — Iteration 149 (May 31, 2026)
 **Comprehensive Device Diagnostics + Kiosk PIN-unlock via QR.**
 
