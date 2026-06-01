@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useBranding } from '../context/BrandingContext';
 import { secureStorage } from '../services/secureStorage';
 import { Eye, EyeOff, Monitor, Users, Fingerprint } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -12,6 +13,7 @@ import { toast } from 'sonner';
 
 export default function LoginPage() {
   const { login, setUser } = useAuth();
+  const { branding } = useBranding();
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -100,12 +102,14 @@ export default function LoginPage() {
         <Card className="shadow-soft rounded-xl">
           <CardHeader className="text-center pb-4">
             <img
-              src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1"
-              alt="58:12 Global"
+              src={branding?.logo_url || 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'}
+              alt={branding?.app_name || '58:12 Global'}
               className="mx-auto h-16 w-auto object-contain mb-3"
+              data-testid="login-logo"
+              onError={(e) => { e.target.onerror = null; e.target.src = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'; }}
             />
-            <CardTitle className="text-2xl font-semibold font-heading">58:12 Global Connect</CardTitle>
-            <CardDescription>Sign in to access the management system</CardDescription>
+            <CardTitle className="text-2xl font-semibold font-heading" data-testid="login-app-name">{branding?.app_name || '58:12 Global Connect'}</CardTitle>
+            <CardDescription>{branding?.tagline || 'Sign in to access the management system'}</CardDescription>
           </CardHeader>
 
           <CardContent className="space-y-4">
@@ -203,7 +207,7 @@ export default function LoginPage() {
             </div>
           </CardContent>
         </Card>
-        <p className="text-center text-xs text-muted-foreground mt-6">58:12 Global</p>
+        <p className="text-center text-xs text-muted-foreground mt-6">{branding?.app_name || '58:12 Global'}</p>
       </div>
     </div>
   );

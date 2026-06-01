@@ -454,7 +454,13 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className={`fixed lg:static inset-y-0 left-0 z-30 flex flex-col w-60 bg-card border-r border-border transform transition-transform duration-200 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="flex items-center gap-2 px-4 py-3.5 border-b border-border">
-          <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1" alt="58:12 Global" className="h-7 w-auto object-contain" />
+          <img
+            src={branding?.logo_url || 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1'}
+            alt={branding?.app_name || '58:12 Global'}
+            className="h-7 w-auto object-contain max-w-[140px]"
+            data-testid="sidebar-logo"
+            onError={(e) => { e.target.onerror = null; e.target.src = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1'; }}
+          />
           <button className="lg:hidden ml-auto text-muted-foreground" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
 

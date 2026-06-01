@@ -5,9 +5,11 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { authApi } from '../services/api';
+import { useBranding } from '../context/BrandingContext';
 import { toast } from 'sonner';
 
 export default function ResetPasswordPage() {
+  const { branding } = useBranding();
   const [email, setEmail] = useState('');
   const [step, setStep] = useState('email'); // email | code | done
   const [resetCode, setResetCode] = useState('');
@@ -45,7 +47,12 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-md">
         <Card className="shadow-soft rounded-xl">
           <CardHeader className="text-center">
-            <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1" alt="58:12 Global" className="mx-auto h-14 w-auto object-contain mb-3" />
+            <img
+              src={branding?.logo_url || 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'}
+              alt={branding?.app_name || '58:12 Global'}
+              className="mx-auto h-14 w-auto object-contain mb-3"
+              onError={(e) => { e.target.onerror = null; e.target.src = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'; }}
+            />
             <CardTitle className="text-xl font-semibold">Reset Password</CardTitle>
             <CardDescription>{step === 'email' ? 'Enter your email to receive a reset code' : step === 'code' ? 'Enter the code sent to your email' : 'Password reset complete'}</CardDescription>
           </CardHeader>

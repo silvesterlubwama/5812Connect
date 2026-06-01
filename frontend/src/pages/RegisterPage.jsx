@@ -33,9 +33,14 @@ export default function RegisterPage() {
       <div className="w-full max-w-md">
         <Card className="shadow-soft rounded-xl">
           <CardHeader className="text-center">
-            <img src="https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1" alt="58:12 Global" className="mx-auto h-14 w-auto object-contain mb-3" />
+            <img
+              src={branding?.logo_url || 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'}
+              alt={branding?.app_name || '58:12 Global'}
+              className="mx-auto h-14 w-auto object-contain mb-3"
+              onError={(e) => { e.target.onerror = null; e.target.src = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'; }}
+            />
             <CardTitle className="text-xl font-semibold">Create an account</CardTitle>
-            <CardDescription>Create an account to join 58:12 Global Connect</CardDescription>
+            <CardDescription>Create an account to join {branding?.app_name || '58:12 Global Connect'}</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
