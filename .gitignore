@@ -195,3 +195,24 @@ credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/121.pack
+
+# ── Whitelist tracked templates / example configs ─────────────────
+# .env.example files must always be tracked so partner orgs / new devs
+# have a clean starting point. The blanket *.env / .env.* rules above would
+# otherwise eat them.
+!**/.env.example
+!**/.env.template
+
+# ── Tauri / desktop bundle outputs ────────────────────────────────
+desktop/dist/
+desktop/src-tauri/target/
+desktop/resources/backend/server
+desktop/resources/backend/server.exe
+desktop/resources/mongo/mongod*
+desktop/resources/cloudflared/cloudflared*
+
+# ── Appliance: keep the data/ tree structure, ignore actual content ─
+# Inner appliance/data/.gitignore handles the per-file rules; this entry
+# is a safety net.
+appliance/data/*/
+!appliance/data/*/.gitkeep

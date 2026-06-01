@@ -1,0 +1,8 @@
+# Persistent data — committed empty, never with actual content.
+# Subdirectories are kept via .gitkeep so docker-compose bind-mounts work
+# immediately after `git clone`.
+*
+!.gitignore
+!.gitkeep
+!*/
+!*/.gitkeep

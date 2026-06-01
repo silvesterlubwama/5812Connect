@@ -1,0 +1,4 @@
+# Placeholder so `appliance/data/` and its subdirectories survive in git.
+# Docker compose mounts these as bind volumes (./data/mongo, ./data/uploads,
+# ./data/backups, ./data/caddy). On first `docker compose up` they get
+# populated; on a fresh clone they need to exist or compose errors.
