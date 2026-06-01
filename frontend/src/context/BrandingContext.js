@@ -74,6 +74,8 @@ export function BrandingProvider({ children }) {
   // primary-coloured element (buttons, badges, links, focus rings) picks up the
   // brand colour without any per-component change. We also keep `--brand-primary`
   // as a literal-hex variable for places that need the raw value (logos, gradients).
+  // `--primary-foreground` is auto-flipped between black/white based on the brand's
+  // perceived luminance so text on the primary button stays readable for any hue.
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
@@ -83,11 +85,16 @@ export function BrandingProvider({ children }) {
       root.style.setProperty('--primary', hsl);
       root.style.setProperty('--ring', hsl);
       root.style.setProperty('--brand-teal', hsl);
+      // Pick black-on-bright vs white-on-dark for the foreground based on HSL lightness.
+      const m = hsl.match(/\s(\d+)%\s*$/);
+      const lightness = m ? parseInt(m[1], 10) : 50;
+      root.style.setProperty('--primary-foreground', lightness > 60 ? '240 24% 14%' : '0 0% 100%');
     } else {
       root.style.removeProperty('--brand-primary');
       root.style.removeProperty('--primary');
       root.style.removeProperty('--ring');
       root.style.removeProperty('--brand-teal');
+      root.style.removeProperty('--primary-foreground');
     }
   }, [branding.primary_color]);
 

@@ -6,6 +6,42 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 157 (Jun 1, 2026)
+**Option Y — UI Customization MVP fully wired end-to-end.**
+
+### What was already in place (iter 150-156)
+- `db.system_settings.branding` field + `BrandingContext` + `BrandingEditor` admin dialog (rename / hide / reorder sidebar items, edit app name + tagline + logo URL + primary colour). Travelled with the backup tarball.
+- Layout sidebar already applied `nav_overrides` + `section_overrides`.
+
+### What this iteration finished
+**1. `primary_color` actually applies app-wide**
+- `BrandingContext` now hex→HSL converts the brand color and overrides the Tailwind `--primary` / `--ring` / `--brand-teal` CSS variables (was only setting an unused `--brand-primary`). Every Tailwind primary-coloured element (Sign In button, focus rings, badges, primary CTAs, sidebar active state) picks up the brand color automatically with zero per-component changes.
+- Bonus: `--primary-foreground` auto-flips between black/white based on the brand's HSL lightness so text on the primary button stays readable for any hue.
+
+**2. `logo_url` + `app_name` actually apply**
+- Layout sidebar logo (testid `sidebar-logo`) reads `branding.logo_url` with a graceful `onError` fallback to the default 58:12 Global logo.
+- Login page (testid `login-logo`, `login-app-name`), Register page, Reset Password page all read `branding.logo_url` + `branding.app_name` + `branding.tagline`.
+- Document `<title>` already updates via the BrandingContext useEffect.
+
+**3. Backend caching**
+- `GET /api/admin/system-settings/public` now sets `Cache-Control: public, max-age=30` since it's called by every anonymous page load.
+
+### Tests / lint
+- New `tests/test_iteration157_branding.py` — 4 cases: public endpoint exposes branding, admin PUT persists + flows through, non-admin write returns 401/403, partial update preserves untouched fields. All PASS.
+- Smoke 16/16 + branding 4/4 = 20/20 green.
+- Frontend testing agent verified e2e: logged in admin, opened `branding-editor-dialog`, changed app_name + primary_color + nav_overrides, saved. Confirmed `document.title` updated, `--primary` CSS var became HSL `142 71% 45%` (correct hex→HSL conversion from `#22c55e`), Sign In button background rendered the brand color, sidebar relabeled `/dashboard` to "Home Base", `/tasks` hidden, login page `login-app-name` shows custom name. Cleanup PUT restored defaults.
+
+⚠️ **Production redeploy needed**. Post-deploy: `/admin → Branding & Navigation → Customise` lets ops:
+- Rename the app + add a tagline
+- Drop in a custom logo URL (with auto-fallback if it 404s)
+- Pick a brand colour that re-themes every primary CTA + focus ring app-wide
+- Rename / hide / reorder any sidebar item or whole section
+- Settings persist in `system_settings.branding` and travel with the iter-150 backup tarball.
+
+### Continuing per your plan
+- **Z** next: Tauri desktop bundle + Cloudflare Tunnel for self-hosted `.exe/.dmg`.
+- Polish backlog: continue rolling EmptyState across pages on-touch, page-by-page mobile audit sweep, modularize `members.py` (1900+ lines).
+
 ## Recently Resolved — Iteration 156 (Jun 1, 2026)
 **Batch F — reusable EmptyState component + mobile-responsiveness baseline.**
 

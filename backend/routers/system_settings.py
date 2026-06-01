@@ -10,7 +10,7 @@ else); the read endpoints mask the API key bodies — only the last 4 chars + le
 are returned so an admin can confirm what's set without exposing the secret. The
 operator must re-enter the full key to change it.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from deps import db, require_admin, _audit, logger
 from datetime import datetime, timezone
 from typing import Optional
@@ -117,10 +117,12 @@ def _mask_for_read(doc: dict) -> dict:
 
 
 @router.get("/public")
-async def public_system_settings():
+async def public_system_settings(response: Response):
     """Non-secret, public-readable subset of system settings — used by the app shell
     to pick the org's primary country/currency + branding overrides without an
-    admin auth round-trip."""
+    admin auth round-trip. Cached for 30 s on the client to avoid hammering the
+    DB on every anonymous page load."""
+    response.headers["Cache-Control"] = "public, max-age=30"
     raw = await _load_raw()
     org = raw.get("org") or {}
     branding = raw.get("branding") or {}
