@@ -818,9 +818,11 @@ async def _fire_auto_backup():
 async def _fire_overdue_task_emails():
     """Daily 08:00 UTC: email assignees about tasks past their due_date that are still open.
     Idempotent — tracked via `task_overdue_emails` collection so each (task_id, assignee) pair
-    receives at most one email per 3-day window."""
+    receives at most one email per 3-day window. Uses the dynamic email config so admin
+    updates via the Integrations UI take effect without redeploying."""
     try:
         from datetime import date
+        from email_helpers import send_notification_email
         today_iso = date.today().isoformat()
         cutoff_3d = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
         # Open tasks past due (respects per-task snoozes)
@@ -832,9 +834,6 @@ async def _fire_overdue_task_emails():
         }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1, "board_id": 1, "description": 1}).to_list(500)
         if not overdue:
             return
-        import resend
-        resend.api_key = os.environ.get("RESEND_API_KEY", "")
-        sender = os.environ.get("SENDER_EMAIL", "no-reply@5812global.org")
         sent_count = 0
         for task in overdue:
             assignees = list(task.get("assignees") or [])
@@ -858,27 +857,25 @@ async def _fire_overdue_task_emails():
                     await _send_push_to_user(uid, "Task Overdue", f'"{task["title"]}" is past due', "/tasks")
                 except Exception:
                     pass
-                if not resend.api_key:
-                    continue
                 days_late = (date.today() - date.fromisoformat(task["due_date"])).days
+                title = (task.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
+                desc = (task.get("description") or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
+                body = (
+                    f"<p>Hi {(user.get('name') or '').split()[0] or 'there'},</p>"
+                    f"<p>Your task <strong>{title}</strong> is <strong>{days_late} day(s) past due</strong> "
+                    f"(due {task['due_date']}).</p>"
+                    f"{f'<p>{desc}</p>' if desc else ''}"
+                    f"<p>Please log in to update it or push the due date.</p>"
+                )
                 send_ok = False
                 try:
-                    title = (task.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
-                    desc = (task.get("description") or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
-                    resend.Emails.send({
-                        "from": sender, "to": user["email"],
-                        "subject": f"Task overdue: {title} ({days_late}d late)",
-                        "html": (
-                            f"<p>Hi {(user.get('name') or '').split()[0] or 'there'},</p>"
-                            f"<p>Your task <strong>{title}</strong> is <strong>{days_late} day(s) past due</strong> "
-                            f"(due {task['due_date']}).</p>"
-                            f"{f'<p>{desc}</p>' if desc else ''}"
-                            f"<p>Please log in to update it or push the due date.</p>"
-                            f"<p>— 58:12 Global</p>"
-                        ),
-                    })
-                    send_ok = True
-                    sent_count += 1
+                    send_ok = await send_notification_email(
+                        user["email"],
+                        f"Task overdue: {title} ({days_late}d late)",
+                        body,
+                    )
+                    if send_ok:
+                        sent_count += 1
                 except Exception as e:
                     logger.warning(f"task overdue email to {user.get('email')}: {e}")
                 # Always write idempotency row so we don't retry every day even when Resend

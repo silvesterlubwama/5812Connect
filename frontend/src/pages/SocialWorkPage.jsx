@@ -24,6 +24,7 @@ import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, U
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import EmptyState from '../components/EmptyState';
 
 const CATEGORY_LABELS = {
   sponsored: 'Sponsored',
@@ -251,7 +252,13 @@ export default function SocialWorkPage() {
             <Button size="sm" onClick={() => setShowNewSchool(true)} data-testid="sw-new-school-btn"><Plus size={13} className="mr-1" />New School</Button>
           </div>
           {schools.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-12">No schools yet.</p>
+            <EmptyState
+              icon={GraduationCap}
+              title="No schools yet"
+              description="Add the schools your sponsored / restricted-location children attend so you can track fees, performance, and assign portal access."
+              action={{ label: 'New school', onClick: () => setShowNewSchool(true), testid: 'sw-empty-new-school-btn' }}
+              testid="sw-schools-empty"
+            />
           ) : (
             <div className="space-y-2">
               {schools.map(s => (
@@ -919,7 +926,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                   <Textarea rows={3} value={newNote.body} onChange={e => setNewNote({ ...newNote, body: e.target.value })} placeholder="What happened? Visit observations, counseling notes, safeguarding flags, milestones..." data-testid="cd-note-body" />
                 </CardContent>
               </Card>
-              {notes.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No notes yet.</p> : (
+              {notes.length === 0 ? <EmptyState compact icon={ClipboardList} title="No notes yet" description="Use this space for visit observations, counseling notes, and safeguarding flags." testid="cd-notes-empty" /> : (
                 <div className="space-y-2">
                   {notes.map(n => (
                     <div key={n.id} className="p-2 rounded border text-xs" data-testid={`cd-note-${n.id}`}>

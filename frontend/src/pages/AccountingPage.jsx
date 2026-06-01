@@ -12,6 +12,7 @@ import { BookOpen, Plus, RefreshCw, Trash2, Check, X, RotateCcw, FileText, Trend
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import EmptyState from '../components/EmptyState';
 
 const CATEGORY_COLORS = {
   asset: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -329,7 +330,15 @@ export default function AccountingPage() {
           <div className="flex justify-end">
             <Button size="sm" onClick={openNewAccountForm} data-testid="acc-new-account-btn"><Plus size={14} className="mr-1" /> New Account</Button>
           </div>
-          {accounts.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No accounts yet — click "Seed Default CoA" to get started.</p> : (
+          {accounts.length === 0 ? (
+            <EmptyState
+              icon={BookOpen}
+              title="No accounts yet"
+              description='Click "Seed Default CoA" to bootstrap a standard chart of accounts, or create one manually.'
+              action={{ label: 'New account', onClick: openNewAccountForm, testid: 'acc-empty-new-account-btn' }}
+              testid="acc-accounts-empty"
+            />
+          ) : (
             <div className="space-y-1.5">
               {accounts.map(a => (
                 <Card key={a.id} className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => openLedger(a)} data-testid={`acc-account-${a.id}`}>
@@ -658,7 +667,9 @@ export default function AccountingPage() {
           {viewLedger && (
             <div className="space-y-2 text-xs mt-2">
               <p className="text-sm">Ending balance: <span className="font-bold">{fmt(viewLedger.ending_balance)}</span></p>
-              {viewLedger.lines.length === 0 ? <p className="text-muted-foreground text-center py-6">No postings yet.</p> : (
+              {viewLedger.lines.length === 0 ? (
+                <EmptyState compact icon={Scale} title="No postings yet" description="Once journal entries reference this account, postings will appear here." testid="acc-ledger-empty" />
+              ) : (
                 <table className="w-full">
                   <thead><tr className="border-b text-muted-foreground"><th className="text-left">Date</th><th className="text-left">Entry</th><th className="text-left">Narration</th><th className="text-right">Debit</th><th className="text-right">Credit</th><th className="text-right">Running</th></tr></thead>
                   <tbody>{viewLedger.lines.map(ln => (

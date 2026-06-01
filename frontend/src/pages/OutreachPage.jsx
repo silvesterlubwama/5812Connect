@@ -14,6 +14,7 @@ import { outreachApi, locationsApi, locationVenuesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
+import EmptyState from '../components/EmptyState';
 
 const statusColors = { active: 'border-green-500 text-green-600', completed: 'border-slate-400 text-slate-500', paused: 'border-amber-500 text-amber-600' };
 
@@ -208,7 +209,7 @@ export default function OutreachPage() {
               ))}
             </div>
             </div>
-          ) : <p className="text-center text-sm text-muted-foreground py-12">No programmes yet.</p>}
+          ) : <EmptyState icon={Globe} title="No outreach programmes yet" description="Programmes group recurring community sessions — schools, food drives, prayer circles, etc. Create your first to start logging sessions." testid="outreach-programs-empty" />}
         </TabsContent>
         <TabsContent value="sessions" className="mt-4">
           <div className="flex justify-end mb-3"><Button size="sm" className="gap-2" onClick={() => setShowSession(true)}><Plus size={14} /> Log Session</Button></div>
@@ -216,7 +217,7 @@ export default function OutreachPage() {
             {sessions.length > 0 ? (
               <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-border text-left"><th className="pb-2 font-medium text-muted-foreground">Program</th><th className="pb-2 font-medium text-muted-foreground">Date</th><th className="pb-2 font-medium text-muted-foreground">Location</th><th className="pb-2 font-medium text-muted-foreground">Attendees</th><th className="pb-2 font-medium text-muted-foreground">Led by</th></tr></thead>
                 <tbody className="divide-y divide-border">{sessions.map(s => { const prog = programs.find(pp => pp.id === s.program_id); return (<tr key={s.id} className="hover:bg-accent/30"><td className="py-3 font-medium">{prog?.name || s.program_id}</td><td className="py-3 text-muted-foreground">{s.date}</td><td className="py-3 text-muted-foreground">{s.location || '—'}</td><td className="py-3 font-semibold text-primary">{s.attendees}</td><td className="py-3 text-muted-foreground">{s.led_by || '—'}</td></tr>); })}</tbody></table></div>
-            ) : <p className="text-sm text-muted-foreground text-center py-10">No sessions logged yet.</p>}
+            ) : <EmptyState compact icon={Calendar} title="No sessions logged yet" description="When you log a session it appears here with attendance, location, and leader." action={{ label: 'Log session', onClick: () => setShowSession(true), testid: 'outreach-empty-log-session' }} testid="outreach-sessions-empty" />}
           </CardContent></Card>
         </TabsContent>
       </Tabs>

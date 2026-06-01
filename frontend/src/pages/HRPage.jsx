@@ -1081,7 +1081,7 @@ function AttendancePanel({ currentUser, staff }) {
       {/* My recent entries */}
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">My Recent Entries</h3>
-        {myEntries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No entries yet.</p> : (
+        {myEntries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6" data-testid="hr-attendance-empty">No entries yet — punch in above to start tracking time.</p> : (
           <div className="space-y-1.5">
             {myEntries.slice(0, 12).map(e => (
               <div key={e.id} className="flex items-center justify-between p-2 rounded border border-border text-xs" data-testid={`att-${e.id}`}>

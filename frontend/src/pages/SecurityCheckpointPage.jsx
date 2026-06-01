@@ -642,7 +642,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
             <CardContent className="p-5">
               <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><History size={14} /> Recent activity</h3>
               {state.history.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-6">No events yet today.</p>
+                <p className="text-xs text-slate-500 text-center py-6" data-testid="cp-history-empty">No events yet today — scan a badge or accept an entry to start the log.</p>
               ) : (
                 <div className="space-y-1.5 max-h-96 overflow-y-auto">
                   {state.history.map(ev => {

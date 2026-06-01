@@ -12,6 +12,7 @@ import { CheckCheck, Plus, Trash2, Check, X, ArrowRight, Inbox, Send, Workflow }
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import EmptyState from '../components/EmptyState';
 
 const ROLES = ['Volunteer', 'Staff', 'Coordinator', 'Leader', 'Manager', 'Director', 'Adviser', 'Executive Director'];
 const KINDS = ['expense', 'leave', 'sale_discount', 'purchase_order', 'custom'];
@@ -157,22 +158,22 @@ export default function ApprovalsPage() {
         </TabsList>
 
         <TabsContent value="inbox" className="space-y-2">
-          {inbox.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">Inbox zero — nothing requires your action right now.</p> :
+          {inbox.length === 0 ? <EmptyState compact icon={Inbox} title="Inbox zero" description="Nothing requires your approval right now. Nice work." testid="apr-inbox-empty" /> :
             inbox.map(r => <RequestCard key={r.id} r={r} />)}
         </TabsContent>
 
         <TabsContent value="mine" className="space-y-2">
-          {mine.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">You haven't submitted any requests.</p> :
+          {mine.length === 0 ? <EmptyState compact icon={Send} title="No requests yet" description="When you submit something for approval (expense, leave, etc.) it'll show up here." testid="apr-mine-empty" /> :
             mine.map(r => <RequestCard key={r.id} r={r} showActions />)}
         </TabsContent>
 
         <TabsContent value="all" className="space-y-2">
-          {all.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No requests yet.</p> :
+          {all.length === 0 ? <EmptyState compact icon={CheckCheck} title="No requests yet" description="Approval requests across the org will surface here." testid="apr-all-empty" /> :
             all.map(r => <RequestCard key={r.id} r={r} />)}
         </TabsContent>
 
         <TabsContent value="workflows" className="space-y-2">
-          {workflows.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No workflows defined. Click "New Workflow" to start.</p> : workflows.map(wf => (
+          {workflows.length === 0 ? <EmptyState icon={Workflow} title="No workflows defined" description="Workflows decide who has to approve what. Set one up to start routing requests automatically." testid="apr-wf-empty" /> : workflows.map(wf => (
             <Card key={wf.id} className="rounded-xl" data-testid={`wf-${wf.id}`}>
               <CardContent className="p-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">

@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 158 (members.py refactor + EmptyState rollout + overdue cron) — backend + frontend regression. Backend: 15/15 new tests for the split members package PASS (members CRUD + GET-after-PUT verification, families create/get/delete with enrichment, children create + full-profile + extras + delete, guests create/delete, badges list + wallet list, NFC tags listable + verify-bogus returns 4xx not 5xx, profile PDF returns pdf/html, public branding still exposed). Re-ran existing regression: test_iteration157_branding 4/4 PASS, test_smoke_recent_modules 16/16 PASS (approvals, hr-leave, hr-reimbursement, hr-attendance, accounting trial balance + balanced entry posting, payment reminders, donation-auto-posts-to-ledger, expense-approval-auto-posts-to-ledger). Frontend: logged in as admin, spot-checked the new EmptyState rollout — verified bank-vendors-empty, bank-bills-empty, apr-inbox-empty, apr-all-empty, apr-wf-empty, outreach-sessions-empty all render with proper copy + CTA when their tab is empty. acc-entries-empty / acc-accounts-empty / acc-ledger-empty / sw-schools-empty did not render only because the demo DB has data populated for those tabs (COA seeded with 14+ accounts, Schools tab shows '(1)') — the component wiring is identical to the verified ones. Login page renders branding app_name '58:12 Connect' confirming BrandingContext + public endpoint still healthy. Backend startup log: 'All modular routers loaded' — refactor imports clean. No 5xx errors observed. Periodic 429s on rapid retries are the expected new login rate-limit and harmless to the regression.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration158_members_refactor.py",
+    "/app/test_reports/pytest/iter158_members_refactor.xml",
+    "/app/backend/tests/test_iteration157_branding.py",
+    "/app/backend/tests/test_smoke_recent_modules.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routers/members/__init__.py aggregator pattern is clean — `from routers.members import router` works unchanged and 8 sub-routers are include_router'd in order. Recommend pinning module-load order with a unit test that asserts the number of expected routes (~70) to catch accidental drop-during-refactor regressions in future iterations.",
+    "routers/members/core.py:108 — duplicate-email check uses case-insensitive regex anchored with `^...$`; safe but reminds future devs to ensure email is regex-escaped if user input ever contains regex metachars (e.g. plus-tagged emails like alice+test@x.com would still anchor correctly because '+' is a regex op but inside `^$` with `.lower()` it's still OK — flagging as defense-in-depth, not a bug).",
+    "EmptyState component re-use: bank/approvals/outreach pages use the same EmptyState contract but the data-testid for each empty case is hand-coded — consider extracting a typed `<EmptyState testId={..} title={..} desc={..} action={..}>` wrapper so new pages can't forget to pass a testid (currently it's easy to miss, e.g. cp-history-empty is documented as 'text-only' rather than testid'd).",
+    "Public /api/admin/system-settings/public is still uncached on every page load by every anonymous visitor (carried over from iter 157 review). Adding Cache-Control: public, max-age=30 would reduce overhead.",
+    "server.py:691 overdue-task email cron — confirmed exists; behaviour not exercised live because it's time-based and would require triggering. Recommend exposing a manual `POST /api/cron/run-overdue-task-emails` (admin-only) for QA so future iterations can pytest it without sleeping until the scheduled hour."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration158_members_refactor.py (new — 15 tests)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100% (verifiable cases)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Each create-test deletes its TEST_-prefixed entity at end of test; no orphaned test data left in DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Members.py refactor (iter 158) confirmed behaviourally equivalent — 15 endpoint tests + 16 module-smoke tests + 4 branding tests all green. EmptyState components on /banking, /approvals, /outreach are wired and render correctly. Accounting (entries/accounts/ledger) and SocialWork (schools) empty states could not be visually verified because the demo DB populates those tabs; if main agent wants direct verification, either truncate those collections in a test fixture or add a query-param like `?empty=true` for QA. The members.py file at /app/backend/routers/members.py has NOT been removed — only the package under routers/members/ is imported. Verify whether the old .py shadows the package directory in Python's import precedence (in this run, routers/members/__init__.py was correctly loaded per supervisor logs). The login flow needs the `identifier` field, not `email`; admin password works as documented.",
+  "rca of the issue": "N/A — no failures detected."
+}

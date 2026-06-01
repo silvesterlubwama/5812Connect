@@ -16,6 +16,7 @@ import { Landmark, Plus, RefreshCw, Upload, FileText, Users, Repeat, Filter, Che
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import EmptyState from '../components/EmptyState';
 
 const STATUS_COLORS = {
   unreconciled: 'bg-amber-100 text-amber-700',
@@ -367,7 +368,15 @@ export default function BankPage() {
           <div className="flex justify-end">
             <Button size="sm" onClick={() => setShowVendorForm(true)} data-testid="bank-new-vendor-btn"><Plus size={14} className="mr-1" />New Vendor</Button>
           </div>
-          {vendors.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No vendors yet.</p> : (
+          {vendors.length === 0 ? (
+            <EmptyState
+              icon={Users}
+              title="No vendors yet"
+              description="Add suppliers and contractors here to track bills, payment terms, and outstanding balances."
+              action={{ label: 'New vendor', onClick: () => setShowVendorForm(true), testid: 'bank-empty-new-vendor-btn' }}
+              testid="bank-vendors-empty"
+            />
+          ) : (
             <div className="space-y-2">
               {vendors.map(v => (
                 <Card key={v.id} className="rounded-xl" data-testid={`bank-vendor-${v.id}`}>
@@ -392,7 +401,15 @@ export default function BankPage() {
           <div className="flex justify-end">
             <Button size="sm" onClick={() => setShowBillForm(true)} disabled={vendors.length === 0} data-testid="bank-new-bill-btn"><Plus size={14} className="mr-1" />New Bill</Button>
           </div>
-          {bills.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No bills yet. {vendors.length === 0 ? 'Create a vendor first.' : 'Click "New Bill" to add one.'}</p> : (
+          {bills.length === 0 ? (
+            <EmptyState
+              icon={Receipt}
+              title="No bills yet"
+              description={vendors.length === 0 ? 'Create a vendor first, then enter bills against them.' : 'Track payables — when they\'re due, what\'s outstanding, and what\'s been paid.'}
+              action={vendors.length > 0 ? { label: 'New bill', onClick: () => setShowBillForm(true), testid: 'bank-empty-new-bill-btn' } : null}
+              testid="bank-bills-empty"
+            />
+          ) : (
             <div className="space-y-2">
               {bills.map(b => (
                 <Card key={b.id} className="rounded-xl" data-testid={`bank-bill-${b.id}`}>
