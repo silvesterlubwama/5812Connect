@@ -111,14 +111,24 @@ export default function FinancialPage() {
 
   const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
 
+  // Org-default currency: pulled from /api/admin/system-settings/public on mount,
+  // falls back to UGX if the endpoint hasn't been configured yet. Lets the
+  // financial UI reflect the org's actual home currency without code changes.
+  const [orgDefaultCurrency, setOrgDefaultCurrency] = useState('UGX');
+  useEffect(() => {
+    let alive = true;
+    api.get('/admin/system-settings/public')
+      .then(r => { if (alive) setOrgDefaultCurrency(r.data?.org?.primary_currency || 'UGX'); })
+      .catch(() => { /* keep UGX */ });
+    return () => { alive = false; };
+  }, []);
+
   // Currency: prefer the explicitly selected location. With no filter ("All Locations"),
-  // default to the org's home currency UGX rather than the admin's active campus currency
-  // (the admin's active campus may be a USA-based HQ even though the org is Uganda-based).
-  // Selecting a specific location always uses that location's currency.
+  // default to the org's home currency (configurable from Admin → Integrations).
   const currentCurrency = (locationFilter
     ? allLocations.find(l => l.id === locationFilter)?.currency
     : null
-  ) || 'UGX';
+  ) || orgDefaultCurrency;
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
   const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
   const [expenseForm, setExpenseForm] = useState(() => ({

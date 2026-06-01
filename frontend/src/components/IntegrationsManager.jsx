@@ -28,6 +28,7 @@ export default function IntegrationsManager() {
   // Mutable form state — separate from `settings` so we can detect dirty fields
   const [emailDraft, setEmailDraft] = useState({});
   const [sentryDraft, setSentryDraft] = useState({});
+  const [orgDraft, setOrgDraft] = useState({});
 
   const load = async () => {
     setLoading(true);
@@ -51,6 +52,10 @@ export default function IntegrationsManager() {
         dsn: '',
         environment: r.data?.sentry?.environment || 'production',
         traces_sample_rate: r.data?.sentry?.traces_sample_rate ?? 0.1,
+      });
+      setOrgDraft({
+        primary_country: r.data?.org?.primary_country || 'Uganda',
+        primary_currency: r.data?.org?.primary_currency || 'UGX',
       });
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to load settings');
@@ -80,6 +85,17 @@ export default function IntegrationsManager() {
       if (!sentryDraft.dsn) delete payload.sentry.dsn;
       await api.put('/admin/system-settings', payload);
       toast.success('Sentry settings saved — restart the backend to apply');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Save failed');
+    } finally { setSaving(false); }
+  };
+
+  const saveOrg = async () => {
+    setSaving(true);
+    try {
+      await api.put('/admin/system-settings', { org: { ...orgDraft } });
+      toast.success('Organisation settings saved');
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Save failed');
@@ -218,6 +234,27 @@ export default function IntegrationsManager() {
                 </div>
                 <Button onClick={saveSentry} disabled={saving} data-testid="sentry-save-btn">{saving ? 'Saving…' : 'Save'}</Button>
                 <p className="text-[10px] text-muted-foreground italic">Sentry reads its config on backend boot — restart the backend (or wait for the next deploy) for changes to take effect.</p>
+              </section>
+
+              {/* ORG */}
+              <section className="space-y-3 p-3 rounded-lg border" data-testid="integrations-org-section">
+                <h3 className="text-sm font-semibold flex items-center gap-2"><Globe size={14} className="text-blue-600" /> Organisation</h3>
+                <p className="text-[11px] text-muted-foreground">Drives the default currency on Finance dashboards and per-country VAT/compliance logic. Picked up on every page load — no redeploy needed.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Primary country</Label>
+                    <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={orgDraft.primary_country} onChange={e => setOrgDraft({ ...orgDraft, primary_country: e.target.value })} data-testid="org-country-select">
+                      {['Uganda', 'Kenya', 'Tanzania', 'Rwanda', 'Burundi', 'Haiti', 'Thailand', 'USA', 'United Kingdom', 'South Africa', 'Nigeria', 'Ghana', 'Ethiopia'].map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Primary currency</Label>
+                    <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={orgDraft.primary_currency} onChange={e => setOrgDraft({ ...orgDraft, primary_currency: e.target.value })} data-testid="org-currency-select">
+                      {['UGX', 'KES', 'TZS', 'RWF', 'BIF', 'HTG', 'THB', 'USD', 'GBP', 'EUR', 'ZAR', 'NGN', 'GHS', 'ETB'].map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <Button onClick={saveOrg} disabled={saving} data-testid="org-save-btn">{saving ? 'Saving…' : 'Save organisation'}</Button>
               </section>
 
               <p className="text-[10px] text-muted-foreground italic">

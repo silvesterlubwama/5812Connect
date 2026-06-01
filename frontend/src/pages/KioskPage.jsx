@@ -8,6 +8,8 @@ import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
+import BarcodeScanDialog from '../components/BarcodeScanDialog';
+import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi, badgesApi, storeSettingsApi } from '../services/api';
@@ -67,6 +69,8 @@ export default function KioskPage() {
   const [scanResult, setScanResult] = useState(null);
   const [recentScans, setRecentScans] = useState([]);
   const [todayStats, setTodayStats] = useState({ checkIns: 0, visitors: 0, scans: 0 });
+  const [showCamScan, setShowCamScan] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [scanType, setScanType] = useState('manual'); // manual, nfc, biometric
   const [lockMode, setLockMode] = useState(() => localStorage.getItem('5812_kiosk_locked') === 'true');
@@ -640,8 +644,16 @@ export default function KioskPage() {
           </div>
 
           {/* Peripheral permission banner */}
-          <div className="mb-4">
+          <div className="mb-4 space-y-2">
             <PeripheralPermissionBanner needs={['camera', 'nfc', 'scanner']} context="the check-in kiosk" testid="kiosk-perm-banner" />
+            <div className="flex gap-2">
+              <Button onClick={() => setShowCamScan(true)} variant="outline" className="gap-2" data-testid="kiosk-camera-scan-btn">
+                📷 Camera Scan
+              </Button>
+              <Button onClick={() => setShowDiagnostics(true)} variant="outline" size="sm" data-testid="kiosk-diagnostics-btn">
+                🔧 Diagnostics
+              </Button>
+            </div>
           </div>
 
           {/* Action Buttons */}
@@ -1201,6 +1213,17 @@ export default function KioskPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* CAMERA SCAN — built-in camera fallback when no NFC reader / USB scanner is attached */}
+      <BarcodeScanDialog
+        open={showCamScan}
+        onOpenChange={setShowCamScan}
+        title="Camera check-in scan"
+        onScan={(value) => handleIdScan(value)}
+      />
+
+      {/* DEVICE DIAGNOSTICS — full hardware/runtime overview */}
+      <DeviceDiagnosticsDialog open={showDiagnostics} onClose={() => setShowDiagnostics(false)} />
     </div>
   );
 }

@@ -104,6 +104,21 @@ def _mask_for_read(doc: dict) -> dict:
     return out
 
 
+@router.get("/public")
+async def public_system_settings():
+    """Non-secret, public-readable subset of system settings — used by the app shell
+    to pick the org's primary country/currency without an admin auth round-trip."""
+    raw = await _load_raw()
+    org = raw.get("org") or {}
+    return {
+        "org": {
+            "primary_country": org.get("primary_country") or "Uganda",
+            "primary_currency": org.get("primary_currency") or "UGX",
+        },
+        "email_provider": (raw.get("email") or {}).get("provider", "resend"),
+    }
+
+
 @router.get("")
 async def get_system_settings(current_user: dict = Depends(require_admin)):
     """Returns the (masked) current settings doc."""

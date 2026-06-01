@@ -6,6 +6,41 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 153 (Jun 1, 2026)
+**Batch C — Org country/currency setting + uniform kiosk peripheral treatment.**
+
+### Built per user request
+
+**1. Org country/currency configurable from the Integrations dialog**
+- New `GET /api/admin/system-settings/public` (no auth) returns `{org: {primary_country, primary_currency}, email_provider}` so any frontend page can pick up the org default without an admin auth round-trip.
+- `IntegrationsManager` gains a new **Organisation** section (testid `integrations-org-section`) with country + currency dropdowns covering Uganda/Kenya/Tanzania/Rwanda/Burundi/Haiti/Thailand/USA/UK/SA/Nigeria/Ghana/Ethiopia. Save button (`org-save-btn`) persists to `db.system_settings`.
+- `FinancialPage.jsx` reads the public endpoint on mount — when no specific location is filtered ("All Locations"), it uses the org's `primary_currency` instead of the hard-coded UGX. Verified end-to-end: switching org to Kenya/KES via the API made the public endpoint return KES; reverted to UGX cleanly.
+
+**2. Batch C — uniform peripheral treatment for Check-in Kiosk + POS**
+
+*Check-in Kiosk (`KioskPage.jsx`)*:
+- Already had `PeripheralPermissionBanner` from iter 143.
+- NEW: **📷 Camera Scan** button (testid `kiosk-camera-scan-btn`) → opens `BarcodeScanDialog` → submits to the existing `handleIdScan` flow.
+- NEW: **🔧 Diagnostics** button (testid `kiosk-diagnostics-btn`) → opens the full `DeviceDiagnosticsDialog` from iter 149.
+
+*POS (`ProductsPage.jsx` POS tab)*:
+- Already had `PeripheralPermissionBanner` from iter 143 + `BarcodeScanDialog` wired for product scans.
+- NEW: explicit **📷 Camera Scan** toolbar button (testid `pos-camera-scan-btn`) so cashiers without an attached barcode scanner can hit the camera path with one tap.
+- NEW: **🔧 Diagnostics** button (testid `pos-diagnostics-btn`) — same dialog as the other kiosks.
+
+### Tests / lint
+- 57/57 pytest still green.
+- Ruff + ESLint clean.
+- Curl-verified public endpoint → Org Kenya/KES round-trip.
+
+⚠️ **Production redeploy needed**. Post-deploy:
+- `/admin → Integrations → Organisation` lets you change country+currency without touching code.
+- `/kiosk` (after staff sign-in) + `/sales` POS tab now both have camera-scan + diagnostics buttons matching the Security Checkpoint experience.
+
+### Continuing per your plan
+- **Batches D-F** next: file split / print styles / PWA / code-split / empty states / mobile audit.
+- Then **Y** (UI customisation), then **Z** (Tauri).
+
 ## Recently Resolved — Iteration 152 (Jun 1, 2026)
 **Batch B — P1 hardening: security headers + Mongo indexes + inactivity logout + Integrations admin UI (Resend/SMTP/Sentry).**
 

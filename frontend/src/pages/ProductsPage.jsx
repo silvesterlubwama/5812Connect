@@ -23,6 +23,7 @@ import VariantPickerDialog from '../components/VariantPickerDialog';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
+import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import PinNumpad from '../components/PinNumpad';
@@ -72,6 +73,7 @@ export default function ProductsPage() {
   const [productForm, setProductForm] = useState(emptyProduct);
   const [productSearch, setProductSearch] = useState('');
   const [lastReceipt, setLastReceipt] = useState(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [lastStoreSettings, setLastStoreSettings] = useState(null);
   const [showReceipt, setShowReceipt] = useState(false);
   const [customers, setCustomers] = useState([]);
@@ -769,8 +771,16 @@ export default function ProductsPage() {
 
         {/* POS TAB */}
         <TabsContent value="pos" className="mt-4">
-          <div className="mb-3">
+          <div className="mb-3 space-y-2">
             <PeripheralPermissionBanner needs={['camera', 'scanner']} context="the POS terminal" testid="pos-perm-banner" />
+            <div className="flex gap-2">
+              <Button onClick={() => setScanOpen(true)} variant="outline" size="sm" data-testid="pos-camera-scan-btn" className="gap-1">
+                📷 Camera Scan
+              </Button>
+              <Button onClick={() => setShowDiagnostics(true)} variant="outline" size="sm" data-testid="pos-diagnostics-btn" className="gap-1">
+                🔧 Diagnostics
+              </Button>
+            </div>
           </div>
           <div className="grid lg:grid-cols-3 gap-5 h-[calc(100vh-320px)] min-h-[500px]">
             <div className="lg:col-span-2 flex flex-col gap-4">
@@ -1525,6 +1535,8 @@ export default function ProductsPage() {
         title="Scan product barcode"
       />
 
+      {/* DEVICE DIAGNOSTICS — full hardware/runtime overview */}
+      <DeviceDiagnosticsDialog open={showDiagnostics} onClose={() => setShowDiagnostics(false)} />
       {/* Change Calculator (cash sales) */}
       <ChangeCalculator
         open={changeOpen}
