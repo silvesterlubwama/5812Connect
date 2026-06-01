@@ -61,8 +61,12 @@ export default function DevicePairingDialog({ trigger }) {
       await refresh();
     } catch (e) {
       const msg = String(e?.message || e);
-      // The browser throws NotFoundError when the user cancels the picker.
-      if (/cancel|no device/i.test(msg)) {
+      const name = e?.name || '';
+      // The browser picker throws NotFoundError on user-cancel. Chrome's
+      // Serial picker uses 'No port selected by user', HID/USB use
+      // 'No device selected'. Treat all of these as a graceful cancel
+      // (info toast) rather than an error.
+      if (name === 'NotFoundError' || /cancel|no (device|port)/i.test(msg)) {
         toast.info('Pairing cancelled');
       } else {
         toast.error(msg);

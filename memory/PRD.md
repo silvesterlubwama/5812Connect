@@ -6,6 +6,53 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 162 (Jun 1, 2026)
+**USB device pairing with role assignment.**
+
+### What shipped
+Persistent device→role mapping for paired USB peripherals (Serial / HID / USB), so consumers can ask for "the receipt printer" / "the NFC reader" / "the scale" by name and get back a live handle without re-prompting the user on every page load.
+
+**1. Device-role registry** (`utils/deviceRoles.js`)
+- 8 canonical roles defined: `receipt_printer`, `label_printer`, `barcode_scanner`, `nfc_reader`, `signature_pad`, `cash_drawer`, `customer_display`, `scale`.
+- Each role declares which transports it supports (`serial` / `hid` / `usb`), a human description, and a setup hint.
+- `pairDeviceForRole(role, transport)` → opens the matching browser picker (`navigator.serial.requestPort` / `navigator.hid.requestDevice` / `navigator.usb.requestDevice`), persists vendor/product IDs + fingerprint to `localStorage` (`5812:device-role-pairings`).
+- `getDeviceForRole(role)` → reads back the live device handle using the persisted fingerprint. Returns `null` if unpaired or unplugged. Survives page reloads as long as the browser permission cache is intact.
+- `probeAllRoles()` → dashboard helper returning per-role `{paired, available, pairing?}`.
+
+**2. Admin UI** (`components/DevicePairingDialog.jsx`)
+- New `/admin → USB Devices & Roles` card (testid `device-pairing-card`).
+- Dialog (testid `device-pairing-dialog`) lists all 8 roles. Each row shows:
+  - Status badge: Not paired / Paired (unplugged) / Available.
+  - Pair button per supported transport (`device-pair-{role}-{serial|hid|usb}`).
+  - Unpair button when paired.
+  - Hardware summary (transport, product name, vendor:product IDs, serial number).
+- Cancel-detection robust to Chrome's three picker messages (NotFoundError, "No port selected by user", "No device selected") — shows friendly "Pairing cancelled" info toast instead of error.
+- Amber banner when the browser exposes none of the three APIs (Safari, mobile browsers).
+
+**3. POS receipt-printer integration** (`utils/printers.js` + `ProductsPage.jsx`)
+- New `printers.js` exposes `printReceiptText(lines)` (ESC/POS over Serial) and `printLabelZpl(zpl)` (ZPL over USB) plus a `buildReceiptLines(sale)` helper.
+- POS checkout auto-print path (when `store_settings.auto_print_receipt` is on):
+  - **If `receipt_printer` is paired**: sends ESC/POS bytes directly to the printer (initialize → text → 3-line feed → partial cut).
+  - **Otherwise**: falls back to the existing `window.print()` flow — zero regression for stores without a paired printer.
+- Dynamic `import('../utils/printers')` so the device-roles bundle is code-split out of the main POS chunk for stores that don't use it.
+
+### Tests / lint
+- `bash /app/scripts/lint-check.sh` → all 3 gates pass (ruff + eslint + check-empty-states).
+- 20/20 backend regression green (16 smoke + 4 branding).
+- Testing agent (`iteration_161.json`): **frontend 100%**, backend N/A (no backend changes). Verified all 8 roles render with correct testids, 13 transport-matched pair buttons, paired-state simulation via localStorage, picker invocation, unpair UI, dynamic-import code-split.
+
+### How partner orgs use this
+1. Plug in the device (USB printer / USB NFC reader / etc.).
+2. Open `/admin → USB Devices & Roles`.
+3. Click "Pair Serial" / "Pair USB" next to the role (e.g. Receipt printer → Pair Serial). The browser shows its native device picker.
+4. Pick the right device. The dialog flips to "Available" (green).
+5. From now on, the POS auto-prints to that printer. Replug the cable later → still works (fingerprint match). Move to a new install → just re-pair once.
+
+⚠️ **Production redeploy needed**. No real hardware can be tested in the K8s preview — the UI + lookup logic are verified via mocked pickers. Real hardware test should happen on a partner-org desktop after deploy.
+
+### Continuing per your plan
+- **More consumers can wire up the same way**: KioskPage (badge scan), Security Checkpoint (NFC reader), Sales Portal (signature pad, scale). Each just calls `getDeviceForRole('xyz')` and handles `null` gracefully.
+
 ## Recently Resolved — Iteration 161 (Jun 1, 2026)
 **CI lint gate adds EmptyState check + license requirement removed.**
 
