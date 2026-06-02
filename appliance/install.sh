@@ -3,7 +3,7 @@
 #
 # Usage on a fresh Ubuntu 22.04+ / Debian 12 / Raspberry Pi OS box:
 #
-#   curl -fsSL https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/silvesterlubwama/5812Connect/5812/appliance/install.sh | sudo bash
 #
 # Or after cloning:
 #
@@ -20,8 +20,8 @@
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/connect}"
-REPO="${CONNECT_REPO:-https://github.com/5812-global/connect.git}"
-BRANCH="${CONNECT_BRANCH:-main}"
+REPO="${CONNECT_REPO:-https://github.com/silvesterlubwama/5812Connect.git}"
+BRANCH="${CONNECT_BRANCH:-5812}"
 
 log()   { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }

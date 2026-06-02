@@ -34,14 +34,14 @@ On a fresh **Ubuntu 22.04+ / Debian 12 / Raspberry Pi OS** install:
 # Make sure curl is available (minimal Ubuntu Server images skip it)
 sudo apt update && sudo apt install -y curl
 
-# Run the installer
-curl -fsSL https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
+# Run the installer (the 5812 branch is the default working branch)
+curl -fsSL https://raw.githubusercontent.com/silvesterlubwama/5812Connect/5812/appliance/install.sh | sudo bash
 ```
 
 Or with `wget` (pre-installed on most images):
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/silvesterlubwama/5812Connect/5812/appliance/install.sh | sudo bash
 ```
 
 The installer auto-installs `curl`, `git`, and `openssl` if they're missing, then:
@@ -64,7 +64,7 @@ The installer auto-installs `curl`, `git`, and `openssl` if they're missing, the
 curl -fsSL https://get.docker.com | sudo sh
 
 # 2. Get the appliance directory only (sparse-checkout is faster than full clone)
-sudo git clone --depth 1 https://github.com/5812-global/connect.git /opt/connect
+sudo git clone --depth 1 -b 5812 https://github.com/silvesterlubwama/5812Connect.git /opt/connect
 cd /opt/connect/appliance
 
 # 3. Generate secrets
