@@ -31,10 +31,20 @@ Partner orgs get a **single LAN URL** that everyone in the office browses to fro
 On a fresh **Ubuntu 22.04+ / Debian 12 / Raspberry Pi OS** install:
 
 ```bash
+# Make sure curl is available (minimal Ubuntu Server images skip it)
+sudo apt update && sudo apt install -y curl
+
+# Run the installer
 curl -fsSL https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
 ```
 
-That script:
+Or with `wget` (pre-installed on most images):
+
+```bash
+wget -qO- https://raw.githubusercontent.com/5812-global/connect/main/appliance/install.sh | sudo bash
+```
+
+The installer auto-installs `curl`, `git`, and `openssl` if they're missing, then:
 
 1. Installs Docker + the compose plugin.
 2. Clones the repo to `/opt/connect`.

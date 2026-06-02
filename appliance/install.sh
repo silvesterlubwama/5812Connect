@@ -29,6 +29,31 @@ err()   { printf '\033[1;31mxx %s\033[0m\n' "$*"; exit 1; }
 
 [ "$(id -u)" = "0" ] || err "Run as root (use sudo)."
 
+# ── 0. Bootstrap missing prerequisites ───────────────────────────
+# Minimal Ubuntu Server / Pi OS / Debian images often ship without curl,
+# git, or openssl. Install whatever's missing before we need it.
+log "Checking for bootstrap prerequisites…"
+needed=""
+for cmd in curl git openssl ca-certificates; do
+    case "$cmd" in
+        ca-certificates) dpkg -s ca-certificates >/dev/null 2>&1 || needed="$needed ca-certificates" ;;
+        *) command -v "$cmd" >/dev/null 2>&1 || needed="$needed $cmd" ;;
+    esac
+done
+if [ -n "$needed" ]; then
+    log "Installing:$needed"
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq
+        apt-get install -y --no-install-recommends $needed
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y $needed
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y $needed
+    else
+        err "No apt-get / dnf / yum found. Install$needed manually and re-run."
+    fi
+fi
+
 # ── 1. Docker ────────────────────────────────────────────────────
 if ! command -v docker >/dev/null 2>&1; then
     log "Installing Docker Engine + compose plugin…"
