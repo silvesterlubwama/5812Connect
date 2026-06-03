@@ -1195,9 +1195,12 @@ async def _fire_birthday_anniversary_notifications():
 async def startup():
     try:
         init_storage()
-        logger.info("Storage initialized")
+        logger.info("Storage initialized (cloud)")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        # Falling back to local disk (./uploads) — fully supported for self-hosted
+        # appliance deploys. Demoted from ERROR to WARNING so log scrapers don't
+        # treat this as a real problem.
+        logger.warning(f"Cloud storage init unavailable, using local disk fallback: {e}")
     # ===== Sentry init (iter152) — reads system_settings, falls back to env =====
     try:
         from routers.system_settings import get_sentry_config
