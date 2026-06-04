@@ -27,7 +27,7 @@
     }
 
     # API: pass-through with WebSocket upgrade support for /api/ws/*
-    handle_path /api/* {
+    handle /api/* {
         reverse_proxy {$BACKEND_UPSTREAM:backend:8001} {
             header_up Host {host}
             header_up X-Real-IP {remote_host}
@@ -80,7 +80,7 @@
         respond "ok" 200
     }
 
-    handle_path /api/* {
+    handle /api/* {
         reverse_proxy {$BACKEND_UPSTREAM:backend:8001}
     }
 
