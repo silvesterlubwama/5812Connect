@@ -20,6 +20,7 @@ import json
 import tarfile
 import tempfile
 import shutil
+from pymongo.errors import DuplicateKeyError
 import uuid
 
 router = APIRouter(prefix="/api/admin/backup", tags=["backup"])
@@ -306,6 +307,33 @@ async def import_backup(
                         else:
                             await db[cname].insert_one(doc)
                             stats["inserted"] += 1
+                    except DuplicateKeyError as e:
+                        # Most common case: importing into a DB that already has
+                        # seeded admins (`users.email` unique index). Fall back to
+                        # matching by the conflicting key so the import wins
+                        # without orphaning the existing row.
+                        retry_done = False
+                        if cname == "users" and doc.get("email"):
+                            try:
+                                # Keep the existing _id/id of the row already in DB
+                                # to avoid breaking foreign-key references elsewhere.
+                                existing = await db.users.find_one(
+                                    {"email": doc["email"]}, {"_id": 0, "id": 1}
+                                )
+                                doc_for_update = {**doc}
+                                if existing and existing.get("id"):
+                                    doc_for_update["id"] = existing["id"]
+                                await db.users.update_one(
+                                    {"email": doc["email"]},
+                                    {"$set": doc_for_update},
+                                )
+                                stats["updated"] += 1
+                                retry_done = True
+                            except Exception as e2:
+                                report["errors"].append(f"{cname}: email-retry: {e2}")
+                        if not retry_done:
+                            stats["errors"] += 1
+                            report["errors"].append(f"{cname}: dup-key: {str(e)[:200]}")
                     except Exception as e:
                         stats["errors"] += 1
                         report["errors"].append(f"{cname}: write: {e}")
