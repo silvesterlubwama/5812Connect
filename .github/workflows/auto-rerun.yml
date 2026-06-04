@@ -1,0 +1,40 @@
+name: Auto-rerun failed workflows
+
+# Whenever any of the listed workflows finish in a failed state, automatically
+# kick off a re-run of just the failed jobs. Caps out at 3 attempts so we don't
+# infinite-loop on a real bug. Transient network / cache / spot-runner failures
+# are recovered without anyone having to click "Re-run failed jobs".
+on:
+  workflow_run:
+    workflows:
+      - "Publish appliance images"
+      - "Desktop Release"
+      - "CI Lint Gate"
+    types:
+      - completed
+
+permissions:
+  actions: write   # required to call gh run rerun
+  contents: read
+
+jobs:
+  rerun:
+    name: Rerun failed jobs
+    # Only act on failures, and stop after 3 total attempts to avoid loops.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger re-run of failed jobs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          echo "Workflow '${{ github.event.workflow_run.name }}' (run $RUN_ID) failed on attempt $ATTEMPT."
+          echo "Triggering re-run of failed jobs (next attempt: $((ATTEMPT + 1)))…"
+          # Brief delay so any cleanup from the failed run completes first
+          sleep 30
+          gh run rerun "$RUN_ID" --failed
