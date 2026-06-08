@@ -1,6 +1,6 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
-from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin
+from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -205,7 +205,8 @@ async def login(data: UserLogin, request: Request) -> dict:
     if not user_loc:
         # No location assigned — find the first campus
         first_campus = await db.locations.find_one({"type": {"$in": ["campus", "main"]}}, {"_id": 0, "id": 1})
-        if first_campus: user_loc = first_campus["id"]
+        if first_campus:
+            user_loc = first_campus["id"]
     if user_loc:
         await db.users.update_one({"id": user["id"]}, {"$set": {"active_campus_id": user_loc}})
         user["active_campus_id"] = user_loc
@@ -445,3 +446,53 @@ async def reset_password(data: dict) -> dict:
     )
     await db.password_resets.update_one({"token": reset["token"]}, {"$set": {"used": True}})
     return {"message": "Password reset successfully. You can now login with your new password."}
+
+
+@router.post("/auth/change-password")
+async def change_password(data: dict, current_user: dict = Depends(get_current_user)) -> dict:
+    """Authenticated self-service password change.
+
+    Body: { current_password, new_password }
+    Requires the caller to prove they know the existing password — defends
+    against session-hijacking and shoulder-surfing scenarios. Both `users`
+    AND `members` tables are updated when the account is linked, so the
+    next login (which may resolve via either record) still works.
+    """
+    current_password = (data.get("current_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="Both current and new password are required")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    if current_password == new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+
+    user = await db.users.find_one({"id": current_user["id"]}, {"_id": 0})
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=404, detail="User record not found")
+    if not verify_password(current_password, user["password_hash"]):
+        # Tiny tarpit so brute-force is unattractive — same pattern as /auth/login
+        import asyncio
+        await asyncio.sleep(0.4)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    new_hash = hash_password(new_password)
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {
+            "password_hash": new_hash,
+            "password_changed_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+    # Mirror into the member record when the account is linked — login can
+    # resolve via either collection.
+    if current_user.get("member_id"):
+        await db.members.update_one(
+            {"id": current_user["member_id"]},
+            {"$set": {"password_hash": new_hash}},
+        )
+    try:
+        await _audit(current_user["id"], "update", "password_change", current_user["id"], {"self_service": True})
+    except Exception:
+        pass
+    return {"message": "Password changed successfully."}

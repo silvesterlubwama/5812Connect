@@ -234,6 +234,108 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
     return await _generate_payslips_for(period, location_id, current_user)
 
 
+@router.post("/payslips/manual")
+async def manual_payslip(data: dict, current_user: dict = Depends(require_director)):
+    """One-off payslip — HR types the amount + deductions directly, no recurring
+    salary record needed. Use for casual workers, end-of-year bonuses, hardship
+    payments, severance, etc.
+
+    Body: {
+        staff_id: str,             # users.id (or members.id) of the recipient
+        period: 'YYYY-MM',
+        gross_salary: number,      # base amount the payslip pays out
+        currency?: str (default UGX),
+        allowances?: [{ name, amount }],
+        deductions?: [{ name, amount }],
+        notes?: str,
+    }
+    """
+    staff_id = (data.get("staff_id") or "").strip()
+    if not staff_id:
+        raise HTTPException(status_code=400, detail="staff_id required")
+    period = (data.get("period") or "").strip()
+    if not period:
+        raise HTTPException(status_code=400, detail="period required (YYYY-MM)")
+    try:
+        gross = float(data.get("gross_salary") or 0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="gross_salary must be a number")
+    if gross <= 0:
+        raise HTTPException(status_code=400, detail="gross_salary must be > 0")
+
+    # Resolve staff record (users first, then members fallback)
+    staff = await db.users.find_one({"id": staff_id}, {"_id": 0, "id": 1, "name": 1, "department": 1, "location_id": 1, "email": 1})
+    if not staff:
+        staff = await db.members.find_one({"id": staff_id}, {"_id": 0, "id": 1, "name": 1, "department": 1, "location_id": 1, "email": 1})
+    if not staff:
+        raise HTTPException(status_code=404, detail=f"Staff {staff_id} not found")
+
+    # Sanitise line items
+    line_items = []
+    total_allowances = 0.0
+    for li in (data.get("allowances") or []):
+        try:
+            amt = float(li.get("amount") or 0)
+        except Exception:
+            continue
+        if amt <= 0:
+            continue
+        line_items.append({
+            "name": (li.get("name") or "Allowance")[:60],
+            "type": "allowance",
+            "amount": amt,
+            "calculated_amount": amt,
+            "is_percentage": False,
+        })
+        total_allowances += amt
+    total_deductions = 0.0
+    for li in (data.get("deductions") or []):
+        try:
+            amt = float(li.get("amount") or 0)
+        except Exception:
+            continue
+        if amt <= 0:
+            continue
+        line_items.append({
+            "name": (li.get("name") or "Deduction")[:60],
+            "type": "deduction",
+            "amount": amt,
+            "calculated_amount": amt,
+            "is_percentage": False,
+        })
+        total_deductions += amt
+
+    net = gross + total_allowances - total_deductions
+    payslip = {
+        "id": f"ps_{uuid.uuid4().hex[:8]}",
+        "salary_id": None,             # null = manual one-off, not tied to a salary record
+        "is_manual": True,
+        "staff_id": staff_id,
+        "staff_name": staff.get("name", ""),
+        "department": staff.get("department", ""),
+        "location_id": staff.get("location_id") or current_user.get("active_campus_id"),
+        "period": period,
+        "gross_salary": gross,
+        "allowances": total_allowances,
+        "deductions": total_deductions,
+        "net_salary": net,
+        "currency": (data.get("currency") or "UGX")[:8],
+        "line_items": line_items,
+        "notes": (data.get("notes") or "")[:500],
+        "status": "draft",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    await db.hr_payslips.insert_one(payslip)
+    payslip.pop("_id", None)
+    await _audit(
+        current_user["id"], "create", "manual_payslip", payslip["id"],
+        {"staff_id": staff_id, "period": period, "net": net, "currency": payslip["currency"]},
+    )
+    return payslip
+
+
 async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
     """Return (unpaid_days, working_days_in_period) for a YYYY-MM period.
     Uses approved leave requests whose leave_type maps to a non-paid type (or id == 'unpaid')."""

@@ -315,12 +315,21 @@ export default function SettingsPage() {
   const handleChangePassword = async (e) => {
     e.preventDefault();
     if (passwords.new_ !== passwords.confirm) { toast.error('New passwords do not match'); return; }
+    if (!passwords.current) { toast.error('Enter your current password'); return; }
+    if (passwords.new_.length < 6) { toast.error('New password must be at least 6 characters'); return; }
     setSavingPass(true);
-    setTimeout(() => {
-      setSavingPass(false);
+    try {
+      await api.post('/auth/change-password', {
+        current_password: passwords.current,
+        new_password: passwords.new_,
+      });
       setPasswords({ current: '', new_: '', confirm: '' });
-      toast.success('Password changed successfully!');
-    }, 800);
+      toast.success('Password changed successfully — next sign-in will use the new password.');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to change password');
+    } finally {
+      setSavingPass(false);
+    }
   };
 
   return (

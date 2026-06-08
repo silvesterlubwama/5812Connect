@@ -27,6 +27,7 @@ import CalendarPage from './pages/CalendarPage';
 import CheckInsPage from './pages/CheckInsPage';
 import SettingsPage from './pages/SettingsPage';
 import ApprovalsPage from './pages/ApprovalsPage';
+import FundsPage from './pages/FundsPage';
 import SchoolPortalPage from './pages/SchoolPortalPage';
 import SponsorPortalPage from './pages/SponsorPortalPage';
 import BankPage from './pages/BankPage';
@@ -140,6 +141,7 @@ function AppRoutes() {
         <Route path="financial" element={<FinancialPage />} />
         <Route path="accounting" element={<AccountingPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
+        <Route path="funds" element={<FundsPage />} />
         <Route path="social-work" element={<SocialWorkPage />} />
         <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />

@@ -581,6 +581,7 @@ try:
     from routers.security_checkpoint import router as security_checkpoint_router, ocr_router
     from routers.backup import router as backup_router
     from routers.system_settings import router as system_settings_router
+    from routers.funds import router as funds_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -601,6 +602,7 @@ try:
     app.include_router(ocr_router)
     app.include_router(backup_router)
     app.include_router(system_settings_router)
+    app.include_router(funds_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

@@ -703,8 +703,32 @@ async def delete_note(case_id: str, note_id: str, current_user: dict = Depends(r
 
 @router.get("/schools")
 async def list_schools(current_user: dict = Depends(require_staff)):
-    scope = await get_campus_filter(current_user)
-    query = {**scope} if scope else {}
+    """List schools visible to the calling user.
+
+    Visibility rules (broader than the default campus filter — social workers
+    routinely need to reference partner schools that aren't tagged to their
+    own campus):
+      • System admins / Directors+ see every school.
+      • Anyone with social_work module access sees every school org-wide
+        (the schools are partner organisations, not internal campuses).
+      • Everyone else sees: their own campus + schools with no campus
+        attached (legacy / un-tagged rows that would otherwise be invisible).
+    """
+    from deps import is_system_admin, has_module_access
+    if is_system_admin(current_user) or has_module_access(current_user, "social_work"):
+        query = {}
+    else:
+        scope = await get_campus_filter(current_user)
+        # Always include rows that have no location_id stamped (legacy data
+        # would otherwise vanish for non-admin viewers — this was the bug).
+        if scope:
+            query = {"$or": [
+                scope,
+                {"location_id": {"$in": [None, ""]}},
+                {"location_id": {"$exists": False}},
+            ]}
+        else:
+            query = {}
     schools = await db.social_schools.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     # Attach a student count per school
     for s in schools:

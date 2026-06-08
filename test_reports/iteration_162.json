@@ -1,0 +1,66 @@
+{
+  "summary": "Iteration 162 (password-change real endpoint, fund requests module, HR manual payslip, social-work schools broadening) — 19/20 backend tests PASS (1 lifecycle test SKIPPED because of a critical schema mismatch — see backend_issues.critical below). Frontend smoke verified on live preview: /funds page mounts, sidebar 'Fund Requests' link visible under Operations, New Request button + My/All tabs + per-row Upload Receipt + Cancel CTAs all render; Settings → Security → Change Password form shows 3 password inputs and 'Update Password' button; HR → Payslips tab shows the new 'Manual Payslip' button positioned between 'Run Payday Now' and 'Generate Payslips' exactly as spec'd. Password rotation E2E backend test passed: change → login w/ new works → login w/ old returns 401 → rotated back successfully. Manual payslip net-salary math correct (1,000,000 + 75,000 - 100,000 = 975,000). Receipt upload accepts image/PNG, rejects application/x-msdownload. Cancel flow works. Mark-paid correctly 400s when status='in_progress'.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/funds/workflow + /api/approvals/requests/{id}/act",
+        "issue": "SCHEMA MISMATCH — funds.py L46-50 seeds the default workflow step with field 'approver_roles' (plural list: ['Director','Adviser','Executive Director','Manager','admin','system_admin']), but the existing approvals system in approvals.py L40-45 (validator) and L89-109 (_can_act_on_step) only reads 'approver_role' (singular string). Result: the auto-seeded default workflow step has approver_role=None — _can_act_on_step() returns False for EVERY user including system admins, so NO ONE can approve a default fund request. Tested directly: POST /api/approvals/requests/{rid}/act as admin returns 403 'Not authorized for step Finance / Director approval (requires specific user)'. This makes the entire mark-paid → expense-creation chain unreachable out of the box. The 'approver_roles' plural design appears intentional (list of accepted roles), but the approvals engine wasn't extended to honor it.",
+        "priority": "CRITICAL",
+        "repro": "1) POST /api/funds/requests {kind:'reimbursement',amount:100,purpose:'x'} 2) POST /api/approvals/requests/{rid}/act {outcome:'approved'} as admin → 403",
+        "fix_options": "Either (a) in funds.py change steps to use 'approver_role':'Director' (single) — but loses the multi-role acceptance; OR (b) in approvals._can_act_on_step accept 'approver_roles' list as well: `roles = step_template.get('approver_roles') or ([step_template['approver_role']] if step_template.get('approver_role') else [])` and check user.role in that list with the existing hierarchy & admin-override logic. Option (b) is the right long-term fix; Option (a) is the 1-line hotfix."
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/funds/requests (list)",
+        "issue": "Endpoint comment says 'finance staff see all in campus, others see only their own' but the actual filter at L89-93 is campus-scoped (not submitter-scoped) for non-finance users — so non-finance users in the same campus would see each other's pending fund requests including amounts and purposes. May be intentional (transparency) but contradicts the docstring and the PR description."
+      },
+      {
+        "endpoint": "/api/funds/requests/mine",
+        "issue": "No status/limit query params — returns ALL of user's history (up to 500). For long-tenured users this could grow unbounded. Suggest adding ?status= and ?limit= filters."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Fund Request → mark-paid (finance officer)",
+        "issue": "Blocked at the approval step due to the backend approver_roles/approver_role schema mismatch above. The 'Mark paid' CTA in the UI will never become available for a default-workflow request, because the request can never reach status='approved'.",
+        "affected_selectors": ["[data-testid*='mark-paid']"]
+      }
+    ],
+    "design_issues": [
+      {"screen": "Settings → Security", "issues": ["Submit button label is 'Update Password' but the PR spec/text in feature description says 'Change Password button'. Cosmetic — recommend aligning copy with the page heading ('Change Password')."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration162_funds_password_hr.py",
+    "/app/test_reports/pytest/iter162_results.xml"
+  ],
+  "action_items": [
+    "[CRITICAL] Fix approver_roles/approver_role mismatch between /app/backend/routers/funds.py L46-50 and /app/backend/routers/approvals.py L40-45 + L89-109 — preferred fix: extend _can_act_on_step to honor approver_roles (list) alongside approver_role (singular). Without this, the entire fund-request approval → mark-paid → expense-creation chain is unreachable.",
+    "[MINOR] Align /api/funds/requests list scoping with docstring (either restrict non-finance users to their own submissions OR update the docstring to say 'all campus-scoped').",
+    "[MINOR/COSMETIC] Either rename the Security submit button to 'Change Password' to match spec OR update spec to say 'Update Password'."
+  ],
+  "critical_code_review_comments": [
+    "funds.py is well-structured (~270 LOC, single concern). Mark-paid idempotency check (md.get('expense_id')) is correct and bullet-proof.",
+    "funds.py receipt upload tries cloud storage first (storage.put_object) then falls back to local disk — correct prod-vs-dev fallback. 10MB cap + content-type allow-list (image/* + application/pdf) is right.",
+    "funds.py:286 cancel endpoint correctly gates on status='in_progress' only, and authorizes submitter OR finance OR admin — correct.",
+    "auth.py change-password endpoint correctly (a) requires authenticated user, (b) verifies current password with bcrypt+tarpit, (c) blocks same-as-current and short, (d) updates BOTH users + members tables when linked, (e) writes audit trail. This is a solid, security-correct implementation — major upgrade over the prior fake setTimeout.",
+    "hr.py manual_payslip correctly computes net = gross + allowances - deductions, gates on require_director, sets is_manual=true + salary_id=null. Spec-compliant.",
+    "social_work.py schools listing correctly broadens visibility to all rows for users with social_work module access OR system admins, and includes legacy (location_id=None/missing) rows for everyone else. Spec-compliant.",
+    "CRITICAL: funds.py default workflow step uses 'approver_roles' (plural array) but the existing approvals.py validator/engine only knows 'approver_role' (singular string). See backend_issues.critical for full RCA. This breaks the entire approval lifecycle."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration162_funds_password_hr.py"],
+  "success_rate": {
+    "backend": "95% (19/20 passing, 1 skipped due to critical approver_roles bug)",
+    "frontend": "100% smoke (sidebar link, /funds page, Settings → Security, HR → Payslips → Manual Payslip button all render correctly)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (preserved — test rotates pw and restores it)",
+  "seed_data_creation": "Backend tests created several TEST_iter162-prefixed fund requests (advance + reimbursement), one TEST_iter162 manual payslip for the admin user (period 2026-01, net=975,000 UGX). Fund-request cleanup via DELETE runs on teardown_class but only succeeds for in_progress rows (test_mark_paid_blocked_when_in_progress + test_create_advance leave their rows in 'in_progress' which then get cancelled). The manual payslip is NOT cleaned up — main agent may want to delete the ps_* row from db.hr_payslips matching {is_manual:true, notes:'TEST_iter162 manual payslip'}.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After the approver_roles/approver_role fix lands, re-enable TestFundRequestCRUD::test_mark_paid_after_force_approve_and_idempotent in test_iteration162_funds_password_hr.py — it will exercise the full lifecycle (create → approve via /api/approvals/requests/{id}/act → mark-paid → idempotency check → expense row creation in db.financial). The test currently auto-skips when /act returns non-200, so once the schema bug is fixed it will pass automatically. Also worth adding: a check that after mark-paid the corresponding db.financial row has type='expense', fund_request_id=req_id, and matches amount/currency.",
+  "rca of the issue": "RCA — approver_roles vs approver_role: The funds module was built against a richer mental model (multiple acceptable roles per step) but the existing approvals engine (which predates this iteration) was built around a single approver_role + hierarchy fallback. The code-author for funds.py wrote `'approver_roles': [...]` (line 47) presumably expecting the engine to iterate the list, but approvals._can_act_on_step (line 94) only reads `step_template.get('approver_role')` and returns False when it's None. There's no early validation error because /api/funds/workflow goes straight to db.approval_workflows.insert_one() bypassing the /api/approvals/workflows POST validator at L40 which WOULD have caught this. The bug surfaces only at act-time. Recommended one-shot fix in approvals._can_act_on_step:\n```\nroles_accepted = step_template.get('approver_roles') or ([] if not step_template.get('approver_role') else [step_template['approver_role']])\n# admin / system_admin / ED override\nif role in {'admin','system_admin','Executive Director'}: return True\nif not roles_accepted and not step_template.get('approver_user_id'): return False\nif role in roles_accepted: return True\n# hierarchy fallback against the highest accepted role\nhierarchy = ['Volunteer','Staff','Coordinator','Leader','Manager','Director','Adviser','Executive Director']\ntry:\n    u_idx = hierarchy.index(role)\n    return any(u_idx >= hierarchy.index(r) for r in roles_accepted if r in hierarchy)\nexcept ValueError: return False\n```"
+}

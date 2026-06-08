@@ -30,6 +30,17 @@ export default function HRPage() {
   const [showSalary, setShowSalary] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [showPayslipGen, setShowPayslipGen] = useState(false);
+  const [showManualPayslip, setShowManualPayslip] = useState(false);
+  const [manualPayslip, setManualPayslip] = useState({
+    staff_id: '',
+    period: new Date().toISOString().slice(0, 7),
+    gross_salary: '',
+    currency: 'UGX',
+    allowances: [],
+    deductions: [],
+    notes: '',
+  });
+  const [savingManual, setSavingManual] = useState(false);
   const [showDocReq, setShowDocReq] = useState(false);
   const [showIssueContract, setShowIssueContract] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -279,6 +290,7 @@ export default function HRPage() {
                 }
               } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
             }}><CheckCircle size={14} /> Run Payday Now</Button>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
             <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
           </div>
           {payslips.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No payslips generated yet.</p> : (
@@ -449,6 +461,132 @@ export default function HRPage() {
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setShowPayslipGen(false)}>Cancel</Button>
               <Button className="flex-1" onClick={handleGeneratePayslips} disabled={saving}>{saving ? 'Generating...' : 'Generate'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Payslip Dialog — HR types amount + deductions for an arbitrary staff member */}
+      <Dialog open={showManualPayslip} onOpenChange={setShowManualPayslip}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="manual-payslip-dialog">
+          <DialogHeader>
+            <DialogTitle>Manual Payslip</DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Issue a one-off payslip without a recurring salary record — for casual workers, bonuses, severance, hardship payments, etc.
+            </p>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Staff member *</Label>
+              <Select value={manualPayslip.staff_id} onValueChange={v => setManualPayslip({ ...manualPayslip, staff_id: v })}>
+                <SelectTrigger data-testid="manual-payslip-staff"><SelectValue placeholder="Select staff…" /></SelectTrigger>
+                <SelectContent>
+                  {staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name} {s.department ? `· ${s.department}` : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Pay period *</Label>
+                <Input type="month" value={manualPayslip.period} onChange={e => setManualPayslip({ ...manualPayslip, period: e.target.value })} data-testid="manual-payslip-period" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Currency</Label>
+                <Input value={manualPayslip.currency} onChange={e => setManualPayslip({ ...manualPayslip, currency: e.target.value.toUpperCase() })} maxLength={4} className="font-mono uppercase" data-testid="manual-payslip-currency" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Gross amount *</Label>
+              <Input type="number" value={manualPayslip.gross_salary} onChange={e => setManualPayslip({ ...manualPayslip, gross_salary: e.target.value })} placeholder="500000" data-testid="manual-payslip-gross" />
+            </div>
+
+            {/* Allowances */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-emerald-700">Allowances (+)</Label>
+                <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setManualPayslip({ ...manualPayslip, allowances: [...manualPayslip.allowances, { name: '', amount: '' }] })} data-testid="manual-payslip-add-allowance">
+                  <Plus size={10} className="mr-1" /> Add
+                </Button>
+              </div>
+              {manualPayslip.allowances.map((a, i) => (
+                <div key={i} className="flex gap-1.5" data-testid={`manual-payslip-allowance-${i}`}>
+                  <Input className="flex-1 h-8 text-xs" placeholder="Transport" value={a.name} onChange={e => { const next = [...manualPayslip.allowances]; next[i] = { ...next[i], name: e.target.value }; setManualPayslip({ ...manualPayslip, allowances: next }); }} />
+                  <Input className="w-24 h-8 text-xs" type="number" placeholder="0" value={a.amount} onChange={e => { const next = [...manualPayslip.allowances]; next[i] = { ...next[i], amount: e.target.value }; setManualPayslip({ ...manualPayslip, allowances: next }); }} />
+                  <Button size="sm" variant="ghost" className="h-8 px-2 text-destructive" onClick={() => setManualPayslip({ ...manualPayslip, allowances: manualPayslip.allowances.filter((_, j) => j !== i) })}>×</Button>
+                </div>
+              ))}
+            </div>
+
+            {/* Deductions */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-rose-700">Deductions (−)</Label>
+                <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setManualPayslip({ ...manualPayslip, deductions: [...manualPayslip.deductions, { name: '', amount: '' }] })} data-testid="manual-payslip-add-deduction">
+                  <Plus size={10} className="mr-1" /> Add
+                </Button>
+              </div>
+              {manualPayslip.deductions.map((d, i) => (
+                <div key={i} className="flex gap-1.5" data-testid={`manual-payslip-deduction-${i}`}>
+                  <Input className="flex-1 h-8 text-xs" placeholder="NSSF / PAYE / Loan" value={d.name} onChange={e => { const next = [...manualPayslip.deductions]; next[i] = { ...next[i], name: e.target.value }; setManualPayslip({ ...manualPayslip, deductions: next }); }} />
+                  <Input className="w-24 h-8 text-xs" type="number" placeholder="0" value={d.amount} onChange={e => { const next = [...manualPayslip.deductions]; next[i] = { ...next[i], amount: e.target.value }; setManualPayslip({ ...manualPayslip, deductions: next }); }} />
+                  <Button size="sm" variant="ghost" className="h-8 px-2 text-destructive" onClick={() => setManualPayslip({ ...manualPayslip, deductions: manualPayslip.deductions.filter((_, j) => j !== i) })}>×</Button>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Notes (optional)</Label>
+              <Textarea rows={2} value={manualPayslip.notes} onChange={e => setManualPayslip({ ...manualPayslip, notes: e.target.value })} placeholder="End-of-year bonus, severance pay, etc." data-testid="manual-payslip-notes" />
+            </div>
+
+            {/* Live preview */}
+            {(() => {
+              const g = Number(manualPayslip.gross_salary || 0);
+              const a = manualPayslip.allowances.reduce((sum, x) => sum + Number(x.amount || 0), 0);
+              const d = manualPayslip.deductions.reduce((sum, x) => sum + Number(x.amount || 0), 0);
+              const net = g + a - d;
+              return (
+                <div className="p-2 rounded bg-muted/40 text-xs space-y-0.5" data-testid="manual-payslip-preview">
+                  <div className="flex justify-between"><span>Gross</span><span className="font-mono">{manualPayslip.currency} {g.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-emerald-700"><span>+ Allowances</span><span className="font-mono">{a.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-rose-700"><span>− Deductions</span><span className="font-mono">{d.toLocaleString()}</span></div>
+                  <div className="flex justify-between font-semibold border-t pt-0.5"><span>Net</span><span className="font-mono">{net.toLocaleString()}</span></div>
+                </div>
+              );
+            })()}
+
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowManualPayslip(false)}>Cancel</Button>
+              <Button
+                className="flex-1"
+                disabled={savingManual || !manualPayslip.staff_id || !manualPayslip.gross_salary}
+                data-testid="manual-payslip-issue"
+                onClick={async () => {
+                  setSavingManual(true);
+                  try {
+                    const payload = {
+                      staff_id: manualPayslip.staff_id,
+                      period: manualPayslip.period,
+                      gross_salary: Number(manualPayslip.gross_salary),
+                      currency: manualPayslip.currency || 'UGX',
+                      allowances: manualPayslip.allowances.filter(x => x.amount && Number(x.amount) > 0),
+                      deductions: manualPayslip.deductions.filter(x => x.amount && Number(x.amount) > 0),
+                      notes: manualPayslip.notes,
+                    };
+                    const res = await api.post('/hr/payslips/manual', payload);
+                    toast.success(`Payslip issued — ${res.data.currency} ${res.data.net_salary.toLocaleString()} net`);
+                    setPayslips(prev => [res.data, ...prev]);
+                    setShowManualPayslip(false);
+                    setManualPayslip({ staff_id: '', period: new Date().toISOString().slice(0, 7), gross_salary: '', currency: 'UGX', allowances: [], deductions: [], notes: '' });
+                  } catch (e) {
+                    toast.error(e.response?.data?.detail || 'Failed to issue payslip');
+                  } finally {
+                    setSavingManual(false);
+                  }
+                }}
+              >
+                {savingManual ? 'Issuing…' : 'Issue payslip'}
+              </Button>
             </div>
           </div>
         </DialogContent>

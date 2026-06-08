@@ -10,7 +10,7 @@ import {
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
   PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server,
-  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark
+  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark, Banknote
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -57,6 +57,7 @@ const NAV_SECTIONS = [
       { to: '/members', icon: Users, label: 'People', roles: STAFF_PLUS },
       { to: '/volunteer-scheduling', icon: Clock, label: 'Scheduling', roles: COORDINATOR_PLUS },
       { to: '/social-work', icon: HeartHandshake, label: 'Social Work', roles: STAFF_PLUS, module: 'social_work' },
+      { to: '/funds', icon: Banknote, label: 'Fund Requests', roles: STAFF_PLUS },
       { to: '/access', icon: ScanLine, label: 'Access Control', roles: COORDINATOR_PLUS },
     ]
   },
@@ -399,6 +400,7 @@ export default function Layout() {
       '/accounting': { roles: null, module: 'accounting' },
       '/banking': { roles: null, module: 'banking' },
       '/approvals': { roles: null, module: 'finance' },
+      '/funds': { roles: STAFF_PLUS, module: null },
       '/sales': { roles: null, module: 'sales' },
       '/social-work': { roles: STAFF_PLUS, module: 'social_work' },
       // Sub-pages that piggy-back off finance/accounting/sales modules
