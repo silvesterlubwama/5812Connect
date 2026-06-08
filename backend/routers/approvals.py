@@ -87,26 +87,40 @@ def _step_done(step_state: dict) -> bool:
 
 
 def _can_act_on_step(user: dict, step_template: dict) -> bool:
-    """Check if `user` is an authorized approver for `step_template`."""
+    """Check if `user` is an authorized approver for `step_template`.
+
+    Supports two role-shape conventions:
+      • approver_role  (str) — legacy single-role steps
+      • approver_roles (list[str]) — newer multi-role steps (e.g. iter-162 fund
+        requests where any of {Director, Adviser, Manager, admin} can sign off).
+    Either / both can be present; we union them.
+    """
     if step_template.get("approver_user_id") and step_template["approver_user_id"] == user["id"]:
         return True
     role = (user.get("role") or "")
-    required_role = step_template.get("approver_role")
-    if required_role:
-        # System admins / EDs / admins can override anywhere
-        if role in {"admin", "system_admin", "Executive Director"}:
-            return True
-        if role == required_role:
-            return True
-        # Hierarchical: Director can approve Manager-level; Manager can approve Coordinator/Leader
-        hierarchy = ["Volunteer", "Staff", "Coordinator", "Leader", "Manager", "Director", "Adviser", "Executive Director"]
-        try:
-            u_idx = hierarchy.index(role)
-            r_idx = hierarchy.index(required_role)
-            return u_idx >= r_idx
-        except ValueError:
+    # System admins / EDs always override (organisational policy — supersedes any per-step rule)
+    if role in {"admin", "system_admin", "Executive Director"}:
+        return True
+    accepted_roles = []
+    if step_template.get("approver_role"):
+        accepted_roles.append(step_template["approver_role"])
+    if step_template.get("approver_roles"):
+        accepted_roles.extend(step_template["approver_roles"])
+    if not accepted_roles:
+        return False
+    if role in accepted_roles:
+        return True
+    # Hierarchical: a higher rank than the LOWEST accepted role can approve.
+    # e.g. accepted={Manager,Director} → Adviser/ED can also approve.
+    hierarchy = ["Volunteer", "Staff", "Coordinator", "Leader", "Manager", "Director", "Adviser", "Executive Director"]
+    try:
+        u_idx = hierarchy.index(role)
+        accepted_idxs = [hierarchy.index(r) for r in accepted_roles if r in hierarchy]
+        if not accepted_idxs:
             return False
-    return False
+        return u_idx >= min(accepted_idxs)
+    except ValueError:
+        return False
 
 
 @router.get("/requests")

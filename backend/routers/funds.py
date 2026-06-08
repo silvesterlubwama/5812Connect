@@ -80,17 +80,26 @@ async def all_fund_requests(
     status: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """All fund requests scoped to the user's campus. Anyone can list — the
-    list itself is non-sensitive (titles + amounts); the act-on permission
-    lives on the underlying approval workflow."""
+    """Fund-request list view.
+
+    Visibility rules (intentionally restrictive — fund requests can mention
+    salary advances, hardship payments, and other sensitive amounts):
+      • system_admin / finance-module users → all requests across their campus.
+      • everyone else → only their OWN submissions (use /requests/mine for the
+        explicit-self surface; this endpoint also self-scopes to avoid an
+        accidental cross-staff data leak when the role check below is bypassed).
+    """
     query = {"subject_kind": "fund_request"}
     if status:
         query["status"] = status
-    if not is_system_admin(current_user) and not has_module_access(current_user, "finance"):
-        # Non-finance non-admin staff only see their own + their campus
+    if is_system_admin(current_user) or has_module_access(current_user, "finance"):
+        # Privileged: campus-scope only
         scope = await get_campus_filter(current_user)
         if scope:
             query.update(scope)
+    else:
+        # Everyone else: self-scope, regardless of campus
+        query["submitted_by"] = current_user["id"]
     rows = await db.approval_requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return rows
 

@@ -6,6 +6,28 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 165 (Jun 8, 2026)
+**🚨 Password-change security fix + Social-work schools + Fund Requests module + HR manual payslip + Approvals multi-role.**
+
+### Security-critical fix (P0)
+**Password change form on Settings → Security was a fake `setTimeout`** — users believed they rotated passwords but the request never reached the backend. Now wired to a real `POST /api/auth/change-password` with bcrypt verification of the current password, tarpit on wrong attempts, audit logging, and mirroring to the `members` collection when the account is linked.
+
+### Shipped
+1. **Social-work schools**: `GET /api/social-work/schools` broadens visibility — system admins + anyone with `social_work` module access see every school org-wide (schools are partner orgs, not campuses). Non-privileged users see campus + legacy un-tagged rows.
+2. **Fund Requests module** (NEW): `routers/funds.py` wraps Approvals with `subject_kind='fund_request'`. Submit advance/reimbursement, upload receipt (10 MB image/PDF, cloud→disk fallback), finance marks paid → auto-creates `db.financial` expense with back-ref. Idempotent. New `/funds` route + sidebar link under Operations (STAFF_PLUS).
+3. **HR manual payslip**: `POST /api/hr/payslips/manual` (director+): one-off payslip with arbitrary gross + allowances + deductions. Live net-preview in the dialog.
+4. **Approvals multi-role engine**: `_can_act_on_step` now honors both `approver_role` (legacy singular) and `approver_roles` (new plural list). Unblocks the entire fund-request approval chain — without this, the auto-seeded workflow could never be approved.
+
+### Verification
+- New `tests/test_iteration162_funds_password_hr.py` — 19/20 PASS at first run (1 skipped due to approver_roles bug, now fixed).
+- Live E2E roundtrip confirmed: create → approve via `/api/approvals/requests/{id}/act` → mark-paid → expense in `db.financial` → idempotent re-call returns same expense_id.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+- Test fixtures cleaned (1 payslip + 6 fund requests deleted from DB).
+
+### Action for the user
+- **Production redeploy** — most important reason is the password-change security fix.
+- **Appliance** — `sudo docker compose pull && sudo docker compose up -d` (or wait for nightly auto-update).
+
 ## Recently Resolved — Iteration 164 (Jun 1, 2026)
 **Docker-compose appliance for self-hosted deployment.**
 
