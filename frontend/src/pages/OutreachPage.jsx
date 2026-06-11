@@ -350,11 +350,29 @@ export default function OutreachPage() {
         <DialogContent className="max-w-sm max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Generate Recurring Events</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">{showRecurring?.name}</p>
-          <div className="space-y-4 mt-2">
+          {/* key={} forces a full remount when the dialog opens AFTER recurForm
+              is populated — fixes a Radix timing issue where SelectValue rendered
+              blank because items hadn't registered yet at the time `value` was set. */}
+          <div className="space-y-4 mt-2" key={showRecurring?.id || 'closed'}>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Recurrence Pattern</Label>
-                <Select value={recurForm.pattern} onValueChange={v => setRecurForm({...recurForm, pattern: v})}>
-                  <SelectTrigger data-testid="outreach-pattern-select"><SelectValue /></SelectTrigger>
+                <Select value={recurForm.pattern || 'weekly'} onValueChange={v => setRecurForm({...recurForm, pattern: v})}>
+                  <SelectTrigger data-testid="outreach-pattern-select">
+                    {/* Explicit label fallback — Radix's value→label mapping is
+                        flaky when the dialog opens (SelectItems mount lazily inside
+                        SelectContent) and would otherwise show blank. */}
+                    {({
+                      daily: 'Daily',
+                      weekly: 'Weekly',
+                      biweekly: 'Bi-weekly',
+                      monthly: 'Monthly (same date)',
+                      bimonthly: 'Bi-monthly (every 2 months)',
+                      quarterly: 'Quarterly (every 3 months)',
+                      yearly: 'Yearly',
+                      nth_week: 'Nth Weekday of Month',
+                      nth_month: 'Nth Day of Month',
+                    }[recurForm.pattern] || 'Weekly')}
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="daily">Daily</SelectItem>
                     <SelectItem value="weekly">Weekly</SelectItem>

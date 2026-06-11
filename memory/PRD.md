@@ -6,6 +6,37 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 166 (Jun 11, 2026)
+**Event signups visibility + Outreach recurring-event generation bug.**
+
+### Bugs fixed
+
+**1. Event signups not visible to staff (Registrations tab always empty)**
+Root cause: `GET /api/events/{id}` was reading from `db.event_registrations`, but every public-signup endpoint (`/api/public/bookings/event`, waitlist, etc.) writes to `db.public_bookings`. Wrong collection → empty list.
+
+Fix in `routers/events.py` L314+: merge both collections, dedup by `email+phone`, exclude `status='cancelled'`. Each attendee row now carries `name / email / phone / status / num_tickets / tier_name / total / created_at / source`. The legacy `event.registered` counter is auto-synced to `sum(num_tickets) + len(legacy_regs)` on every GET — so the event card always shows the real number.
+
+UI in `EventsPage.jsx`: attendees tab now renders ticket count + tier + total + registered-at + payment status when present (was just name+email+badge).
+
+**2. Recurring Outreach events: only 1 generated regardless of frequency**
+Root cause was on the FRONTEND, not the backend. Line 204 of `OutreachPage.jsx` reset `recurForm` to a **completely different shape** (`{months_ahead, nth_day, day_of_week:'saturday', time, end_time}`) when the dialog opened. This wiped the proper fields (`pattern`, `occurrences`, `interval`, `start_date`, `end_date`). On submit, the form's blank fields produced undefined payload values; backend defaults kicked in unpredictably; an explicit `end_date` (which the user always sets) would frequently land just after the first iteration, terminating the generation loop at 1 event.
+
+Fix: rewrote the click handler to reset `recurForm` to the proper schema, pre-filled from `programme.recurrence_*` fields. Added validation: end_date must be ≥ start_date; start_date required; warn-toast when only 1 event was created with `occurrences>1` (the bug's fingerprint).
+
+**3. Bonus polish — Radix Select rendering blank on dialog open**
+Found by the testing agent. The Pattern Select trigger rendered visually blank even though state was correct, because Radix's value→label mapping fails when `SelectItem`s register lazily after the value prop is set. Fix: explicit label fallback inside `SelectTrigger` (`{patternLabels[recurForm.pattern] || 'Weekly'}`) so the user always sees the current selection even if Radix's mapping hasn't kicked in yet.
+
+### Verification
+- Live E2E confirmed: public RSVP → staff event detail shows `attendee_count=1, registered=2, first_attendee='Alice Test'`. weekly×10 → 10 events. monthly×6 with 5-month end_date → 6 events. daily×5 → 5 events. end_date < start_date → 0 events (was the bug fingerprint).
+- Pattern Select now shows "Weekly" on open (visual confirmation via screenshot).
+- 20/20 smoke + branding regression green.
+- All 3 lint gates pass.
+- Test data cleaned (54 events + 19 bookings + 0 programmes deleted from DB).
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org` to ship both fixes.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update timer picks it up tonight at 03:30 UTC, OR `sudo docker compose pull && sudo docker compose up -d` to pull it now.
+
 ## Recently Resolved — Iteration 165 (Jun 8, 2026)
 **🚨 Password-change security fix + Social-work schools + Fund Requests module + HR manual payslip + Approvals multi-role.**
 
