@@ -115,6 +115,17 @@ export default function OutreachPage() {
 
   const generateRecurring = async () => {
     if (!showRecurring) return;
+    // Validate end_date isn't before start_date (was producing 1 event then bailing
+    // out of the backend loop — common cause of "only 1 event generated").
+    if (recurForm.end_date && recurForm.start_date && recurForm.end_date < recurForm.start_date) {
+      toast.error('End date must be after start date');
+      return;
+    }
+    if (!recurForm.start_date) {
+      toast.error('Pick a start date');
+      return;
+    }
+    const occurrences = Math.max(1, Math.min(104, parseInt(recurForm.occurrences) || 12));
     setSaving(true);
     try {
       const res = await outreachApi.generateRecurring({
@@ -122,20 +133,28 @@ export default function OutreachPage() {
         type: 'outreach',
         location: showRecurring.location || '',
         location_id: showRecurring.location_id || '',
-        pattern: recurForm.pattern,
-        occurrences: parseInt(recurForm.occurrences) || 12,
+        pattern: recurForm.pattern || 'weekly',
+        occurrences,
         interval: parseInt(recurForm.interval) || 1,
         start_date: recurForm.start_date,
         end_date: recurForm.end_date || undefined,
-        time: recurForm.time,
-        end_time: recurForm.end_time,
+        time: recurForm.time || '09:00',
+        end_time: recurForm.end_time || '',
         day_of_week: parseInt(recurForm.day_of_week) || 0,
         nth_week: parseInt(recurForm.nth_week) || 1,
         day_of_month: parseInt(recurForm.day_of_month) || 1,
       });
-      toast.success(`Generated ${res.data.created} recurring events`);
+      const count = res.data?.created || 0;
+      if (count === 0) {
+        toast.error('No events generated — check that the end date is after the start date');
+      } else if (count === 1 && occurrences > 1) {
+        // The backend bailed on iteration 2 — almost always end_date too close to start
+        toast.warning(`Only 1 event generated. Did you pick an end date too close to ${recurForm.start_date}?`);
+      } else {
+        toast.success(`Generated ${count} recurring events`);
+      }
       setShowRecurring(null);
-    } catch { toast.error('Failed to generate events'); }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to generate events'); }
     finally { setSaving(false); }
   };
 
@@ -201,7 +220,29 @@ export default function OutreachPage() {
                     <div className="flex gap-1.5 border-t border-border pt-3">
                       <Button size="sm" variant="ghost" onClick={() => editProgram(p)} title="Edit"><Settings size={13} /></Button>
                       <Button size="sm" variant="ghost" onClick={() => duplicateProgram(p)} title="Duplicate"><Copy size={13} /></Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setRecurForm({ months_ahead: 3, nth_day: p.recurrence_day || 2, day_of_week: p.recurrence_pattern || 'saturday', time: p.recurrence_time || '09:00', end_time: p.recurrence_end_time || '12:00' }); setShowRecurring(p); }} title="Generate Events"><Repeat size={13} /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => {
+                        // Open the recurrence dialog with a properly-shaped form.
+                        // Pre-fills FROM the programme's stored recurrence_* settings
+                        // when present, so editing an existing recurring programme
+                        // keeps the user's prior choices. Defaults match the form
+                        // schema declared in useState(line 42) — critical to avoid
+                        // React's "controlled-to-uncontrolled" warning that hid the
+                        // pattern + dates and silently dropped them on submit.
+                        const today = new Date().toISOString().split('T')[0];
+                        setRecurForm({
+                          pattern: p.recurrence_pattern || 'weekly',
+                          occurrences: 12,
+                          interval: 1,
+                          day_of_week: typeof p.recurrence_day === 'number' ? p.recurrence_day : 5,
+                          nth_week: 2,
+                          day_of_month: 1,
+                          time: p.recurrence_time || '09:00',
+                          end_time: p.recurrence_end_time || '12:00',
+                          start_date: p.start_date || today,
+                          end_date: '',
+                        });
+                        setShowRecurring(p);
+                      }} title="Generate Events" data-testid={`outreach-generate-${p.id}`}><Repeat size={13} /></Button>
                       <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteProgram(p.id)}><Trash2 size={13} /></Button>
                     </div>
                   </CardContent>

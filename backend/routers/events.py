@@ -316,8 +316,52 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    attendees = await db.event_registrations.find({"event_id": event_id}, {"_id": 0}).to_list(500)
+    # Public signups land in db.public_bookings (see POST /api/public/bookings/event).
+    # Legacy / internal registrations may live in db.event_registrations. Merge both
+    # so the staff "Registrations" tab shows everyone regardless of entry path.
+    public_bookings = await db.public_bookings.find(
+        {"event_id": event_id, "status": {"$ne": "cancelled"}},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(2000)
+    legacy_regs = await db.event_registrations.find({"event_id": event_id}, {"_id": 0}).to_list(500)
+    # Normalise into the shape the frontend already expects: {name, email, phone, status, num_tickets, ...}
+    attendees = []
+    seen = set()
+    for b in public_bookings:
+        key = (b.get("email") or "").lower() + "|" + str(b.get("phone") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        attendees.append({
+            "id": b.get("id"),
+            "name": b.get("name") or b.get("guest_name") or "Anonymous",
+            "email": b.get("email", ""),
+            "phone": b.get("phone", ""),
+            "status": b.get("status", "confirmed"),
+            "payment_status": b.get("payment_status"),
+            "num_tickets": b.get("num_tickets", 1),
+            "tier_name": b.get("tier_name"),
+            "total": b.get("total"),
+            "created_at": b.get("created_at"),
+            "source": "public_booking",
+        })
+    for r in legacy_regs:
+        key = (r.get("email") or "").lower() + "|" + str(r.get("phone") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        attendees.append({**r, "source": "registration"})
     event["attendees"] = attendees
+    event["attendee_count"] = len(attendees)
+    # Keep the legacy "registered" counter in sync with the actual booking total —
+    # this is what shows on event cards.
+    real_count = sum(b.get("num_tickets", 1) for b in public_bookings) + len(legacy_regs)
+    if event.get("registered") != real_count:
+        try:
+            await db.events.update_one({"id": event_id}, {"$set": {"registered": real_count}})
+            event["registered"] = real_count
+        except Exception:
+            pass
     checkins = await db.checkins.find({"event_id": event_id}, {"_id": 0}).to_list(500)
     event["checkins"] = checkins
     return event

@@ -216,3 +216,4 @@ desktop/resources/cloudflared/cloudflared*
 # is a safety net.
 appliance/data/*/
 !appliance/data/*/.gitkeep
+frontend/node_modules/.cache/default-development/149.pack

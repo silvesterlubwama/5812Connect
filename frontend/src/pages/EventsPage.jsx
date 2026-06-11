@@ -425,11 +425,31 @@ export default function EventsPage() {
                   )}
                 </TabsContent>
                 <TabsContent value="attendees" className="mt-3">
-                  {(eventDetail.attendees ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No registrations</p> : (
-                    <div className="space-y-2">{eventDetail.attendees.map((a, i) => (
-                      <div key={a.id || a.email || `att-${i}`} className="flex items-center justify-between p-2 rounded border border-border text-sm">
-                        <div><p className="font-medium">{a.name}</p><p className="text-xs text-muted-foreground">{a.email}</p></div>
-                        <Badge className="bg-green-600 text-white border-0 text-xs">{a.status}</Badge>
+                  {(eventDetail.attendees ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-6" data-testid="event-attendees-empty">No registrations yet — when people sign up via the public event page or staff register them internally, they'll appear here.</p> : (
+                    <div className="space-y-2" data-testid="event-attendees-list">{eventDetail.attendees.map((a, i) => (
+                      <div key={a.id || a.email || `att-${i}`} className="flex items-center justify-between gap-2 p-2 rounded border border-border text-sm flex-wrap" data-testid={`attendee-row-${a.id || i}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{a.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {a.email || '—'}{a.phone ? ` · ${a.phone}` : ''}
+                          </p>
+                          {(a.num_tickets > 1 || a.tier_name) && (
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {a.num_tickets || 1} ticket{(a.num_tickets || 1) === 1 ? '' : 's'}
+                              {a.tier_name ? ` · ${a.tier_name}` : ''}
+                              {a.total ? ` · ${eventDetail.currency || 'UGX'} ${Number(a.total).toLocaleString()}` : ''}
+                            </p>
+                          )}
+                          {a.created_at && (
+                            <p className="text-[10px] text-muted-foreground">Registered {new Date(a.created_at).toLocaleString()}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {a.payment_status && a.payment_status !== 'paid' && a.payment_status !== 'free' && (
+                            <Badge variant="outline" className="text-[10px] capitalize">{a.payment_status}</Badge>
+                          )}
+                          <Badge className="bg-green-600 text-white border-0 text-xs capitalize">{a.status}</Badge>
+                        </div>
                       </div>
                     ))}</div>
                   )}

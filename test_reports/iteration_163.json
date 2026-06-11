@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 163 — verified the two bug fixes from PR: (A) GET /api/events/{id} now merges public_bookings + event_registrations and exposes them in event.attendees (PASSED). (B) POST /api/events/generate-recurring counts are now correct: weekly×10=10, monthly×6 with 5-mo end_date=6, daily×5=5, end_date<start=0 (PASSED). 6/7 backend tests pass; 1 test skipped because no public endpoint exists to cancel a public_booking (cancelled-exclusion logic verified by code-read instead). Frontend UI on /outreach mostly correct: outreach-generate-{pid} testid present, dialog opens with occurrences=12, start_date=today, end_date blank, generate-recurring-btn submit testid present, and empty-start-date validation toast 'Pick a start date' fires correctly. HOWEVER — one frontend bug found: the Recurrence Pattern Select DROPDOWN IS VISUALLY BLANK on dialog open even though recurForm.pattern='weekly' is set in state (Radix <SelectValue /> renders an empty span). This directly contradicts the PR claim that 'The Select dropdown for Pattern shows a selected value (not blank)'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/public-bookings/{id} / /api/bookings/{id}",
+        "issue": "No public-bookings update/cancel endpoint exists. Staff cannot cancel a public_booking via the API; only db.bookings (resource bookings) has cancel/update routes. The dedup/exclude-cancelled logic in GET /events/{id} (status:{$ne:'cancelled'}) is therefore unreachable from the UI for public-event bookings — admins would need direct DB access. Consider adding PUT /api/public-bookings/{id}/cancel or merging the two collections."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "OutreachPage → Generate Recurring Events dialog → Recurrence Pattern Select",
+        "issue": "The pattern Select trigger is VISUALLY BLANK on dialog open even though recurForm.pattern='weekly' is set in state. <SelectValue /> renders an empty span (verified via inner_html). Root cause: shadcn/ui Select uses Radix Select where <SelectValue /> displays the matching SelectItem's children text ('Weekly'), but in this case the Select is rendered AFTER setRecurForm(); Radix's controlled-value-to-text mapping is failing silently. Quick fix: add a placeholder so users see SOMETHING, and/or set `defaultValue` on <Select>: e.g. `<Select value={recurForm.pattern} defaultValue='weekly' ...><SelectTrigger><SelectValue placeholder='Weekly' /></SelectTrigger>`. Better fix: ensure SelectItems are mounted before the value prop changes, or use a key on Select that changes when the dialog opens to force re-render after state is set.",
+        "selector": "[data-testid='outreach-pattern-select']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "OutreachPage validation toast",
+        "issue": "When clicking 'Generate Events' with empty start_date the toast 'Pick a start date' fires TWICE (double-render or double-call of the toast). Functionally fine but visually duplicates the toast.",
+        "selector": "[data-testid='generate-recurring-btn']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter163_events_attendees_recurring.py",
+    "/app/test_reports/pytest/iter163_results.xml"
+  ],
+  "action_items": [
+    "[HIGH] Fix Recurrence Pattern Select in OutreachPage.jsx L355-370 — it renders blank on dialog open. Recommended: change <SelectValue /> to <SelectValue placeholder='Weekly' /> AND set `defaultValue` on the <Select> root, OR add `key={showRecurring?.id || 'closed'}` to force remount when dialog opens after state is set.",
+    "[LOW] Investigate the duplicate 'Pick a start date' toast (called twice when start_date is empty).",
+    "[OPTIONAL] Consider adding a PUT/cancel endpoint for db.public_bookings rows so the cancelled-attendee exclusion is reachable from the UI (not just from direct DB access)."
+  ],
+  "critical_code_review_comments": [
+    "events.py GET /events/{event_id} dedup logic is sound — public_booking wins on key collision (iterated first), and the registered counter is auto-synced on every GET. Good defensive code with try/except around the update.",
+    "events.py generate_recurring_events is correctly implemented; the `if end_date and date_str > end_date: break` guard is what makes end<start return 0 events (bug fingerprint verified).",
+    "OutreachPage.jsx setRecurForm shape is correct (matches the form schema); the visual blank-Select bug is a Radix hydration/timing issue, not a state-shape issue — the underlying value IS 'weekly', verified by submit succeeding without re-selecting.",
+    "Missing: a public/admin endpoint to cancel a public_booking row. The status:{$ne:'cancelled'} filter on the backend will work, but only if some endpoint can set status='cancelled' on public_bookings."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter163_events_attendees_recurring.py"],
+  "success_rate": {
+    "backend": "100% of executable tests (6/6 PASSED, 1 SKIPPED due to missing public cancel endpoint — not a bug in the PR)",
+    "frontend": "85% — dialog opens correctly with all defaults, validation fires, submit testid works; ONE high-priority bug: Pattern Select is visually blank on open"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (worked)",
+  "seed_data_creation": "Backend test creates TEST_iter163_event_* and TEST_iter163_recur_* events plus 1-2 public_bookings with email *_e2e.test. Most events are deleted in teardown_class. Some recurring events from the weekly×10, monthly×6, daily×5 generators may remain — these are dated 2030+ so harmless. Two e2e.test bookings persist for the test event that was deleted (orphan bookings — main agent's cleanup script removes by email @e2e.test).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After the Recurrence Pattern Select fix, verify that (a) Pattern shows 'Weekly' (or programme.recurrence_pattern label) on dialog open, (b) the value is submittable WITHOUT clicking the dropdown first, and (c) toast doesn't double-fire. The backend tests in test_iter163_events_attendees_recurring.py can be reused as regression. The cancelled-booking exclude test (test_cancelled_booking_excluded) will auto-skip until a public-bookings cancel endpoint is added.",
+  "rca of the issue": "Recurrence Pattern blank: Radix Select's <SelectValue /> renders the SelectItem's children for the matching `value`. When the dialog opens, the Select component mounts WITH `value='weekly'`, but Radix needs the SelectItem children to be registered into its internal viewport context BEFORE it can map the value to display-text. In React the order is: setRecurForm() → setShowRecurring() → Dialog mounts → Select mounts → SelectItems register. Because `value` is set on the Select trigger BEFORE its items have registered with Radix's portal-driven viewport, the trigger sees `value='weekly'` but no item registered yet → falls back to empty. Workarounds: (1) Add a `<SelectValue placeholder='Weekly' />` so something shows. (2) Set `defaultValue='weekly'` on <Select>. (3) Force a remount when the dialog opens via `<Select key={showRecurring?.id} ...>`. Option (3) is the cleanest fix."
+}
