@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe } from 'lucide-react';
 import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import ReviewsDueWidget from '../components/ReviewsDueWidget';
+import ExternalSponsorAutocomplete from '../components/ExternalSponsorAutocomplete';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -526,6 +527,25 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
   const [complianceEdits, setComplianceEdits] = useState({});
   const [newNote, setNewNote] = useState({ kind: 'visit', body: '', is_confidential: false });
   const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
+  // When a manual sponsor's email matches an existing in-system user we surface a
+  // "link this account instead?" banner so org-wide identity stays unified.
+  const [sponsorUserMatch, setSponsorUserMatch] = useState(null);
+
+  // Watch the manual-sponsor email and check the members directory for a match.
+  // Debounced 400ms so we don't spam the API on every keystroke. Cleared when
+  // the user dismisses, links, or switches sponsor modes.
+  useEffect(() => {
+    const email = (caseDoc?.sponsor_manual?.email || '').trim().toLowerCase();
+    if (!email || email.length < 5 || !caseDoc?.sponsor_manual_mode) {
+      setSponsorUserMatch(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      const hit = (members || []).find(m => (m.email || '').toLowerCase() === email);
+      setSponsorUserMatch(hit || null);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [caseDoc?.sponsor_manual?.email, caseDoc?.sponsor_manual_mode, members]);
 
   const reload = useCallback(async () => {
     if (!caseId) { setCaseDoc(null); setNotes([]); setPayments([]); setComplianceSchema(null); return; }
@@ -753,17 +773,50 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                 </div>
 
                 {(caseDoc.sponsor_manual_mode || caseDoc.sponsor_manual) ? (
+                  <>
+                    {/* In-system user match prompt — if the manual email matches an
+                        existing app user, suggest linking that account instead so
+                        org-wide identity stays unified. */}
+                    {sponsorUserMatch && (
+                      <div className="p-2 rounded border border-amber-300 bg-amber-50 text-xs flex items-center justify-between gap-2 flex-wrap" data-testid="cd-sponsor-user-match-banner">
+                        <p className="text-amber-900 flex-1 min-w-0">
+                          <strong>{sponsorUserMatch.name}</strong> is already a user in your team ({sponsorUserMatch.email}).
+                          Link their account instead?
+                        </p>
+                        <button
+                          type="button"
+                          className="px-2.5 py-1 rounded bg-amber-600 text-white text-[11px] shrink-0"
+                          onClick={async () => {
+                            await api.put(`/social-work/cases/${caseId}`, { sponsor_member_id: sponsorUserMatch.id, sponsor_manual: null });
+                            setCaseDoc({ ...caseDoc, sponsor_member_id: sponsorUserMatch.id, sponsor_manual: null, sponsor_manual_mode: false });
+                            toast.success(`Linked ${sponsorUserMatch.name}`);
+                          }}
+                          data-testid="cd-sponsor-link-user-btn"
+                        >Link account</button>
+                      </div>
+                    )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">Sponsor name *</Label>
-                      <Input
-                        className="h-8 text-xs"
+                      <Label className="text-[10px] text-muted-foreground">Sponsor name * <span className="opacity-60">(type to find existing donors)</span></Label>
+                      <ExternalSponsorAutocomplete
                         value={caseDoc.sponsor_manual?.name || ''}
-                        onChange={e => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), name: e.target.value } })}
-                        onBlur={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual, sponsor_member_id: null }).catch(() => {})}
+                        onChange={v => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), name: v } })}
+                        onPick={(g) => {
+                          const next = { name: g.name, email: g.email || '', phone: g.phone || '', notes: g.notes || '' };
+                          setCaseDoc({ ...caseDoc, sponsor_manual: next });
+                          api.put(`/social-work/cases/${caseId}`, { sponsor_manual: next, sponsor_member_id: null }).catch(() => {});
+                          toast.success(`Picked existing sponsor: ${g.name}${g.active_cases > 0 ? ` (already on ${g.active_cases} case${g.active_cases === 1 ? '' : 's'})` : ''}`);
+                        }}
                         placeholder="e.g. Sarah Johnson"
-                        data-testid="cd-sponsor-manual-name"
+                        testid="cd-sponsor-manual-name"
                       />
+                      {caseDoc.sponsor_manual?.name && (
+                        <Button
+                          size="sm" variant="ghost" className="h-6 text-[10px] -mt-0.5 px-1"
+                          onClick={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual, sponsor_member_id: null }).catch(() => {})}
+                          data-testid="cd-sponsor-manual-save-name"
+                        >Save name</Button>
+                      )}
                     </div>
                     <div className="space-y-1">
                       <Label className="text-[10px] text-muted-foreground">Email</Label>
@@ -814,6 +867,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                       </div>
                     )}
                   </div>
+                  </>
                 ) : (
                   <div className="space-y-1">
                     <Label className="text-[10px] text-muted-foreground">Link an existing user account</Label>
@@ -829,7 +883,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                         {members.slice(0, 100).map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    <p className="text-[10px] text-muted-foreground">Switch to "Manual entry" if the sponsor isn&apos;t an in-system user.</p>
+                    <p className="text-[10px] text-muted-foreground">Switch to &ldquo;Manual entry&rdquo; if the sponsor isn&apos;t an in-system user.</p>
                   </div>
                 )}
               </div>

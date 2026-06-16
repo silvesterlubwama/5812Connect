@@ -1,0 +1,46 @@
+{
+  "summary": "Iter-171 FE testing for ExternalSponsorAutocomplete + In-System User Match banner on the Case Detail Sponsor section. Seeded a child + 2 cases sharing the same sponsor 'TESTITER171 Maria Lopez' so the autocomplete had a real hit with active_cases=2, then drove the full UI flow with Playwright. 11/12 spec items PASS; 1 functional bug found in the autocomplete empty-state rendering.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ExternalSponsorAutocomplete (/app/frontend/src/components/ExternalSponsorAutocomplete.jsx)",
+        "issue": "Empty-state message ('No existing sponsors match — keep typing to register a new one') is dead code and never renders. Line 58 guards the dropdown Card with `open && (hits.length > 0 || loading)`. The empty-state <p> inside (line 77-79) requires `!loading && hits.length === 0`, which contradicts the outer guard — so when there are 0 hits and not loading, the whole Card is hidden and the user never sees the message. Spec explicitly calls this branch out.",
+        "selector": "ExternalSponsorAutocomplete — outer Card render condition",
+        "priority": "MEDIUM",
+        "fix_hint": "Change the outer condition to `open && (value && value.trim().length >= 2)` OR drop the `hits.length > 0 || loading` gate entirely and let the inner branches handle empty/loading/list states."
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_171.json"
+  ],
+  "action_items": [
+    "Fix empty-state visibility in ExternalSponsorAutocomplete — the spec's 'No existing sponsors match — keep typing to register a new one' message is currently unreachable due to a contradictory render guard.",
+    "(Optional UX) The 'Save name' button currently PUTs the entire current sponsor_manual block (name + email + phone + notes), not just the name. In the test flow it overwrote a guest's email with admin@5812uganda.org because the email field still held a previous value when Save name was clicked. Either rename the button to 'Save sponsor' or only send {name} on click to match the label.",
+    "(Optional) Add a DELETE /api/social-work/sponsors/external/{guest_id} endpoint (or admin sweep) so test-created guests can be cleaned up. Right now external_sponsor guests linger forever once dedup creates them."
+  ],
+  "critical_code_review_comments": [
+    "ExternalSponsorAutocomplete.jsx: the empty-state render path is unreachable due to a contradictory guard between the outer Card condition and the inner empty-state condition — see ui_bugs above.",
+    "Save-name button (cd-sponsor-manual-save-name) PUTs the entire sponsor_manual object instead of only the name. The label is misleading and can cause unintended writes to the external_sponsor guest record (email/phone fields get bound to whatever's currently in the form).",
+    "SocialWorkPage.jsx L537-548: the sponsorUserMatch effect correctly debounces 400ms and does case-insensitive lookup against the prop `members`. Verified live with MIXED-CASE email — works. Good.",
+    "ExternalSponsorAutocomplete uses `onMouseDown` on each hit instead of `onClick` so the parent Input's onBlur doesn't close the dropdown before the click is registered — nice. (Test confirmed by dispatching 'mousedown'.)",
+    "The autocomplete component swallows API errors with `catch { setHits([]); }` (line 30) — fine for UX (no toast spam) but worth a one-line warn in dev so flakes don't go silent."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (sanity-checked /sponsors/external — returns Maria with active_cases=2, dedups by email on repeated sponsor_manual PUT)",
+    "frontend": "92% (11/12 spec checks pass — only empty-state render fails)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md). Login uses 'identifier' field. Token at response.token.",
+  "seed_data_creation": "Created 2 children (chd_c2f8a1f3, chd_9276fdb7) + 2 cases (sc_1a9e401fb6, sc_d414863d96) both linked to sponsor_manual 'TESTITER171 Maria Lopez / maria@donor.org' which auto-created external_sponsor guest gst_a92f5d70 with active_cases=2. All cases + children deleted at end. Two external_sponsor guests (gst_a92f5d70 + gst_c9fc47b2 from the 'manual typed name' save-test) still linger in db.guests with active_cases=0 — no API exists to delete them, but they're harmless.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-171 ExternalSponsorAutocomplete + user-match banner is 92% green. Only one bug: the empty-state ('No existing sponsors match...') never shows because the outer Card render condition contradicts the inner empty-state condition in /app/frontend/src/components/ExternalSponsorAutocomplete.jsx line 58. To repro: open case-detail → Sponsor → Manual entry → type 'zzznomatch' (something that won't match) — you'll see no dropdown at all (expected: see the empty-state message). Once main agent fixes the guard, retest by typing < 2 chars and a no-match query and confirming the message appears. Test creds: admin@5812uganda.org / Admin@5812. To seed: see commands in iter-171 testing — create child via POST /api/children {name, gender, dob}, create case via POST /api/social-work/cases {subject_kind:'child', subject_id, category:'sponsored', risk_level:'medium'} (categories MUST be one of multiple/restricted_location/sponsored/welfare_support), then PUT sponsor_manual to seed an external_sponsor guest.",
+  "rca of the issue": "Bug: dead empty-state branch in ExternalSponsorAutocomplete.jsx. Lines 58 and 77 have contradictory conditions: outer requires hits.length>0||loading, inner empty-state requires hits.length===0&&!loading. Intersection is the empty set — the empty-state <p> can never render. RCA: classic case of two render branches written separately without checking the parent gate. Mitigation: relax the outer Card condition to render whenever the dropdown is open (or whenever the query is ≥2 chars), and let the inner branches handle empty/loading/list. Suggested patch:  `{open && (value || '').trim().length >= 2 && ( ... ) }` — that way both the loading spinner, hit list, AND empty-state can show as intended."
+}

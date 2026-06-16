@@ -218,3 +218,4 @@ appliance/data/*/
 !appliance/data/*/.gitkeep
 frontend/node_modules/.cache/default-development/149.pack
 frontend/node_modules/.cache/default-development/160.pack
+frontend/node_modules/.cache/default-development/143.pack
