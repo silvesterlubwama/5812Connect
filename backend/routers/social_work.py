@@ -377,12 +377,31 @@ async def create_case(data: dict, current_user: dict = Depends(require_staff)):
         "goals": data.get("goals") or [],  # [{ goal, target_date, progress_pct, notes }]
         "risk_level": (data.get("risk_level") if data.get("risk_level") in RISK_LEVELS else "low"),
         "sponsor_member_id": data.get("sponsor_member_id"),
+        "sponsor_manual": None,    # set below if data includes it (with full validation + guest upsert)
+        "sponsor_guest_id": None,
         "location_id": data.get("location_id") or subject.get("location_id") or current_user.get("active_campus_id"),
         "opened_at": now,
         "opened_by": current_user["id"],
         "opened_by_name": current_user.get("name", ""),
         "updated_at": now,
     }
+    # Same validation+guest-upsert path used by PUT so create + edit behave identically.
+    sm_in = data.get("sponsor_manual")
+    if sm_in is not None:
+        if not isinstance(sm_in, dict):
+            raise HTTPException(status_code=400, detail="sponsor_manual must be an object or null")
+        name = (sm_in.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="sponsor_manual.name is required when sponsor_manual is set")
+        doc["sponsor_manual"] = {
+            "name": name[:120],
+            "email": (sm_in.get("email") or "").strip().lower()[:120],
+            "phone": (sm_in.get("phone") or "").strip()[:32],
+            "notes": (sm_in.get("notes") or "").strip()[:500],
+        }
+        gid = await _upsert_external_sponsor_guest(doc["sponsor_manual"], current_user)
+        if gid:
+            doc["sponsor_guest_id"] = gid
     await db.social_cases.insert_one(doc)
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "social_case", case_id, {"subject": subject.get("name"), "category": category})
@@ -445,7 +464,35 @@ async def generate_case_report(case_id: str, current_user: dict = Depends(requir
     compliance_schema = COUNTRY_COMPLIANCE_FIELDS.get(country_code, COUNTRY_COMPLIANCE_FIELDS["GENERIC"])
     compliance_values = case.get("compliance") or {}
 
-    html = _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values)
+    # Resolve sponsor for the report's Sponsor section. The case can carry EITHER:
+    #   • sponsor_member_id  → lookup in db.users to get name/email/phone
+    #   • sponsor_manual     → use the embedded {name, email, phone, notes} directly
+    # Manual wins when both are set (UI keeps them mutually exclusive but be defensive).
+    sponsor_info = None
+    sm = case.get("sponsor_manual") or {}
+    if sm and sm.get("name"):
+        sponsor_info = {
+            "name": sm.get("name", ""),
+            "email": sm.get("email", ""),
+            "phone": sm.get("phone", ""),
+            "notes": sm.get("notes", ""),
+            "source": "External donor",
+        }
+    elif case.get("sponsor_member_id"):
+        u = await db.users.find_one(
+            {"id": case["sponsor_member_id"]},
+            {"_id": 0, "name": 1, "email": 1, "phone": 1},
+        )
+        if u:
+            sponsor_info = {
+                "name": u.get("name", ""),
+                "email": u.get("email", ""),
+                "phone": u.get("phone", ""),
+                "notes": "",
+                "source": "In-system user",
+            }
+
+    html = _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values, sponsor_info)
 
     from weasyprint import HTML
     from starlette.responses import StreamingResponse
@@ -475,7 +522,7 @@ def _esc(value) -> str:
              .replace("'", "&#39;"))
 
 
-def _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values) -> str:
+def _render_case_report_html(case, school, notes, payments, compliance_schema, compliance_values, sponsor_info=None) -> str:
     """Build a branded HTML report — clean, presentation-ready for school/official handoff."""
     edu = case.get("education") or {}
     med = case.get("medical") or {}
@@ -641,6 +688,17 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
     {f"<tr><td class='label'>Notes</td><td>{_esc(fam.get('notes'))}</td></tr>" if fam.get('notes') else ''}
   </table>
 
+  {(
+    "<h2>Sponsor</h2>"
+    "<table class='kv'>"
+    f"<tr><td class='label'>Name</td><td>{_esc(sponsor_info['name'])}</td></tr>"
+    f"<tr><td class='label'>Source</td><td>{_esc(sponsor_info['source'])}</td></tr>"
+    + (f"<tr><td class='label'>Email</td><td>{_esc(sponsor_info['email'])}</td></tr>" if sponsor_info.get('email') else '')
+    + (f"<tr><td class='label'>Phone</td><td>{_esc(sponsor_info['phone'])}</td></tr>" if sponsor_info.get('phone') else '')
+    + (f"<tr><td class='label'>Notes</td><td>{_esc(sponsor_info['notes'])}</td></tr>" if sponsor_info.get('notes') else '')
+    + "</table>"
+  ) if sponsor_info else ''}
+
   <h2>{_esc(compliance_schema.get('name', 'Compliance'))}</h2>
   {compliance_html or "<p class='muted'>No compliance fields recorded.</p>"}
 
@@ -676,13 +734,35 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
 @router.put("/cases/{case_id}")
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
-               "risk_level", "sponsor_member_id", "sponsor_manual", "compliance"}
+               "risk_level", "sponsor_member_id", "sponsor_manual", "sponsor_guest_id", "compliance"}
     if "status" in data and data["status"] not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(CASE_STATUSES)}")
     if data.get("status") == "discharged" and not _can_manage_social_work(current_user):
         raise HTTPException(status_code=403, detail="Only social-work manager+ can discharge a case")
     if "risk_level" in data and data["risk_level"] not in RISK_LEVELS:
         raise HTTPException(status_code=400, detail=f"risk_level must be one of {sorted(RISK_LEVELS)}")
+    # Validate sponsor_manual shape — must be either null/missing OR an object with a non-empty name.
+    # Anything else gets rejected here rather than landing as garbage that the report PDF then trips on.
+    if "sponsor_manual" in data and data["sponsor_manual"] is not None:
+        sm = data["sponsor_manual"]
+        if not isinstance(sm, dict):
+            raise HTTPException(status_code=400, detail="sponsor_manual must be an object or null")
+        name = (sm.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="sponsor_manual.name is required when sponsor_manual is set")
+        # Normalise: strip whitespace + cap field lengths so junk paste doesn't blow up the report PDF
+        data["sponsor_manual"] = {
+            "name": name[:120],
+            "email": (sm.get("email") or "").strip().lower()[:120],
+            "phone": (sm.get("phone") or "").strip()[:32],
+            "notes": (sm.get("notes") or "").strip()[:500],
+        }
+        # Mirror the manual sponsor into db.guests as kind='external_sponsor' so future cases
+        # can link the SAME donor by id (no re-typing). Sets case.sponsor_guest_id alongside
+        # case.sponsor_manual so the existing guest-payment pipeline lights up automatically.
+        guest_id = await _upsert_external_sponsor_guest(data["sponsor_manual"], current_user)
+        if guest_id:
+            data["sponsor_guest_id"] = guest_id
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     update["updated_by"] = current_user["id"]
@@ -693,6 +773,118 @@ async def update_case(case_id: str, data: dict, current_user: dict = Depends(req
     await db.social_cases.update_one({"id": case_id}, {"$set": update})
     await _audit(current_user["id"], "update", "social_case", case_id, {"fields": list(update.keys())})
     return await db.social_cases.find_one({"id": case_id}, {"_id": 0})
+
+
+@router.get("/sponsors/external")
+async def list_external_sponsors(
+    search: Optional[str] = None,
+    current_user: dict = Depends(require_staff),
+):
+    """List external sponsor guests so the case detail dialog can autocomplete
+    instead of forcing the social worker to re-type the same donor's contact
+    info every time they open a new case for that sponsor's child.
+
+    External sponsors are stored as `db.guests` rows with `kind='external_sponsor'`.
+    They're created automatically when a manual sponsor is filled on any case
+    (see `_upsert_external_sponsor_guest`), but admins can also pre-seed them
+    via the standard guests endpoints if they prefer to manage a roster.
+    """
+    query = {"kind": "external_sponsor"}
+    if search and search.strip():
+        s = search.strip()
+        query["$or"] = [
+            {"name": {"$regex": s, "$options": "i"}},
+            {"email": {"$regex": s, "$options": "i"}},
+            {"phone": {"$regex": s, "$options": "i"}},
+        ]
+    rows = await db.guests.find(
+        query,
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "notes": 1, "created_at": 1},
+    ).sort("name", 1).to_list(500)
+    # Annotate each with how many active cases they currently sponsor
+    if rows:
+        ids = [r["id"] for r in rows]
+        pipeline = [
+            {"$match": {"sponsor_guest_id": {"$in": ids}, "status": "active"}},
+            {"$group": {"_id": "$sponsor_guest_id", "n": {"$sum": 1}}},
+        ]
+        counts = {}
+        async for row in db.social_cases.aggregate(pipeline):
+            counts[row["_id"]] = row["n"]
+        for r in rows:
+            r["active_cases"] = counts.get(r["id"], 0)
+    return rows
+
+
+async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dict) -> Optional[str]:
+    """Idempotently create-or-find a guest record for an external sponsor.
+
+    Dedup strategy:
+      • Primary key — email (case-insensitive) when present.
+      • Secondary — phone (exact) when present.
+      • Tertiary — name (case-insensitive) alone.
+
+    Returns the guest id (existing or newly-created), or None if upsert failed.
+    Non-fatal — sponsor_manual still saves on the case if this errors.
+    """
+    name = (sponsor_manual.get("name") or "").strip()
+    if not name:
+        return None
+    email = (sponsor_manual.get("email") or "").strip().lower()
+    phone = (sponsor_manual.get("phone") or "").strip()
+    notes = (sponsor_manual.get("notes") or "").strip()
+    try:
+        # Look for an existing external_sponsor by email→phone→name (whichever matches first)
+        existing = None
+        if email:
+            existing = await db.guests.find_one(
+                {"kind": "external_sponsor", "email": email}, {"_id": 0, "id": 1}
+            )
+        if not existing and phone:
+            existing = await db.guests.find_one(
+                {"kind": "external_sponsor", "phone": phone}, {"_id": 0, "id": 1}
+            )
+        if not existing:
+            existing = await db.guests.find_one(
+                {"kind": "external_sponsor", "name": {"$regex": f"^{name}$", "$options": "i"}},
+                {"_id": 0, "id": 1},
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        if existing:
+            # Backfill any fields the caller now has that we didn't previously
+            await db.guests.update_one(
+                {"id": existing["id"]},
+                {"$set": {
+                    "name": name,
+                    "email": email or None,
+                    "phone": phone or None,
+                    "notes": notes or None,
+                    "updated_at": now,
+                    "kind": "external_sponsor",
+                    "is_sponsor": True,
+                }},
+            )
+            return existing["id"]
+        # Create fresh
+        guest_id = f"gst_{uuid.uuid4().hex[:8]}"
+        await db.guests.insert_one({
+            "id": guest_id,
+            "kind": "external_sponsor",
+            "is_sponsor": True,
+            "name": name,
+            "email": email or None,
+            "phone": phone or None,
+            "notes": notes or None,
+            "created_at": now,
+            "created_by": current_user["id"],
+            "created_by_name": current_user.get("name", ""),
+            "source": "social_work_sponsor_manual",
+        })
+        return guest_id
+    except Exception as e:
+        logger.warning(f"external sponsor guest upsert failed: {e}")
+        return None
 
 
 @router.delete("/cases/{case_id}")

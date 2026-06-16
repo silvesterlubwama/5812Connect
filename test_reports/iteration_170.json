@@ -1,0 +1,40 @@
+{
+  "summary": "Backend testing for iter-170 sponsor_manual validation, guest auto-create/dedup, /sponsors/external endpoint, and profile-report PDF sponsor section. 13 pytest cases + 3 direct HTML-render assertions — all PASSED. Frontend was explicitly out-of-scope this round.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_case_sponsor_iter170.py",
+    "/app/test_reports/pytest/iter170_results.xml"
+  ],
+  "action_items": [
+    "Frontend integration of GET /api/social-work/sponsors/external (autocomplete dropdown in case-detail dialog) — flagged by main agent for next iteration. No action this round."
+  ],
+  "critical_code_review_comments": [
+    "social_work.py is now 1478 lines — consider splitting into sub-modules (cases.py, sponsors.py, report.py, notes.py, payments.py) once it crosses 1500. Current iter170 additions are clean and well-commented.",
+    "_upsert_external_sponsor_guest swallows exceptions and only logs.warning — that's intentional per spec ('Non-fatal'), but worth surfacing as a soft warning in API response (e.g. response header X-Sponsor-Guest-Warning) so the UI can hint that dedup failed. Optional.",
+    "PUT with sponsor_manual=null intentionally does NOT clear sponsor_guest_id (verified by test). Spec calls this out explicitly — fine, but the docstring/comment in code at L744-745 could be sharper about this asymmetric behavior so future devs don't 'fix' it.",
+    "Dedup priority email→phone→name relies on case-insensitive regex anchored match for name (^name$). For names with special regex chars (e.g. 'O'Brien (Jr.)'), this could mis-match or throw. Consider re.escape() of the trimmed name before injecting into $regex. Low priority — emails dominate the real-world dedup path.",
+    "/sponsors/external returns up to 500 rows with no pagination. For a large donor roster this could get heavy; consider ?limit and ?skip for future iterations.",
+    "active_cases aggregation pipeline correctly filters status='active' — confirmed via test."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_case_sponsor_iter170.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13 pytest + 3/3 direct HTML render checks)",
+    "frontend": "not tested (out of scope per review request)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "All TEST_iter170_* children, their cases, and external_sponsor guests created during the run are cleaned up in session-scoped autouse fixture (_cleanup_at_end). It deletes by id-list AND by name/email regex sweep to catch anything that escaped. Verified post-run db.guests has no TEST_ external_sponsor rows lingering.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter170 backend is fully green. Test file at /app/backend/tests/test_case_sponsor_iter170.py is the regression suite — re-run with `pytest /app/backend/tests/test_case_sponsor_iter170.py -v` after any social_work.py touch. Next iteration will add the FE autocomplete dropdown for /sponsors/external — when that lands, write a Playwright flow that picks a sponsor from the dropdown and verifies sponsor_guest_id (not sponsor_manual) ends up on the case. Login uses 'identifier' field (not email). Auth response token is at j['token'].",
+  "rca of the issue": "N/A — no bugs found. One initial test failure (Event loop is closed when reusing motor client across asyncio.new_event_loop() calls) was a TEST CODE issue, not a product bug. Fixed by creating a fresh AsyncIOMotorClient inside each async helper rather than reusing a session-scoped fixture bound to a now-closed loop. All 13 tests then passed cleanly."
+}
