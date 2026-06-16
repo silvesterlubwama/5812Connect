@@ -676,7 +676,7 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
 @router.put("/cases/{case_id}")
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
-               "risk_level", "sponsor_member_id", "compliance"}
+               "risk_level", "sponsor_member_id", "sponsor_manual", "compliance"}
     if "status" in data and data["status"] not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(CASE_STATUSES)}")
     if data.get("status") == "discharged" and not _can_manage_social_work(current_user):

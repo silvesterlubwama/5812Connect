@@ -626,11 +626,11 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
 
   return (
     <Dialog open={!!caseId} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" data-testid="sw-case-detail-dialog">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {caseDoc?.subject_photo_url && <img src={caseDoc.subject_photo_url} alt="" className="h-7 w-7 rounded-full object-cover" />}
-            {caseDoc?.subject_name || 'Case'}
+      <DialogContent className="max-w-5xl w-[96vw] max-h-[92vh] overflow-y-auto p-5 sm:p-6" data-testid="sw-case-detail-dialog">
+        <DialogHeader className="space-y-1">
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            {caseDoc?.subject_photo_url && <img src={caseDoc.subject_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />}
+            <span>{caseDoc?.subject_name || 'Case'}</span>
             <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={downloadReport} disabled={!caseDoc} data-testid="cd-download-report-btn">
               <FileDown size={11} className="mr-1" />Download Profile Report
             </Button>
@@ -648,46 +648,67 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
         {loading || !caseDoc ? (
           <div className="space-y-2 mt-3">{[1, 2, 3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>
         ) : (
-          <Tabs defaultValue="overview" className="mt-2">
-            <TabsList className="flex-wrap">
-              <TabsTrigger value="overview" data-testid="cd-tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="education" data-testid="cd-tab-education"><BookOpen size={11} className="mr-1" />Education</TabsTrigger>
-              <TabsTrigger value="medical" data-testid="cd-tab-medical"><Heart size={11} className="mr-1" />Medical</TabsTrigger>
-              <TabsTrigger value="family" data-testid="cd-tab-family"><Home size={11} className="mr-1" />Family</TabsTrigger>
-              <TabsTrigger value="compliance" data-testid="cd-tab-compliance"><Globe size={11} className="mr-1" />Compliance</TabsTrigger>
-              <TabsTrigger value="goals" data-testid="cd-tab-goals"><Target size={11} className="mr-1" />Goals</TabsTrigger>
-              <TabsTrigger value="payments" data-testid="cd-tab-payments"><DollarSign size={11} className="mr-1" />Payments ({payments.length})</TabsTrigger>
-              <TabsTrigger value="notes" data-testid="cd-tab-notes"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
-              <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews"><GraduationCap size={11} className="mr-1" />School Reviews</TabsTrigger>
-              <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits"><ClipboardCheck size={11} className="mr-1" />Welfare Visits</TabsTrigger>
+          <Tabs defaultValue="overview" className="mt-3">
+            {/* Tab strip: scrolls horizontally on narrow screens so tabs never wrap onto two rows.
+                Abbreviated labels keep each trigger compact while testids remain stable. */}
+            <TabsList className="w-full flex flex-nowrap overflow-x-auto justify-start gap-0.5 h-auto p-1">
+              <TabsTrigger value="overview" data-testid="cd-tab-overview" className="text-xs px-2.5 py-1.5 shrink-0">Overview</TabsTrigger>
+              <TabsTrigger value="education" data-testid="cd-tab-education" className="text-xs px-2.5 py-1.5 shrink-0"><BookOpen size={11} className="mr-1" />Education</TabsTrigger>
+              <TabsTrigger value="medical" data-testid="cd-tab-medical" className="text-xs px-2.5 py-1.5 shrink-0"><Heart size={11} className="mr-1" />Medical</TabsTrigger>
+              <TabsTrigger value="family" data-testid="cd-tab-family" className="text-xs px-2.5 py-1.5 shrink-0"><Home size={11} className="mr-1" />Family</TabsTrigger>
+              <TabsTrigger value="compliance" data-testid="cd-tab-compliance" className="text-xs px-2.5 py-1.5 shrink-0"><Globe size={11} className="mr-1" />Compliance</TabsTrigger>
+              <TabsTrigger value="goals" data-testid="cd-tab-goals" className="text-xs px-2.5 py-1.5 shrink-0"><Target size={11} className="mr-1" />Goals</TabsTrigger>
+              <TabsTrigger value="payments" data-testid="cd-tab-payments" className="text-xs px-2.5 py-1.5 shrink-0"><DollarSign size={11} className="mr-1" />Payments ({payments.length})</TabsTrigger>
+              <TabsTrigger value="notes" data-testid="cd-tab-notes" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
+              <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews" className="text-xs px-2.5 py-1.5 shrink-0"><GraduationCap size={11} className="mr-1" />School</TabsTrigger>
+              <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardCheck size={11} className="mr-1" />Welfare</TabsTrigger>
             </TabsList>
 
             {/* OVERVIEW */}
-            <TabsContent value="overview" className="space-y-3 mt-3">
-              <div className="space-y-1.5"><Label className="text-xs">Summary</Label>
+            <TabsContent value="overview" className="space-y-4 mt-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Summary</Label>
                 <Textarea rows={3} value={caseDoc.summary || ''}
                   onChange={e => setCaseDoc({ ...caseDoc, summary: e.target.value })}
-                  onBlur={() => api.put(`/social-work/cases/${caseId}`, { summary: caseDoc.summary }).catch(() => {})} />
+                  onBlur={() => api.put(`/social-work/cases/${caseId}`, { summary: caseDoc.summary }).catch(() => {})}
+                  data-testid="cd-summary"
+                />
               </div>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <Label className="text-[10px] text-muted-foreground">Sponsor</Label>
-                  <Select value={caseDoc.sponsor_member_id || 'none'} onValueChange={async v => {
-                    const val = v === 'none' ? null : v;
-                    await api.put(`/social-work/cases/${caseId}`, { sponsor_member_id: val });
-                    reload();
+
+              {/* Support type + Risk + Status — all three now editable inline. Was display-only before. */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Support type</Label>
+                  <Select value={caseDoc.category} onValueChange={async v => {
+                    await api.put(`/social-work/cases/${caseId}`, { category: v });
+                    setCaseDoc({ ...caseDoc, category: v });
+                    toast.success('Support type updated');
                   }}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="None" /></SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs" data-testid="cd-category"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {members.slice(0, 100).map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                      {Object.entries(CATEGORY_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label className="text-[10px] text-muted-foreground">Status</Label>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Risk level</Label>
+                  <Select value={caseDoc.risk_level} onValueChange={async v => {
+                    await api.put(`/social-work/cases/${caseId}`, { risk_level: v });
+                    setCaseDoc({ ...caseDoc, risk_level: v });
+                    toast.success('Risk level updated');
+                  }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="cd-risk-level"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Case status</Label>
                   <Select value={caseDoc.status} onValueChange={updateStatus}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs" data-testid="cd-status"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="active">Active</SelectItem>
                       <SelectItem value="on_hold">On hold</SelectItem>
@@ -695,6 +716,110 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              {/* SPONSOR — supports two modes: link an existing user, OR enter a manual sponsor
+                  (external donor not in the system). Toggle controls which mode is active.
+                  Stored as case.sponsor_member_id (existing) or case.sponsor_manual {name,email,phone,notes}. */}
+              <div className="border-t pt-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <Label className="text-xs font-semibold">Sponsor</Label>
+                  <div className="flex rounded border overflow-hidden text-[11px]">
+                    <button
+                      type="button"
+                      className={`px-2.5 py-1 ${!caseDoc.sponsor_manual_mode ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                      onClick={() => setCaseDoc({ ...caseDoc, sponsor_manual_mode: false })}
+                      data-testid="cd-sponsor-mode-existing"
+                    >Existing user</button>
+                    <button
+                      type="button"
+                      className={`px-2.5 py-1 border-l ${caseDoc.sponsor_manual_mode || caseDoc.sponsor_manual ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                      onClick={() => setCaseDoc({ ...caseDoc, sponsor_manual_mode: true })}
+                      data-testid="cd-sponsor-mode-manual"
+                    >Manual entry</button>
+                  </div>
+                </div>
+
+                {(caseDoc.sponsor_manual_mode || caseDoc.sponsor_manual) ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Sponsor name *</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        value={caseDoc.sponsor_manual?.name || ''}
+                        onChange={e => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), name: e.target.value } })}
+                        onBlur={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual, sponsor_member_id: null }).catch(() => {})}
+                        placeholder="e.g. Sarah Johnson"
+                        data-testid="cd-sponsor-manual-name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Email</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        type="email"
+                        value={caseDoc.sponsor_manual?.email || ''}
+                        onChange={e => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), email: e.target.value } })}
+                        onBlur={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual }).catch(() => {})}
+                        placeholder="sponsor@example.org"
+                        data-testid="cd-sponsor-manual-email"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Phone</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        value={caseDoc.sponsor_manual?.phone || ''}
+                        onChange={e => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), phone: e.target.value } })}
+                        onBlur={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual }).catch(() => {})}
+                        placeholder="+256 700 123 456"
+                        data-testid="cd-sponsor-manual-phone"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Organisation / notes</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        value={caseDoc.sponsor_manual?.notes || ''}
+                        onChange={e => setCaseDoc({ ...caseDoc, sponsor_manual: { ...(caseDoc.sponsor_manual || {}), notes: e.target.value } })}
+                        onBlur={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual }).catch(() => {})}
+                        placeholder="Hope Foundation · monthly $50"
+                        data-testid="cd-sponsor-manual-notes"
+                      />
+                    </div>
+                    {caseDoc.sponsor_manual && (
+                      <div className="col-span-full">
+                        <Button
+                          size="sm" variant="ghost" className="h-7 text-[11px] text-destructive"
+                          onClick={async () => {
+                            if (!window.confirm('Clear the manual sponsor info?')) return;
+                            await api.put(`/social-work/cases/${caseId}`, { sponsor_manual: null });
+                            setCaseDoc({ ...caseDoc, sponsor_manual: null, sponsor_manual_mode: false });
+                            toast.success('Cleared');
+                          }}
+                          data-testid="cd-sponsor-manual-clear"
+                        >Clear manual sponsor</Button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Link an existing user account</Label>
+                    <Select value={caseDoc.sponsor_member_id || 'none'} onValueChange={async v => {
+                      const val = v === 'none' ? null : v;
+                      await api.put(`/social-work/cases/${caseId}`, { sponsor_member_id: val, sponsor_manual: null });
+                      setCaseDoc({ ...caseDoc, sponsor_member_id: val, sponsor_manual: null });
+                      reload();
+                    }}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="cd-sponsor-existing"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {members.slice(0, 100).map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[10px] text-muted-foreground">Switch to "Manual entry" if the sponsor isn&apos;t an in-system user.</p>
+                  </div>
+                )}
               </div>
               {caseDoc.payments_total && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
@@ -709,7 +834,8 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* EDUCATION */}
-            <TabsContent value="education" className="space-y-3 mt-3">
+            <TabsContent value="education" className="space-y-4 mt-4">
+              <p className="text-[11px] text-muted-foreground -mb-2">Click any field to edit. Save with the button at the bottom of the section.</p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label className="text-xs">Grade / Level</Label>
                   <Input value={editing.education?.grade || ''} onChange={e => setEditing({ ...editing, education: { ...editing.education, grade: e.target.value } })} data-testid="cd-grade" />
@@ -737,7 +863,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* MEDICAL */}
-            <TabsContent value="medical" className="space-y-3 mt-3">
+            <TabsContent value="medical" className="space-y-4 mt-4">
               <div className="space-y-1.5"><Label className="text-xs">Conditions (comma-separated)</Label>
                 <Input value={(editing.medical?.conditions || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, conditions: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} data-testid="cd-conditions" />
               </div>
@@ -762,7 +888,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* FAMILY */}
-            <TabsContent value="family" className="space-y-3 mt-3">
+            <TabsContent value="family" className="space-y-4 mt-4">
               <div className="space-y-1.5"><Label className="text-xs">Guardians (comma-separated)</Label>
                 <Input value={(editing.family?.guardians || []).join(', ')} onChange={e => setEditing({ ...editing, family: { ...editing.family, guardians: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} />
               </div>
@@ -781,7 +907,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* COMPLIANCE — country-specific fields */}
-            <TabsContent value="compliance" className="space-y-3 mt-3">
+            <TabsContent value="compliance" className="space-y-4 mt-4">
               {!complianceSchema ? (
                 <p className="text-sm text-muted-foreground text-center py-6">No compliance template for this country.</p>
               ) : (
@@ -874,7 +1000,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* GOALS */}
-            <TabsContent value="goals" className="space-y-3 mt-3">
+            <TabsContent value="goals" className="space-y-4 mt-4">
               {(editing.goals || []).map((g, i) => (
                 <div key={i} className="p-2 rounded border space-y-1.5">
                   <Input value={g.goal || ''} onChange={e => { const goals = [...editing.goals]; goals[i] = { ...g, goal: e.target.value }; setEditing({ ...editing, goals }); }} placeholder="Goal" />
@@ -890,7 +1016,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* PAYMENTS */}
-            <TabsContent value="payments" className="space-y-3 mt-3">
+            <TabsContent value="payments" className="space-y-4 mt-4">
               <Card className="rounded-lg border-dashed">
                 <CardContent className="p-3 space-y-2">
                   <p className="text-xs font-semibold uppercase text-muted-foreground">Record a payment</p>
@@ -928,7 +1054,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* NOTES */}
-            <TabsContent value="notes" className="space-y-3 mt-3">
+            <TabsContent value="notes" className="space-y-4 mt-4">
               <Card className="rounded-lg border-dashed">
                 <CardContent className="p-3 space-y-2">
                   <p className="text-xs font-semibold uppercase text-muted-foreground">Add a note</p>
@@ -973,7 +1099,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* SCHOOL PROGRESS REVIEWS — termly review forms filled at school visits */}
-            <TabsContent value="school_reviews" className="space-y-3 mt-3">
+            <TabsContent value="school_reviews" className="space-y-4 mt-4">
               <SocialReviewsPanel child={editing} kind="school_progress" />
             </TabsContent>
 

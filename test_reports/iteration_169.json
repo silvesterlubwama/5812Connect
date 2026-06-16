@@ -1,0 +1,35 @@
+{
+  "summary": "Iter169 — Social-work child case detail dialog redesign verified. Backend: 7/7 pytest cases pass against /api/social-work/cases/{id} — PUT accepts sponsor_manual, persists risk_level/category, validator still rejects invalid risk_level (extreme→400), sponsor_manual can be cleared with null, combined PUT (risk_level+category+sponsor_manual) returns 200 and GET round-trips all three fields. Frontend: opened sw-case-detail-dialog for a seeded case. Dialog is now max-w-5xl w-[96vw] (visibly wider, no overlap). All 10 TabsTriggers render in a SINGLE horizontal row (all share y=362.75 — verified by bounding boxes), with last two abbreviated 'School' and 'Welfare' as specified. Overview tab shows the new 3-column inline editor row: cd-category, cd-risk-level, cd-status — all present and bound to selects. Sponsor section has the dual-mode toggle (cd-sponsor-mode-existing default-active, cd-sponsor-mode-manual). Clicking Manual entry reveals 4 fields (cd-sponsor-manual-name/email/phone/notes); filling them and tabbing blurs triggers PUT — verified by GETting the case afterwards: sponsor_manual={name:'Sarah Johnson', email:'sarah@hope.org', phone:'+256700000001'} persisted, sponsor_member_id=None (mutually exclusive on save). Clear-manual button (cd-sponsor-manual-clear) renders once any manual data is filled. Toggling back to Existing user reveals cd-sponsor-existing select again.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Case detail dialog — Welfare tab", "issues": ["TabsContent value='welfare_visits' still has the OLD `space-y-3 mt-3` spacing (SocialWorkPage.jsx:1107). Every other TabsContent was bumped to `space-y-4 mt-4` per spec. Minor visual inconsistency — Welfare tab will look slightly more cramped than its 9 siblings. One-line fix."]},
+      {"screen": "Case detail dialog", "issues": ["Carry-over from earlier iter: DialogContent missing aria-describedby / Description — console emits 'Warning: Missing Description or aria-describedby={undefined} for {DialogContent}' twice on open. Non-blocking but should add <DialogDescription> or aria-describedby={undefined} suppressor."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_case_detail_iter169.py",
+    "/app/test_reports/pytest/iter169_results.xml"
+  ],
+  "action_items": [
+    "Tiny fix: bump SocialWorkPage.jsx L1107 from `space-y-3 mt-3` to `space-y-4 mt-4` so the Welfare tab matches the spec and the other 9 tabs.",
+    "(low) Add a DialogDescription (or aria-describedby={undefined} to silence) to sw-case-detail-dialog — Radix prints a console warning on every open."
+  ],
+  "critical_code_review_comments": [
+    "Backend update_case (social_work.py:676-695): allowed-set is now {category, status, summary, education, medical, family, goals, risk_level, sponsor_member_id, sponsor_manual, compliance}. Field 'subject_name', 'opened_by' are correctly NOT settable via PUT — good. Validator runs BEFORE the allow-filter, so an invalid risk_level rejects before any write — correct order.",
+    "sponsor_manual is stored as a free-form dict (no Pydantic model on the field). FE always sends {name,email,phone,notes} but backend will accept arbitrary keys. Consider lightly validating shape (e.g. require .name when sponsor_manual is non-null) so callers can't store junk that the report PDF later trips on. Currently low-risk since FE is the only writer.",
+    "FE sponsor toggle (SocialWorkPage.jsx:721-823): when user switches to Manual entry but doesn't fill anything and switches back, no PUT is triggered — sponsor_member_id stays as-is. Good. When user fills manual name, the onBlur PUT correctly sends `{sponsor_manual, sponsor_member_id: null}` — confirmed via GET. The remaining 3 fields (email/phone/notes) only PUT `{sponsor_manual}` without nulling sponsor_member_id, but by that point name's PUT has already cleared it — fine in practice but slightly inconsistent.",
+    "Inline cd-category/cd-risk-level Selects use the `await api.put(...)` pattern and update local state after. If the PUT errors, local state will NOT reflect the actual server state (the toast.success runs unconditionally before any catch). Wrap in try/catch to revert on error and toast.error.",
+    "Tab strip `flex flex-nowrap overflow-x-auto` is a clean solution — no wrap on narrow screens, just horizontal scroll. Verified all 10 tabs render at identical y."
+  ],
+  "updated_files": ["/app/backend/tests/test_case_detail_iter169.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "95% (one minor spacing mismatch on Welfare tab)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created TEST_iter169_uiCase child + social case (sc_46736cdcf2) for UI verification; both deleted at end of run via DELETE /api/children/{id} and DELETE /api/social-work/cases/{id}. Pytest also seeds+cleans its own TEST_iter169_* fixtures.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression suite at /app/backend/tests/test_case_detail_iter169.py (7 tests). Stable FE testids: sw-case-detail-dialog, cd-tab-{overview,education,medical,family,compliance,goals,payments,notes,school-reviews,welfare-visits}, cd-category, cd-risk-level, cd-status, cd-sponsor-mode-existing, cd-sponsor-mode-manual, cd-sponsor-existing, cd-sponsor-manual-{name,email,phone,notes,clear}. Only outstanding issue is the one-line space-y-3 mt-3 on Welfare TabsContent — once fixed, this iteration is fully spec-compliant.",
+  "rca of the issue": "n/a — features work as specified. Single minor mismatch on Welfare tab spacing appears to be an oversight when the bulk class-name update was applied."
+}
