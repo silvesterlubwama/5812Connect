@@ -923,3 +923,23 @@ export const waveApi = {
   saveMyCredentials: (data) => api.put('/wave/my-credentials', data),
 };
 
+
+// ---- SOCIAL WORK REVIEW FORMS (school progress + welfare home visits) ----
+export const socialReviewsApi = {
+  list: (childId, kind) => api.get(`/social-work/reviews/children/${childId}${kind ? `?kind=${kind}` : ''}`),
+  get: (id) => api.get(`/social-work/reviews/${id}`),
+  create: (childId, payload) => api.post(`/social-work/reviews/children/${childId}`, payload),
+  update: (id, payload) => api.put(`/social-work/reviews/${id}`, payload),
+  remove: (id) => api.delete(`/social-work/reviews/${id}`),
+  templateUrl: (kind) => `${BACKEND_URL}/api/social-work/reviews/templates/${kind}.pdf`,
+  uploadScan: (childId, file, kind, reviewDate) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post(
+      `/social-work/reviews/children/${childId}/upload-scan?kind=${encodeURIComponent(kind)}${reviewDate ? `&review_date=${encodeURIComponent(reviewDate)}` : ''}`,
+      fd,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+  },
+};
+

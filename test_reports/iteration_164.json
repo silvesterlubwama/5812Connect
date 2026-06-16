@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 164: Tested social_review_forms (school progress + welfare visit) end-to-end. 14/14 pytest cases passed covering templates (PDF auth-gated, 401 unauth, invalid kind), CRUD (create, list+filter, update re-applies sync, soft delete), auto-sync into child profile (education.* + family.* + welfare.latest_review + protection.flags/has_active_concern), and upload-scan (PDF accepted, txt rejected, invalid kind rejected). Frontend smoke: logged in as admin, opened the case for TEST_Review_Child_FE, both new tabs visible (cd-tab-school-reviews, cd-tab-welfare-visits), all 3 toolbar buttons (reviews-{kind}-print, upload, reviews-{kind}-new) render, both New review dialogs open with full form schemas verbatim (school: Academic Performance 4 rows x 4 ratings, Attendance 4 rows x Yes/No, Social/Emotional 4 rows; welfare: Welfare Assessment 9 rows, Education/Health/Protection checkbox groups, Household, Child voice). Empty-state copy + 'Add the first review' CTA also render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "SocialReviewsPanel — New review dialog", "issues": ["Review date uses the browser-native date picker (<input type=date>) instead of the shadcn Calendar component. Consistent with the rest of the dialog but worth aligning if other date pickers in the app use shadcn."]},
+      {"screen": "SocialWorkPage child detail dialog", "issues": ["React hydration warning: '<p> cannot contain <div>'. DialogDescription (renders as <p id=radix-...>) wraps Badge components (<div>) at SocialWorkPage.jsx ~line 620. Console error only — UI still renders, but it pollutes logs and breaks SSR/strict-mode. Fix: change DialogDescription to a span-wrapping component, or move the Badges out of DialogDescription."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_social_reviews.py",
+    "/app/test_reports/pytest/iter164_results.xml"
+  ],
+  "action_items": [
+    "(low) Fix React hydration warning in SocialWorkPage.jsx ~L620 — DialogDescription (<p>) cannot contain Badge (<div>). Wrap the meta line in a sibling <div> or change DialogDescription to render a span via asChild.",
+    "(optional) Consider shadcn Calendar/Popover for review date input to match rest of app."
+  ],
+  "critical_code_review_comments": [
+    "social_review_forms.py (~510 LOC) is at the upper limit before splitting — consider extracting the two big HTML template strings into separate template files (e.g. /app/backend/templates/school_review.html + welfare_visit.html) so the router stays under ~250 LOC and the HTML is editable without touching Python.",
+    "PUT /api/social-work/reviews/{id} re-runs _apply_review_to_child using {**rev, **update} — this is correct, but since fields/action_plan/overall_assessment are stored under different sub-dicts than the top-level, the merge subtly works only because the auto-sync reads from .fields and top-level overall_assessment. Worth adding a unit test that updates ONLY fields and verifies child.education.latest_review picks up the new fields. (Already partially covered by test_update_reapplies_sync.)",
+    "upload-scan stores files under /app/backend/uploads/social-review-scans/ when cloud storage fails — this is fine for dev but the served URL is /api/uploads/... which must be mounted as StaticFiles. Verify in production that this path is actually served, otherwise the attached_scan_url will 404.",
+    "Tenant scoping: list_child_reviews queries only by child_id and ignores location_id / org scoping — if this app is multi-tenant (it appears to be from the routing prefix), any staff in any tenant who can call require_staff can read any child's reviews provided they guess the child_id. Recommend adding the same location_id scoping the children router uses.",
+    "Soft-delete: db.deleted_items insert keeps Mongo's _id from the original doc — when restoring this will collide. Standard pattern across this codebase, but worth flagging."
+  ],
+  "updated_files": ["/app/backend/tests/test_social_reviews.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created and cleaned up TEST_Review_Child_* children (one for FE, transient ones inside pytest fixtures). Social-work case for TEST_Review_Child_FE was created then deleted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "social_review_forms router is fully covered by /app/backend/tests/test_social_reviews.py (14 cases, all green). Auto-sync verified for both kinds. Frontend: tabs + toolbar + both dialogs render with the correct schemas. Only outstanding nits are the React p-cannot-contain-div hydration warning in SocialWorkPage.jsx and the native date picker.",
+  "rca of the issue": "n/a — feature works end-to-end. The p>div hydration warning is in SocialWorkPage's existing DialogDescription, not the new SocialReviewsPanel — Badge components are placed as children of DialogDescription (which renders <p>). React treats this as invalid HTML."
+}

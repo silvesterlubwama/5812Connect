@@ -20,7 +20,8 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, Search, FileDown, Globe } from 'lucide-react';
+import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe } from 'lucide-react';
+import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -638,6 +639,8 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
               <TabsTrigger value="goals" data-testid="cd-tab-goals"><Target size={11} className="mr-1" />Goals</TabsTrigger>
               <TabsTrigger value="payments" data-testid="cd-tab-payments"><DollarSign size={11} className="mr-1" />Payments ({payments.length})</TabsTrigger>
               <TabsTrigger value="notes" data-testid="cd-tab-notes"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
+              <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews"><GraduationCap size={11} className="mr-1" />School Reviews</TabsTrigger>
+              <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits"><ClipboardCheck size={11} className="mr-1" />Welfare Visits</TabsTrigger>
             </TabsList>
 
             {/* OVERVIEW */}
@@ -948,6 +951,16 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                   ))}
                 </div>
               )}
+            </TabsContent>
+
+            {/* SCHOOL PROGRESS REVIEWS — termly review forms filled at school visits */}
+            <TabsContent value="school_reviews" className="space-y-3 mt-3">
+              <SocialReviewsPanel child={editing} kind="school_progress" />
+            </TabsContent>
+
+            {/* WELFARE VISITS — home visits, protection assessment, household checks */}
+            <TabsContent value="welfare_visits" className="space-y-3 mt-3">
+              <SocialReviewsPanel child={editing} kind="welfare_visit" />
             </TabsContent>
           </Tabs>
         )}
