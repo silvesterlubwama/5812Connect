@@ -617,12 +617,12 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </Button>
           </DialogTitle>
           {caseDoc && (
-            <DialogDescription className="text-xs flex flex-wrap items-center gap-2">
+            <div className="text-xs flex flex-wrap items-center gap-2 mt-1" data-testid="cd-case-meta">
               <Badge variant="outline" className={`text-[10px] ${CATEGORY_COLORS[caseDoc.category]}`}>{CATEGORY_LABELS[caseDoc.category]}</Badge>
               <Badge variant="outline" className={`text-[10px] ${RISK_COLORS[caseDoc.risk_level]}`}>{caseDoc.risk_level} risk</Badge>
               <Badge variant="secondary" className="text-[10px]">{caseDoc.status}</Badge>
               <span className="text-muted-foreground">opened {caseDoc.opened_at?.slice(0, 10)} by {caseDoc.opened_by_name}</span>
-            </DialogDescription>
+            </div>
           )}
         </DialogHeader>
 

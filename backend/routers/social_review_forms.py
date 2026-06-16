@@ -40,7 +40,23 @@ async def list_child_reviews(
     kind: Optional[str] = None,
     current_user: dict = Depends(require_staff),
 ):
-    """Timeline of review forms filed for one child. Optional ?kind= filter."""
+    """Timeline of review forms filed for one child. Optional ?kind= filter.
+
+    Visibility: anyone with social_work module access (or system admin) sees
+    every review for any child in their campus tree. Non-privileged staff are
+    still campus-scoped against the child's location_id — matches the rest of
+    the social-work surface.
+    """
+    from deps import is_system_admin, has_module_access, get_campus_filter
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "location_id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    if not is_system_admin(current_user) and not has_module_access(current_user, "social_work"):
+        scope = await get_campus_filter(current_user)
+        child_loc = child.get("location_id") or ""
+        allowed_locs = (scope.get("location_id", {}) or {}).get("$in", []) if scope else []
+        if child_loc and allowed_locs and child_loc not in allowed_locs:
+            raise HTTPException(status_code=403, detail="Child is outside your campus scope")
     query = {"child_id": child_id}
     if kind:
         if kind not in VALID_KINDS:

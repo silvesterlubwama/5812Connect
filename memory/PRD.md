@@ -6,6 +6,50 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 167 (Jun 16, 2026)
+**Social Work Review Forms — School Progress + Welfare Home Visit.**
+
+### What shipped
+
+Productionised the two paper forms the field-team has been filling by hand. The forms collect data NOT currently in the codebase: termly academic ratings (Excellent/Good/Fair/Poor on overall, reading/writing, math, participation), attendance/discipline checks, social-emotional ratings, welfare indicators (physical health, nutrition, hygiene, emotional well-being, safety, family support, living conditions), protection concerns (neglect, physical abuse, emotional abuse, child labour, dropout risk, early marriage risk), child's voice (what's going well / challenges / support wanted), household assessment, and per-review action plans.
+
+**1. Backend** — new `routers/social_review_forms.py` (~530 LOC):
+- `POST /api/social-work/reviews/children/{child_id}` — submit filled review (school_progress or welfare_visit). Validates kind + child exists.
+- `GET /api/social-work/reviews/children/{child_id}` — timeline of reviews, optional `?kind=` filter. Campus-scoped for non-privileged staff.
+- `PUT /api/social-work/reviews/{id}` — edit, auto re-applies sync.
+- `DELETE /api/social-work/reviews/{id}` — soft delete to db.deleted_items.
+- `POST /api/social-work/reviews/children/{child_id}/upload-scan` — accepts PDF/image up to 15 MB, creates a draft review with `attached_scan_url`, also mirrors into `db.child_extras`.
+- `GET /api/social-work/reviews/templates/{kind}.pdf` — generates a printable blank form (WeasyPrint) with org branding pulled from `system_settings`. Two layouts hand-built to mirror the original .docx visually (header bar, checkbox glyphs, signature blocks).
+
+**2. Auto-sync into child profile** — `_apply_review_to_child`:
+- school_progress saves → `child.education.{school_name, current_term, grade, latest_review}`.
+- welfare_visit saves → `child.family.{primary_caregiver, caregiver_relationship, village_parish, district, household_assessment}` + `child.welfare.latest_review` + `child.protection.{flags, has_active_concern, last_assessed_at}`.
+- Existing `/api/members/{id}/profile-pdf` report-generator picks up these fields automatically — no extra wiring.
+
+**3. Frontend** (`SocialReviewsPanel.jsx`, ~450 LOC, plus 2 new tabs on SocialWorkPage):
+- Two new tabs in the child detail dialog: **School Reviews** + **Welfare Visits**.
+- Each tab has toolbar: Print blank · Upload scan · + New review · Refresh.
+- Print blank downloads the PDF for paper use.
+- Upload scan → creates a draft "transcribe later" row.
+- + New review opens a dialog with the FULL form schema verbatim (4 rating tables, all checkbox groups, action-plan rows, overall-assessment dropdown, child's voice textareas).
+- Timeline shows each filed review with overall-badge, social-worker name, protection-flag badge when applicable.
+
+**4. Side fix** — React hydration warning: `DialogDescription` wraps `<p>` and cannot contain `<div>` (Badge). Replaced with a `<div>` sibling so the meta-line strip renders without console noise.
+
+### Verification
+- E2E roundtrip: school review saved → `child.education.latest_review.overall='Good Progress'`, welfare review saved with `protection_concerns.{neglect, child_labour}=true` → `child.protection.has_active_concern=true, flags={neglect:true, child_labour:true, ...}`. Both PDFs generate cleanly (200 + application/pdf).
+- Testing agent (`iteration_164.json`): **14/14 backend pytest pass, frontend 100%**. All form-schema fields verified in both dialogs.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org` so social-work staff get the new tabs + templates.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update tonight at 03:30 UTC OR `sudo docker compose pull && up -d` now.
+
+### Future / Backlog (from testing agent + my review)
+- Split the two long HTML templates out of `social_review_forms.py` into separate files so the router stays under ~250 LOC.
+- Add Gemini OCR step to `upload-scan` so a filled paper form auto-extracts into structured `fields` — would close the only manual step in the flow.
+- Wire the existing protection-flag onto the children list (sw-tab-cases) so a red dot appears next to flagged kids.
+
 ## Recently Resolved — Iteration 166 (Jun 11, 2026)
 **Event signups visibility + Outreach recurring-event generation bug.**
 
