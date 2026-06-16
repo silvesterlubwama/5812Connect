@@ -6,6 +6,39 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 168 (Jun 16, 2026)
+**Gemini OCR for review forms + template extraction + protection red dot + reviews-due widget.**
+
+### Shipped
+
+**1. Gemini-3-flash-preview OCR auto-fill on upload-scan**
+The bottleneck was: social worker uploaded a filled paper form → it sat as `draft_scan_only` until someone manually transcribed it. Now: upload an image (JPEG/PNG/WEBP) → Gemini extracts the full structured `fields` schema → auto-syncs into the child profile → status flips to `submitted`. PDFs still go to `draft_scan_only` (image-only for MVP; PDF→image step is a future enhancement). OCR failures (no LLM key, bad image, etc.) degrade gracefully to draft mode with the error surfaced in `ocr.error`.
+
+E2E verified: a synthetic JPEG with form-like content → Gemini extracted `school=Hope Primary, class=P4, term=Term 2 2026, academic.overall.rating=Good, strengths='Strong reader, asks questions', overall='Good Progress'` at `confidence=high`. ~10-15s per call.
+
+**2. HTML templates extracted** to `/app/backend/templates/social_reviews/{school_progress,welfare_visit}.html` so the markup is editable without touching Python. `_load_template` re-reads on every request → ops can hot-edit the form layout in production without a restart.
+
+**3. Protection red dot on the case list** — `GET /api/social-work/cases` now enriches each case with `case.protection.{has_active_concern, flags}` pulled from the child record. The Cases tab shows a rose-500 dot on the avatar of any flagged child with a tooltip + ARIA label listing the specific flags (e.g. "Active protection concern: neglect, physical abuse"). Screen-reader accessible.
+
+**4. Reviews-due widget** — new `GET /api/social-work/reviews/compliance/due?days=N` endpoint + `ReviewsDueWidget` component. KPI row now has 5 cards. Last card shows count of children whose last welfare visit was >90 days ago (or never). Click → dialog with the overdue list, threshold selector (30/60/90/180), drill-into-case shortcut. Empty state when everyone's up to date.
+
+### Verification
+- Testing agent (`iteration_168.json`): **15/15 backend pytest pass + frontend 100%**. Aria-label nit fixed post-test.
+- Gemini OCR: live-tested end-to-end by main agent (extraction confidence=high, all fields populated).
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+- Test fixtures: 25 stale test children + 1 case + 0 reviews cleaned during this iteration.
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org`.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update at 03:30 UTC OR `sudo docker compose pull && up -d` now.
+- **EMERGENT_LLM_KEY** must be set in your prod env for OCR to actually run; without it, scans go to `draft_scan_only` (no failure, just no auto-fill).
+
+### Future / Backlog
+- Split `_ocr_review_form` + `_OCR_SYSTEM_PROMPTS` into a sibling `social_review_ocr.py` module (router file would drop ~150 LOC).
+- Add a PDF→image first-page conversion step (pdf2image / poppler) so PDF scans also run through OCR.
+- Cache rendered PDF templates keyed by template mtime if traffic warrants.
+- Tighten `/compliance/due` aggregation: filter reviews aggregation by location_id when caller passes `?location_id=`. Currently child_id list is already campus-scoped so functionally fine; just a defence-in-depth improvement.
+
 ## Recently Resolved — Iteration 167 (Jun 16, 2026)
 **Social Work Review Forms — School Progress + Welfare Home Visit.**
 

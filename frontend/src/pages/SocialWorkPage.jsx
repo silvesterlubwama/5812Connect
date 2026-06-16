@@ -237,10 +237,13 @@ export default function SocialWorkPage() {
                         : <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center text-sm">{(c.subject_name || '?').slice(0, 1)}</div>}
                       {c.protection?.has_active_concern && (
                         // Red dot — child has an active protection concern flagged by a recent welfare review.
-                        // Tooltip surfaces the specific flag names.
+                        // Tooltip surfaces the specific flag names. role+aria-label give screen-readers the
+                        // same information.
                         <span
                           className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-rose-500 border-2 border-background ring-1 ring-rose-700"
                           title={`Active protection concern: ${Object.entries(c.protection.flags || {}).filter(([, v]) => v).map(([k]) => k.replace(/_/g, ' ')).join(', ') || 'unspecified'}`}
+                          role="img"
+                          aria-label={`Active protection concern: ${Object.entries(c.protection.flags || {}).filter(([, v]) => v).map(([k]) => k.replace(/_/g, ' ')).join(', ') || 'unspecified'}`}
                           data-testid={`sw-case-${c.id}-protection-flag`}
                         />
                       )}
