@@ -845,8 +845,11 @@ async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dic
                 {"kind": "external_sponsor", "phone": phone}, {"_id": 0, "id": 1}
             )
         if not existing:
+            # re.escape to defend against names with regex metacharacters
+            # ('O'Brien (Jr.)', etc.) — would otherwise mis-match or throw.
+            import re as _re
             existing = await db.guests.find_one(
-                {"kind": "external_sponsor", "name": {"$regex": f"^{name}$", "$options": "i"}},
+                {"kind": "external_sponsor", "name": {"$regex": f"^{_re.escape(name)}$", "$options": "i"}},
                 {"_id": 0, "id": 1},
             )
 

@@ -6,6 +6,51 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 170 (Jun 17, 2026)
+**Sponsor hardening — validation + Guest auto-dedup + PDF section + autocomplete endpoint.**
+
+### Shipped
+
+**1. Server-side `sponsor_manual` validation** (was FE-only discipline)
+- Both POST `/cases` and PUT `/cases/{id}` now reject any `sponsor_manual` that isn't either `null` or `{name: <non-empty>, ...}` with HTTP 400.
+- On save: name is trimmed, email lowercased, all fields length-capped (name≤120 / email≤120 / phone≤32 / notes≤500) so paste-garbage can't blow up the report PDF later.
+
+**2. Auto-upsert into `db.guests` as `kind='external_sponsor'`**
+- New helper `_upsert_external_sponsor_guest`: idempotent dedup priority **email → phone → name** (case-insensitive, `re.escape`d for names with metacharacters like `O'Brien (Jr.)`). When a sponsor_manual is filled on any case, the helper finds-or-creates a guest row and stamps `case.sponsor_guest_id` for FK linking.
+- Result: the SAME external sponsor can back multiple kids without re-typing, and payments routed through the existing guest pipeline automatically light up.
+
+**3. Sponsor section in profile-report PDF**
+- `_render_case_report_html(..., sponsor_info=None)` now renders a `<h2>Sponsor</h2>` block (Name / Source / Email / Phone / Notes) between Family and Compliance.
+- Source label is either "External donor" (manual_sponsor) or "In-system user" (sponsor_member_id lookup).
+- Section is omitted entirely when neither pathway has data (no empty header).
+- Manual sponsor wins when both are populated (defensive — the FE keeps them mutually exclusive).
+
+**4. New `GET /api/social-work/sponsors/external` endpoint**
+- Returns roster of all `kind='external_sponsor'` guests with `{id, name, email, phone, notes, active_cases}`. Supports `?search=` filter on name/email/phone. Sorted by name.
+- `active_cases` counts rows in `db.social_cases` where `sponsor_guest_id = guest.id` AND `status='active'`.
+- Enables the next iteration's FE autocomplete dropdown ("link existing external sponsor" mode).
+
+### Verification
+- Testing agent (`iteration_170.json`): **13/13 backend pytest + 3/3 HTML-render assertions PASS**. Frontend out-of-scope this round (autocomplete UI is next iter).
+- E2E roundtrip confirmed end-to-end by main agent:
+  - 400 on no-name `sponsor_manual` ✓
+  - Whitespace trim + email lowercase ✓
+  - Guest auto-created with `kind='external_sponsor'` ✓
+  - Second case with same email **reused** the same `sponsor_guest_id` (dedup OK) ✓
+  - `/sponsors/external` returned `active_cases=2` for the shared sponsor ✓
+  - PDF generated (19 KB) with `<h2>Sponsor</h2>` + name + source verified via direct HTML render ✓
+- Post-test polish applied: `re.escape()` on the name regex to handle names with regex metacharacters.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org`.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update at 03:30 UTC OR `sudo docker compose pull && up -d` now.
+
+### Future / Backlog (from testing review)
+- **Next iter**: FE autocomplete in the case-detail Sponsor section — call `/sponsors/external?search=` while typing to pre-fill name/email/phone from an existing donor instead of re-typing.
+- Split `social_work.py` (now 1483 LOC) into sub-modules (cases.py / sponsors.py / report.py / notes.py / payments.py).
+- Add `?limit` + `?skip` pagination to `/sponsors/external` for large donor rosters.
+
 ## Recently Resolved — Iteration 169 (Jun 16, 2026)
 **Social-work case detail dialog redesign: wider layout + editable risk/category + manual sponsor entry.**
 
