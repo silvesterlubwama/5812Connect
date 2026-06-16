@@ -252,12 +252,27 @@ export default function SocialReviewsPanel({ child, kind }) {
 
   const handleScanUpload = async (file) => {
     if (!file) return;
+    const isImage = file.type?.startsWith('image/');
+    const msg = toast.loading(isImage ? 'Uploading + running OCR (10–30s)…' : 'Uploading scan…');
     try {
-      await socialReviewsApi.uploadScan(child.id, file, kind);
-      toast.success('Scan uploaded — transcribe the data into a new review when ready');
+      const r = await socialReviewsApi.uploadScan(child.id, file, kind);
+      toast.dismiss(msg);
+      const res = r.data || {};
+      const ocr = res.ocr || {};
+      if (ocr.ran) {
+        const conf = ocr.confidence || 'medium';
+        toast.success(`OCR complete (confidence: ${conf}) — review and edit if needed`);
+      } else if (ocr.error) {
+        toast.warning(`Scan uploaded — OCR skipped (${ocr.error}). Click the row to transcribe manually.`);
+      } else {
+        toast.success('Scan uploaded — transcribe via the in-app form when ready');
+      }
       setScanFile(null);
       await refresh();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
+    } catch (e) {
+      toast.dismiss(msg);
+      toast.error(e.response?.data?.detail || 'Upload failed');
+    }
   };
 
   const addActionRow = () => setForm({

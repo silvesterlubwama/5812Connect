@@ -266,7 +266,22 @@ async def list_cases(
     scope = await get_campus_filter(current_user)
     if scope:
         query.update(scope)
-    return await db.social_cases.find(query, {"_id": 0}).sort("opened_at", -1).to_list(500)
+    cases = await db.social_cases.find(query, {"_id": 0}).sort("opened_at", -1).to_list(500)
+
+    # Enrich with child protection flags so the list view can render a red dot
+    # for any child with an active protection concern (set by welfare-visit reviews).
+    child_ids = [c["subject_id"] for c in cases if c.get("subject_kind") == "child" and c.get("subject_id")]
+    if child_ids:
+        prot_map = {}
+        async for ch in db.children.find(
+            {"id": {"$in": child_ids}, "protection.has_active_concern": True},
+            {"_id": 0, "id": 1, "protection": 1},
+        ):
+            prot_map[ch["id"]] = ch.get("protection") or {}
+        for c in cases:
+            if c.get("subject_id") in prot_map:
+                c["protection"] = prot_map[c["subject_id"]]
+    return cases
 
 
 @router.post("/cases")

@@ -1,0 +1,125 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Child Welfare Review &amp; Home Visit</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 36px 32px; color: #1a1a2e; font-size: 11pt; line-height: 1.45; }
+.header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 3px solid #fbbf24; margin-bottom: 14px; }
+.brand { font-size: 14pt; font-weight: 700; color: #1a1a2e; letter-spacing: 1px; }
+.brand-sub { color: #fbbf24; font-size: 9pt; font-weight: 600; margin-top: 2px; }
+.form-id { text-align: right; font-size: 9pt; color: #64748b; }
+h1 { font-size: 16pt; text-align: center; margin: 12px 0 18px 0; text-transform: uppercase; letter-spacing: 1.5px; }
+h2 { font-size: 11pt; margin: 16px 0 6px 0; background: #f1f5f9; padding: 6px 10px; border-left: 4px solid #fbbf24; }
+.fld { display: flex; align-items: baseline; margin: 4px 0; }
+.fld label { font-weight: 600; min-width: 150px; }
+.fld .line { flex: 1; border-bottom: 1px dotted #334155; min-height: 18px; margin-left: 6px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+table { width: 100%; border-collapse: collapse; margin: 6px 0 8px 0; font-size: 10pt; }
+th, td { border: 1px solid #94a3b8; padding: 6px 8px; vertical-align: top; }
+th { background: #f8fafc; text-align: center; font-weight: 600; font-size: 9.5pt; }
+.rating { width: 38px; text-align: center; }
+.checkbox { display: inline-block; width: 11px; height: 11px; border: 1.2px solid #334155; vertical-align: middle; margin-right: 4px; }
+.sig { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 22px; }
+.sig .slot { border-top: 1px solid #334155; padding-top: 4px; font-size: 9pt; }
+.note { font-size: 8pt; color: #64748b; margin-top: 18px; text-align: center; }
+.checkrow { margin: 3px 0; font-size: 10pt; }
+</style></head>
+<body>
+<div class="header">
+  <div><div class="brand">{{ORG_NAME}}</div><div class="brand-sub">Welfare &amp; Education Programme</div></div>
+  <div class="form-id">Form: WV-REV-01<br/>Print date: {{TODAY}}</div>
+</div>
+<h1>Child Welfare Review and Home Visit</h1>
+
+<h2>Visit Details</h2>
+<div class="row2">
+  <div class="fld"><label>Date of Visit</label><span class="line"></span></div>
+  <div class="fld"><label>Child Name</label><span class="line"></span></div>
+  <div class="fld"><label>Sponsorship ID</label><span class="line"></span></div>
+  <div class="fld"><label>Age</label><span class="line"></span></div>
+  <div class="fld"><label>Sex</label><span class="line"></span></div>
+  <div class="fld"><label>Caregiver Name</label><span class="line"></span></div>
+  <div class="fld"><label>Relationship to Child</label><span class="line"></span></div>
+  <div class="fld"><label>Village / Parish</label><span class="line"></span></div>
+  <div class="fld"><label>District</label><span class="line"></span></div>
+</div>
+
+<h2>Child Welfare Assessment <span style="font-weight:400; font-size:9pt; color:#64748b;">(Good / Fair / Poor — tick one per row)</span></h2>
+<table>
+  <thead><tr><th style="text-align:left;">Welfare Indicator</th><th class="rating">Good</th><th class="rating">Fair</th><th class="rating">Poor</th><th>Comments</th></tr></thead>
+  <tbody>
+    <tr><td>Physical Health</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Nutrition Status</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Personal Hygiene</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Emotional / Psychological Well-being</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Safety and Protection</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>School Attendance</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Academic Progress</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Family Support and Care</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Living Conditions</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Education Status</h2>
+<div class="checkrow"><span class="checkbox"></span> Enrolled in school &nbsp;&nbsp; <span class="checkbox"></span> Attends regularly &nbsp;&nbsp; <span class="checkbox"></span> Adequate learning materials</div>
+<div class="checkrow"><span class="checkbox"></span> School fees/scholastic needs met &nbsp;&nbsp; <span class="checkbox"></span> Progressing academically</div>
+
+<h2>Health and Nutrition</h2>
+<div class="checkrow"><span class="checkbox"></span> Appears healthy &nbsp;&nbsp; <span class="checkbox"></span> Accesses medical care when needed &nbsp;&nbsp; <span class="checkbox"></span> Receives adequate meals daily</div>
+<div class="checkrow"><span class="checkbox"></span> Disability or chronic illness identified (specify below)</div>
+
+<h2>Child Protection Concerns <span style="font-weight:400; font-size:9pt; color:#64748b;">(tick any that apply)</span></h2>
+<div class="checkrow"><span class="checkbox"></span> Neglect &nbsp;&nbsp; <span class="checkbox"></span> Physical Abuse &nbsp;&nbsp; <span class="checkbox"></span> Emotional Abuse &nbsp;&nbsp; <span class="checkbox"></span> Child Labour</div>
+<div class="checkrow"><span class="checkbox"></span> School Dropout Risk &nbsp;&nbsp; <span class="checkbox"></span> Early Marriage Risk &nbsp;&nbsp; <span class="checkbox"></span> Other Protection Concern</div>
+<div class="fld" style="margin-top:6px;"><label>Details</label><span class="line" style="min-height:30px;"></span></div>
+
+<h2>Household and Family Environment</h2>
+<table>
+  <thead><tr><th style="width:24px;">No.</th><th style="text-align:left;">Indicator</th><th class="rating">Good</th><th class="rating">Fair</th><th class="rating">Poor</th><th>Comments</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Caregiver-child relationship</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>2</td><td>Household stability</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>3</td><td>Housing condition</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>4</td><td>Water and sanitation facilities</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>5</td><td>Family capacity to meet basic needs</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Child&rsquo;s Voice</h2>
+<div class="fld"><label>What is going well at home/school?</label><span class="line" style="min-height:30px;"></span></div>
+<div class="fld"><label>What challenges are you facing?</label><span class="line" style="min-height:30px;"></span></div>
+<div class="fld"><label>What support would you like?</label><span class="line" style="min-height:30px;"></span></div>
+
+<h2>Strengths and Positive Changes Observed</h2>
+<div style="border-bottom:1px dotted #334155; min-height:42px;"></div>
+
+<h2>Key Challenges Identified</h2>
+<div style="border-bottom:1px dotted #334155; min-height:42px;"></div>
+
+<h2>Agreed Action Plan</h2>
+<table>
+  <thead><tr><th style="width:24px;">No.</th><th>Identified Need</th><th>Action Required</th><th>Responsible</th><th style="width:90px;">Timeline</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>2</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>3</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>4</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Overall Case Assessment <span style="font-weight:400; font-size:9pt; color:#64748b;">(tick one)</span></h2>
+<p>
+  <span class="checkbox"></span> The child is thriving and progressing well &nbsp;&nbsp;
+  <span class="checkbox"></span> Requires routine monitoring &nbsp;&nbsp;
+  <span class="checkbox"></span> Requires additional support services &nbsp;&nbsp;
+  <span class="checkbox"></span> Requires urgent intervention
+</p>
+<p><span class="checkbox"></span> Referral made to another service provider (specify)</p>
+
+<div class="sig">
+  <div class="slot"><strong>Caregiver</strong><br/>Name: _______________<br/>Sign &amp; Date: ________________</div>
+  <div class="slot"><strong>Child</strong><br/>Name: _______________<br/>Sign &amp; Date: ________________</div>
+  <div class="slot"><strong>Social Worker</strong><br/>Name: _______________<br/>Sign &amp; Date: ________________</div>
+</div>
+
+<p style="margin-top:14px; font-size:9pt;"><strong>Next Visit Date:</strong> ___________________</p>
+
+<div class="note">{{ORG_NAME}} &middot; Confidential &mdash; for internal use only &middot; Form returns to the social worker for upload into the child&rsquo;s digital profile.</div>
+</body></html>

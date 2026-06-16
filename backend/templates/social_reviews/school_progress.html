@@ -1,0 +1,103 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>School Progress Review</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 36px 32px; color: #1a1a2e; font-size: 11pt; line-height: 1.45; }
+.header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 3px solid #fbbf24; margin-bottom: 14px; }
+.brand { font-size: 14pt; font-weight: 700; color: #1a1a2e; letter-spacing: 1px; }
+.brand-sub { color: #fbbf24; font-size: 9pt; font-weight: 600; margin-top: 2px; }
+.form-id { text-align: right; font-size: 9pt; color: #64748b; }
+h1 { font-size: 16pt; text-align: center; margin: 12px 0 18px 0; text-transform: uppercase; letter-spacing: 1.5px; }
+h2 { font-size: 11pt; margin: 16px 0 6px 0; background: #f1f5f9; padding: 6px 10px; border-left: 4px solid #fbbf24; }
+.fld { display: flex; align-items: baseline; margin: 4px 0; }
+.fld label { font-weight: 600; min-width: 130px; }
+.fld .line { flex: 1; border-bottom: 1px dotted #334155; min-height: 18px; margin-left: 6px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+table { width: 100%; border-collapse: collapse; margin: 6px 0 8px 0; font-size: 10pt; }
+th, td { border: 1px solid #94a3b8; padding: 6px 8px; vertical-align: top; }
+th { background: #f8fafc; text-align: center; font-weight: 600; font-size: 9.5pt; }
+.rating { width: 38px; text-align: center; }
+.checkbox { display: inline-block; width: 11px; height: 11px; border: 1.2px solid #334155; vertical-align: middle; margin-right: 4px; }
+.sig { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 22px; }
+.sig .slot { border-top: 1px solid #334155; padding-top: 4px; font-size: 9pt; }
+.note { font-size: 8pt; color: #64748b; margin-top: 18px; text-align: center; }
+</style></head>
+<body>
+<div class="header">
+  <div><div class="brand">{{ORG_NAME}}</div><div class="brand-sub">Welfare &amp; Education Programme</div></div>
+  <div class="form-id">Form: SP-REV-01<br/>Print date: {{TODAY}}</div>
+</div>
+<h1>Child School Progress Review</h1>
+
+<h2>Child Information</h2>
+<div class="row2">
+  <div class="fld"><label>Child Name</label><span class="line"></span></div>
+  <div class="fld"><label>Sponsorship ID</label><span class="line"></span></div>
+  <div class="fld"><label>School</label><span class="line"></span></div>
+  <div class="fld"><label>Class/Grade</label><span class="line"></span></div>
+  <div class="fld"><label>Term</label><span class="line"></span></div>
+  <div class="fld"><label>Review Date</label><span class="line"></span></div>
+</div>
+
+<h2>Academic Performance <span style="font-weight:400; font-size:9pt; color:#64748b;">(tick the appropriate column)</span></h2>
+<table>
+  <thead><tr><th style="text-align:left;">Area</th><th class="rating">Excellent</th><th class="rating">Good</th><th class="rating">Fair</th><th class="rating">Poor</th><th>Comments</th></tr></thead>
+  <tbody>
+    <tr><td>Overall academic performance</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Reading and writing skills</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Mathematics performance</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Class participation</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Attendance &amp; Discipline</h2>
+<table>
+  <thead><tr><th style="text-align:left;">Indicator</th><th class="rating">Yes</th><th class="rating">No</th><th>Comments</th></tr></thead>
+  <tbody>
+    <tr><td>Attends school regularly</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Arrives on time</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Demonstrates good discipline</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Completes assignments/homework</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Social and Emotional Development</h2>
+<table>
+  <thead><tr><th style="text-align:left;">Indicator</th><th class="rating">Good</th><th class="rating">Fair</th><th class="rating">Poor</th><th>Comments</th></tr></thead>
+  <tbody>
+    <tr><td>Relates well with peers</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Respects teachers and school rules</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Confidence and self-esteem</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>Participation in co-curricular activities</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Teacher&rsquo;s Comments</h2>
+<div class="fld"><label>Strengths</label><span class="line" style="min-height:32px;"></span></div>
+<div class="fld"><label>Areas requiring support</label><span class="line" style="min-height:32px;"></span></div>
+
+<h2>Action Plan</h2>
+<table>
+  <thead><tr><th style="width:24px;">No.</th><th>Identified Concern</th><th>Action Required</th><th>Responsible</th><th style="width:90px;">Timeline</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>2</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>3</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+
+<h2>Overall Assessment <span style="font-weight:400; font-size:9pt; color:#64748b;">(tick one)</span></h2>
+<p>
+  <span class="checkbox"></span> Excellent Progress &nbsp;&nbsp;
+  <span class="checkbox"></span> Good Progress &nbsp;&nbsp;
+  <span class="checkbox"></span> Satisfactory Progress &nbsp;&nbsp;
+  <span class="checkbox"></span> Needs Additional Support &nbsp;&nbsp;
+  <span class="checkbox"></span> Requires Immediate Follow-up
+</p>
+
+<div class="sig">
+  <div class="slot"><strong>Class Teacher</strong><br/>Name: _________________<br/>Sign &amp; Date: ________________</div>
+  <div class="slot"><strong>Head Teacher</strong> (optional)<br/>Name: _________________<br/>Sign &amp; Date: ________________</div>
+  <div class="slot"><strong>Social Worker</strong><br/>Name: _________________<br/>Sign &amp; Date: ________________</div>
+</div>
+
+<div class="note">{{ORG_NAME}} &middot; Confidential &mdash; for internal use only &middot; Form returns to the social worker for upload into the child&rsquo;s digital profile.</div>
+</body></html>

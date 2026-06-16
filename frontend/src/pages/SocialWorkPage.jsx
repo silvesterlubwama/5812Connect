@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe } from 'lucide-react';
 import SocialReviewsPanel from '../components/SocialReviewsPanel';
+import ReviewsDueWidget from '../components/ReviewsDueWidget';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -157,7 +158,7 @@ export default function SocialWorkPage() {
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="sw-kpis">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-testid="sw-kpis">
         <Card className="rounded-xl"><CardContent className="p-3">
           <p className="text-xs text-muted-foreground uppercase">Active cases</p>
           <p className="text-2xl font-bold">{kpis.total}</p>
@@ -175,6 +176,10 @@ export default function SocialWorkPage() {
           <p className="text-2xl font-bold">{paymentsSummary?.count || 0}</p>
           {paymentsSummary && <p className="text-[10px] text-muted-foreground">in {(paymentsSummary.total_in || 0).toLocaleString()} / out {(paymentsSummary.total_out || 0).toLocaleString()}</p>}
         </CardContent></Card>
+        <ReviewsDueWidget onOpenCase={(childId) => {
+          const c = cases.find(x => x.subject_id === childId);
+          if (c) setOpenCase(c);
+        }} />
       </div>
 
       <Tabs defaultValue="cases" className="space-y-3">
@@ -226,9 +231,20 @@ export default function SocialWorkPage() {
               {cases.map(c => (
                 <Card key={c.id} className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => setOpenCase(c)} data-testid={`sw-case-${c.id}`}>
                   <CardContent className="p-3 flex items-center gap-3">
-                    {c.subject_photo_url
-                      ? <img src={c.subject_photo_url} alt="" className="h-10 w-10 rounded-full object-cover" />
-                      : <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center text-sm">{(c.subject_name || '?').slice(0, 1)}</div>}
+                    <div className="relative">
+                      {c.subject_photo_url
+                        ? <img src={c.subject_photo_url} alt="" className="h-10 w-10 rounded-full object-cover" />
+                        : <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center text-sm">{(c.subject_name || '?').slice(0, 1)}</div>}
+                      {c.protection?.has_active_concern && (
+                        // Red dot — child has an active protection concern flagged by a recent welfare review.
+                        // Tooltip surfaces the specific flag names.
+                        <span
+                          className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-rose-500 border-2 border-background ring-1 ring-rose-700"
+                          title={`Active protection concern: ${Object.entries(c.protection.flags || {}).filter(([, v]) => v).map(([k]) => k.replace(/_/g, ' ')).join(', ') || 'unspecified'}`}
+                          data-testid={`sw-case-${c.id}-protection-flag`}
+                        />
+                      )}
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{c.subject_name}</p>
                       <p className="text-[11px] text-muted-foreground truncate">

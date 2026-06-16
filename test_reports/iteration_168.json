@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 168 full surface verified. Backend: 15/15 pytest cases pass (templates externalised + HTML→PDF still serves, _load_template re-reads on every request → hot reload works without restart, upload-scan handles unsupported MIME (text/plain → 400), oversize >15MB → 400, PDF→draft_scan_only/ocr.ran=false, image+run_ocr=false→draft_scan_only, invalid kind→400, auth required, /compliance/due returns {total_active, due, never_visited, threshold_days, list[]} with threshold parameterised, list capped at 200, never-visited surface at top, case list enriched with case.protection.{has_active_concern, flags} when a welfare review flags concerns). Frontend: SocialWorkPage KPI grid uses sm:grid-cols-5 with the new sw-reviews-due-card (data-testid=sw-reviews-due-count) as the 5th card. Clicking opens sw-reviews-due-dialog with sw-reviews-due-threshold selector (90/60/30/180). Empty state ('Everyone is up to date 🎉') renders when no overdue children. With a seeded protection-flagged child + active case + welfare_visit review carrying neglect/physical_abuse=true, the case row renders sw-case-{id}-protection-flag (rose-500 dot, computed bg rgb(244,63,94)) with title='Active protection concern: neglect, physical abuse' — matches spec exactly. Reviews-due count correctly reports 1 for a child whose only welfare visit (2026-01-15) is >90 days ago. Gemini OCR not exercised this run (main-agent already validated; LLM cost concern noted) but the surface around it — error handling, MIME validation, PDF skip, no-OCR mode, status field, ocr.ran flag — all validated.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Cases tab — protection flag dot", "issues": ["The red dot has a title tooltip ('Active protection concern: neglect, physical abuse') but no aria-label. Minor a11y nit — screen readers won't announce the alert. Consider adding aria-label or role='img' with aria-label."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_social_reviews_iter168.py",
+    "/app/test_reports/pytest/iter168_results.xml"
+  ],
+  "action_items": [
+    "(optional/low) Add aria-label to the sw-case-{id}-protection-flag element so screen-reader users hear the protection concern alert. The visual tooltip is fine for sighted users; only adding aria covers the assistive-tech path.",
+    "(carry-over from iter164) React hydration warning '<p> cannot contain <div>' in SocialWorkPage.jsx — DialogDescription wraps Badge components. Still present in iter168 build.",
+    "(out-of-scope but noted) Gemini OCR live call was not re-tested here to avoid LLM-token cost; main agent already confirmed end-to-end. Future regression should mock or stub the LlmChat call."
+  ],
+  "critical_code_review_comments": [
+    "social_review_forms.py is now 628 LOC — slightly above the 500-LOC comfort line, but two of the templates were moved out (good). Future splits could move _ocr_review_form + _OCR_SYSTEM_PROMPTS into a sibling module (social_review_ocr.py) so the router file stays under ~400 LOC.",
+    "upload-scan: when run_ocr=true on an image but EMERGENT_LLM_KEY is missing, the endpoint silently downgrades to draft_scan_only with ocr.error='OCR not configured (no LLM key)'. This is the documented behaviour (best-effort) but worth surfacing in the UI toast — currently the FE only shows confidence on success.",
+    "/compliance/due: scoping uses get_campus_filter for non-privileged staff but the filter is applied to social_cases not children — correct, since cases already carry location_id. Latest review aggregation does NOT filter by location, so a privileged user querying with location_id='X' would still pick up child reviews recorded outside X. Not currently an issue (child_id list is already campus-scoped), but document this in the function docstring.",
+    "Template hot-reload works — verified by mutating school_progress.html in-place and re-requesting the PDF. The file is re-read every call (good for ops), but the WeasyPrint render itself is the bottleneck (~1.2s). Consider caching final PDF bytes keyed by template mtime if traffic warrants it.",
+    "Protection enrichment on /api/social-work/cases queries db.children for children with has_active_concern=true — single batched query, scales fine. Cases without flagged children get no protection field as designed. Good code."
+  ],
+  "updated_files": ["/app/backend/tests/test_social_reviews_iter168.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created and cleaned up TEST_OCR_Child_* (pytest fixtures) and TEST_FlagDot_* + associated active case for the FE red-dot verification. All seed data removed at end of run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter168 surface points pass. Test file at /app/backend/tests/test_social_reviews_iter168.py is the new regression suite (15 cases, no LLM tokens consumed). Gemini live-OCR test was deliberately skipped — when re-running add a single test that posts a synthetic filled form image, asserts status='submitted' + ocr.ran=true + ocr.confidence in {high,medium,low}, and cleans up the social_review_forms + child_extras row. Use a fixture pattern with pytest.skip(EMERGENT_LLM_KEY missing). FE: sw-reviews-due-card, sw-reviews-due-dialog, sw-reviews-due-threshold, sw-reviews-due-count, sw-case-{id}-protection-flag are all stable testids. Only outstanding nits are the carry-over <p>/<div> hydration warning and missing aria-label on the flag dot.",
+  "rca of the issue": "n/a — all features work as specified."
+}
