@@ -6,6 +6,39 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 169 (Jun 16, 2026)
+**Social-work case detail dialog redesign: wider layout + editable risk/category + manual sponsor entry.**
+
+### Shipped
+
+**1. Case detail dialog no longer overlaps** — `max-w-3xl` → `max-w-5xl w-[96vw]`. TabsList now uses `flex flex-nowrap overflow-x-auto` instead of `flex-wrap`, so the 10 tabs render in a single horizontal-scrolling row instead of crowding into two cramped rows. Every TabsContent bumped from `space-y-3 mt-3` to `space-y-4 mt-4` for clearer section separation. Last two tab labels abbreviated to 'School' and 'Welfare' for compactness.
+
+**2. Risk level + Support type now inline-editable**
+- New 3-column row on Overview tab: **Support type** (sponsored / restricted_location / welfare_support / multiple) · **Risk level** (low / medium / high) · **Case status**. All 3 PUT immediately on change with optimistic UI + revert-on-error. Was display-only badges before.
+
+**3. Manual sponsor entry** — sponsor section now has a 2-mode toggle:
+- **Existing user** (default) — link an in-system user (unchanged).
+- **Manual entry** — for external donors. Name + email + phone + organisation/notes inputs. Stored on `case.sponsor_manual`. Mutually exclusive with `sponsor_member_id` (saving one clears the other).
+- "Clear manual sponsor" button appears once any manual data is filled.
+
+**4. Side fixes from testing review**
+- Welfare tab spacing now matches the other 9 (was the one tab still on old `space-y-3 mt-3`).
+- DialogContent gets `aria-describedby={undefined}` to silence the Radix "Missing Description" console warning.
+- Inline Selects (category/risk) wrap PUT in try/catch and revert local state on error so the UI doesn't drift from the server.
+
+### Verification
+- Testing agent (`iteration_169.json`): **7/7 backend pytest pass + frontend 95%** (only nit was the Welfare-tab spacing, now fixed). Verified all 10 TabsTriggers share the same Y coordinate (single horizontal row), the 3 inline editors trigger PUTs, the sponsor toggle switches modes cleanly, and `sponsor_manual` persists to MongoDB.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+- E2E roundtrip: PUT with `{risk_level:'high', category:'sponsored', sponsor_manual:{...}}` returns 200 with all 3 reflected.
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org`.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update at 03:30 UTC OR `sudo docker compose pull && up -d` now.
+
+### Future / Backlog (from testing review)
+- Add a Pydantic model for `sponsor_manual` to lightly validate shape (require `name` when present) — currently relies on FE discipline.
+- Show `sponsor_manual.name` on the case profile-report PDF alongside the existing `sponsor_member_id` pathway.
+
 ## Recently Resolved — Iteration 168 (Jun 16, 2026)
 **Gemini OCR for review forms + template extraction + protection red dot + reviews-due widget.**
 

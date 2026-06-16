@@ -626,7 +626,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
 
   return (
     <Dialog open={!!caseId} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-5xl w-[96vw] max-h-[92vh] overflow-y-auto p-5 sm:p-6" data-testid="sw-case-detail-dialog">
+      <DialogContent className="max-w-5xl w-[96vw] max-h-[92vh] overflow-y-auto p-5 sm:p-6" data-testid="sw-case-detail-dialog" aria-describedby={undefined}>
         <DialogHeader className="space-y-1">
           <DialogTitle className="flex items-center gap-2 flex-wrap">
             {caseDoc?.subject_photo_url && <img src={caseDoc.subject_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />}
@@ -680,9 +680,15 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Support type</Label>
                   <Select value={caseDoc.category} onValueChange={async v => {
-                    await api.put(`/social-work/cases/${caseId}`, { category: v });
+                    const prev = caseDoc.category;
                     setCaseDoc({ ...caseDoc, category: v });
-                    toast.success('Support type updated');
+                    try {
+                      await api.put(`/social-work/cases/${caseId}`, { category: v });
+                      toast.success('Support type updated');
+                    } catch (e) {
+                      setCaseDoc({ ...caseDoc, category: prev });
+                      toast.error(e.response?.data?.detail || 'Update failed');
+                    }
                   }}>
                     <SelectTrigger className="h-8 text-xs" data-testid="cd-category"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -693,9 +699,15 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Risk level</Label>
                   <Select value={caseDoc.risk_level} onValueChange={async v => {
-                    await api.put(`/social-work/cases/${caseId}`, { risk_level: v });
+                    const prev = caseDoc.risk_level;
                     setCaseDoc({ ...caseDoc, risk_level: v });
-                    toast.success('Risk level updated');
+                    try {
+                      await api.put(`/social-work/cases/${caseId}`, { risk_level: v });
+                      toast.success('Risk level updated');
+                    } catch (e) {
+                      setCaseDoc({ ...caseDoc, risk_level: prev });
+                      toast.error(e.response?.data?.detail || 'Update failed');
+                    }
                   }}>
                     <SelectTrigger className="h-8 text-xs" data-testid="cd-risk-level"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1104,7 +1116,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             </TabsContent>
 
             {/* WELFARE VISITS — home visits, protection assessment, household checks */}
-            <TabsContent value="welfare_visits" className="space-y-3 mt-3">
+            <TabsContent value="welfare_visits" className="space-y-4 mt-4">
               <SocialReviewsPanel child={editing} kind="welfare_visit" />
             </TabsContent>
           </Tabs>
