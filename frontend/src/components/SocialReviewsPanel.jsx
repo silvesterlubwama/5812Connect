@@ -11,7 +11,7 @@
  * existing /api/members/{id}/profile-pdf report picks them up. No extra wiring.
  */
 import React, { useEffect, useState, useCallback } from 'react';
-import { Plus, Printer, Upload, ClipboardCheck, RefreshCw, Trash2, FileText, AlertTriangle } from 'lucide-react';
+import { Plus, Printer, Upload, ClipboardCheck, RefreshCw, Trash2, FileText, AlertTriangle, Pencil, Camera, X } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -273,6 +273,32 @@ export default function SocialReviewsPanel({ child, kind }) {
       toast.dismiss(msg);
       toast.error(e.response?.data?.detail || 'Upload failed');
     }
+  };
+
+  // Attach a photo taken during the visit to an existing review row. Used by
+  // the camera-icon button on each row AND by the Photos section inside the
+  // create/edit dialog (which auto-saves the form first if it's a new review).
+  const handlePhotoUpload = async (reviewId, file) => {
+    if (!file || !reviewId) return;
+    const t = toast.loading('Uploading photo…');
+    try {
+      await socialReviewsApi.uploadPhoto(reviewId, file);
+      toast.dismiss(t);
+      toast.success('Photo attached');
+      await refresh();
+    } catch (e) {
+      toast.dismiss(t);
+      toast.error(e.response?.data?.detail || 'Photo upload failed');
+    }
+  };
+
+  const handleDeletePhoto = async (reviewId, photoId) => {
+    if (!window.confirm('Remove this photo?')) return;
+    try {
+      await socialReviewsApi.deletePhoto(reviewId, photoId);
+      toast.success('Photo removed');
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Delete failed'); }
   };
 
   const addActionRow = () => setForm({
@@ -621,6 +647,56 @@ export default function SocialReviewsPanel({ child, kind }) {
                 </div>
               )}
             </div>
+
+            {/* PHOTOS — only available when editing an existing review (photos
+                attach to the saved review ID). For new reviews, save first then
+                photos appear on the row's camera icon. */}
+            {editingId && (
+              <div className="border-t pt-3 mt-1">
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className="text-xs flex items-center gap-1"><Camera size={11} /> Visit photos</Label>
+                  <label className="inline-flex">
+                    <Button size="sm" variant="outline" className="h-7 text-[11px]" asChild>
+                      <span><Plus size={11} className="mr-1" /> Add photo</span>
+                    </Button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={e => handlePhotoUpload(editingId, e.target.files?.[0])}
+                      data-testid={`reviews-${kind}-dialog-photo-upload`}
+                    />
+                  </label>
+                </div>
+                {(() => {
+                  const editingReview = list.find(x => x.id === editingId);
+                  const photos = editingReview?.photos || [];
+                  if (photos.length === 0) {
+                    return <p className="text-[11px] text-muted-foreground py-2">No photos yet. Add pictures taken during the visit — they appear on the child's profile gallery too.</p>;
+                  }
+                  return (
+                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-2" data-testid={`reviews-${kind}-dialog-photos`}>
+                      {photos.map(p => (
+                        <div key={p.id} className="relative group">
+                          <a href={p.url} target="_blank" rel="noreferrer" title={p.caption || 'Visit photo'}>
+                            <img src={p.url} alt={p.caption || 'visit'} className="h-20 w-full rounded object-cover border" />
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePhoto(editingId, p.id)}
+                            className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove photo"
+                            data-testid={`reviews-photo-delete-${p.id}`}
+                          >
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div className="flex gap-2 pt-3 border-t mt-2">
               <Button variant="ghost" onClick={() => setShowCreate(false)} className="flex-1">Cancel</Button>

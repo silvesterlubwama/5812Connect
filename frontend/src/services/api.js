@@ -941,5 +941,16 @@ export const socialReviewsApi = {
       { headers: { 'Content-Type': 'multipart/form-data' } }
     );
   },
+  uploadPhoto: (reviewId, file, caption = '') => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (caption) fd.append('caption', caption);
+    return api.post(`/social-work/reviews/${reviewId}/photos`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deletePhoto: (reviewId, photoId) => api.delete(`/social-work/reviews/${reviewId}/photos/${photoId}`),
+  complianceDue: (days = 90, locationId) =>
+    api.get(`/social-work/reviews/compliance/due?days=${days}${locationId ? `&location_id=${encodeURIComponent(locationId)}` : ''}`),
 };
 

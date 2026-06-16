@@ -245,9 +245,16 @@ async def list_cases(
     risk_level: Optional[str] = None,
     school_id: Optional[str] = None,
     search: Optional[str] = None,
+    ocr_confidence: Optional[str] = None,
     current_user: dict = Depends(require_staff),
 ):
-    """Search cases. Scoped to user's campus."""
+    """Search cases. Scoped to user's campus.
+
+    `ocr_confidence` filters cases by the LATEST review's OCR confidence:
+      • 'low'   → cases whose latest review was auto-extracted with low confidence
+                  (these need a social worker to review & correct)
+      • 'any'   → no filter
+    """
     query = {}
     if category and category in CASE_CATEGORIES:
         query["category"] = category
@@ -270,17 +277,54 @@ async def list_cases(
 
     # Enrich with child protection flags so the list view can render a red dot
     # for any child with an active protection concern (set by welfare-visit reviews).
+    # Also pull the latest-review OCR confidence so the UI can surface
+    # "needs review" cases and so we can apply the ocr_confidence filter.
     child_ids = [c["subject_id"] for c in cases if c.get("subject_kind") == "child" and c.get("subject_id")]
     if child_ids:
+        # Protection flags (batched)
         prot_map = {}
         async for ch in db.children.find(
             {"id": {"$in": child_ids}, "protection.has_active_concern": True},
             {"_id": 0, "id": 1, "protection": 1},
         ):
             prot_map[ch["id"]] = ch.get("protection") or {}
+        # Latest-review OCR meta — one aggregation per child × kind so the
+        # caller can see if the most recent review for either kind was
+        # auto-extracted at low confidence.
+        ocr_map = {}
+        pipeline = [
+            {"$match": {"child_id": {"$in": child_ids}, "ocr.ran": True}},
+            {"$sort": {"review_date": -1}},
+            {"$group": {
+                "_id": {"child_id": "$child_id", "kind": "$kind"},
+                "latest_confidence": {"$first": "$ocr.confidence"},
+                "latest_review_id": {"$first": "$id"},
+                "latest_review_date": {"$first": "$review_date"},
+            }},
+        ]
+        async for row in db.social_review_forms.aggregate(pipeline):
+            cid = row["_id"]["child_id"]
+            ocr_map.setdefault(cid, {})[row["_id"]["kind"]] = {
+                "confidence": row["latest_confidence"],
+                "review_id": row["latest_review_id"],
+                "review_date": row["latest_review_date"],
+            }
         for c in cases:
-            if c.get("subject_id") in prot_map:
-                c["protection"] = prot_map[c["subject_id"]]
+            sid = c.get("subject_id")
+            if sid in prot_map:
+                c["protection"] = prot_map[sid]
+            if sid in ocr_map:
+                c["latest_ocr"] = ocr_map[sid]
+                # Convenience boolean — true if ANY of the review kinds is low-confidence
+                c["has_low_confidence_ocr"] = any(v.get("confidence") == "low" for v in ocr_map[sid].values())
+
+    if ocr_confidence == "low":
+        cases = [c for c in cases if c.get("has_low_confidence_ocr")]
+    elif ocr_confidence in {"high", "medium"}:
+        cases = [c for c in cases if any(
+            v.get("confidence") == ocr_confidence for v in (c.get("latest_ocr") or {}).values()
+        )]
+
     return cases
 
 
