@@ -813,9 +813,10 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                       {caseDoc.sponsor_manual?.name && (
                         <Button
                           size="sm" variant="ghost" className="h-6 text-[10px] -mt-0.5 px-1"
-                          onClick={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual, sponsor_member_id: null }).catch(() => {})}
+                          onClick={() => api.put(`/social-work/cases/${caseId}`, { sponsor_manual: caseDoc.sponsor_manual, sponsor_member_id: null }).then(() => toast.success('Sponsor saved')).catch(() => toast.error('Save failed'))}
                           data-testid="cd-sponsor-manual-save-name"
-                        >Save name</Button>
+                          title="Save the current name + email + phone + notes to this case"
+                        >Save sponsor</Button>
                       )}
                     </div>
                     <div className="space-y-1">

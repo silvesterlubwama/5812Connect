@@ -27,7 +27,14 @@ export default function ExternalSponsorAutocomplete({ value, onChange, onPick, p
     try {
       const r = await api.get(`/social-work/sponsors/external?search=${encodeURIComponent(term)}`);
       setHits((r.data || []).slice(0, 8));
-    } catch { setHits([]); }
+    } catch (e) {
+      // Don't toast — autocomplete failures are common (network flake, debounce race).
+      // Keep a dev-only warn so silent breaks are still visible during local debugging.
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[sponsor-autocomplete] search failed:', e?.message || e);
+      }
+      setHits([]);
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -55,11 +62,15 @@ export default function ExternalSponsorAutocomplete({ value, onChange, onPick, p
         data-testid={testid}
         autoComplete="off"
       />
-      {open && (hits.length > 0 || loading) && (
+      {/* Show the dropdown whenever the user has typed at least 2 chars — let the inner
+          branches (loading / list / empty-state) decide what's rendered. Previously the
+          outer guard required hits.length > 0 which made the "No matches" message
+          unreachable. */}
+      {open && (value || '').trim().length >= 2 && (
         <Card className="absolute z-50 top-9 left-0 right-0 max-h-64 overflow-y-auto shadow-md">
           <CardContent className="p-1">
             {loading && <p className="text-[11px] text-muted-foreground px-2 py-1">Searching…</p>}
-            {hits.map(g => (
+            {!loading && hits.map(g => (
               <button
                 key={g.id}
                 type="button"
@@ -75,7 +86,9 @@ export default function ExternalSponsorAutocomplete({ value, onChange, onPick, p
               </button>
             ))}
             {!loading && hits.length === 0 && (
-              <p className="text-[11px] text-muted-foreground px-2 py-1">No existing sponsors match — keep typing to register a new one.</p>
+              <p className="text-[11px] text-muted-foreground px-2 py-1.5" data-testid="sponsor-autocomplete-empty">
+                No existing sponsors match — keep typing to register a new one.
+              </p>
             )}
           </CardContent>
         </Card>

@@ -816,6 +816,33 @@ async def list_external_sponsors(
     return rows
 
 
+@router.delete("/sponsors/external/{guest_id}")
+async def delete_external_sponsor(guest_id: str, current_user: dict = Depends(require_director)):
+    """Director-only: remove an external sponsor guest record.
+
+    Refuses to delete if any ACTIVE case still references this sponsor — surfaces
+    the count so the operator knows what to re-link first. Inactive references
+    (discharged cases) get nulled out so the case retains its sponsor_manual
+    snapshot but the dangling FK is cleaned up.
+    """
+    g = await db.guests.find_one({"id": guest_id, "kind": "external_sponsor"}, {"_id": 0, "name": 1})
+    if not g:
+        raise HTTPException(status_code=404, detail="External sponsor not found")
+    active = await db.social_cases.count_documents({"sponsor_guest_id": guest_id, "status": "active"})
+    if active > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete — {active} active case(s) still reference this sponsor. Re-link or discharge them first.",
+        )
+    # Null the dangling FK on inactive cases so we don't leave broken references
+    await db.social_cases.update_many(
+        {"sponsor_guest_id": guest_id}, {"$set": {"sponsor_guest_id": None}}
+    )
+    await db.guests.delete_one({"id": guest_id})
+    await _audit(current_user["id"], "delete", "external_sponsor", guest_id, {"name": g.get("name")})
+    return {"deleted": True}
+
+
 async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dict) -> Optional[str]:
     """Idempotently create-or-find a guest record for an external sponsor.
 

@@ -6,6 +6,36 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 171 (Jun 17, 2026)
+**External sponsor autocomplete + in-system-user match prompt + cleanup endpoint.**
+
+### Shipped
+
+**1. ExternalSponsorAutocomplete typeahead** — new component replacing the plain "Sponsor name" input in the case-detail dialog's Manual Sponsor mode. As the social worker types (≥2 chars, debounced 250ms), hits `GET /api/social-work/sponsors/external?search=` and surfaces up to 8 matches inline. Each hit shows name + email/phone + active-cases badge. Picking a hit pre-fills the entire sponsor_manual block (name/email/phone/notes) in one click — no re-typing for repeat donors. Uses `onMouseDown` (not click) so the parent Input's blur doesn't kill the dropdown.
+
+**2. In-system user match banner** — when the manual sponsor's email matches an existing app user (case-insensitive, debounced 400ms), an amber banner offers "Link [user]'s account instead?" with a one-click switch to Existing-user mode. Promotes data unification across the org so the same person isn't duplicated as a user AND an external sponsor.
+
+**3. DELETE /api/social-work/sponsors/external/{guest_id}** (director only) — closes the cleanup gap noted by the iter-170 testing review. Refuses with clear error + active-case count when any active case still references the sponsor. Nulls out dangling FKs on discharged cases when delete succeeds.
+
+**4. Post-test fixes from iter-171 review**
+- Dropdown empty-state ("No existing sponsors match…") was dead code due to a contradictory render guard — fixed: outer condition now triggers on `value.length >= 2`, inner branches handle loading/list/empty.
+- "Save name" → renamed to "Save sponsor" (it PUTs the full sponsor_manual block — label now matches behaviour).
+- Autocomplete fetch errors now `console.warn` in dev (silent in production).
+
+### Verification
+- Testing agent (`iteration_171.json`): **backend 100%, frontend 11/12 (92%)** — the 1 failed item was the dead empty-state, now patched.
+- Live E2E by main agent: DELETE refuses on active case with clear 400 message ("Cannot delete — N active case(s) still reference this sponsor") ✓ discharge → DELETE → 200 ✓.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** to `https://5812.lubwamas.org`.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update at 03:30 UTC OR `sudo docker compose pull && up -d`.
+
+### Future / Backlog
+- Pagination on `/sponsors/external` (currently capped at 500 rows) — only matters once a deploy crosses ~200 donors.
+- Re-test the empty-state path on the next iter to confirm the fix renders for `<2 char` AND `no-match` queries.
+- Optional: surface "linked to N sponsors" on the Existing-user dropdown so reverse-direction unification is also obvious.
+
 ## Recently Resolved — Iteration 170 (Jun 17, 2026)
 **Sponsor hardening — validation + Guest auto-dedup + PDF section + autocomplete endpoint.**
 
