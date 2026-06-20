@@ -176,13 +176,17 @@ export default function ProductsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [prodRes, salesRes, locRes] = await Promise.all([productsApi.list(), salesApi.list({ limit: 200 }), locationsApi.list()]);
-      setProducts(prodRes.data);
-      setSales(salesRes.data);
-      setLocations(locRes.data || []);
+      // Promise.allSettled — sales endpoint can 403 for non-finance users
+      // (POS page is still useful without the historical sales feed).
+      const results = await Promise.allSettled([productsApi.list(), salesApi.list({ limit: 200 }), locationsApi.list()]);
+      const data = (i, fb = []) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fb) : fb;
+      setProducts(data(0, []));
+      const salesData = data(1, []);
+      setSales(salesData);
+      setLocations(data(2, []));
       // Aggregate customers from sales — keep receipts per customer for the profile drawer
       const custMap = {};
-      salesRes.data.forEach(s => {
+      salesData.forEach(s => {
         const name = s.customer_name || 'Walk-in Customer';
         const phone = s.customer_phone || '';
         if (!custMap[name]) custMap[name] = { id: s.customer_id || null, name, phone, total_spent: 0, transactions: 0, last_purchase: s.created_at, receipts: [] };

@@ -6,6 +6,35 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 174 (Jun 20, 2026)
+**Per-campus completeness leaderboard + finished `Promise.allSettled` sweep.**
+
+### Shipped
+
+**1. Per-campus completeness leaderboard**
+- `GET /api/social-work/reviews/compliance/completeness?group_by=location_id` now also returns a `by_campus[]` rollup: `{location_id, location_name, total_active, above_threshold, below_threshold, avg_pct}` sorted by avg descending so the leading campus shows first.
+- `<ProfileCompletenessWidget>` dialog now has TWO tabs: **By child** (existing drill-down, sorted least-complete-first) and **By campus** (new leaderboard with gold/silver/bronze rank chips for the top 3).
+- Useful for monthly ops review + healthy peer comparison between social workers.
+
+**2. Finished `Promise.allSettled` sweep** on remaining high-traffic pages:
+- **LocationsPage** — locations + staff + venues + group-types. A 403 on the cross-campus members fetch no longer breaks the page.
+- **ProductsPage** (POS) — products + sales + locations. Sales 403 (non-finance) no longer breaks the POS page.
+
+Other pages reviewed (HRPage / TasksPage / CheckInsPage / AdminPage / PbxSettingsPage) already had per-promise `.catch()` and were already resilient. PosKioskSetup / Wave / SecurityCheckpoint left alone — those are admin-only and route-gated.
+
+### Verification
+- E2E confirmed leaderboard: 2 test cases across 2 campuses, partial reviews → `Central avg=14% (0/1 on file), Haiti avg=0% (0/1 on file)` ✓.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** — bundles the iter-172/173/174 cluster (dashboard fix, expense form, medical exam, child file checklist, profile bundle ZIP, page resilience, child + campus completeness audits).
+- **Appliance**: auto-update tonight OR `sudo docker compose pull && up -d`.
+
+### Future / Backlog
+- Email digest: "5 children's files dropped below 70% completeness this month" → social-work manager. Runs alongside the existing overdue-task email cron.
+- Optional: surface the leaderboard widget on the Dashboard for system_admins as an org-wide health view.
+- Backend pagination on `/sponsors/external` once a deploy crosses ~200 donors.
+
 ## Recently Resolved — Iteration 173 (Jun 20, 2026)
 **`Promise.allSettled` rollout + Profile-Completeness audit widget.**
 

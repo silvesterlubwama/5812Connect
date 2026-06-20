@@ -40,11 +40,12 @@ export default function ProfileCompletenessWidget({ onOpenCase }) {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [threshold, setThreshold] = useState(70);
+  const [tab, setTab] = useState('children');
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get(`/social-work/reviews/compliance/completeness?threshold_pct=${threshold}`);
+      const r = await api.get(`/social-work/reviews/compliance/completeness?threshold_pct=${threshold}&group_by=location_id`);
       setData(r.data);
     } catch (e) { console.warn(e?.message || e); }
     finally { setLoading(false); }
@@ -85,7 +86,19 @@ export default function ProfileCompletenessWidget({ onOpenCase }) {
           </DialogHeader>
 
           <div className="flex items-center gap-2 mt-1 mb-3">
-            <span className="text-xs text-muted-foreground">Threshold</span>
+            <div className="flex rounded border overflow-hidden text-[11px]">
+              <button
+                className={`px-2.5 py-1 ${tab === 'children' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                onClick={() => setTab('children')}
+                data-testid="sw-completeness-tab-children"
+              >By child ({data?.list?.length ?? 0})</button>
+              <button
+                className={`px-2.5 py-1 border-l ${tab === 'campus' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                onClick={() => setTab('campus')}
+                data-testid="sw-completeness-tab-campus"
+              >By campus ({data?.by_campus?.length ?? 0})</button>
+            </div>
+            <span className="text-xs text-muted-foreground ml-2">Threshold</span>
             <Select value={String(threshold)} onValueChange={v => setThreshold(parseInt(v))}>
               <SelectTrigger className="h-7 w-24 text-xs" data-testid="sw-completeness-threshold"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -103,14 +116,16 @@ export default function ProfileCompletenessWidget({ onOpenCase }) {
             </Button>
           </div>
 
-          {!data || data.list.length === 0 ? (
+          {!data || (tab === 'children' ? data.list.length === 0 : (data.by_campus || []).length === 0) ? (
             <EmptyState
               icon={CheckCircle2}
-              title={!data ? 'Loading…' : 'No active cases to audit'}
-              description="Once cases are opened on children, their file-completeness will surface here."
+              title={!data ? 'Loading…' : tab === 'children' ? 'No active cases to audit' : 'No campus data yet'}
+              description={tab === 'children'
+                ? 'Once cases are opened on children, their file-completeness will surface here.'
+                : 'Open at least one case per campus to populate the leaderboard.'}
               testid="sw-completeness-empty"
             />
-          ) : (
+          ) : tab === 'children' ? (
             <div className="space-y-1.5">
               {data.list.filter(r => r.completeness_pct < threshold).map(row => {
                 const missing = Object.entries(row.indicators).filter(([, v]) => !v).map(([k]) => INDICATOR_LABELS[k] || k);
@@ -145,6 +160,36 @@ export default function ProfileCompletenessWidget({ onOpenCase }) {
                   </Card>
                 );
               })}
+            </div>
+          ) : (
+            /* By-campus leaderboard — surfaces which campus is keeping the cleanest files
+               and drives healthy peer-comparison for the social-work team. */
+            <div className="space-y-1.5" data-testid="sw-completeness-campus-list">
+              {(data.by_campus || []).map((g, idx) => (
+                <Card key={g.location_id} className="rounded-lg" data-testid={`sw-completeness-campus-${g.location_id}`}>
+                  <CardContent className="p-2.5 flex items-center gap-3">
+                    <div className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+                      idx === 0 ? 'bg-yellow-100 text-yellow-800'
+                      : idx === 1 ? 'bg-slate-200 text-slate-700'
+                      : idx === 2 ? 'bg-orange-100 text-orange-800'
+                      : 'bg-muted text-muted-foreground'
+                    }`}>{idx + 1}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{g.location_name}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {g.total_active} active case{g.total_active === 1 ? '' : 's'} ·
+                        {' '}<span className="text-emerald-700">{g.above_threshold} fully on file</span> ·
+                        {' '}<span className="text-rose-700">{g.below_threshold} incomplete</span>
+                      </p>
+                    </div>
+                    <Badge className={g.avg_pct >= 85 ? 'bg-emerald-100 text-emerald-700'
+                      : g.avg_pct >= 50 ? 'bg-amber-100 text-amber-700'
+                      : 'bg-rose-100 text-rose-700'}>
+                      avg {g.avg_pct}%
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
         </DialogContent>

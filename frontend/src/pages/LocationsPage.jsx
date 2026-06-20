@@ -66,16 +66,20 @@ export default function LocationsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [locRes, staffRes, venueRes, groupRes] = await Promise.all([
+      // Promise.allSettled — same hardening pattern. members 403 (cross-campus filter mismatch)
+      // shouldn't blank the whole locations admin page.
+      const results = await Promise.allSettled([
         locationsApi.list(),
         membersApi.list({ limit: 200 }),
-        venuesApi.list().catch(() => ({ data: [] })),
-        groupTypesApi.list().catch(() => ({ data: [] })),
+        venuesApi.list(),
+        groupTypesApi.list(),
       ]);
-      setLocations(locRes.data);
-      setAllStaff(staffRes.data?.members || staffRes.data || []);
-      setVenues(venueRes.data || []);
-      setGroupTypes(groupRes.data || []);
+      const data = (i, fb) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fb) : fb;
+      setLocations(data(0, []));
+      const staffData = data(1, []);
+      setAllStaff(staffData?.members || staffData || []);
+      setVenues(data(2, []));
+      setGroupTypes(data(3, []));
     } catch { toast.error('Failed to load locations'); }
     finally { setLoading(false); }
   }, []);

@@ -849,6 +849,7 @@ _FILE_DOC_TYPE_KEYS = [
 async def child_file_completeness(
     location_id: Optional[str] = None,
     threshold_pct: int = 70,
+    group_by: Optional[str] = None,
     current_user: dict = Depends(require_staff),
 ):
     """Per-child profile-completeness scorecard.
@@ -863,6 +864,11 @@ async def child_file_completeness(
 
     Returns the aggregate counts + a list of children sorted by ascending
     completeness so the audit-focused user sees the most-incomplete files first.
+
+    Pass `group_by=location_id` to ALSO get a `by_campus` rollup: { location_id,
+    location_name, total_active, above_threshold, below_threshold, avg_pct }.
+    Used by the per-campus leaderboard widget to surface which campus is
+    keeping the cleanest records.
     """
     from deps import is_system_admin, has_module_access, get_campus_filter
     case_query = {"subject_kind": "child", "status": "active"}
@@ -926,13 +932,47 @@ async def child_file_completeness(
             "indicators": indicators,
         })
     out_list.sort(key=lambda x: (x["completeness_pct"], (x["name"] or "").lower()))
-    return {
+
+    # Optional per-campus rollup — drives the leaderboard widget. Computed in
+    # process from out_list so we don't re-query; location names resolved in a
+    # single round-trip.
+    by_campus = None
+    if group_by == "location_id":
+        groups = {}
+        for row in out_list:
+            loc = row.get("location_id") or "_unassigned"
+            g = groups.setdefault(loc, {"location_id": loc, "total_active": 0, "above_threshold": 0, "below_threshold": 0, "sum_pct": 0})
+            g["total_active"] += 1
+            g["sum_pct"] += row["completeness_pct"]
+            if row["completeness_pct"] >= threshold_pct:
+                g["above_threshold"] += 1
+            else:
+                g["below_threshold"] += 1
+        real_ids = [g for g in groups.keys() if g != "_unassigned"]
+        name_map = {}
+        if real_ids:
+            async for loc in db.locations.find({"id": {"$in": real_ids}}, {"_id": 0, "id": 1, "name": 1}):
+                name_map[loc["id"]] = loc.get("name") or loc["id"]
+        by_campus = []
+        for g in groups.values():
+            g["location_name"] = name_map.get(g["location_id"], "Unassigned" if g["location_id"] == "_unassigned" else g["location_id"])
+            g["avg_pct"] = round(g["sum_pct"] / g["total_active"]) if g["total_active"] else 0
+            del g["sum_pct"]
+            by_campus.append(g)
+        # Top campus first — sort by avg, then by raw above-threshold count to
+        # break ties in favour of larger campuses doing well.
+        by_campus.sort(key=lambda g: (-g["avg_pct"], -g["above_threshold"]))
+
+    response = {
         "total_active": len(cases),
         "above_threshold": above,
         "below_threshold": len(cases) - above,
         "threshold_pct": threshold_pct,
         "list": out_list[:500],
     }
+    if by_campus is not None:
+        response["by_campus"] = by_campus
+    return response
 
 
 # Late import to avoid circular dep with deps.py inside the module top-level.
