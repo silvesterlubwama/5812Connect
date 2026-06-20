@@ -6,6 +6,42 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 173 (Jun 20, 2026)
+**`Promise.allSettled` rollout + Profile-Completeness audit widget.**
+
+### Resilience rollout (preventing the iter-172 "all pages failed" regression)
+
+Same root cause as iter-172 — any page using `Promise.all` for parallel fetches will blank when a single sub-fetch returns 403. Applied the `Promise.allSettled` pattern to the next-most-likely-to-break high-traffic pages:
+
+- **OutreachPage** — `outreachApi.{programs,sessions,categories}` + `locationsApi.list()`. A 403 on any one no longer breaks the page.
+- **FinancialPage** — `summary` + `donations` + `expenses` + `cashflow` — each can require different role levels (manager vs director). Now degrades independently.
+- **VolunteerSchedulingPage** — 5 different modules' worth of fetches (shifts + my-shifts + locations + events + user-directory). Restricted users now see partial data instead of nothing.
+
+HRPage / TasksPage / CheckInsPage were already using per-promise `.catch(()=>({data:[]}))` so they were already resilient — left alone.
+
+### Profile-completeness audit widget (NEW)
+
+Connects directly to iter-172's checklist + medical-exam work — gives field staff a single dashboard view of which kids have incomplete files for OVCMIS / donor audits.
+
+- New `GET /api/social-work/reviews/compliance/completeness?threshold_pct=N` endpoint.
+- For each active child case, computes 14 binary indicators: photo + 3 review kinds (welfare/school/medical) + 10 file-doc types.
+- Returns `{total_active, above_threshold, below_threshold, list[]}` with each child's `{completeness_pct, present, total_indicators, indicators: {…}}`. Sorted by ascending completeness so the most-incomplete files surface first.
+- Bulk-loads child photos + reviews + file_docs in 3 round-trips total → fast even with 500+ active cases.
+- New `<ProfileCompletenessWidget>` on the Social Work hub KPI row — sits next to `<ReviewsDueWidget>` (KPI row is now 6 cards on sm: breakpoint). Click → drill-down dialog listing each child with missing-indicators highlighted; threshold picker (50/70/85/100%); click-row → open case detail.
+
+### Verification
+- E2E confirmed: TEST_COMP child seeded with `photo_url` set + 1 welfare review → endpoint returns `completeness_pct=14%, present=2/14, below_threshold=1` ✓.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** — bundles all iter-172 fixes (dashboard / expense form / medical-exam / child-file checklist / profile bundle) AND iter-173 (page resilience + completeness widget). Should ship together.
+- **Appliance** at `https://connect.lubwamas.org` — auto-update tonight OR `sudo docker compose pull && up -d`.
+
+### Future / Backlog
+- Apply `Promise.allSettled` to remaining `Promise.all` callers (LocationsPage, ProductsPage, AdminPage, ResourcesPage) on-touch.
+- Per-campus completeness leaderboard for monthly ops review.
+- Email digest: "5 children's files dropped below 70% completeness this month" to the social-work manager.
+
 ## Recently Resolved — Iteration 172 (Jun 20, 2026)
 **Production-blocker fixes + Medical Exam form + Child File checklist + Profile bundle ZIP.**
 

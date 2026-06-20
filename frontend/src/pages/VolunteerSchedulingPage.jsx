@@ -62,20 +62,22 @@ export default function VolunteerSchedulingPage() {
       if (dateFilter) params.date = dateFilter;
       if (locationFilter) params.location_id = locationFilter;
 
-      const [shiftsRes, myShiftsRes, locsRes, eventsRes, membersRes] = await Promise.all([
+      // Promise.allSettled — same hardening as iter-172. Volunteer scheduling
+      // touches 5 different modules; any one can 403 without taking down the page.
+      const results = await Promise.allSettled([
         volunteerApi.shifts(params),
         volunteerApi.myShifts(),
         locationsApi.list(),
         eventsApi.list({ status: 'upcoming' }),
         adminApi.userDirectory(),
       ]);
-
-      setShifts(shiftsRes.data || []);
-      setMyShifts(myShiftsRes.data || []);
-      setLocations(locsRes.data || []);
-      setEvents(eventsRes.data || []);
+      const data = (i, fb = []) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fb) : fb;
+      setShifts(data(0));
+      setMyShifts(data(1));
+      setLocations(data(2));
+      setEvents(data(3));
       // Directory returns campus-scoped staff only
-      setMembers(membersRes.data || []);
+      setMembers(data(4));
     } catch {
       toast.error('Failed to load shifts');
     } finally {

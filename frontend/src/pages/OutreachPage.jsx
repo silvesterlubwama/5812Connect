@@ -52,12 +52,18 @@ export default function OutreachPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [progRes, sessRes, catRes, locsRes] = await Promise.all([
+      // Promise.allSettled — same resilience pattern as iter-172 Dashboard fix.
+      // A 403 on any sub-fetch (e.g. sessions endpoint when permissions tighten)
+      // shouldn't poison the whole page.
+      const results = await Promise.allSettled([
         outreachApi.programs(), outreachApi.sessions(), outreachApi.categories(),
-        locationsApi.list().catch(() => ({ data: [] })),
+        locationsApi.list(),
       ]);
-      setPrograms(progRes.data); setSessions(sessRes.data); setCategories(catRes.data);
-      setLocations(locsRes.data || []);
+      const data = (i, fallback = []) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fallback) : fallback;
+      setPrograms(data(0));
+      setSessions(data(1));
+      setCategories(data(2));
+      setLocations(data(3));
     } catch { toast.error('Failed to load outreach data'); }
     finally { setLoading(false); }
   };

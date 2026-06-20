@@ -832,5 +832,108 @@ async def reviews_due(
     }
 
 
+# ============================================================
+# Profile completeness — % of file-checklist + reviews present per child
+# ============================================================
+
+# Same canonical doc_types as `routers/members/children.py`. Duplicated here so this
+# module stays import-light (avoids a circular routers.members.children import).
+_FILE_DOC_TYPE_KEYS = [
+    "ovcmis_form_008", "sponsorship_assessment", "lc1_introduction_letter",
+    "school_report", "guardian_national_id", "family_consent_letter",
+    "medical_assessment", "exit_form", "sponsor_letter_in", "sponsor_letter_out",
+]
+
+
+@router.get("/compliance/completeness")
+async def child_file_completeness(
+    location_id: Optional[str] = None,
+    threshold_pct: int = 70,
+    current_user: dict = Depends(require_staff),
+):
+    """Per-child profile-completeness scorecard.
+
+    For each child with an active social-work case, computes:
+      • has_photo        — child.photo_url set
+      • has_welfare      — at least one welfare_visit review
+      • has_school       — at least one school_progress review
+      • has_medical      — at least one medical_exam review OR a medical_assessment file_doc
+      • per-doctype flags for the 10 checklist items
+      • completeness_pct — 0–100 (weighted equally across 14 indicators)
+
+    Returns the aggregate counts + a list of children sorted by ascending
+    completeness so the audit-focused user sees the most-incomplete files first.
+    """
+    from deps import is_system_admin, has_module_access, get_campus_filter
+    case_query = {"subject_kind": "child", "status": "active"}
+    if not is_system_admin(current_user) and not has_module_access(current_user, "social_work"):
+        scope = await get_campus_filter(current_user)
+        if scope:
+            case_query.update(scope)
+    if location_id and location_id != "all":
+        case_query["location_id"] = location_id
+    cases = await db.social_cases.find(case_query, {"_id": 0, "subject_id": 1, "subject_name": 1, "location_id": 1}).to_list(2000)
+    if not cases:
+        return {"total_active": 0, "above_threshold": 0, "below_threshold": 0, "threshold_pct": threshold_pct, "list": []}
+    child_ids = [c["subject_id"] for c in cases if c.get("subject_id")]
+
+    # Bulk-load: child photos + reviews + file_docs in one round-trip per source.
+    photo_map = {}
+    async for ch in db.children.find({"id": {"$in": child_ids}}, {"_id": 0, "id": 1, "photo_url": 1}):
+        photo_map[ch["id"]] = bool(ch.get("photo_url"))
+
+    review_kinds_map = {}  # child_id → set of kinds
+    async for r in db.social_review_forms.find(
+        {"child_id": {"$in": child_ids}}, {"_id": 0, "child_id": 1, "kind": 1}
+    ):
+        review_kinds_map.setdefault(r["child_id"], set()).add(r.get("kind"))
+
+    doc_types_map = {}  # child_id → set of doc_types present
+    async for d in db.child_extras.find(
+        {"child_id": {"$in": child_ids}, "kind": "file_doc"},
+        {"_id": 0, "child_id": 1, "doc_type": 1},
+    ):
+        doc_types_map.setdefault(d["child_id"], set()).add(d.get("doc_type"))
+
+    out_list = []
+    above = 0
+    # 14 indicators: 4 high-level (photo, welfare, school, medical) + 10 file-doc types
+    TOTAL_INDICATORS = 4 + len(_FILE_DOC_TYPE_KEYS)
+    for c in cases:
+        cid = c.get("subject_id")
+        kinds = review_kinds_map.get(cid, set())
+        docs = doc_types_map.get(cid, set())
+        # has_medical is met EITHER by a medical_exam review OR by an uploaded medical_assessment scan
+        has_medical = "medical_exam" in kinds or "medical_assessment" in docs
+        indicators = {
+            "has_photo": photo_map.get(cid, False),
+            "has_welfare": "welfare_visit" in kinds,
+            "has_school": "school_progress" in kinds,
+            "has_medical": has_medical,
+            **{f"doc_{k}": (k in docs) for k in _FILE_DOC_TYPE_KEYS},
+        }
+        present = sum(1 for v in indicators.values() if v)
+        pct = round((present / TOTAL_INDICATORS) * 100)
+        if pct >= threshold_pct:
+            above += 1
+        out_list.append({
+            "child_id": cid,
+            "name": c.get("subject_name", ""),
+            "location_id": c.get("location_id"),
+            "completeness_pct": pct,
+            "present": present,
+            "total_indicators": TOTAL_INDICATORS,
+            "indicators": indicators,
+        })
+    out_list.sort(key=lambda x: (x["completeness_pct"], (x["name"] or "").lower()))
+    return {
+        "total_active": len(cases),
+        "above_threshold": above,
+        "below_threshold": len(cases) - above,
+        "threshold_pct": threshold_pct,
+        "list": out_list[:500],
+    }
+
+
 # Late import to avoid circular dep with deps.py inside the module top-level.
 from datetime import timedelta  # noqa: E402

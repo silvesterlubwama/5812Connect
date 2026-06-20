@@ -147,16 +147,19 @@ export default function FinancialPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [sumRes, donRes, expRes, cfRes] = await Promise.all([
+      // Promise.allSettled so one denied sub-fetch (e.g. cashflow needs director+
+      // but summary only needs manager) doesn't blank the whole page.
+      const results = await Promise.allSettled([
         financialApi.summary(locationFilter || undefined),
         financialApi.donations({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined, location_id: locationFilter || undefined }),
         financialApi.expenses({ limit: 50, date_from: dateFrom || undefined, date_to: dateTo || undefined, location_id: locationFilter || undefined }),
         financialExtrasApi.cashflow(cashflowMonths),
       ]);
-      setSummary(sumRes.data);
-      setDonations(donRes.data);
-      setExpenses(expRes.data);
-      setCashflowData(cfRes.data?.monthly || []);
+      const data = (i, fallback) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fallback) : fallback;
+      setSummary(data(0, null));
+      setDonations(data(1, []));
+      setExpenses(data(2, []));
+      setCashflowData(data(3, { monthly: [] })?.monthly || []);
     } catch { toast.error('Failed to load financial data'); }
     finally { setLoading(false); }
   };

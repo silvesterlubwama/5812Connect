@@ -25,6 +25,7 @@ import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import ReviewsDueWidget from '../components/ReviewsDueWidget';
 import ExternalSponsorAutocomplete from '../components/ExternalSponsorAutocomplete';
 import ChildDocumentsPanel from '../components/ChildDocumentsPanel';
+import ProfileCompletenessWidget from '../components/ProfileCompletenessWidget';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -160,7 +161,7 @@ export default function SocialWorkPage() {
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-testid="sw-kpis">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3" data-testid="sw-kpis">
         <Card className="rounded-xl"><CardContent className="p-3">
           <p className="text-xs text-muted-foreground uppercase">Active cases</p>
           <p className="text-2xl font-bold">{kpis.total}</p>
@@ -179,6 +180,10 @@ export default function SocialWorkPage() {
           {paymentsSummary && <p className="text-[10px] text-muted-foreground">in {(paymentsSummary.total_in || 0).toLocaleString()} / out {(paymentsSummary.total_out || 0).toLocaleString()}</p>}
         </CardContent></Card>
         <ReviewsDueWidget onOpenCase={(childId) => {
+          const c = cases.find(x => x.subject_id === childId);
+          if (c) setOpenCase(c);
+        }} />
+        <ProfileCompletenessWidget onOpenCase={(childId) => {
           const c = cases.find(x => x.subject_id === childId);
           if (c) setOpenCase(c);
         }} />
