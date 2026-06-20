@@ -6,6 +6,53 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 172 (Jun 20, 2026)
+**Production-blocker fixes + Medical Exam form + Child File checklist + Profile bundle ZIP.**
+
+### 🚨 Production-blockers (PRIORITY)
+
+**1. "All pages failed to load" on production** — Root cause: `DashboardPage` used `Promise.all` for 8 parallel fetches; when `financialApi.summary` returned 403 for a user without finance access (after recent finance-UI restriction), the whole promise REJECTED and the dashboard fell into the catch-block "Failed to load" state. Many other places had the same pattern.
+   - Fix: `Promise.all` → `Promise.allSettled` on Dashboard. Each section now degrades independently. Failed sub-fetches log to dev-console for debugging, not toasts.
+
+**2. "Expense entry requires a number"** for non-admin users — Root cause: Pydantic v2's strict mode rejects empty string for `Optional[float]` fields with "input should be a valid number". When the FE blanks out unused expense fields (`usd_equivalent`, `exchange_rate`, etc.) rather than omitting them, Pydantic 422'd the entire submission.
+   - Fix: Added `@field_validator(mode="before")` on `ExpenseCreate.amount/usd_equivalent/exchange_rate` and `DonationCreate.amount` that coerces empty / whitespace-only strings to None. Required `amount` still correctly raises "Field required" when fully blank. Live-verified: `{"amount":1000,"usd_equivalent":"","exchange_rate":""}` → 200.
+
+### Medical Exam form (3rd kind in social_review_forms)
+- Extended `VALID_KINDS = {school_progress, welfare_visit, medical_exam}` so the same upload-scan + OCR + auto-sync infrastructure handles medical examinations.
+- New template at `backend/templates/social_reviews/medical_exam.html` matching the .docx form verbatim (11 sections: ID, Past Medical History, Physical, Nutritional, Disability, Mental/Psychosocial, Immunization, Diagnosis, Recommendations, Referral, Practitioner Certification).
+- Gemini-3-flash OCR prompt added for medical extraction — handles past-medical checkboxes + disability flags + recommendations with conservative defaults to avoid false-positive condition flags.
+- Auto-sync on save: writes `child.medical.{conditions, allergies, current_medication, nutritional_status, general_condition, immunization_status, diagnosis, has_disability, disability_flags, recommendations, practitioner, latest_exam}`. Existing report PDF picks them up.
+- FE: SocialReviewsPanel now accepts `kind='medical_exam'` with a streamlined in-app form (past-medical Yes/No grid + condition/nutrition selects + disability multi-select + diagnosis textarea + recommendations checkboxes + practitioner info).
+
+### Child File checklist (typed documents tab)
+- New `db.child_extras` rows with `kind='file_doc'` + `doc_type` matching the 11 canonical items from the .docx checklist (OVCMIS 008, Sponsorship Assessment, LC1 Letter, School Reports, Guardian ID, Family Consent, Medical scan, Exit Form, Sponsor Letters in/out, Other).
+- New endpoints: `GET /children/{id}/file-doc-types` (catalogue + counts), `POST /children/{id}/file-docs` (upload), `GET /children/{id}/file-docs` (list).
+- New `<ChildDocumentsPanel>` rendering the checklist with green-tick/empty-circle coverage indicator + per-item upload + "Download profile bundle (ZIP)" button.
+
+### Whole-profile bundle ZIP
+- New `GET /api/children/{id}/profile-bundle` streams a ZIP containing:
+  - `profile.json` (raw child record)
+  - `photo.jpg` (main profile photo)
+  - `reviews/*.json + *.pdf/jpg` (every school_progress + welfare_visit + medical_exam form, attached scans, visit photos)
+  - `documents/*` (every typed file_doc)
+  - `gallery/*` (every gallery photo)
+  - `INDEX.md` (human-readable manifest + checklist coverage: ☐/☒ for each of the 11 items)
+- Resilient: broken / missing file URLs land as `.error.txt` placeholders instead of crashing the whole zip.
+
+### Verification
+- E2E roundtrip: medical_exam saved → `child.medical.conditions=['asthma']`, `child.medical.diagnosis='Mild seasonal asthma'`, `child.medical.recommendations.fit_with_monitoring=true`, `child.medical.immunization_status='Fully Immunized'` ✓. LC1 letter uploaded → counted on docs catalogue → bundled into ZIP ✓.
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+- The dashboard Promise.allSettled fix is the most important deploy item — restores production for everyone.
+
+### Action for the user
+- **🚨 PRIORITY production redeploy** to `https://5812.lubwamas.org` — fixes the "all pages fail to load" + expense form errors. **This should ship same-day.**
+- **Appliance** at `https://connect.lubwamas.org` — auto-update tonight OR `sudo docker compose pull && up -d` now.
+
+### Future / Backlog
+- Apply the `Promise.allSettled` pattern to other multi-fetch pages (`HRPage`, `FinancialPage`, `SocialWorkPage`) so they also degrade gracefully when a single sub-fetch 403s.
+- PDF→image first-page conversion for medical scans so PDF uploads also get OCR'd (currently image-only).
+- Auto-populate `child.medical.disability_flags` UI to surface on the badge / kiosk check-in for staff awareness.
+
 ## Recently Resolved — Iteration 171 (Jun 17, 2026)
 **External sponsor autocomplete + in-system-user match prompt + cleanup endpoint.**
 

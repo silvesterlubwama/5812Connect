@@ -1,0 +1,171 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Child Enrollment Medical Examination Form</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 36px 32px; color: #1a1a2e; font-size: 11pt; line-height: 1.45; }
+.header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 3px solid #fbbf24; margin-bottom: 14px; }
+.brand { font-size: 14pt; font-weight: 700; color: #1a1a2e; letter-spacing: 1px; }
+.brand-sub { color: #fbbf24; font-size: 9pt; font-weight: 600; margin-top: 2px; }
+.form-id { text-align: right; font-size: 9pt; color: #64748b; }
+h1 { font-size: 16pt; text-align: center; margin: 12px 0 6px 0; text-transform: uppercase; letter-spacing: 1.5px; }
+.subtitle { text-align: center; font-size: 9pt; color: #64748b; font-style: italic; margin-bottom: 14px; }
+h2 { font-size: 11pt; margin: 16px 0 6px 0; background: #f1f5f9; padding: 6px 10px; border-left: 4px solid #fbbf24; }
+.fld { display: flex; align-items: baseline; margin: 4px 0; }
+.fld label { font-weight: 600; min-width: 160px; }
+.fld .line { flex: 1; border-bottom: 1px dotted #334155; min-height: 18px; margin-left: 6px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+table { width: 100%; border-collapse: collapse; margin: 6px 0 8px 0; font-size: 10pt; }
+th, td { border: 1px solid #94a3b8; padding: 6px 8px; vertical-align: top; }
+th { background: #f8fafc; text-align: center; font-weight: 600; font-size: 9.5pt; }
+.rating { width: 38px; text-align: center; }
+.checkbox { display: inline-block; width: 11px; height: 11px; border: 1.2px solid #334155; vertical-align: middle; margin-right: 4px; }
+.sig { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 22px; }
+.sig .slot { border-top: 1px solid #334155; padding-top: 4px; font-size: 9pt; }
+.note { font-size: 8pt; color: #64748b; margin-top: 18px; text-align: center; }
+.checkrow { margin: 4px 0; font-size: 10pt; }
+.cert-text { font-size: 9.5pt; font-style: italic; margin: 6px 0 10px 0; padding: 8px 10px; background: #fffbeb; border-left: 3px solid #fbbf24; }
+</style></head>
+<body>
+<div class="header">
+  <div><div class="brand">{{ORG_NAME}}</div><div class="brand-sub">Welfare &amp; Education Programme</div></div>
+  <div class="form-id">Form: MED-EXAM-01<br/>Print date: {{TODAY}}</div>
+</div>
+<h1>Child Enrollment Medical Examination Form</h1>
+<p class="subtitle">[ CONFIDENTIAL — For Internal Use Only ]</p>
+
+<h2>Child Identification Details</h2>
+<div class="row2">
+  <div class="fld"><label>Child's Full Name</label><span class="line"></span></div>
+  <div class="fld"><label>Date of Birth</label><span class="line"></span></div>
+  <div class="fld"><label>Age</label><span class="line"></span></div>
+  <div class="fld"><label>Sex</label>
+    <span style="margin-left:6px;"><span class="checkbox"></span> Male &nbsp;&nbsp; <span class="checkbox"></span> Female</span>
+  </div>
+  <div class="fld"><label>Village</label><span class="line"></span></div>
+  <div class="fld"><label>Parish</label><span class="line"></span></div>
+  <div class="fld"><label>Sub-county</label><span class="line"></span></div>
+  <div class="fld"><label>District</label><span class="line"></span></div>
+  <div class="fld"><label>Parent / Guardian Name</label><span class="line"></span></div>
+  <div class="fld"><label>Contact</label><span class="line"></span></div>
+  <div class="fld"><label>Date of Examination</label><span class="line"></span></div>
+</div>
+
+<h2>Medical History <span style="font-weight:400; font-size:9pt; color:#64748b;">(to be completed by the Medical Practitioner)</span></h2>
+<p style="font-size:10pt; margin:2px 0 4px 0; font-weight:600;">Past Medical History</p>
+<table>
+  <thead><tr><th style="width:24px;">No.</th><th style="text-align:left;">Condition</th><th class="rating">Yes</th><th class="rating">No</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Asthma</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>2</td><td>Epilepsy</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>3</td><td>Diabetes</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>4</td><td>Sickle Cell Disease</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>5</td><td>Heart Disease</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>6</td><td>Tuberculosis</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>7</td><td>HIV / AIDS</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>8</td><td>Chronic Illness</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+    <tr><td>9</td><td>Other (specify): _______________________</td><td class="rating">&#9744;</td><td class="rating">&#9744;</td><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+<div class="fld"><label>Current Medication</label><span class="line" style="min-height:30px;"></span></div>
+<div class="fld"><label>Known Allergies</label><span class="line" style="min-height:30px;"></span></div>
+<div class="fld"><label>Previous Hospital Admissions or Surgeries</label><span class="line" style="min-height:42px;"></span></div>
+
+<h2>Physical Examination</h2>
+<p class="checkrow">General Physical Condition:
+  <span class="checkbox"></span> Excellent &nbsp;&nbsp;
+  <span class="checkbox"></span> Good &nbsp;&nbsp;
+  <span class="checkbox"></span> Fair &nbsp;&nbsp;
+  <span class="checkbox"></span> Poor
+</p>
+<div class="fld"><label>Medical Remarks</label><span class="line" style="min-height:50px;"></span></div>
+
+<h2>Nutritional Assessment</h2>
+<p class="checkrow">Nutritional Status:
+  <span class="checkbox"></span> Well Nourished &nbsp;&nbsp;
+  <span class="checkbox"></span> Mild Malnutrition &nbsp;&nbsp;
+  <span class="checkbox"></span> Moderate Malnutrition &nbsp;&nbsp;
+  <span class="checkbox"></span> Severe Malnutrition
+</p>
+<div class="fld"><label>Clinical Remarks</label><span class="line" style="min-height:40px;"></span></div>
+
+<h2>Disability Assessment</h2>
+<p class="checkrow">Does the child have any identified disability?
+  <span class="checkbox"></span> No &nbsp;&nbsp; <span class="checkbox"></span> Yes
+</p>
+<p class="checkrow" style="font-size:9.5pt; color:#64748b;">If yes, indicate (tick all that apply):</p>
+<div class="checkrow">
+  <span class="checkbox"></span> Physical Disability &nbsp;&nbsp;
+  <span class="checkbox"></span> Visual Impairment &nbsp;&nbsp;
+  <span class="checkbox"></span> Hearing Impairment &nbsp;&nbsp;
+  <span class="checkbox"></span> Intellectual Disability
+</div>
+<div class="checkrow">
+  <span class="checkbox"></span> Autism Spectrum Disorder &nbsp;&nbsp;
+  <span class="checkbox"></span> Speech and Language Impairment &nbsp;&nbsp;
+  <span class="checkbox"></span> Multiple Disabilities
+</div>
+<div class="checkrow"><span class="checkbox"></span> Other: ______________________________________</div>
+<div class="fld" style="margin-top:6px;"><label>Description</label><span class="line" style="min-height:34px;"></span></div>
+<div class="fld"><label>Assistive Devices Required / Used</label><span class="line" style="min-height:30px;"></span></div>
+
+<h2>Mental and Psychosocial Health Screening</h2>
+<p style="font-size:10pt;margin:2px 0 4px 0;">Medical observations:</p>
+<div class="checkrow">
+  <span class="checkbox"></span> No concerns observed &nbsp;&nbsp;
+  <span class="checkbox"></span> Emotional distress &nbsp;&nbsp;
+  <span class="checkbox"></span> Behavioural concerns
+</div>
+<div class="checkrow">
+  <span class="checkbox"></span> Developmental concerns &nbsp;&nbsp;
+  <span class="checkbox"></span> Trauma-related concerns &nbsp;&nbsp;
+  <span class="checkbox"></span> Other
+</div>
+<div class="fld" style="margin-top:6px;"><label>Other Remarks</label><span class="line" style="min-height:32px;"></span></div>
+
+<h2>Immunization Status</h2>
+<div class="checkrow">
+  <span class="checkbox"></span> Fully Immunized &nbsp;&nbsp;
+  <span class="checkbox"></span> Partially Immunized &nbsp;&nbsp;
+  <span class="checkbox"></span> Status Unknown
+</div>
+<div class="checkrow">Immunization Card Verified:
+  <span class="checkbox"></span> Yes &nbsp;&nbsp; <span class="checkbox"></span> No
+</div>
+
+<h2>Medical Diagnosis / Impression</h2>
+<div style="border:1px solid #94a3b8; min-height: 60px; padding: 6px;">&nbsp;</div>
+
+<h2>Recommendations <span style="font-weight:400; font-size:9pt; color:#64748b;">(tick all that apply)</span></h2>
+<div class="checkrow"><span class="checkbox"></span> The child is medically fit</div>
+<div class="checkrow"><span class="checkbox"></span> The child is medically fit but requires routine monitoring</div>
+<div class="checkrow"><span class="checkbox"></span> The child requires medical treatment</div>
+<div class="checkrow"><span class="checkbox"></span> The child requires specialist referral</div>
+<div class="checkrow"><span class="checkbox"></span> The child requires nutritional support</div>
+<div class="checkrow"><span class="checkbox"></span> The child requires disability support services</div>
+<div class="fld" style="margin-top:6px;"><label>Recommended Actions</label><span class="line" style="min-height:46px;"></span></div>
+
+<h2>Referral Information <span style="font-weight:400; font-size:9pt; color:#64748b;">(if applicable)</span></h2>
+<div class="row2">
+  <div class="fld"><label>Facility Referred To</label><span class="line"></span></div>
+  <div class="fld"><label>Reason for Referral</label><span class="line"></span></div>
+  <div class="fld"><label>Follow-up Date</label><span class="line"></span></div>
+</div>
+
+<h2>Medical Practitioner's Certification</h2>
+<p class="cert-text">
+  I certify that I have personally examined the above-named child and that the information provided
+  in this report is accurate to the best of my professional knowledge.
+</p>
+<div class="row2">
+  <div class="fld"><label>Name of Medical Practitioner</label><span class="line"></span></div>
+  <div class="fld"><label>Professional Qualification</label><span class="line"></span></div>
+  <div class="fld"><label>Medical Facility</label><span class="line"></span></div>
+  <div class="fld"><label>Telephone</label><span class="line"></span></div>
+</div>
+
+<div class="sig">
+  <div class="slot"><strong>Signature &amp; Stamp</strong><br/><br/><br/></div>
+  <div class="slot"><strong>Date</strong><br/>_____________________________</div>
+</div>
+
+<div class="note">{{ORG_NAME}} &middot; Confidential medical record &mdash; protected per data-protection policy &middot; Form returns to the social worker for upload into the child&rsquo;s digital profile.</div>
+</body></html>

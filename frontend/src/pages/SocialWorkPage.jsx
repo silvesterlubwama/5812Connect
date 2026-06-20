@@ -24,6 +24,7 @@ import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, U
 import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import ReviewsDueWidget from '../components/ReviewsDueWidget';
 import ExternalSponsorAutocomplete from '../components/ExternalSponsorAutocomplete';
+import ChildDocumentsPanel from '../components/ChildDocumentsPanel';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -682,6 +683,8 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
               <TabsTrigger value="notes" data-testid="cd-tab-notes" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
               <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews" className="text-xs px-2.5 py-1.5 shrink-0"><GraduationCap size={11} className="mr-1" />School</TabsTrigger>
               <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardCheck size={11} className="mr-1" />Welfare</TabsTrigger>
+              <TabsTrigger value="medical_exams" data-testid="cd-tab-medical-exams" className="text-xs px-2.5 py-1.5 shrink-0"><Heart size={11} className="mr-1" />Medical Exam</TabsTrigger>
+              <TabsTrigger value="documents" data-testid="cd-tab-documents" className="text-xs px-2.5 py-1.5 shrink-0"><FileText size={11} className="mr-1" />Documents</TabsTrigger>
             </TabsList>
 
             {/* OVERVIEW */}

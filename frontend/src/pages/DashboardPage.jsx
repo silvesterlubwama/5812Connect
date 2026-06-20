@@ -63,7 +63,10 @@ export default function DashboardPage() {
         setParentData(dashRes.data);
         setEvents(evRes.data.slice(0, 5));
       } else {
-        const [statsRes, eventsRes, tasksRes, finRes, famRes, chdRes, prodRes, actionsRes] = await Promise.all([
+        // Promise.allSettled — so a single 403 on a finance-gated endpoint (e.g.
+        // financialApi.summary for staff without finance access) doesn't poison the
+        // whole dashboard with "Failed to load". Each section degrades independently.
+        const results = await Promise.allSettled([
           dashboardApi.stats(campusParam),
           eventsApi.list({ status: 'upcoming' }),
           tasksApi.list(),
@@ -71,15 +74,25 @@ export default function DashboardPage() {
           familiesApi.list(),
           childrenApi.list(),
           productsApi.list(),
-          dashboardApi.actionItems(campusParam).catch(() => ({ data: null })),
+          dashboardApi.actionItems(campusParam),
         ]);
-        setStats(statsRes.data);
-        setEvents(eventsRes.data.slice(0, 4));
-        setTasks(tasksRes.data.filter(t => t.status !== 'done' && t.priority === 'high').slice(0, 4));
-        setFinancial(finRes.data);
-        setFamilyCount(Array.isArray(famRes.data) ? famRes.data.length : 0);
-        setChildrenCount(Array.isArray(chdRes.data) ? chdRes.data.length : 0);
-        const prods = Array.isArray(prodRes.data) ? prodRes.data : [];
+        const data = (i) => results[i].status === 'fulfilled' ? results[i].value?.data : null;
+        const statsData = data(0);
+        const eventsData = data(1);
+        const tasksData = data(2);
+        const finData = data(3);          // null when user lacks finance access — UI hides finance cards
+        const famData = data(4);
+        const chdData = data(5);
+        const prodData = data(6);
+        const actionsData = data(7);
+
+        setStats(statsData);
+        if (eventsData) setEvents(eventsData.slice(0, 4));
+        if (Array.isArray(tasksData)) setTasks(tasksData.filter(t => t.status !== 'done' && t.priority === 'high').slice(0, 4));
+        setFinancial(finData);
+        if (Array.isArray(famData)) setFamilyCount(famData.length);
+        if (Array.isArray(chdData)) setChildrenCount(chdData.length);
+        const prods = Array.isArray(prodData) ? prodData : [];
         // Use the new endpoint that supports per-variant alerts
         try {
           const alertsRes = await api.get('/products/reorder-alerts');
@@ -88,9 +101,15 @@ export default function DashboardPage() {
           // Fallback to legacy product-level filter
           setLowStockProducts(prods.filter(p => p.stock <= (p.reorder_level || 5)).map(p => ({ product_id: p.id, product_name: p.name, stock: p.stock, reorder_level: p.reorder_level || 5 })));
         }
-        setActionItems(actionsRes.data);
-        if (statsRes.data?.group_breakdown) {
-          setDeptData(Object.entries(statsRes.data.group_breakdown).map(([name, count]) => ({ name, count })));
+        setActionItems(actionsData);
+        if (statsData?.group_breakdown) {
+          setDeptData(Object.entries(statsData.group_breakdown).map(([name, count]) => ({ name, count })));
+        }
+        // Log which sub-fetches failed so admins debugging permission issues see
+        // exactly which endpoint 403'd in the console.
+        const failures = results.map((r, i) => r.status === 'rejected' ? `[${i}]:${r.reason?.response?.status || r.reason?.message}` : null).filter(Boolean);
+        if (failures.length && process.env.NODE_ENV !== 'production') {
+          console.warn('[dashboard] sub-fetches that failed (dashboard still rendered):', failures);
         }
       }
     } catch (err) {

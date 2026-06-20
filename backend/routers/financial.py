@@ -1,6 +1,6 @@
 """Financial routes: donations, expenses, products, sales, cashflow, balance, approval workflow"""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, is_system_admin, get_campus_filter, get_role_level, require_finance_view, require_finance_admin
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -39,6 +39,16 @@ class DonationCreate(BaseModel):
     date: Optional[str] = None; notes: str = ""; member_id: Optional[str] = None
     location_id: Optional[str] = None; sublocation_id: Optional[str] = None
 
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _blank_to_none_or_float(cls, v, info):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str):
+            try: return float(v.strip())
+            except ValueError: return v
+        return v
+
 class ExpenseCreate(BaseModel):
     title: str; amount: float; currency: str = "UGX"; category: str = "general"
     date: Optional[str] = None; notes: str = ""; submitted_by: Optional[str] = None
@@ -52,6 +62,30 @@ class ExpenseCreate(BaseModel):
     budget_category: Optional[str] = None  # Uganda Farm, Petty Cash, Wages & Salaries, Bank Fees, etc.
     usd_equivalent: Optional[float] = None  # For multi-currency tracking
     exchange_rate: Optional[float] = None  # UGX per USD
+
+    # Pydantic v2 by default rejects empty-string for Optional[float] with "input should
+    # be a valid number, unable to parse string as a number". This bit non-admin
+    # expense entries hard because the FE blanks out unused fields rather than omitting
+    # them. Coerce '', None, ' ' to None up front so the field stays validly absent.
+    @field_validator("amount", "usd_equivalent", "exchange_rate", mode="before")
+    @classmethod
+    def _blank_to_none_or_float(cls, v, info):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                # `amount` is REQUIRED in this model — pydantic will then raise the
+                # standard "Field required" error which the FE renders as a clear
+                # red banner. Optional fields drop quietly.
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                # Let pydantic produce its own structured "valid number" error so
+                # the FE can show the precise field that failed validation.
+                return v
+        return v
 
 
 

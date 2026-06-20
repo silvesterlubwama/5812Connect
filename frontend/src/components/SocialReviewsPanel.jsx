@@ -89,6 +89,38 @@ const SCHOOL_OVERALL = [
 const WELFARE_OVERALL = [
   'Thriving and progressing well', 'Requires routine monitoring', 'Requires additional support services', 'Requires urgent intervention',
 ];
+const MEDICAL_OVERALL = [
+  'Medically fit', 'Fit with monitoring', 'Needs treatment',
+  'Needs referral', 'Needs nutritional support', 'Needs disability support',
+];
+// Medical exam — past medical history rows (Yes/No per condition)
+const MEDICAL_HISTORY_ROWS = [
+  { key: 'asthma', label: 'Asthma' },
+  { key: 'epilepsy', label: 'Epilepsy' },
+  { key: 'diabetes', label: 'Diabetes' },
+  { key: 'sickle_cell', label: 'Sickle Cell Disease' },
+  { key: 'heart_disease', label: 'Heart Disease' },
+  { key: 'tuberculosis', label: 'Tuberculosis' },
+  { key: 'hiv_aids', label: 'HIV / AIDS' },
+  { key: 'chronic_illness', label: 'Other chronic illness' },
+];
+const DISABILITY_FLAGS = [
+  { key: 'physical', label: 'Physical' },
+  { key: 'visual', label: 'Visual impairment' },
+  { key: 'hearing', label: 'Hearing impairment' },
+  { key: 'intellectual', label: 'Intellectual' },
+  { key: 'autism', label: 'Autism spectrum' },
+  { key: 'speech_language', label: 'Speech / language' },
+  { key: 'multiple', label: 'Multiple disabilities' },
+];
+const MEDICAL_RECOMMENDATIONS = [
+  { key: 'fit', label: 'Medically fit' },
+  { key: 'fit_with_monitoring', label: 'Fit but requires routine monitoring' },
+  { key: 'needs_treatment', label: 'Requires medical treatment' },
+  { key: 'needs_referral', label: 'Requires specialist referral' },
+  { key: 'needs_nutrition', label: 'Requires nutritional support' },
+  { key: 'needs_disability_support', label: 'Requires disability support services' },
+];
 
 const RatingRow = ({ row, value, onChange, options, idPrefix }) => (
   <tr data-testid={`${idPrefix}-row-${row.key}`}>
@@ -133,6 +165,28 @@ function emptyFormFor(kind) {
       areas_requiring_support: '',
     };
   }
+  if (kind === 'medical_exam') {
+    return {
+      child_name: '', dob: '', age: '', sex: '',
+      village: '', parish: '', sub_county: '', district: '',
+      guardian_name: '', contact: '',
+      medical_history: {},
+      current_medication: '', known_allergies: '', previous_admissions: '',
+      general_condition: '',
+      medical_remarks: '',
+      nutritional_status: '',
+      clinical_remarks: '',
+      disability: {},
+      disability_description: '', assistive_devices: '',
+      mental_observations: '', mental_remarks: '',
+      immunization_status: '', immunization_card_verified: false,
+      diagnosis: '',
+      recommendations: {},
+      recommended_actions: '',
+      referral: { facility: '', reason: '', follow_up_date: '' },
+      practitioner: { name: '', qualification: '', facility: '', telephone: '', exam_date: '' },
+    };
+  }
   return {
     caregiver_name: '', caregiver_relationship: '', village_parish: '', district: '',
     welfare_indicators: {},
@@ -149,6 +203,7 @@ function emptyFormFor(kind) {
 
 export default function SocialReviewsPanel({ child, kind }) {
   const isSchool = kind === 'school_progress';
+  const isMedical = kind === 'medical_exam';
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -240,7 +295,7 @@ export default function SocialReviewsPanel({ child, kind }) {
       const url = URL.createObjectURL(r.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = isSchool ? 'school-progress-review-blank.pdf' : 'welfare-visit-blank.pdf';
+      a.download = isSchool ? 'school-progress-review-blank.pdf' : isMedical ? 'medical-examination-blank.pdf' : 'welfare-visit-blank.pdf';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -325,7 +380,9 @@ export default function SocialReviewsPanel({ child, kind }) {
         <p className="text-xs text-muted-foreground">
           {isSchool
             ? 'Termly school progress reviews. Print a blank form to take to school visits, then transcribe the teacher\'s ratings back here.'
-            : 'Welfare and home-visit reviews. Captures protection concerns, household assessment, and the child\'s voice.'}
+            : isMedical
+              ? 'Child enrollment medical exam. Print the blank form for the medical practitioner; uploaded scans are auto-extracted by OCR into the structured fields.'
+              : 'Welfare and home-visit reviews. Captures protection concerns, household assessment, and the child\'s voice.'}
         </p>
         <div className="flex gap-1.5 flex-wrap">
           <Button size="sm" variant="outline" onClick={handlePrint} data-testid={`reviews-${kind}-print`}>
@@ -355,10 +412,12 @@ export default function SocialReviewsPanel({ child, kind }) {
       {list.length === 0 ? (
         <EmptyState
           icon={ClipboardCheck}
-          title={isSchool ? 'No school progress reviews yet' : 'No welfare visits yet'}
+          title={isSchool ? 'No school progress reviews yet' : isMedical ? 'No medical exams yet' : 'No welfare visits yet'}
           description={isSchool
             ? 'Each term, fill a Child School Progress Review during a school visit. The data syncs into the child\'s education tab.'
-            : 'Log a welfare visit after each home check-in. Protection concerns auto-flag on the child\'s profile.'}
+            : isMedical
+              ? 'On enrollment (and routinely after), record a Medical Examination. Findings auto-sync into the child\'s medical tab and any disability or chronic-illness flag surfaces on their profile.'
+              : 'Log a welfare visit after each home check-in. Protection concerns auto-flag on the child\'s profile.'}
           action={{ label: 'Add the first review', onClick: openCreate, testid: `reviews-${kind}-empty-add` }}
           testid={`reviews-${kind}-empty`}
         />
@@ -403,7 +462,7 @@ export default function SocialReviewsPanel({ child, kind }) {
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto" data-testid={`reviews-${kind}-dialog`}>
           <DialogHeader>
-            <DialogTitle>{isSchool ? 'School Progress Review' : 'Welfare Visit Review'}{editingId ? ' (editing)' : ''}</DialogTitle>
+            <DialogTitle>{isSchool ? 'School Progress Review' : isMedical ? 'Medical Examination' : 'Welfare Visit Review'}{editingId ? ' (editing)' : ''}</DialogTitle>
             <DialogDescription className="text-xs">{child?.name} · {child?.id}</DialogDescription>
           </DialogHeader>
 
@@ -425,7 +484,8 @@ export default function SocialReviewsPanel({ child, kind }) {
                   </div>
                 </>
               )}
-              {!isSchool && (
+              {/* WELFARE-only top fields (medical_exam has its own top section below) */}
+              {!isSchool && !isMedical && (
                 <>
                   <div className="space-y-1"><Label className="text-xs">Caregiver name</Label>
                     <Input value={form.fields.caregiver_name || ''} onChange={e => updateField('caregiver_name', e.target.value)} />
@@ -438,6 +498,21 @@ export default function SocialReviewsPanel({ child, kind }) {
                   </div>
                   <div className="space-y-1"><Label className="text-xs">District</Label>
                     <Input value={form.fields.district || ''} onChange={e => updateField('district', e.target.value)} />
+                  </div>
+                </>
+              )}
+              {/* MEDICAL EXAM top-row: child identification + exam date already covered by review_date */}
+              {isMedical && (
+                <>
+                  <div className="space-y-1"><Label className="text-xs">Sex</Label>
+                    <select className="w-full border rounded h-9 px-2 text-sm bg-background" value={form.fields.sex || ''} onChange={e => updateField('sex', e.target.value)} data-testid="reviews-medical_exam-sex">
+                      <option value="">—</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Guardian name</Label>
+                    <Input value={form.fields.guardian_name || ''} onChange={e => updateField('guardian_name', e.target.value)} />
                   </div>
                 </>
               )}
@@ -510,7 +585,7 @@ export default function SocialReviewsPanel({ child, kind }) {
             )}
 
             {/* WELFARE VISIT */}
-            {!isSchool && (
+            {!isSchool && !isMedical && (
               <div>
                 <p className="text-xs font-semibold mt-2">Welfare Assessment</p>
                 <table className="w-full border-collapse text-xs mt-1">
@@ -607,6 +682,135 @@ export default function SocialReviewsPanel({ child, kind }) {
               </div>
             )}
 
+            {/* MEDICAL EXAM — condensed in-app form. Full paper version is on the printed
+                PDF; OCR auto-extracts ALL fields from a scanned filled form, so this in-app
+                dialog focuses on the structured fields that feed child.medical.* on save. */}
+            {isMedical && (
+              <div>
+                <p className="text-xs font-semibold mt-2">Past Medical History</p>
+                <table className="w-full border-collapse text-xs mt-1">
+                  <thead><tr className="bg-muted/40"><th className="p-1 text-left">Condition</th><th className="p-1">Present</th><th className="p-1">Notes</th></tr></thead>
+                  <tbody>
+                    {MEDICAL_HISTORY_ROWS.map(r => (
+                      <tr key={r.key} data-testid={`mh-row-${r.key}`}>
+                        <td className="p-1">{r.label}</td>
+                        <td className="text-center p-1">
+                          <input type="checkbox"
+                            checked={!!form.fields.medical_history?.[r.key]?.present}
+                            onChange={e => updateField(`medical_history.${r.key}`, { ...(form.fields.medical_history?.[r.key] || {}), present: e.target.checked })}
+                            data-testid={`mh-${r.key}-present`}
+                          />
+                        </td>
+                        <td className="p-1">
+                          <Input className="h-7 text-xs" value={form.fields.medical_history?.[r.key]?.notes || ''}
+                            onChange={e => updateField(`medical_history.${r.key}`, { ...(form.fields.medical_history?.[r.key] || {}), notes: e.target.value })} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div className="space-y-1"><Label className="text-xs">Current medication</Label>
+                    <Textarea rows={2} value={form.fields.current_medication || ''} onChange={e => updateField('current_medication', e.target.value)} data-testid="reviews-medical_exam-meds" />
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Known allergies</Label>
+                    <Textarea rows={2} value={form.fields.known_allergies || ''} onChange={e => updateField('known_allergies', e.target.value)} data-testid="reviews-medical_exam-allergies" />
+                  </div>
+                </div>
+
+                <p className="text-xs font-semibold mt-3">Physical &amp; Nutritional Status</p>
+                <div className="grid grid-cols-2 gap-3 mt-1">
+                  <div className="space-y-1"><Label className="text-xs">General condition</Label>
+                    <select className="w-full border rounded h-8 px-2 text-sm bg-background" value={form.fields.general_condition || ''} onChange={e => updateField('general_condition', e.target.value)} data-testid="reviews-medical_exam-general">
+                      <option value="">—</option>
+                      {['Excellent', 'Good', 'Fair', 'Poor'].map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Nutritional status</Label>
+                    <select className="w-full border rounded h-8 px-2 text-sm bg-background" value={form.fields.nutritional_status || ''} onChange={e => updateField('nutritional_status', e.target.value)} data-testid="reviews-medical_exam-nutrition">
+                      <option value="">—</option>
+                      {['Well Nourished', 'Mild Malnutrition', 'Moderate Malnutrition', 'Severe Malnutrition'].map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <p className="text-xs font-semibold mt-3">Disability assessment</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <input type="checkbox"
+                    checked={!!form.fields.disability?.has_disability}
+                    onChange={e => updateField('disability', { ...(form.fields.disability || {}), has_disability: e.target.checked })}
+                    data-testid="reviews-medical_exam-has-disability"
+                  />
+                  <span className="text-xs">Child has an identified disability</span>
+                </div>
+                {form.fields.disability?.has_disability && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2" data-testid="reviews-medical_exam-disability-flags">
+                    {DISABILITY_FLAGS.map(c => (
+                      <CheckBox
+                        key={c.key} label={c.label}
+                        checked={form.fields.disability?.[c.key]}
+                        onChange={v => updateField(`disability.${c.key}`, v)}
+                        testid={`reviews-medical_exam-dis-${c.key}`}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <p className="text-xs font-semibold mt-3">Immunization status</p>
+                <div className="grid grid-cols-2 gap-3 mt-1">
+                  <div className="space-y-1"><Label className="text-xs">Status</Label>
+                    <select className="w-full border rounded h-8 px-2 text-sm bg-background" value={form.fields.immunization_status || ''} onChange={e => updateField('immunization_status', e.target.value)} data-testid="reviews-medical_exam-immun">
+                      <option value="">—</option>
+                      {['Fully Immunized', 'Partially Immunized', 'Status Unknown'].map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <CheckBox
+                    label="Immunization card verified"
+                    checked={form.fields.immunization_card_verified}
+                    onChange={v => updateField('immunization_card_verified', v)}
+                    testid="reviews-medical_exam-card-verified"
+                  />
+                </div>
+
+                <p className="text-xs font-semibold mt-3">Diagnosis &amp; recommendations</p>
+                <div className="space-y-2 mt-1">
+                  <div className="space-y-1"><Label className="text-xs">Medical diagnosis / impression</Label>
+                    <Textarea rows={3} value={form.fields.diagnosis || ''} onChange={e => updateField('diagnosis', e.target.value)} data-testid="reviews-medical_exam-diagnosis" />
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2" data-testid="reviews-medical_exam-recs">
+                    {MEDICAL_RECOMMENDATIONS.map(c => (
+                      <CheckBox
+                        key={c.key} label={c.label}
+                        checked={form.fields.recommendations?.[c.key]}
+                        onChange={v => updateField(`recommendations.${c.key}`, v)}
+                        testid={`reviews-medical_exam-rec-${c.key}`}
+                      />
+                    ))}
+                  </div>
+                  <div className="space-y-1"><Label className="text-xs">Recommended actions</Label>
+                    <Textarea rows={2} value={form.fields.recommended_actions || ''} onChange={e => updateField('recommended_actions', e.target.value)} data-testid="reviews-medical_exam-rec-actions" />
+                  </div>
+                </div>
+
+                <p className="text-xs font-semibold mt-3">Medical practitioner</p>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <div className="space-y-1"><Label className="text-[10px]">Name</Label>
+                    <Input className="h-8 text-xs" value={form.fields.practitioner?.name || ''} onChange={e => updateField('practitioner.name', e.target.value)} />
+                  </div>
+                  <div className="space-y-1"><Label className="text-[10px]">Qualification</Label>
+                    <Input className="h-8 text-xs" value={form.fields.practitioner?.qualification || ''} onChange={e => updateField('practitioner.qualification', e.target.value)} />
+                  </div>
+                  <div className="space-y-1"><Label className="text-[10px]">Facility</Label>
+                    <Input className="h-8 text-xs" value={form.fields.practitioner?.facility || ''} onChange={e => updateField('practitioner.facility', e.target.value)} />
+                  </div>
+                  <div className="space-y-1"><Label className="text-[10px]">Telephone</Label>
+                    <Input className="h-8 text-xs" value={form.fields.practitioner?.telephone || ''} onChange={e => updateField('practitioner.telephone', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Action plan */}
             <div>
               <div className="flex items-center justify-between mt-3">
@@ -638,10 +842,10 @@ export default function SocialReviewsPanel({ child, kind }) {
                   data-testid={`reviews-${kind}-overall`}
                 >
                   <option value="">— pick one —</option>
-                  {(isSchool ? SCHOOL_OVERALL : WELFARE_OVERALL).map(o => <option key={o} value={o}>{o}</option>)}
+                  {(isSchool ? SCHOOL_OVERALL : isMedical ? MEDICAL_OVERALL : WELFARE_OVERALL).map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
-              {!isSchool && (
+              {!isSchool && !isMedical && (
                 <div className="space-y-1"><Label className="text-xs">Next visit date</Label>
                   <Input type="date" value={form.next_visit_date} onChange={e => setForm({ ...form, next_visit_date: e.target.value })} data-testid="reviews-welfare_visit-next-visit" />
                 </div>
@@ -672,7 +876,7 @@ export default function SocialReviewsPanel({ child, kind }) {
                   const editingReview = list.find(x => x.id === editingId);
                   const photos = editingReview?.photos || [];
                   if (photos.length === 0) {
-                    return <p className="text-[11px] text-muted-foreground py-2">No photos yet. Add pictures taken during the visit — they appear on the child's profile gallery too.</p>;
+                    return <p className="text-[11px] text-muted-foreground py-2">No photos yet. Add pictures taken during the visit — they appear on the child&apos;s profile gallery too.</p>;
                   }
                   return (
                     <div className="grid grid-cols-4 sm:grid-cols-6 gap-2" data-testid={`reviews-${kind}-dialog-photos`}>

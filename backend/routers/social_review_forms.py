@@ -21,7 +21,7 @@ import json
 
 router = APIRouter(prefix="/api/social-work/reviews", tags=["social_work_reviews"])
 
-VALID_KINDS = {"school_progress", "welfare_visit"}
+VALID_KINDS = {"school_progress", "welfare_visit", "medical_exam"}
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "social_reviews"
 
 
@@ -196,6 +196,82 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
         set_ops["protection.has_active_concern"] = any_flag
         set_ops["protection.flags"] = {k: bool(prot.get(k)) for k in flag_keys}
         set_ops["protection.last_assessed_at"] = data.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+
+    elif kind == "medical_exam":
+        # Sync medical-history flags + chronic conditions onto child.medical so the existing
+        # report generator and badges-with-conditions surface them. Stamps a `medical.latest_exam`
+        # snapshot for full verbatim retrieval.
+        history = fields.get("medical_history") or {}
+        condition_list = [k for k in (
+            "asthma", "epilepsy", "diabetes", "sickle_cell", "heart_disease",
+            "tuberculosis", "hiv_aids", "chronic_illness",
+        ) if (history.get(k) or {}).get("present")]
+        other_cond = (history.get("other") or {}).get("specify", "").strip()
+        if other_cond:
+            condition_list.append(other_cond)
+        set_ops["medical.conditions"] = condition_list
+        if fields.get("known_allergies"):
+            set_ops["medical.allergies"] = fields["known_allergies"]
+        if fields.get("current_medication"):
+            set_ops["medical.current_medication"] = fields["current_medication"]
+        if fields.get("nutritional_status"):
+            set_ops["medical.nutritional_status"] = fields["nutritional_status"]
+        if fields.get("general_condition"):
+            set_ops["medical.general_condition"] = fields["general_condition"]
+        if fields.get("immunization_status"):
+            set_ops["medical.immunization_status"] = fields["immunization_status"]
+        # Disability sub-flags — multi-select bools
+        disability = fields.get("disability") or {}
+        has_disability = bool(disability.get("has_disability"))
+        set_ops["medical.has_disability"] = has_disability
+        set_ops["medical.disability_flags"] = {
+            k: bool(disability.get(k)) for k in (
+                "physical", "visual", "hearing", "intellectual",
+                "autism", "speech_language", "multiple",
+            )
+        }
+        if disability.get("other"):
+            set_ops["medical.disability_other"] = disability["other"]
+        if fields.get("assistive_devices"):
+            set_ops["medical.assistive_devices"] = fields["assistive_devices"]
+        # Mental health screening
+        if fields.get("mental_observations"):
+            set_ops["medical.mental_observations"] = fields["mental_observations"]
+        # Medical Diagnosis / Impression + Recommendations
+        if fields.get("diagnosis"):
+            set_ops["medical.diagnosis"] = fields["diagnosis"]
+        recs = fields.get("recommendations") or {}
+        set_ops["medical.recommendations"] = {
+            k: bool(recs.get(k)) for k in (
+                "fit", "fit_with_monitoring", "needs_treatment",
+                "needs_referral", "needs_nutrition", "needs_disability_support",
+            )
+        }
+        set_ops["medical.recommended_actions"] = (fields.get("recommended_actions") or "")[:1000]
+        # Referral
+        ref = fields.get("referral") or {}
+        if ref:
+            set_ops["medical.referral"] = {
+                "facility": (ref.get("facility") or "")[:120],
+                "reason": (ref.get("reason") or "")[:300],
+                "follow_up_date": (ref.get("follow_up_date") or "")[:10],
+            }
+        # Practitioner certification
+        pc = fields.get("practitioner") or {}
+        if pc:
+            set_ops["medical.practitioner"] = {
+                "name": (pc.get("name") or "")[:120],
+                "qualification": (pc.get("qualification") or "")[:80],
+                "facility": (pc.get("facility") or "")[:120],
+                "telephone": (pc.get("telephone") or "")[:32],
+                "exam_date": (pc.get("exam_date") or "")[:10],
+            }
+        set_ops["medical.latest_exam"] = {
+            "review_id": review_id,
+            "exam_date": data.get("review_date") or "",
+            "fields_snapshot": fields,
+            "overall": data.get("overall_assessment") or "",
+        }
 
     set_ops["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_ops["last_review_id"] = review_id
@@ -420,6 +496,46 @@ _OCR_SYSTEM_PROMPTS = {
         "}\n"
         "All checkboxes default to false unless clearly ticked. Be especially careful with protection_concerns — "
         "false positives there cause incorrect protection alerts on the child's record."
+    ),
+    "medical_exam": (
+        "You are an OCR + structured-extraction assistant for a 58:12 Global Child Enrollment "
+        "Medical Examination Form. Output STRICT JSON — no prose, no markdown:\n"
+        "{\n"
+        '  "review_date": "YYYY-MM-DD or empty (use Date of Examination)",\n'
+        '  "fields": {\n'
+        '    "child_name": str, "dob": "YYYY-MM-DD"|"", "age": str, "sex": "male"|"female"|"",\n'
+        '    "village": str, "parish": str, "sub_county": str, "district": str,\n'
+        '    "guardian_name": str, "contact": str,\n'
+        '    "medical_history": { "asthma": {"present": bool, "notes": str}, "epilepsy": {...},\n'
+        '       "diabetes": {...}, "sickle_cell": {...}, "heart_disease": {...},\n'
+        '       "tuberculosis": {...}, "hiv_aids": {...}, "chronic_illness": {...},\n'
+        '       "other": {"present": bool, "specify": str, "notes": str} },\n'
+        '    "current_medication": str, "known_allergies": str, "previous_admissions": str,\n'
+        '    "general_condition": "Excellent"|"Good"|"Fair"|"Poor"|"",\n'
+        '    "medical_remarks": str,\n'
+        '    "nutritional_status": "Well Nourished"|"Mild Malnutrition"|"Moderate Malnutrition"|"Severe Malnutrition"|"",\n'
+        '    "clinical_remarks": str,\n'
+        '    "disability": { "has_disability": bool, "physical": bool, "visual": bool, "hearing": bool,\n'
+        '       "intellectual": bool, "autism": bool, "speech_language": bool, "multiple": bool, "other": str },\n'
+        '    "disability_description": str, "assistive_devices": str,\n'
+        '    "mental_observations": str,  // one of: "No concerns observed","Emotional distress","Behavioural concerns","Developmental concerns","Trauma-related concerns","Other"\n'
+        '    "mental_remarks": str,\n'
+        '    "immunization_status": "Fully Immunized"|"Partially Immunized"|"Status Unknown"|"",\n'
+        '    "immunization_card_verified": bool,\n'
+        '    "diagnosis": str,\n'
+        '    "recommendations": { "fit": bool, "fit_with_monitoring": bool, "needs_treatment": bool,\n'
+        '       "needs_referral": bool, "needs_nutrition": bool, "needs_disability_support": bool },\n'
+        '    "recommended_actions": str,\n'
+        '    "referral": { "facility": str, "reason": str, "follow_up_date": "YYYY-MM-DD"|"" },\n'
+        '    "practitioner": { "name": str, "qualification": str, "facility": str, "telephone": str, "exam_date": "YYYY-MM-DD"|"" }\n'
+        '  },\n'
+        '  "overall_assessment": "Medically fit"|"Fit with monitoring"|"Needs treatment"|"Needs referral"|"Needs nutritional support"|"Needs disability support"|"",\n'
+        '  "ocr_confidence": "high"|"medium"|"low",\n'
+        '  "raw_text": "everything legible"\n'
+        "}\n"
+        "Be extra careful with the past-medical-history table: read each row's Yes/No checkbox literally. "
+        "False positives (e.g. recording 'epilepsy: present=true' when the No box was ticked) cause serious "
+        "downstream harm — set present=false unless the Yes box is clearly marked."
     ),
 }
 

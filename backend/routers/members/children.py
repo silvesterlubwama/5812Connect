@@ -415,3 +415,218 @@ async def move_child_to_guest(child_id: str, current_user: dict = Depends(requir
     guest.pop("_id", None)
     await _audit(current_user["id"], "move", "child_to_guest", child_id, {"new_id": guest_id})
     return {"message": f"Moved {child.get('name')} to guests", "guest_id": guest_id}
+
+
+
+# ========== TYPED FILE-CHECKLIST DOCUMENTS ==========
+
+# Canonical doc_types — matches the "Items in a child's file" checklist 1:1.
+CHILD_FILE_DOC_TYPES = [
+    {"key": "ovcmis_form_008", "label": "OVCMIS Form 008 — Child Enrollment & Monitoring Card"},
+    {"key": "sponsorship_assessment", "label": "58:12 Child Sponsorship Assessment"},
+    {"key": "lc1_introduction_letter", "label": "LC1 Introduction Letter"},
+    {"key": "school_report", "label": "Previous / Current School Report"},
+    {"key": "guardian_national_id", "label": "Parent / Guardian National ID"},
+    {"key": "family_consent_letter", "label": "Family Consent Letter (58:12 policies)"},
+    {"key": "medical_assessment", "label": "Medical Assessment Form (scan)"},
+    {"key": "exit_form", "label": "Exit Form"},
+    {"key": "sponsor_letter_in", "label": "Letter from Sponsor"},
+    {"key": "sponsor_letter_out", "label": "Letter to Sponsor"},
+    {"key": "other", "label": "Other document"},
+]
+
+
+@router.get("/children/{child_id}/file-doc-types")
+async def get_doc_types(child_id: str, current_user: dict = Depends(require_staff)):
+    """Doc-type catalogue + per-type count for the Documents tab UI."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    counts = {}
+    async for ex in db.child_extras.find({"child_id": child_id, "kind": "file_doc"}, {"_id": 0, "doc_type": 1}):
+        counts[ex.get("doc_type") or "other"] = counts.get(ex.get("doc_type") or "other", 0) + 1
+    return [{**t, "count": counts.get(t["key"], 0)} for t in CHILD_FILE_DOC_TYPES]
+
+
+@router.post("/children/{child_id}/file-docs")
+async def upload_file_doc(
+    child_id: str,
+    file: UploadFile = File(...),
+    doc_type: str = Form("other"),
+    notes: str = Form(""),
+    issued_date: Optional[str] = Form(None),
+    current_user: dict = Depends(require_staff),
+):
+    """Upload a checklist document (LC1 letter, guardian ID scan, etc.) as a
+    typed child_extras row so the Documents tab can group by category and the
+    profile-bundle ZIP knows what to label them."""
+    if doc_type not in {t["key"] for t in CHILD_FILE_DOC_TYPES}:
+        doc_type = "other"
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1, "name": 1, "location_id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    data = await file.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Document must be under 15 MB")
+    ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
+    unique = f"{child_id}-{doc_type}-{uuid.uuid4().hex[:8]}.{ext}"
+    file_url = None
+    try:
+        from storage import put_object
+        result = put_object(f"child-file-docs/{unique}", data, file.content_type or "application/octet-stream")
+        file_url = result.get("url", f"/api/storage/child-file-docs/{unique}")
+    except Exception as e:
+        logger.warning(f"Cloud storage put failed, saving locally: {e}")
+        import os as _os
+        _os.makedirs("/app/backend/uploads/child-file-docs", exist_ok=True)
+        with open(f"/app/backend/uploads/child-file-docs/{unique}", "wb") as fh:
+            fh.write(data)
+        file_url = f"/api/uploads/child-file-docs/{unique}"
+
+    label = next((t["label"] for t in CHILD_FILE_DOC_TYPES if t["key"] == doc_type), "Other document")
+    doc = {
+        "id": f"cex_{uuid.uuid4().hex[:10]}",
+        "child_id": child_id,
+        "child_name": child.get("name"),
+        "kind": "file_doc",
+        "doc_type": doc_type,
+        "doc_label": label,
+        "caption": (notes or label)[:300],
+        "issued_date": (issued_date or "")[:10],
+        "file_url": file_url,
+        "file_name": file.filename,
+        "file_size": len(data),
+        "is_public_for_sponsor": False,
+        "location_id": child.get("location_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+    }
+    await db.child_extras.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "create", "child_file_doc", doc["id"], {"doc_type": doc_type})
+    return doc
+
+
+@router.get("/children/{child_id}/file-docs")
+async def list_file_docs(child_id: str, current_user: dict = Depends(require_staff)):
+    rows = await db.child_extras.find({"child_id": child_id, "kind": "file_doc"}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return rows
+
+
+# ========== WHOLE-PROFILE BUNDLE DOWNLOAD ==========
+
+@router.get("/children/{child_id}/profile-bundle")
+async def download_profile_bundle(child_id: str, current_user: dict = Depends(require_staff)):
+    """Stream a ZIP containing the entire child file: profile JSON, main photo,
+    all review forms + attached scans + visit photos, all checklist documents,
+    and the gallery. Includes an INDEX.md manifest listing checklist coverage so
+    field staff can see at a glance what's missing."""
+    from fastapi.responses import StreamingResponse
+    import io
+    import zipfile
+    import json as _json
+    import httpx
+
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+
+    buf = io.BytesIO()
+    zf = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, allowZip64=True)
+
+    async def _add_url(rel_path: str, url: str):
+        try:
+            if not url:
+                return
+            # Local-disk URL — read directly (avoids an HTTP roundtrip)
+            if url.startswith("/api/uploads/"):
+                import os as _os
+                local_path = url.replace("/api/uploads/", "/app/backend/uploads/")
+                if _os.path.exists(local_path):
+                    with open(local_path, "rb") as fh:
+                        zf.writestr(rel_path, fh.read())
+                    return
+            # Otherwise fetch via HTTP
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    zf.writestr(rel_path, r.content)
+                else:
+                    zf.writestr(rel_path + ".missing.txt", f"Could not fetch {url}: HTTP {r.status_code}")
+        except Exception as e:
+            zf.writestr(rel_path + ".error.txt", f"Could not fetch {url}: {e}")
+
+    # 1. profile.json
+    profile = {k: v for k, v in child.items() if k != "_id"}
+    zf.writestr("profile.json", _json.dumps(profile, indent=2, default=str))
+
+    # 2. Main profile photo
+    if child.get("photo_url"):
+        await _add_url("photo.jpg", child["photo_url"])
+
+    # 3. Reviews + attached scans + visit photos
+    reviews = await db.social_review_forms.find({"child_id": child_id}, {"_id": 0}).to_list(500)
+    for r in reviews:
+        date = (r.get("review_date") or "undated")[:10]
+        kind = r.get("kind", "review")
+        zf.writestr(f"reviews/{kind}-{date}-{r['id']}.json", _json.dumps(r, indent=2, default=str))
+        if r.get("attached_scan_url"):
+            ext = r["attached_scan_url"].rsplit(".", 1)[-1] if "." in r["attached_scan_url"] else "bin"
+            await _add_url(f"reviews/{kind}-{date}-{r['id']}-scan.{ext}", r["attached_scan_url"])
+        for p in (r.get("photos") or []):
+            if p.get("url"):
+                ext = p["url"].rsplit(".", 1)[-1] if "." in p["url"] else "jpg"
+                await _add_url(f"reviews/{kind}-{date}-{r['id']}-photo-{p['id']}.{ext}", p["url"])
+
+    # 4. Checklist documents
+    docs = await db.child_extras.find({"child_id": child_id, "kind": "file_doc"}, {"_id": 0}).to_list(200)
+    for d in docs:
+        if d.get("file_url"):
+            ext = d["file_url"].rsplit(".", 1)[-1] if "." in d["file_url"] else "bin"
+            safe_type = (d.get("doc_type") or "other").replace("/", "_")
+            await _add_url(f"documents/{safe_type}-{d['id']}.{ext}", d["file_url"])
+
+    # 5. Gallery photos
+    gallery = await db.child_extras.find({"child_id": child_id, "kind": "gallery"}, {"_id": 0}).to_list(200)
+    for g in gallery:
+        if g.get("file_url"):
+            ext = g["file_url"].rsplit(".", 1)[-1] if "." in g["file_url"] else "jpg"
+            await _add_url(f"gallery/{g['id']}.{ext}", g["file_url"])
+
+    # 6. INDEX.md — manifest + checklist coverage
+    doc_type_seen = {d.get("doc_type") for d in docs}
+    review_kinds = {r.get("kind") for r in reviews}
+    lines = [
+        f"# 58:12 Connect — Child File Bundle for {child.get('name', '?')}",
+        f"_Generated {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')} by {current_user.get('name', '')}_",
+        "",
+        f"- Child ID: {child_id}",
+        f"- Reviews: {len(reviews)} (school: {1 if 'school_progress' in review_kinds else 0}, welfare: {1 if 'welfare_visit' in review_kinds else 0}, medical: {1 if 'medical_exam' in review_kinds else 0})",
+        f"- Documents (checklist): {len(docs)}",
+        f"- Gallery photos: {len(gallery)}",
+        "",
+        "## Checklist coverage",
+        f"- [{'x' if child.get('photo_url') else ' '}] Child's photo",
+        f"- [{'x' if 'ovcmis_form_008' in doc_type_seen else ' '}] OVCMIS Form 008 — Child Enrollment & Monitoring Card",
+        f"- [{'x' if 'sponsorship_assessment' in doc_type_seen else ' '}] 58:12 Child Sponsorship Assessment",
+        f"- [{'x' if 'lc1_introduction_letter' in doc_type_seen else ' '}] LC1 Introduction Letter",
+        f"- [{'x' if 'school_report' in doc_type_seen else ' '}] Previous / Current School Report",
+        f"- [{'x' if 'guardian_national_id' in doc_type_seen else ' '}] Parent / Guardian National ID",
+        f"- [{'x' if 'family_consent_letter' in doc_type_seen else ' '}] Family Consent Letter",
+        f"- [{'x' if 'medical_assessment' in doc_type_seen or 'medical_exam' in review_kinds else ' '}] Medical Assessment Form",
+        f"- [{'x' if 'welfare_visit' in review_kinds or 'school_progress' in review_kinds else ' '}] 58:12 Welfare Review and Visit Forms",
+        f"- [{'x' if 'exit_form' in doc_type_seen else ' '}] Exit Form",
+        f"- [{'x' if 'sponsor_letter_in' in doc_type_seen or 'sponsor_letter_out' in doc_type_seen else ' '}] Letters to / from the Sponsor",
+    ]
+    zf.writestr("INDEX.md", "\n".join(lines))
+
+    zf.close()
+    buf.seek(0)
+    name_safe = (child.get("name") or "child").replace(" ", "_").replace("/", "_")
+    fname = f"{name_safe}-file-bundle-{datetime.now(timezone.utc).strftime('%Y%m%d')}.zip"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
