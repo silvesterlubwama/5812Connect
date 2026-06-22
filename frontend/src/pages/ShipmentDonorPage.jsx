@@ -17,12 +17,15 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2 } from 'lucide-react';
+import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2, KeyRound, LogOut, Pencil, Trophy, Clock, Layers, Trash2, Ruler, Plus, X } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import { useBranding } from '../context/BrandingContext';
 import ContainerVisualizer from '../components/ContainerVisualizer';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Textarea } from '../components/ui/textarea';
 
 const PRIORITY_BADGE = {
   urgent: 'bg-rose-100 text-rose-700',
@@ -40,6 +43,20 @@ export default function ShipmentDonorPage() {
   const [showAI, setShowAI] = useState(false);
   const [pickItem, setPickItem] = useState(null);
   const [donateForm, setDonateForm] = useState({ qty: 1, donor_name: '' });
+  // ─── Editor-PIN session ────────────────────────────────────────
+  const [editToken, setEditToken] = useState(() => {
+    try { return localStorage.getItem(`ship-edit-token:${token}`) || null; } catch { return null; }
+  });
+  const [showLogin, setShowLogin] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  // ─── PIN-scoped editing ────────────────────────────────────────
+  const [editingItem, setEditingItem] = useState(null);   // existing or {} for new
+  const [editingPallet, setEditingPallet] = useState(null);
+  const [showContainerEdit, setShowContainerEdit] = useState(false);
+  const [containerForm, setContainerForm] = useState({ length_cm: 1203, width_cm: 235, height_cm: 269, max_payload_kg: 26000 });
+  // shorthand for authenticated request headers
+  const authHeaders = () => editToken ? { 'X-Shipment-Edit-Token': editToken } : {};
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -71,6 +88,113 @@ export default function ShipmentDonorPage() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Could not record donation'); }
   };
 
+  // ─── Editor login flow ───────────────────────────────────────────
+  const submitLogin = async () => {
+    setLoginBusy(true);
+    try {
+      const r = await api.post(`/public/shipments/${token}/login`, { pin: pinInput.trim() });
+      try { localStorage.setItem(`ship-edit-token:${token}`, r.data.edit_token); } catch { /* ignore */ }
+      setEditToken(r.data.edit_token);
+      toast.success(`Editor session unlocked — ${r.data.ttl_hours}h`);
+      setShowLogin(false); setPinInput('');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Incorrect PIN'); }
+    finally { setLoginBusy(false); }
+  };
+  const logoutEditor = () => {
+    try { localStorage.removeItem(`ship-edit-token:${token}`); } catch { /* ignore */ }
+    setEditToken(null);
+    toast.success('Editor session ended');
+  };
+
+  // ─── Editor-only mutations (all go through PIN-scoped endpoints) ─
+  const saveItemEdit = async () => {
+    if (!editingItem) return;
+    const isNew = !editingItem.id;
+    try {
+      const url = isNew
+        ? `/public/shipments/${token}/items`
+        : `/public/shipments/${token}/items/${editingItem.id}`;
+      const method = isNew ? api.post : api.put;
+      await method(url, {
+        name: editingItem.name,
+        category: editingItem.category,
+        priority: editingItem.priority,
+        qty_needed: Number(editingItem.qty_needed) || 1,
+        qty_acquired: Number(editingItem.qty_acquired) || 0,
+        weight_kg: Number(editingItem.weight_kg) || 0,
+        value_usd: Number(editingItem.value_usd) || 0,
+        dims_cm: {
+          length: Number(editingItem.dims_cm?.length) || 0,
+          width: Number(editingItem.dims_cm?.width) || 0,
+          height: Number(editingItem.dims_cm?.height) || 0,
+        },
+        pallet_id: editingItem.pallet_id || null,
+        x_cm: Number(editingItem.x_cm) || 0,
+        y_cm: Number(editingItem.y_cm) || 0,
+        z_cm: Number(editingItem.z_cm) || 0,
+        notes: editingItem.notes || '',
+      }, { headers: authHeaders() });
+      toast.success(isNew ? 'Item added' : 'Item updated');
+      setEditingItem(null);
+      await refresh();
+    } catch (e) {
+      if (e.response?.status === 401) { logoutEditor(); toast.error('Session expired — log in again'); }
+      else toast.error(e.response?.data?.detail || 'Save failed');
+    }
+  };
+  const deleteItem = async (itemId) => {
+    if (!window.confirm('Delete this item?')) return;
+    try {
+      await api.delete(`/public/shipments/${token}/items/${itemId}`, { headers: authHeaders() });
+      toast.success('Item deleted');
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Delete failed'); }
+  };
+  const savePallet = async () => {
+    if (!editingPallet) return;
+    const isNew = !editingPallet.id;
+    const payload = {
+      label: editingPallet.label,
+      notes: editingPallet.notes || '',
+      length_cm: Number(editingPallet.length_cm) || 120,
+      width_cm: Number(editingPallet.width_cm) || 80,
+      height_cm: Number(editingPallet.height_cm) || 150,
+      x_cm: Number(editingPallet.x_cm) || 0,
+      y_cm: Number(editingPallet.y_cm) || 0,
+      color: editingPallet.color || '',
+    };
+    try {
+      if (isNew) await api.post(`/public/shipments/${token}/pallets`, payload, { headers: authHeaders() });
+      else await api.put(`/public/shipments/${token}/pallets/${editingPallet.id}`, payload, { headers: authHeaders() });
+      toast.success(isNew ? 'Pallet added' : 'Pallet updated');
+      setEditingPallet(null);
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+  };
+  const deletePallet = async (pid) => {
+    if (!window.confirm('Delete this pallet? Items will be unassigned.')) return;
+    try {
+      await api.delete(`/public/shipments/${token}/pallets/${pid}`, { headers: authHeaders() });
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Delete failed'); }
+  };
+  const saveContainer = async () => {
+    try {
+      await api.put(`/public/shipments/${token}/container`, containerForm, { headers: authHeaders() });
+      toast.success('Container dimensions saved');
+      setShowContainerEdit(false);
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+  };
+  const movePallet = async (pid, x_cm, y_cm) => {
+    try {
+      await api.put(`/public/shipments/${token}/pallets/${pid}`, {
+        x_cm: Math.round(x_cm), y_cm: Math.round(y_cm),
+      }, { headers: authHeaders() });
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
+  };
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center"><p className="text-sm text-muted-foreground">Loading shipment…</p></div>;
   }
@@ -89,18 +213,43 @@ export default function ShipmentDonorPage() {
   }
 
   const t = data.totals || {};
+  const isEditor = !!editToken;
+  // Countdown to target_ship_date
+  const daysUntilShip = (() => {
+    if (!data.target_ship_date) return null;
+    const target = new Date(data.target_ship_date + 'T00:00:00Z');
+    const now = new Date();
+    const ms = target.getTime() - now.getTime();
+    return Math.ceil(ms / (1000 * 60 * 60 * 24));
+  })();
 
   return (
     <div className="min-h-screen bg-background" data-testid="shipment-donor-page">
       {/* Header bar */}
       <div className="border-b bg-card">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3 flex-wrap">
           {branding?.logo_url && <img src={branding.logo_url} alt={branding?.app_name || '58:12'} className="h-8 w-auto" />}
           <div className="flex-1 min-w-0">
             <p className="text-[11px] text-muted-foreground uppercase tracking-wide">{branding?.app_name || '58:12 Global'} · Container shipment</p>
             <h1 className="text-lg font-semibold truncate" data-testid="ship-donor-name">{data.name}</h1>
           </div>
           <Badge variant="outline" className="text-[10px] capitalize">{data.status}</Badge>
+          {/* PIN-login button (only when the shipment has a PIN configured) */}
+          {data.pin_required && !isEditor && (
+            <Button size="sm" variant="outline" onClick={() => setShowLogin(true)} data-testid="ship-donor-login">
+              <KeyRound size={12} className="mr-1" /> Editor login
+            </Button>
+          )}
+          {isEditor && (
+            <Badge className="bg-emerald-100 text-emerald-700 text-[10px]" data-testid="ship-donor-editor-badge">
+              <Pencil size={9} className="mr-1" /> Edit mode
+            </Badge>
+          )}
+          {isEditor && (
+            <Button size="sm" variant="ghost" onClick={logoutEditor} title="End editor session" data-testid="ship-donor-logout">
+              <LogOut size={12} />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -126,15 +275,83 @@ export default function ShipmentDonorPage() {
               </div>
               {t.value_usd > 0 && <p className="text-[11px] text-muted-foreground">Estimated value contributed: <strong>${t.value_usd.toLocaleString()}</strong></p>}
             </div>
+            {/* At-a-glance stat row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1" data-testid="ship-donor-stats">
+              <div className="rounded-lg border bg-muted/30 p-2 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Pallets</p>
+                <p className="text-sm font-semibold flex items-center justify-center gap-1"><Layers size={11} /> {t.pallet_count || 0}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-2 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Donors</p>
+                <p className="text-sm font-semibold flex items-center justify-center gap-1"><Heart size={11} className="text-rose-500" /> {t.donor_count || 0}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-2 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Items in</p>
+                <p className="text-sm font-semibold flex items-center justify-center gap-1"><CheckCircle2 size={11} className="text-emerald-600" /> {t.items_acquired || 0}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-2 text-center" data-testid="ship-donor-countdown">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Ship in</p>
+                <p className={`text-sm font-semibold flex items-center justify-center gap-1 ${daysUntilShip != null && daysUntilShip < 7 ? 'text-rose-700' : ''}`}>
+                  <Clock size={11} /> {daysUntilShip == null ? '—' : daysUntilShip < 0 ? `${-daysUntilShip}d overdue` : `${daysUntilShip}d`}
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
+
+        {/* Donor leaderboard */}
+        {(t.leaderboard || []).length > 0 && (
+          <Card className="rounded-xl" data-testid="ship-donor-leaderboard">
+            <CardContent className="p-3 space-y-1.5">
+              <p className="text-sm font-semibold flex items-center gap-1.5"><Trophy size={13} className="text-amber-500" /> Top contributors</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {(t.leaderboard || []).map((row, idx) => (
+                  <div key={row.donor_name} className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground w-5 text-right">{idx + 1}.</span>
+                    <span className="flex-1 truncate font-medium">{row.donor_name}</span>
+                    <Badge variant="outline" className="text-[10px]">{row.total_qty} items</Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Editor toolbar — shows when logged in with PIN */}
+        {isEditor && (
+          <Card className="rounded-xl border-primary/30 bg-primary/5" data-testid="ship-donor-editor-bar">
+            <CardContent className="p-3 flex items-center gap-2 flex-wrap">
+              <p className="text-xs font-semibold flex items-center gap-1"><Pencil size={11} /> Editor tools</p>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setEditingItem({ name: '', category: '', priority: 'normal', qty_needed: 1, qty_acquired: 0, weight_kg: 0, value_usd: 0, dims_cm: { length: 0, width: 0, height: 0 }, x_cm: 0, y_cm: 0, z_cm: 0, notes: '' })} data-testid="ship-donor-add-item">
+                <Plus size={10} className="mr-1" /> Item
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setEditingPallet({ label: '', notes: '', length_cm: 120, width_cm: 80, height_cm: 150, x_cm: 0, y_cm: 0, color: '#10b981' })} data-testid="ship-donor-add-pallet">
+                <Layers size={10} className="mr-1" /> Pallet
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => {
+                const c = data.container_dims_cm || {};
+                setContainerForm({
+                  length_cm: c.length_cm || 1203, width_cm: c.width_cm || 235,
+                  height_cm: c.height_cm || 269, max_payload_kg: c.max_payload_kg || data.max_payload_kg || 26000,
+                });
+                setShowContainerEdit(true);
+              }} data-testid="ship-donor-edit-container">
+                <Ruler size={10} className="mr-1" /> Container
+              </Button>
+              <p className="text-[10px] text-muted-foreground ml-auto">Click items below to edit · drag pallets on the 2D viz to reposition.</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Container visualization (3D by default — let donors see what's in the truck) */}
         {((data.already_acquired || []).length > 0 || (data.still_needed || []).length > 0) && (
           <ContainerVisualizer
             items={[...(data.already_acquired || []), ...(data.still_needed || [])]}
             pallets={data.pallets || []}
+            container={data.container_dims_cm}
             defaultMode="3d"
+            editable={isEditor}
+            onPalletMove={isEditor ? movePallet : undefined}
           />
         )}
 
@@ -162,8 +379,14 @@ export default function ShipmentDonorPage() {
                       {it.notes && <p className="text-[10px] text-muted-foreground italic mt-0.5">{it.notes}</p>}
                     </div>
                     <Button size="sm" onClick={() => { setPickItem(it); setDonateForm({ qty: Math.min(1, it.qty_remaining), donor_name: '' }); }} data-testid={`ship-donor-pledge-${it.id}`}>
-                      <Heart size={11} className="mr-1" /> I'll donate
+                      <Heart size={11} className="mr-1" /> I&apos;ll donate
                     </Button>
+                    {isEditor && (
+                      <>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setEditingItem({ ...it })} data-testid={`ship-donor-edit-${it.id}`}><Pencil size={11} /></Button>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-rose-600" onClick={() => deleteItem(it.id)} data-testid={`ship-donor-del-${it.id}`}><Trash2 size={11} /></Button>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -250,6 +473,172 @@ export default function ShipmentDonorPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Editor login dialog */}
+      <Dialog open={showLogin} onOpenChange={(o) => { if (!o) { setShowLogin(false); setPinInput(''); } }}>
+        <DialogContent className="max-w-sm" data-testid="ship-donor-login-dialog">
+          <DialogHeader>
+            <DialogTitle>Editor sign-in</DialogTitle>
+            <DialogDescription className="text-xs">
+              Enter the PIN your admin shared with you. You&apos;ll be able to edit items, pallets, and container settings for this shipment for 12 hours.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <div className="space-y-1"><Label className="text-xs">Shipment PIN</Label>
+              <Input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)}
+                placeholder="••••••••" autoFocus
+                onKeyDown={e => e.key === 'Enter' && submitLogin()}
+                data-testid="ship-donor-pin-input" />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="ghost" className="flex-1" onClick={() => { setShowLogin(false); setPinInput(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={submitLogin} disabled={loginBusy || !pinInput.trim()} data-testid="ship-donor-pin-submit">
+                {loginBusy ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Item editor (editor-only) */}
+      <Dialog open={!!editingItem} onOpenChange={(o) => { if (!o) setEditingItem(null); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="ship-donor-item-dialog">
+          <DialogHeader>
+            <DialogTitle>{editingItem?.id ? `Edit — ${editingItem?.name}` : 'New item'}</DialogTitle>
+          </DialogHeader>
+          {editingItem && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1"><Label className="text-xs">Name *</Label>
+                <Input value={editingItem.name || ''} onChange={e => setEditingItem({ ...editingItem, name: e.target.value })} data-testid="ship-donor-item-name" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Category</Label>
+                  <Input value={editingItem.category || ''} onChange={e => setEditingItem({ ...editingItem, category: e.target.value })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Priority</Label>
+                  <Select value={editingItem.priority || 'normal'} onValueChange={v => setEditingItem({ ...editingItem, priority: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{['urgent', 'high', 'normal', 'low'].map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Qty needed</Label>
+                  <Input type="number" value={editingItem.qty_needed || 1} onChange={e => setEditingItem({ ...editingItem, qty_needed: parseInt(e.target.value) || 1 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Qty acquired</Label>
+                  <Input type="number" value={editingItem.qty_acquired || 0} onChange={e => setEditingItem({ ...editingItem, qty_acquired: parseInt(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Weight (kg/unit)</Label>
+                  <Input type="number" step="0.01" value={editingItem.weight_kg || 0} onChange={e => setEditingItem({ ...editingItem, weight_kg: parseFloat(e.target.value) || 0 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Value ($/unit)</Label>
+                  <Input type="number" step="0.01" value={editingItem.value_usd || 0} onChange={e => setEditingItem({ ...editingItem, value_usd: parseFloat(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Dims (cm) L × W × H</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Input type="number" value={editingItem.dims_cm?.length || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, length: parseFloat(e.target.value) || 0 } })} />
+                  <Input type="number" value={editingItem.dims_cm?.width || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, width: parseFloat(e.target.value) || 0 } })} />
+                  <Input type="number" value={editingItem.dims_cm?.height || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, height: parseFloat(e.target.value) || 0 } })} />
+                </div>
+              </div>
+              {(data.pallets || []).length > 0 && (
+                <div className="space-y-1"><Label className="text-xs">Pallet</Label>
+                  <Select value={editingItem.pallet_id || 'none'} onValueChange={v => setEditingItem({ ...editingItem, pallet_id: v === 'none' ? null : v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— Unassigned (loose) —</SelectItem>
+                      {(data.pallets || []).map(p => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="space-y-1"><Label className="text-xs">Notes</Label>
+                <Textarea rows={2} value={editingItem.notes || ''} onChange={e => setEditingItem({ ...editingItem, notes: e.target.value })} />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button variant="ghost" className="flex-1" onClick={() => setEditingItem(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={saveItemEdit} data-testid="ship-donor-item-save">Save</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pallet editor (editor-only) */}
+      <Dialog open={!!editingPallet} onOpenChange={(o) => { if (!o) setEditingPallet(null); }}>
+        <DialogContent className="max-w-md" data-testid="ship-donor-pallet-dialog">
+          <DialogHeader>
+            <DialogTitle>{editingPallet?.id ? 'Edit pallet' : 'New pallet'}</DialogTitle>
+          </DialogHeader>
+          {editingPallet && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1"><Label className="text-xs">Label *</Label>
+                <Input value={editingPallet.label || ''} onChange={e => setEditingPallet({ ...editingPallet, label: e.target.value })} data-testid="ship-donor-pallet-label" />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Footprint (cm) L × W × H</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Input type="number" value={editingPallet.length_cm} onChange={e => setEditingPallet({ ...editingPallet, length_cm: parseFloat(e.target.value) || 0 })} />
+                  <Input type="number" value={editingPallet.width_cm} onChange={e => setEditingPallet({ ...editingPallet, width_cm: parseFloat(e.target.value) || 0 })} />
+                  <Input type="number" value={editingPallet.height_cm} onChange={e => setEditingPallet({ ...editingPallet, height_cm: parseFloat(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Position (X, Y cm from back-left)</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input type="number" value={editingPallet.x_cm} onChange={e => setEditingPallet({ ...editingPallet, x_cm: parseFloat(e.target.value) || 0 })} />
+                  <Input type="number" value={editingPallet.y_cm} onChange={e => setEditingPallet({ ...editingPallet, y_cm: parseFloat(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Color</Label>
+                  <Input type="color" value={editingPallet.color || '#10b981'} onChange={e => setEditingPallet({ ...editingPallet, color: e.target.value })} className="h-9" />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Notes</Label>
+                  <Input value={editingPallet.notes || ''} onChange={e => setEditingPallet({ ...editingPallet, notes: e.target.value })} />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                {editingPallet.id && <Button variant="ghost" className="text-rose-700" onClick={() => { setEditingPallet(null); deletePallet(editingPallet.id); }}><X size={11} className="mr-1" /> Delete</Button>}
+                <Button variant="ghost" className="flex-1" onClick={() => setEditingPallet(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={savePallet} data-testid="ship-donor-pallet-save">Save</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Container dims editor (editor-only) */}
+      <Dialog open={showContainerEdit} onOpenChange={setShowContainerEdit}>
+        <DialogContent className="max-w-md" data-testid="ship-donor-container-dialog">
+          <DialogHeader>
+            <DialogTitle>Container dimensions</DialogTitle>
+            <DialogDescription className="text-xs">Default = 40&apos; high-cube (1203 × 235 × 269 cm).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1"><Label className="text-xs">L (cm)</Label>
+                <Input type="number" value={containerForm.length_cm} onChange={e => setContainerForm({ ...containerForm, length_cm: parseFloat(e.target.value) || 0 })} />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">W (cm)</Label>
+                <Input type="number" value={containerForm.width_cm} onChange={e => setContainerForm({ ...containerForm, width_cm: parseFloat(e.target.value) || 0 })} />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">H (cm)</Label>
+                <Input type="number" value={containerForm.height_cm} onChange={e => setContainerForm({ ...containerForm, height_cm: parseFloat(e.target.value) || 0 })} />
+              </div>
+            </div>
+            <div className="space-y-1"><Label className="text-xs">Max payload (kg)</Label>
+              <Input type="number" value={containerForm.max_payload_kg} onChange={e => setContainerForm({ ...containerForm, max_payload_kg: parseFloat(e.target.value) || 0 })} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShowContainerEdit(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveContainer} data-testid="ship-donor-container-save">Save</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

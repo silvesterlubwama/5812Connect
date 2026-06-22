@@ -19,7 +19,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -48,6 +48,16 @@ export default function ShipmentsAdminPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', dest_country: 'Uganda', target_ship_date: '', description: '' });
   const [itemForm, setItemForm] = useState(emptyItem());
+  // Full-edit dialog for an existing item (dimensions, pallet, position, etc.)
+  const [editingItem, setEditingItem] = useState(null);   // the item object being edited
+  // Pallet manager dialog (size, label, position)
+  const [editingPallet, setEditingPallet] = useState(null); // null|{} (new)| existing pallet
+  // Container-dims editor
+  const [showContainerEdit, setShowContainerEdit] = useState(false);
+  const [containerForm, setContainerForm] = useState({ length_cm: 1203, width_cm: 235, height_cm: 269, max_payload_kg: 26000 });
+  // PIN management
+  const [showPinDialog, setShowPinDialog] = useState(false);
+  const [pinForm, setPinForm] = useState('');
 
   const refreshList = useCallback(async () => {
     setLoading(true);
@@ -186,13 +196,33 @@ export default function ShipmentsAdminPage() {
     URL.revokeObjectURL(url);
   };
 
-  const addPallet = async () => {
-    const label = window.prompt('Pallet label (e.g. "Pallet A — Kitchen")');
-    if (!label) return;
+  const openNewPallet = () => setEditingPallet({
+    label: '', notes: '', length_cm: 120, width_cm: 80, height_cm: 150, x_cm: 0, y_cm: 0, color: '',
+  });
+
+  const savePallet = async () => {
+    if (!editingPallet) return;
+    const payload = {
+      label: editingPallet.label,
+      notes: editingPallet.notes,
+      length_cm: Number(editingPallet.length_cm) || 120,
+      width_cm: Number(editingPallet.width_cm) || 80,
+      height_cm: Number(editingPallet.height_cm) || 150,
+      x_cm: Number(editingPallet.x_cm) || 0,
+      y_cm: Number(editingPallet.y_cm) || 0,
+      color: editingPallet.color || '',
+    };
     try {
-      await api.post(`/shipments/${selectedId}/pallets`, { label });
+      if (editingPallet.id) {
+        await api.put(`/shipments/${selectedId}/pallets/${editingPallet.id}`, payload);
+        toast.success('Pallet updated');
+      } else {
+        await api.post(`/shipments/${selectedId}/pallets`, payload);
+        toast.success('Pallet added');
+      }
+      setEditingPallet(null);
       await refreshDetail();
-    } catch { toast.error('Failed to add pallet'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
   };
 
   const deletePallet = async (pid) => {
@@ -201,6 +231,79 @@ export default function ShipmentsAdminPage() {
       await api.delete(`/shipments/${selectedId}/pallets/${pid}`);
       await refreshDetail();
     } catch { toast.error('Failed'); }
+  };
+
+  // Container dims editor
+  const openContainerEdit = () => {
+    const c = selected?.container_dims_cm || {};
+    setContainerForm({
+      length_cm: c.length_cm || 1203,
+      width_cm: c.width_cm || 235,
+      height_cm: c.height_cm || 269,
+      max_payload_kg: c.max_payload_kg || selected?.max_payload_kg || 26000,
+    });
+    setShowContainerEdit(true);
+  };
+  const saveContainer = async () => {
+    try {
+      await api.put(`/shipments/${selectedId}`, {
+        container_dims_cm: {
+          length_cm: Number(containerForm.length_cm),
+          width_cm: Number(containerForm.width_cm),
+          height_cm: Number(containerForm.height_cm),
+          max_payload_kg: Number(containerForm.max_payload_kg),
+        },
+        max_payload_kg: Number(containerForm.max_payload_kg),
+      });
+      toast.success('Container dimensions saved');
+      setShowContainerEdit(false);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+  };
+
+  // Edit-PIN management
+  const savePin = async () => {
+    try {
+      const r = await api.post(`/shipments/${selectedId}/set-pin`, { pin: pinForm.trim() });
+      toast.success(r.data.set ? 'PIN set — share it with trusted editors' : 'PIN cleared');
+      setShowPinDialog(false);
+      setPinForm('');
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'PIN update failed'); }
+  };
+
+  // Open full-edit dialog for an item
+  const openItemEdit = (item) => setEditingItem({
+    ...item,
+    dims_cm: item.dims_cm || { length: 0, width: 0, height: 0 },
+    x_cm: item.x_cm || 0, y_cm: item.y_cm || 0, z_cm: item.z_cm || 0,
+  });
+  const saveItemEdit = async () => {
+    if (!editingItem) return;
+    try {
+      await api.put(`/shipments/${selectedId}/items/${editingItem.id}`, {
+        name: editingItem.name,
+        category: editingItem.category,
+        priority: editingItem.priority,
+        qty_needed: Number(editingItem.qty_needed) || 1,
+        qty_acquired: Number(editingItem.qty_acquired) || 0,
+        weight_kg: Number(editingItem.weight_kg) || 0,
+        value_usd: Number(editingItem.value_usd) || 0,
+        dims_cm: {
+          length: Number(editingItem.dims_cm?.length) || 0,
+          width: Number(editingItem.dims_cm?.width) || 0,
+          height: Number(editingItem.dims_cm?.height) || 0,
+        },
+        pallet_id: editingItem.pallet_id || null,
+        x_cm: Number(editingItem.x_cm) || 0,
+        y_cm: Number(editingItem.y_cm) || 0,
+        z_cm: Number(editingItem.z_cm) || 0,
+        notes: editingItem.notes || '',
+      });
+      toast.success('Item updated');
+      setEditingItem(null);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
   };
 
   const runAiPacking = async () => {
@@ -375,6 +478,12 @@ export default function ShipmentsAdminPage() {
               <Button size="sm" variant="ghost" onClick={rotateToken} title="Invalidate current link + issue a new one">
                 <RefreshCw size={11} />
               </Button>
+              <Button size="sm" variant="outline" onClick={openContainerEdit} title="Edit container dimensions" data-testid="ship-edit-container">
+                <Ruler size={11} className="mr-1" /> Container
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => { setPinForm(''); setShowPinDialog(true); }} title="Set / change shipment edit PIN" data-testid="ship-edit-pin">
+                <KeyRound size={11} className="mr-1" /> {selected?.access_pin_hash ? 'PIN set' : 'Set PIN'}
+              </Button>
             </div>
           </div>
 
@@ -398,7 +507,7 @@ export default function ShipmentsAdminPage() {
       <div>
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold flex items-center gap-1"><Layers size={11} /> Pallets ({(selected.pallets || []).length})</p>
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={addPallet} data-testid="ship-add-pallet"><Plus size={10} className="mr-1" /> Pallet</Button>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={openNewPallet} data-testid="ship-add-pallet"><Plus size={10} className="mr-1" /> Pallet</Button>
         </div>
         <div className="flex gap-2 flex-wrap" data-testid="ship-pallets">
           {(selected.pallets || []).length === 0 ? (
@@ -407,10 +516,14 @@ export default function ShipmentsAdminPage() {
             const palletItems = (selected.items || []).filter(i => i.pallet_id === p.id);
             const w = palletItems.reduce((s, i) => s + (Number(i.weight_kg) || 0) * (Number(i.qty_acquired) || 0), 0);
             return (
-              <div key={p.id} className="px-3 py-1.5 rounded border text-xs flex items-center gap-2" data-testid={`ship-pallet-${p.id}`}>
+              <div key={p.id} className="px-3 py-1.5 rounded border text-xs flex items-center gap-2" data-testid={`ship-pallet-${p.id}`} style={p.color ? { borderLeft: `4px solid ${p.color}` } : {}}>
                 <span className="font-medium">{p.label}</span>
-                <span className="text-muted-foreground">· {palletItems.length} items · {w.toFixed(0)} kg</span>
-                <button onClick={() => deletePallet(p.id)} className="text-rose-600 hover:text-rose-800" title="Delete"><Trash2 size={10} /></button>
+                <span className="text-muted-foreground">
+                  · {palletItems.length} items · {w.toFixed(0)} kg
+                  {(p.length_cm && p.width_cm) ? ` · ${p.length_cm}×${p.width_cm}×${p.height_cm || 0} cm` : ''}
+                </span>
+                <button onClick={() => setEditingPallet({ ...p })} className="text-primary hover:text-primary/80" title="Edit pallet" data-testid={`ship-pallet-edit-${p.id}`}><Pencil size={10} /></button>
+                <button onClick={() => deletePallet(p.id)} className="text-rose-600 hover:text-rose-800" title="Delete" data-testid={`ship-pallet-del-${p.id}`}><Trash2 size={10} /></button>
               </div>
             );
           })}
@@ -476,6 +589,10 @@ export default function ShipmentsAdminPage() {
                     )}
                     <Input type="number" className="h-7 w-20 text-[11px]" value={it.qty_acquired || 0}
                       onChange={e => updateItem(it.id, { qty_acquired: parseInt(e.target.value) || 0 })} title="Manual adjustment of acquired qty" />
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Edit details (dimensions, pallet, position…)"
+                      onClick={() => openItemEdit(it)} data-testid={`ship-item-edit-${it.id}`}>
+                      <Pencil size={11} />
+                    </Button>
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="AI estimate weight + size from product URL"
                       onClick={() => setLinkUrlFor({ itemId: it.id, url: it.source_url || '' })}
                       data-testid={`ship-item-link-${it.id}`}>
@@ -493,7 +610,12 @@ export default function ShipmentsAdminPage() {
       </div>
 
       {/* Container visualization — 2D / 3D */}
-      <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} />
+      <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} container={selected.container_dims_cm} editable onPalletMove={async (pid, x, y) => {
+        try {
+          await api.put(`/shipments/${selectedId}/pallets/${pid}`, { x_cm: Math.round(x), y_cm: Math.round(y) });
+          await refreshDetail();
+        } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
+      }} />
 
       {/* AI Packing scenario */}
       <Card className="rounded-xl border-primary/20">
@@ -543,6 +665,186 @@ export default function ShipmentsAdminPage() {
           }} data-testid="ship-delete-btn">Delete shipment</Button>
         </CardContent>
       </Card>
+
+      {/* Edit item dialog (full form: dimensions, pallet, position, notes) */}
+      <Dialog open={!!editingItem} onOpenChange={(o) => { if (!o) setEditingItem(null); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="ship-edit-item-dialog">
+          <DialogHeader><DialogTitle>Edit item — {editingItem?.name}</DialogTitle></DialogHeader>
+          {editingItem && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1"><Label className="text-xs">Name</Label>
+                <Input value={editingItem.name} onChange={e => setEditingItem({ ...editingItem, name: e.target.value })} data-testid="ship-edit-item-name" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Category</Label>
+                  <Input value={editingItem.category || ''} onChange={e => setEditingItem({ ...editingItem, category: e.target.value })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Priority</Label>
+                  <Select value={editingItem.priority || 'normal'} onValueChange={v => setEditingItem({ ...editingItem, priority: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['urgent', 'high', 'normal', 'low'].map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Qty needed</Label>
+                  <Input type="number" value={editingItem.qty_needed || 1} onChange={e => setEditingItem({ ...editingItem, qty_needed: parseInt(e.target.value) || 1 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Qty acquired</Label>
+                  <Input type="number" value={editingItem.qty_acquired || 0} onChange={e => setEditingItem({ ...editingItem, qty_acquired: parseInt(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Weight per unit (kg)</Label>
+                  <Input type="number" step="0.01" value={editingItem.weight_kg || 0} onChange={e => setEditingItem({ ...editingItem, weight_kg: parseFloat(e.target.value) || 0 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Value per unit (USD)</Label>
+                  <Input type="number" step="0.01" value={editingItem.value_usd || 0} onChange={e => setEditingItem({ ...editingItem, value_usd: parseFloat(e.target.value) || 0 })} />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Dimensions (cm) — L × W × H</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Input type="number" placeholder="length" value={editingItem.dims_cm?.length || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, length: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-length" />
+                  <Input type="number" placeholder="width" value={editingItem.dims_cm?.width || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, width: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-width" />
+                  <Input type="number" placeholder="height" value={editingItem.dims_cm?.height || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, height: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-height" />
+                </div>
+              </div>
+              {(selected.pallets || []).length > 0 && (
+                <div className="space-y-1"><Label className="text-xs">Pallet placement</Label>
+                  <Select value={editingItem.pallet_id || 'none'} onValueChange={v => setEditingItem({ ...editingItem, pallet_id: v === 'none' ? null : v })}>
+                    <SelectTrigger data-testid="ship-edit-item-pallet"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— Unassigned (loose) —</SelectItem>
+                      {(selected.pallets || []).map(p => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {editingItem.pallet_id && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Position within pallet (cm) — X · Y · Z</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Input type="number" value={editingItem.x_cm || 0} onChange={e => setEditingItem({ ...editingItem, x_cm: parseFloat(e.target.value) || 0 })} />
+                    <Input type="number" value={editingItem.y_cm || 0} onChange={e => setEditingItem({ ...editingItem, y_cm: parseFloat(e.target.value) || 0 })} />
+                    <Input type="number" value={editingItem.z_cm || 0} onChange={e => setEditingItem({ ...editingItem, z_cm: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                </div>
+              )}
+              <div className="space-y-1"><Label className="text-xs">Notes</Label>
+                <Textarea rows={2} value={editingItem.notes || ''} onChange={e => setEditingItem({ ...editingItem, notes: e.target.value })} />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button variant="ghost" className="flex-1" onClick={() => setEditingItem(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={saveItemEdit} data-testid="ship-edit-item-save">Save changes</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pallet manager dialog (add / edit with size + position) */}
+      <Dialog open={!!editingPallet} onOpenChange={(o) => { if (!o) setEditingPallet(null); }}>
+        <DialogContent className="max-w-md" data-testid="ship-pallet-dialog">
+          <DialogHeader>
+            <DialogTitle>{editingPallet?.id ? 'Edit pallet' : 'New pallet'}</DialogTitle>
+            <DialogDescription className="text-xs">
+              Set pallet footprint + position inside the container so the visualizer can lay it out to scale.
+              <br />Standard EUR pallet: 120 × 80 cm.
+            </DialogDescription>
+          </DialogHeader>
+          {editingPallet && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1"><Label className="text-xs">Label *</Label>
+                <Input value={editingPallet.label || ''} onChange={e => setEditingPallet({ ...editingPallet, label: e.target.value })} placeholder="Pallet A — Kitchen" data-testid="ship-pallet-label" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Footprint (cm) — L × W × stack height</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  <Input type="number" value={editingPallet.length_cm} onChange={e => setEditingPallet({ ...editingPallet, length_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-pallet-length" />
+                  <Input type="number" value={editingPallet.width_cm} onChange={e => setEditingPallet({ ...editingPallet, width_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-pallet-width" />
+                  <Input type="number" value={editingPallet.height_cm} onChange={e => setEditingPallet({ ...editingPallet, height_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-pallet-height" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Position in container (cm from back-left)</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input type="number" value={editingPallet.x_cm} onChange={e => setEditingPallet({ ...editingPallet, x_cm: parseFloat(e.target.value) || 0 })} placeholder="X (along length)" />
+                  <Input type="number" value={editingPallet.y_cm} onChange={e => setEditingPallet({ ...editingPallet, y_cm: parseFloat(e.target.value) || 0 })} placeholder="Y (across width)" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Color tag</Label>
+                  <Input type="color" value={editingPallet.color || '#10b981'} onChange={e => setEditingPallet({ ...editingPallet, color: e.target.value })} className="h-9" />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Notes</Label>
+                  <Input value={editingPallet.notes || ''} onChange={e => setEditingPallet({ ...editingPallet, notes: e.target.value })} placeholder="Kitchen supplies" />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button variant="ghost" className="flex-1" onClick={() => setEditingPallet(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={savePallet} data-testid="ship-pallet-save">Save pallet</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Container dimensions editor */}
+      <Dialog open={showContainerEdit} onOpenChange={setShowContainerEdit}>
+        <DialogContent className="max-w-md" data-testid="ship-container-dialog">
+          <DialogHeader>
+            <DialogTitle>Container dimensions</DialogTitle>
+            <DialogDescription className="text-xs">
+              Defaults match a 40&apos; high-cube (1203 × 235 × 269 cm interior, 26,000 kg payload). Override for 20&apos;, refrigerated, or partial-load shipments.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1"><Label className="text-xs">Length (cm)</Label>
+                <Input type="number" value={containerForm.length_cm} onChange={e => setContainerForm({ ...containerForm, length_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-container-length" />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Width (cm)</Label>
+                <Input type="number" value={containerForm.width_cm} onChange={e => setContainerForm({ ...containerForm, width_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-container-width" />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Height (cm)</Label>
+                <Input type="number" value={containerForm.height_cm} onChange={e => setContainerForm({ ...containerForm, height_cm: parseFloat(e.target.value) || 0 })} data-testid="ship-container-height" />
+              </div>
+            </div>
+            <div className="space-y-1"><Label className="text-xs">Max payload (kg)</Label>
+              <Input type="number" value={containerForm.max_payload_kg} onChange={e => setContainerForm({ ...containerForm, max_payload_kg: parseFloat(e.target.value) || 0 })} data-testid="ship-container-payload" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" className="flex-1" onClick={() => setShowContainerEdit(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveContainer} data-testid="ship-container-save">Save dimensions</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit-PIN dialog */}
+      <Dialog open={showPinDialog} onOpenChange={(o) => { if (!o) { setShowPinDialog(false); setPinForm(''); } }}>
+        <DialogContent className="max-w-md" data-testid="ship-pin-dialog">
+          <DialogHeader>
+            <DialogTitle>Shipment edit PIN</DialogTitle>
+            <DialogDescription className="text-xs">
+              Share this PIN with trusted volunteers (warehouse leads, partner orgs). They&apos;ll log in via the donor page and gain <strong>edit access to this shipment only</strong>. Session lasts 12h. Leave blank to clear.
+              {selected?.access_pin_hash && <span className="block mt-1 text-emerald-700">A PIN is currently active.</span>}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <div className="space-y-1"><Label className="text-xs">New PIN (4-32 chars, leave blank to clear)</Label>
+              <Input type="text" value={pinForm} onChange={e => setPinForm(e.target.value)} placeholder="e.g. warehouse-2026" data-testid="ship-pin-input" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" className="flex-1" onClick={() => { setShowPinDialog(false); setPinForm(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={savePin} data-testid="ship-pin-save">{pinForm.trim() ? 'Set / update PIN' : 'Clear PIN'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Add item dialog */}
       <Dialog open={showAddItem} onOpenChange={setShowAddItem}>

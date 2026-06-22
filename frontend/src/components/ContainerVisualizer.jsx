@@ -22,11 +22,20 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Box, RotateCw, Grid3x3 } from 'lucide-react';
 
-// 40' high-cube interior in cm — matches backend CONTAINER_40FT_HC
+// 40' high-cube interior in cm — matches backend CONTAINER_40FT_HC. Default,
+// overridable per-shipment via the `container` prop on the visualizer.
 const CONTAINER = { length: 1203, width: 235, height: 269 };
 
-/** Compute the layout from shipment data — returns { boxes:[], total_volume_m3, fill_pct, scenes:'ok'|'overflow' }. */
-function computeLayout(items, pallets) {
+/** Compute the layout from shipment data — returns { boxes:[], total_volume_m3, fill_pct, scenes:'ok'|'overflow' }.
+ *  If `pallets` provide explicit `x_cm`/`y_cm` + dims, they are used verbatim
+ *  (admin-positioned). Otherwise we fall back to greedy heaviest-first packing.
+ */
+function computeLayout(items, pallets, containerOverride) {
+  const CONT = containerOverride && containerOverride.length_cm ? {
+    length: containerOverride.length_cm,
+    width: containerOverride.width_cm,
+    height: containerOverride.height_cm,
+  } : CONTAINER;
   // Group items by pallet (or null for "Loose")
   const groups = new Map();
   items.forEach(it => {
@@ -43,18 +52,15 @@ function computeLayout(items, pallets) {
     const vol = (Number(d.length) || 0) * (Number(d.width) || 0) * (Number(d.height) || 0) * acquired;
     g.total_volume += vol;
   });
-  if (groups.size === 0) return { boxes: [], total_volume_m3: 0, fill_pct: 0, container: CONTAINER };
+  if (groups.size === 0) return { boxes: [], total_volume_m3: 0, fill_pct: 0, container: CONT };
 
-  // Standardize pallet footprint: 120 x 100 cm. Height grows with item volume.
-  // For items without dims, fall back to 40 cm height per pallet (typical box stack).
+  // Standardize pallet footprint when no explicit dims: 120 x 100 cm.
   const PALLET_L = 120;
   const PALLET_W = 100;
 
   // Sort heaviest-first so heavy pallets pack against the back wall
   const sorted = Array.from(groups.values()).sort((a, b) => b.total_weight - a.total_weight);
 
-  // Bin-pack pallets into the container floor — 2 columns × 10 rows = 20 slots
-  // (1203 cm / 120 cm ≈ 10 rows, 235 cm / 100 cm = 2 columns + leftover walkway).
   const boxes = [];
   const palletMeta = new Map((pallets || []).map(p => [p.id, p]));
   let row = 0;
@@ -62,36 +68,47 @@ function computeLayout(items, pallets) {
   const totalVolume = sorted.reduce((s, g) => s + g.total_volume, 0);
   for (const g of sorted) {
     const meta = palletMeta.get(g.id) || { label: g.id === '_loose' ? 'Loose items' : g.id };
-    // Height proportional to relative volume; floor at 40 cm so loose pallets are visible
-    const baseHeight = g.total_volume > 0
+    // Use explicit pallet dims when admin set them, otherwise estimate
+    const L = Number(meta.length_cm) || PALLET_L;
+    const W = Number(meta.width_cm) || PALLET_W;
+    // Use explicit pallet height when set; otherwise scale by relative volume
+    const baseHeight = meta.height_cm ? Number(meta.height_cm) : (g.total_volume > 0
       ? Math.max(40, Math.min(220, (g.total_volume / Math.max(totalVolume, 1)) * 1200))
-      : 40 + Math.min(120, g.items.length * 5);
+      : 40 + Math.min(120, g.items.length * 5));
+    // Use explicit x_cm/y_cm if admin positioned; otherwise greedy grid
+    let x, y;
+    if (meta.x_cm != null && meta.y_cm != null && (meta.x_cm || meta.y_cm || meta.id === '_loose')) {
+      x = Math.max(0, Math.min(CONT.length - L, Number(meta.x_cm) || 0));
+      y = Math.max(0, Math.min(CONT.width - W, Number(meta.y_cm) || 0));
+    } else {
+      x = row * PALLET_L;
+      y = col * PALLET_W;
+      col++;
+      if (col >= 2) { col = 0; row++; }
+    }
     boxes.push({
       id: g.id,
       label: meta.label,
-      x: row * PALLET_L,
-      y: col * PALLET_W,
-      z: 0,
-      length: PALLET_L,
-      width: PALLET_W,
+      x, y, z: 0,
+      length: L,
+      width: W,
       height: baseHeight,
       weight_kg: Math.round(g.total_weight),
       item_count: g.items.length,
-      color: g.id === '_loose' ? '#94a3b8' : palletColor(g.id),
+      color: meta.color || (g.id === '_loose' ? '#94a3b8' : palletColor(g.id)),
+      draggable: g.id !== '_loose',  // loose group isn't a real pallet
     });
-    col++;
-    if (col >= 2) { col = 0; row++; }
-    if (row >= 10) break;  // out of floor space — overflow indicator below
+    if (row >= 10 && !meta.x_cm) break;  // out of floor space — overflow indicator below
   }
   const overflow = boxes.length < sorted.length;
   const totalVolumeM3 = totalVolume / 1e6;
-  const containerVolumeM3 = (CONTAINER.length * CONTAINER.width * CONTAINER.height) / 1e6;
+  const containerVolumeM3 = (CONT.length * CONT.width * CONT.height) / 1e6;
   return {
     boxes,
     total_volume_m3: Number(totalVolumeM3.toFixed(1)),
     container_volume_m3: Number(containerVolumeM3.toFixed(1)),
     fill_pct: Math.min(100, Math.round((totalVolumeM3 / containerVolumeM3) * 100)),
-    container: CONTAINER,
+    container: CONT,
     overflow,
     overflow_count: sorted.length - boxes.length,
   };
@@ -107,9 +124,12 @@ function palletColor(id) {
 }
 
 // ───────────────────────────────────────────────────────────────
-// 2D — top-down SVG floor plan
+// 2D — top-down SVG floor plan (with optional drag-to-reposition pallets)
 // ───────────────────────────────────────────────────────────────
-function FloorPlan2D({ layout }) {
+function FloorPlan2D({ layout, editable, onPalletMove }) {
+  const svgRef = React.useRef(null);
+  const [draggingId, setDraggingId] = React.useState(null);
+  const [dragGhost, setDragGhost] = React.useState(null);   // {id,x,y}
   if (!layout || layout.boxes.length === 0) return null;
   const { container, boxes } = layout;
   const PAD = 16;
@@ -117,8 +137,45 @@ function FloorPlan2D({ layout }) {
   const scale = (targetWidth - PAD * 2) / container.length;
   const w = container.length * scale + PAD * 2;
   const h = container.width * scale + PAD * 2;
+
+  const beginDrag = (e, b) => {
+    if (!editable || !b.draggable) return;
+    e.preventDefault();
+    setDraggingId(b.id);
+    setDragGhost({ id: b.id, x: b.x, y: b.y, length: b.length, width: b.width, color: b.color });
+  };
+  const onPointerMove = (e) => {
+    if (!draggingId || !svgRef.current) return;
+    const pt = svgRef.current.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const ctm = svgRef.current.getScreenCTM();
+    if (!ctm) return;
+    const loc = pt.matrixTransform(ctm.inverse());
+    const cx = (loc.x - PAD) / scale - (dragGhost?.length || 0) / 2;
+    const cy = (loc.y - PAD) / scale - (dragGhost?.width || 0) / 2;
+    const x = Math.max(0, Math.min(container.length - (dragGhost?.length || 0), cx));
+    const y = Math.max(0, Math.min(container.width - (dragGhost?.width || 0), cy));
+    setDragGhost(g => g ? { ...g, x, y } : g);
+  };
+  const endDrag = async () => {
+    if (!draggingId || !dragGhost) { setDraggingId(null); return; }
+    const id = draggingId; const x = dragGhost.x; const y = dragGhost.y;
+    setDraggingId(null); setDragGhost(null);
+    if (onPalletMove) await onPalletMove(id, x, y);
+  };
+
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" role="img" aria-label="2D floor plan of container packing">
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${w} ${h}`}
+      className="w-full"
+      role="img"
+      aria-label="2D floor plan of container packing"
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerLeave={endDrag}
+      style={{ cursor: draggingId ? 'grabbing' : 'default', userSelect: 'none', touchAction: 'none' }}
+    >
       {/* Container outline */}
       <rect x={PAD} y={PAD} width={container.length * scale} height={container.width * scale}
         fill="#f8fafc" stroke="#94a3b8" strokeWidth="2" />
@@ -126,26 +183,31 @@ function FloorPlan2D({ layout }) {
       <text x={w - PAD - 4} y={PAD - 4} fontSize="9" fill="#64748b" textAnchor="end">← Doors (load last)</text>
       <text x={PAD + 2} y={PAD - 4} fontSize="9" fill="#64748b">Back wall (heavy first) →</text>
       {/* Pallets */}
-      {boxes.map(b => (
-        <g key={b.id}>
-          <rect
-            x={PAD + b.x * scale} y={PAD + b.y * scale}
-            width={b.length * scale} height={b.width * scale}
-            fill={b.color} fillOpacity="0.75" stroke="#1e293b" strokeWidth="1"
-          />
-          <text
-            x={PAD + (b.x + b.length / 2) * scale}
-            y={PAD + (b.y + b.width / 2) * scale}
-            fontSize={Math.max(8, scale * 8)} fill="#fff" textAnchor="middle" dominantBaseline="middle"
-            style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.35)', strokeWidth: 2 }}
-          >{b.label.length > 14 ? b.label.slice(0, 12) + '…' : b.label}</text>
-          <text
-            x={PAD + (b.x + b.length / 2) * scale}
-            y={PAD + (b.y + b.width / 2) * scale + Math.max(10, scale * 9)}
-            fontSize={Math.max(7, scale * 6)} fill="#fff" textAnchor="middle" opacity="0.9"
-          >{b.weight_kg} kg</text>
-        </g>
-      ))}
+      {boxes.map(b => {
+        const isDragging = draggingId === b.id;
+        const px = isDragging ? dragGhost.x : b.x;
+        const py = isDragging ? dragGhost.y : b.y;
+        return (
+          <g key={b.id} onPointerDown={(e) => beginDrag(e, b)} style={{ cursor: (editable && b.draggable) ? 'grab' : 'default' }} data-testid={`viz-pallet-${b.id}`}>
+            <rect
+              x={PAD + px * scale} y={PAD + py * scale}
+              width={b.length * scale} height={b.width * scale}
+              fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75} stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
+            />
+            <text
+              x={PAD + (px + b.length / 2) * scale}
+              y={PAD + (py + b.width / 2) * scale}
+              fontSize={Math.max(8, scale * 8)} fill="#fff" textAnchor="middle" dominantBaseline="middle"
+              style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.35)', strokeWidth: 2 }}
+            >{(b.label || '').length > 14 ? b.label.slice(0, 12) + '…' : b.label}</text>
+            <text
+              x={PAD + (px + b.length / 2) * scale}
+              y={PAD + (py + b.width / 2) * scale + Math.max(10, scale * 9)}
+              fontSize={Math.max(7, scale * 6)} fill="#fff" textAnchor="middle" opacity="0.9"
+            >{b.weight_kg} kg</text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -239,9 +301,9 @@ const ThreeCanvas = React.lazy(async () => {
 // ───────────────────────────────────────────────────────────────
 // Public component
 // ───────────────────────────────────────────────────────────────
-export default function ContainerVisualizer({ items = [], pallets = [], defaultMode = '2d' }) {
+export default function ContainerVisualizer({ items = [], pallets = [], container, editable = false, onPalletMove, defaultMode = '2d' }) {
   const [mode, setMode] = useState(defaultMode);
-  const layout = useMemo(() => computeLayout(items, pallets), [items, pallets]);
+  const layout = useMemo(() => computeLayout(items, pallets, container), [items, pallets, container]);
 
   if (!layout.boxes.length) {
     return (
@@ -283,7 +345,10 @@ export default function ContainerVisualizer({ items = [], pallets = [], defaultM
           </div>
         </div>
 
-        {mode === '2d' && <FloorPlan2D layout={layout} />}
+        {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} />}
+        {mode === '2d' && editable && (
+          <p className="text-[10px] text-muted-foreground text-center -mt-1">Tip: click + drag pallets to reposition. Container floor is {layout.container.length} × {layout.container.width} cm.</p>
+        )}
 
         {mode === '3d' && (
           <Suspense fallback={<div className="text-xs text-muted-foreground py-8 text-center">Loading 3D…</div>}>

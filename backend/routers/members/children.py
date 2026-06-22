@@ -420,32 +420,45 @@ async def move_child_to_guest(child_id: str, current_user: dict = Depends(requir
 
 # ========== TYPED FILE-CHECKLIST DOCUMENTS ==========
 
-# Canonical doc_types — matches the "Items in a child's file" checklist 1:1.
+# Canonical doc_types — matches the "Items in a child's file" master list 1:1.
+# Order matches the customer's "LIST OF ITEMS IN A CHILD'S FILE" reference doc.
+# Two entries (child_photo, welfare_review) are *synthetic* — their satisfaction
+# is derived from the child profile (profile photo) and the social_reviews
+# collection respectively, NOT from uploaded scans. Their `synthetic` flag tells
+# the FE to hide the Upload button and instead surface a "Go to source" link.
 CHILD_FILE_DOC_TYPES = [
+    {"key": "child_photo", "label": "Child's Photograph", "synthetic": True, "source": "profile_photo"},
     {"key": "ovcmis_form_008", "label": "OVCMIS Form 008 — Child Enrollment & Monitoring Card"},
     {"key": "sponsorship_assessment", "label": "58:12 Child Sponsorship Assessment"},
-    {"key": "lc1_introduction_letter", "label": "LC1 Introduction Letter"},
-    {"key": "school_report", "label": "Previous / Current School Report"},
+    {"key": "school_report", "label": "Previous / Current School Reports"},
     {"key": "guardian_national_id", "label": "Parent / Guardian National ID"},
-    {"key": "family_consent_letter", "label": "Family Consent Letter (58:12 policies)"},
+    {"key": "lc1_introduction_letter", "label": "LC1 Introduction Letter"},
     {"key": "medical_assessment", "label": "Medical Assessment Form (scan)"},
-    {"key": "exit_form", "label": "Exit Form"},
+    {"key": "family_consent_letter", "label": "Family Consent Letter (58:12 policies)"},
+    {"key": "welfare_review", "label": "58:12 Child Welfare Review & Visit Forms", "synthetic": True, "source": "social_reviews"},
+    {"key": "school_document", "label": "Other School Documents (admission, transfer, etc.)"},
     {"key": "sponsor_letter_in", "label": "Letter from Sponsor"},
     {"key": "sponsor_letter_out", "label": "Letter to Sponsor"},
+    {"key": "exit_form", "label": "Exit Form"},
     {"key": "other", "label": "Other document"},
 ]
 
 
 @router.get("/children/{child_id}/file-doc-types")
 async def get_doc_types(child_id: str, current_user: dict = Depends(require_staff)):
-    """Doc-type catalogue + per-type count for the Documents tab UI."""
-    child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1})
+    """Doc-type catalogue + per-type count for the Documents tab UI.
+    Synthetic items derive their count from the child record / reviews."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
     counts = {}
     async for ex in db.child_extras.find({"child_id": child_id, "kind": "file_doc"}, {"_id": 0, "doc_type": 1}):
         counts[ex.get("doc_type") or "other"] = counts.get(ex.get("doc_type") or "other", 0) + 1
-    return [{**t, "count": counts.get(t["key"], 0)} for t in CHILD_FILE_DOC_TYPES]
+    # Derive synthetic counts
+    photo_present = 1 if (child.get("photo_url") or child.get("profile_photo_url")) else 0
+    review_count = await db.social_review_forms.count_documents({"child_id": child_id})
+    derived = {"child_photo": photo_present, "welfare_review": review_count}
+    return [{**t, "count": derived.get(t["key"], counts.get(t["key"], 0))} for t in CHILD_FILE_DOC_TYPES]
 
 
 @router.post("/children/{child_id}/file-docs")
