@@ -1537,6 +1537,17 @@ export default function ProductsPage() {
         onOpenChange={(open) => { if (!open) setBarcodePrintProduct(null); }}
         product={barcodePrintProduct}
         currency={barcodePrintProduct?.currency || 'UGX'}
+        onProductUpdated={async () => {
+          // Pull the freshly-regenerated barcodes back into state so the in-dialog
+          // preview & next print reflect the new barcodes immediately.
+          try {
+            const r = await productsApi.list();
+            setProducts(r.data || []);
+            const id = barcodePrintProduct?.id;
+            const fresh = (r.data || []).find(p => p.id === id);
+            if (fresh) setBarcodePrintProduct(fresh);
+          } catch { /* ignore */ }
+        }}
       />
 
       {/* POS Barcode Scan Dialog */}

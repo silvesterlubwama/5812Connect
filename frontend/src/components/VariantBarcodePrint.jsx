@@ -4,9 +4,10 @@ import { Button } from './ui/button';
 import { Label } from './ui/label';
 import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Printer } from 'lucide-react';
+import { Printer, Download, RefreshCw } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
-import { escapeHtml as e } from '../utils/htmlEscape';
+import api from '../services/api';
+import { toast } from 'sonner';
 
 const LAYOUTS = [
   { value: 'grid_4x6', label: '4 × 6 grid (24/page, Avery-style)', cols: 4, rows: 6 },
@@ -33,15 +34,61 @@ function BarcodeCanvas({ value, height = 50, width = 1.5 }) {
   return <canvas ref={ref} style={{ display: 'block', maxWidth: '100%' }} />;
 }
 
-export default function VariantBarcodePrint({ open, onOpenChange, product, currency = 'UGX' }) {
+export default function VariantBarcodePrint({ open, onOpenChange, product, currency = 'UGX', onProductUpdated }) {
   const [layout, setLayout] = useState('grid_4x6');
   const [copies, setCopies] = useState(1);
   const [showPrice, setShowPrice] = useState(true);
   const [showName, setShowName] = useState(true);
+  const [regenBusy, setRegenBusy] = useState(false);
 
   const variants = product?.variants || [];
   const cfg = LAYOUTS.find(l => l.value === layout) || LAYOUTS[0];
   const perPage = cfg.cols * cfg.rows;
+
+  // CSV export — variant name, barcode, price, units/pack
+  const exportCsv = () => {
+    if (variants.length === 0) { toast.error('No variants to export'); return; }
+    const header = 'product,variant,barcode,price,currency,stock,units_per_pack,sku';
+    const lines = variants.map(v => {
+      const fields = [
+        product.name || '',
+        v.name || '',
+        v.barcode || '',
+        v.price ?? '',
+        currency,
+        v.stock ?? '',
+        v.units_per_pack ?? 1,
+        v.sku || '',
+      ];
+      return fields.map(f => {
+        const s = String(f).replace(/"/g, '""');
+        return /[",\n]/.test(s) ? `"${s}"` : s;
+      }).join(',');
+    });
+    const csv = [header, ...lines].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (product.name || 'product').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+    a.href = url;
+    a.download = `barcodes-${safeName}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${variants.length} barcode${variants.length === 1 ? '' : 's'}`);
+  };
+
+  // Regenerate ALL barcodes (force=true) — useful after a collision or a printer mis-print.
+  const regenerateAll = async () => {
+    if (!product?.id) { toast.error('Save the product first'); return; }
+    if (!window.confirm(`Regenerate barcodes for all ${variants.length} variants? Old barcodes will be replaced — make sure no live labels are still in use.`)) return;
+    setRegenBusy(true);
+    try {
+      const r = await api.post(`/products/${product.id}/generate-barcodes?force=true`);
+      toast.success(r.data?.message || 'Regenerated');
+      onProductUpdated?.();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Regenerate failed'); }
+    finally { setRegenBusy(false); }
+  };
 
   // Build print list with copies
   const printList = [];
@@ -151,6 +198,14 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
           <Button onClick={handlePrint} className="gap-1.5" disabled={variants.length === 0} data-testid="print-barcodes-btn">
             <Printer size={14} /> Print ({pages.length} page{pages.length === 1 ? '' : 's'})
           </Button>
+          <Button onClick={exportCsv} variant="outline" className="gap-1.5" disabled={variants.length === 0} data-testid="export-barcodes-csv-btn">
+            <Download size={14} /> Export CSV
+          </Button>
+          {product?.id && (
+            <Button onClick={regenerateAll} variant="outline" className="gap-1.5" disabled={variants.length === 0 || regenBusy} data-testid="regenerate-barcodes-btn">
+              <RefreshCw size={14} className={regenBusy ? 'animate-spin' : ''} /> {regenBusy ? 'Regenerating…' : 'Regenerate all'}
+            </Button>
+          )}
         </div>
 
         {variants.length === 0 ? (

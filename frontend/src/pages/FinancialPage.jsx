@@ -102,6 +102,9 @@ export default function FinancialPage() {
   const [transferForm, setTransferForm] = useState({ from_account_id: '', to_account_id: '', amount: '', currency: 'UGX', notes: '' });
   const [showBudget, setShowBudget] = useState(false);
   const [budgetForm, setBudgetForm] = useState({ department: '', period: new Date().toISOString().slice(0, 7), amount: '', category: 'general' });
+  // Rejection dialog state (replaces window.prompt)
+  const [rejectingExpense, setRejectingExpense] = useState(null); // holds the expense being rejected
+  const [rejectReason, setRejectReason] = useState('');
   const [showRevalue, setShowRevalue] = useState(null); // holds the asset being revalued
   const [revalueForm, setRevalueForm] = useState({ current_value: 0, method: 'appreciation', notes: '' });
   const [showStartingBal, setShowStartingBal] = useState(null); // holds the account
@@ -589,10 +592,7 @@ export default function FinancialPage() {
                                   <Button size="sm" variant="ghost" className="h-6 text-xs text-green-700 hover:bg-green-50" data-testid={`inline-approve-${e.id}`} onClick={async () => {
                                     try { await financialApi.approveExpense(e.id, ''); setExpenses(prev => prev.map(x => x.id === e.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
                                   }}>✓ Approve</Button>
-                                  <Button size="sm" variant="ghost" className="h-6 text-xs text-red-700 hover:bg-red-50" data-testid={`inline-reject-${e.id}`} onClick={async () => {
-                                    const reason = window.prompt('Rejection reason (optional):') || '';
-                                    try { await financialApi.rejectExpense(e.id, reason); setExpenses(prev => prev.map(x => x.id === e.id ? { ...x, status: 'rejected' } : x)); toast.success('Rejected'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-                                  }}>✕ Reject</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 text-xs text-red-700 hover:bg-red-50" data-testid={`inline-reject-${e.id}`} onClick={() => { setRejectingExpense(e); setRejectReason(''); }}>✕ Reject</Button>
                                 </>
                               )}
                               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>
@@ -1155,6 +1155,59 @@ export default function FinancialPage() {
               }}>Save</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Expense Rejection Dialog (replaces window.prompt) */}
+      <Dialog open={!!rejectingExpense} onOpenChange={(o) => { if (!o) { setRejectingExpense(null); setRejectReason(''); } }}>
+        <DialogContent className="max-w-md" data-testid="reject-expense-dialog">
+          <DialogHeader>
+            <DialogTitle>Reject expense</DialogTitle>
+          </DialogHeader>
+          {rejectingExpense && (
+            <div className="space-y-3 mt-2">
+              <div className="rounded-lg bg-muted/40 p-3 text-xs space-y-1">
+                <p className="font-semibold text-sm">{rejectingExpense.title}</p>
+                <p className="text-muted-foreground">
+                  {rejectingExpense.currency} {Number(rejectingExpense.amount || 0).toLocaleString()} · {rejectingExpense.category} · {rejectingExpense.date}
+                </p>
+                {rejectingExpense.submitted_by && (
+                  <p className="text-muted-foreground">Submitted by: {rejectingExpense.submitted_by}</p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Rejection reason <span className="text-muted-foreground font-normal">(optional, shown to submitter)</span></Label>
+                <Textarea
+                  rows={3}
+                  value={rejectReason}
+                  onChange={ev => setRejectReason(ev.target.value)}
+                  placeholder="e.g. Missing receipt — please attach and resubmit"
+                  data-testid="reject-expense-reason"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button variant="ghost" className="flex-1" onClick={() => { setRejectingExpense(null); setRejectReason(''); }}>Cancel</Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1"
+                  onClick={async () => {
+                    const id = rejectingExpense.id;
+                    try {
+                      await financialApi.rejectExpense(id, rejectReason);
+                      setExpenses(prev => prev.map(x => x.id === id ? { ...x, status: 'rejected' } : x));
+                      toast.success('Expense rejected');
+                      setRejectingExpense(null);
+                      setRejectReason('');
+                      fetchAll();
+                    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                  }}
+                  data-testid="reject-expense-confirm"
+                >
+                  Reject expense
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

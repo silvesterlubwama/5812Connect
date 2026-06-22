@@ -41,6 +41,10 @@ export default function FundRequestsPanel() {
   const [form, setForm] = useState({ kind: 'reimbursement', amount: '', currency: 'UGX', purpose: '', category: '' });
   const [submitting, setSubmitting] = useState(false);
   const [receiptUploadFor, setReceiptUploadFor] = useState(null);
+  // Mark-paid dialog state (replaces window.prompt)
+  const [markPaidFor, setMarkPaidFor] = useState(null); // holds the request
+  const [markPaidNotes, setMarkPaidNotes] = useState('');
+  const [markPaidBusy, setMarkPaidBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -90,14 +94,22 @@ export default function FundRequestsPanel() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
   };
 
-  const markPaid = async (req) => {
-    const notes = window.prompt(`Mark as paid? This creates a ${req.currency} ${req.amount.toLocaleString()} expense entry.\nOptional notes:`);
-    if (notes === null) return;
+  const markPaid = (req) => {
+    setMarkPaidFor(req);
+    setMarkPaidNotes('');
+  };
+
+  const confirmMarkPaid = async () => {
+    if (!markPaidFor) return;
+    setMarkPaidBusy(true);
     try {
-      await api.post(`/funds/requests/${req.id}/mark-paid`, { notes });
-      toast.success(`Paid → expense created (${req.currency} ${req.amount.toLocaleString()})`);
+      await api.post(`/funds/requests/${markPaidFor.id}/mark-paid`, { notes: markPaidNotes });
+      toast.success(`Paid → expense created (${markPaidFor.currency} ${markPaidFor.amount.toLocaleString()})`);
+      setMarkPaidFor(null);
+      setMarkPaidNotes('');
       await refresh();
     } catch (e) { toast.error(e.response?.data?.detail || 'Mark-paid failed'); }
+    finally { setMarkPaidBusy(false); }
   };
 
   const cancel = async (req) => {
@@ -266,6 +278,45 @@ export default function FundRequestsPanel() {
               {submitting ? 'Submitting…' : 'Submit request'}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mark-paid confirmation dialog (replaces window.prompt) */}
+      <Dialog open={!!markPaidFor} onOpenChange={(o) => { if (!o) { setMarkPaidFor(null); setMarkPaidNotes(''); } }}>
+        <DialogContent className="max-w-md" data-testid="fund-mark-paid-dialog">
+          <DialogHeader>
+            <DialogTitle>Mark as paid</DialogTitle>
+            <DialogDescription className="text-xs">
+              This creates a matching <strong>expense entry</strong> in the books. The submitter will be notified.
+            </DialogDescription>
+          </DialogHeader>
+          {markPaidFor && (
+            <div className="space-y-3 mt-2">
+              <div className="rounded-lg bg-muted/40 p-3 text-xs space-y-1">
+                <p className="font-semibold text-sm">{markPaidFor.title}</p>
+                <p className="text-muted-foreground">
+                  <Banknote size={10} className="inline mr-1 mb-0.5" />
+                  {markPaidFor.currency} {Number(markPaidFor.amount || 0).toLocaleString()} · {markPaidFor.metadata?.kind || 'reimbursement'}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Payment notes <span className="text-muted-foreground font-normal">(optional — e.g. transaction ID, payment method)</span></Label>
+                <Textarea
+                  rows={3}
+                  value={markPaidNotes}
+                  onChange={e => setMarkPaidNotes(e.target.value)}
+                  placeholder="e.g. Sent via mobile money — txn ABC123"
+                  data-testid="fund-mark-paid-notes"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button variant="ghost" className="flex-1" onClick={() => { setMarkPaidFor(null); setMarkPaidNotes(''); }}>Cancel</Button>
+                <Button className="flex-1" onClick={confirmMarkPaid} disabled={markPaidBusy} data-testid="fund-mark-paid-confirm">
+                  {markPaidBusy ? 'Recording…' : 'Confirm & create expense'}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

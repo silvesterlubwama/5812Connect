@@ -191,9 +191,12 @@ async def delete_product_variant(product_id: str, variant_id: str, current_user:
 
 
 @router.post("/products/{product_id}/generate-barcodes")
-async def generate_product_barcodes(product_id: str, current_user: dict = Depends(get_current_user)):
-    """Auto-generate 5812-* barcodes for all variants of a product that don't have one.
-    Only admins, directors, and managers may issue barcodes."""
+async def generate_product_barcodes(product_id: str, force: bool = False, current_user: dict = Depends(get_current_user)):
+    """Auto-generate 5812-* barcodes for all variants of a product.
+    By default only fills variants that have no barcode (or a non-5812 one).
+    Pass `?force=true` to regenerate fresh barcodes for ALL variants (useful after
+    a barcode collision or printer mis-print). Only admins, directors, and
+    managers may issue barcodes."""
     if not _can_issue_barcodes(current_user):
         raise HTTPException(status_code=403, detail="Only admins, directors, and managers can issue product barcodes")
     product = await db.products.find_one({"id": product_id}, {"_id": 0})
@@ -203,14 +206,15 @@ async def generate_product_barcodes(product_id: str, current_user: dict = Depend
         raise HTTPException(status_code=400, detail="Set product location/campus first — the barcode prefix derives from it.")
     updated = 0
     for i, v in enumerate(product.get("variants") or []):
-        if not v.get("barcode") or not str(v.get("barcode")).startswith("5812-"):
+        needs_new = force or (not v.get("barcode") or not str(v.get("barcode")).startswith("5812-"))
+        if needs_new:
             barcode = await _generate_variant_barcode(product["location_id"], i + 1)
             await db.products.update_one(
                 {"id": product_id, "variants.id": v["id"]},
                 {"$set": {"variants.$.barcode": barcode, "variants.$.barcode_auto_generated": True}}
             )
             updated += 1
-    return {"message": f"Generated {updated} barcodes", "format": "5812-{COUNTRY}{ABBR}-{DDMMYY}-V{NN}-{NNNN}"}
+    return {"message": f"Generated {updated} barcodes", "format": "5812-{COUNTRY}{ABBR}-{DDMMYY}-V{NN}-{NNNN}", "force": force}
 
 
 
