@@ -3,6 +3,26 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 176 (Feb 2026)
+**2D + 3D pallet/container visualization, per-item photo upload, AI URL→size estimate, CSV bulk import.**
+
+### Frontend
+- New `<ContainerVisualizer>` component with **2D top-down SVG** floor plan (color-coded boxes per pallet/loose) and **3D OrbitControls Three.js scene** (`@react-three/fiber@9` + `@react-three/drei@10` + `three@0.176`). Lazy-loaded — donor page defaults to 3D, admin page to 2D.
+- **CSV bulk import** in `ShipmentsAdminPage`: Papaparse client-side, downloadable template, preview table, POST to `/items/bulk-import`.
+- **Per-item photo upload** — click thumbnail tile beside each item, multipart upload to `/items/{id}/photo`.
+- **AI estimate from product URL** — Gemini-3-flash analyses an Amazon/Walmart/etc. link and fills weight + dims + value + confidence badge.
+- Public donor page now also renders the 3D visualizer (defaultMode='3d') so supporters see the container fill visually.
+
+### Backend
+- `/api/public/shipments/{token}` now also returns `pallets` (lite roster) + `container_dims_cm` so the public visualizer can label boxes correctly.
+
+### Critical fix during implementation
+- **R3F + visual-edits Babel plugin incompatibility**: `@emergentbase/visual-edits` injects `x-line-number` / `x-file-name` / `x-component` props on every JSX element; R3F's `applyProps` walker treats hyphenated names as Three.js property paths (`x-line-number` → tries to set `mesh.x.line.number`) and throws. **Fix**: in `ContainerVisualizer.jsx::ThreeCanvas`, use `React.createElement(Canvas/primitive/OrbitControls,...)` instead of JSX. The visual-edits plugin only walks JSX AST nodes — raw createElement calls stay clean. The 3D scene itself is built with vanilla `THREE.*` constructors and handed off via `<primitive object={...}>`.
+- Defense-in-depth: `frontend/scripts/patch-r3f-reserved-props.js` runs on postinstall and adds `__source`/`__self` to R3F's RESERVED_PROPS array.
+
+### Testing
+- Iteration 172 test report: 11/11 backend pytest pass, 8/8 frontend Playwright pass on live preview. Only minor issue (duplicate `ship-donor-name` testid) fixed.
+
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 

@@ -239,7 +239,7 @@ export default function ShipmentDonorPage() {
               <div className="space-y-1">
                 <label className="text-xs font-medium">Your name <span className="opacity-60">(optional)</span></label>
                 <Input value={donateForm.donor_name} onChange={e => setDonateForm({ ...donateForm, donor_name: e.target.value })}
-                  placeholder="Anonymous" data-testid="ship-donor-name" />
+                  placeholder="Anonymous" data-testid="ship-donor-name-input" />
                 <p className="text-[10px] text-muted-foreground">Leave blank to donate anonymously.</p>
               </div>
               <div className="flex gap-2 pt-1">
