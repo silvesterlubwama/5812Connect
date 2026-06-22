@@ -566,6 +566,8 @@ async def public_shipment(token: str):
     total_weight = sum(float(i.get("weight_kg") or 0) * int(i.get("qty_acquired") or 0) for i in items)
     total_value = sum(float(i.get("value_usd") or 0) * int(i.get("qty_acquired") or 0) for i in items)
     cap = float(s.get("max_payload_kg") or 26000)
+    # Lightweight pallet roster (id+label) so the FE visualizer can label boxes
+    pallets_lite = [{"id": p.get("id"), "label": p.get("label")} for p in (s.get("pallets") or [])]
     return {
         "id": s["id"],
         "name": s.get("name"),
@@ -574,8 +576,10 @@ async def public_shipment(token: str):
         "target_ship_date": s.get("target_ship_date"),
         "status": s.get("status"),
         "max_payload_kg": cap,
+        "container_dims_cm": s.get("container_dims_cm") or CONTAINER_40FT_HC,
         "still_needed": still_needed,
         "already_acquired": already_acquired,
+        "pallets": pallets_lite,
         "totals": {
             "weight_kg": round(total_weight, 1),
             "weight_pct": round(min(100, (total_weight / cap) * 100), 1) if cap else 0,

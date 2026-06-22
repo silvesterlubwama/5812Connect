@@ -1,0 +1,48 @@
+{
+  "summary": "Iter-172 full backend + frontend regression of the new Container Shipments visualizer (2D/3D), per-item photo upload, AI URL estimate, and CSV bulk-import features. Backend: 11/11 pytest passed. Frontend (Playwright on the live preview URL): admin /shipments → create shipment → manual-add item → CSV upload (2 rows previewed, items 1→3) → photo upload → AI-from-link triggered without crashing the page → 2D SVG (4 nodes) + 3D canvas (1 node) render with ZERO r3f x-line-number errors and no runtime-error overlay → public donor page renders shipment-donor-page with 3D canvas as default (defaultMode='3d' confirmed) → donation dialog opens and accepts qty/name. One real FE bug found: duplicate data-testid='ship-donor-name' (page <h1> AND the donor form <Input>). Everything else green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ShipmentDonorPage.jsx",
+        "issue": "Duplicate data-testid='ship-donor-name' on TWO different elements: (1) the page hero <h1> on line 101 (`{data.name}`) and (2) the donor name <Input> inside the confirm-donation dialog on line 242. This is a testability bug — any selector targeting ship-donor-name resolves to 2 elements and may bind to the wrong one. Functionally the form still works for end users (the input is the only editable one), but breaks data-testid contract and Playwright tests.",
+        "selector": "[data-testid=\"ship-donor-name\"]",
+        "priority": "MEDIUM",
+        "fix_hint": "Rename the donor form input to data-testid=\"ship-donor-donor-name\" (or ship-donor-name-input) and keep ship-donor-name on the hero h1, OR vice-versa. Each data-testid must be unique on the page."
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter172_shipments.py",
+    "/app/test_reports/pytest/iter172_results.xml"
+  ],
+  "action_items": [
+    "Fix duplicate data-testid='ship-donor-name' in /app/frontend/src/pages/ShipmentDonorPage.jsx — same id is used on both the hero <h1> and the donor name <Input> (lines 101 + 242). Rename one of them.",
+    "(Optional) The 2D viz currently renders 4 SVG nodes — verify intentionally (e.g. nested decorative svgs for icons inside the card) so future tests can assert a tighter count."
+  ],
+  "critical_code_review_comments": [
+    "ContainerVisualizer.jsx: the ThreeCanvas component correctly uses React.createElement(Canvas/primitive/OrbitControls,...) instead of JSX so the visual-edits Babel plugin can't inject x-line-number/x-component props onto R3F primitives. Verified live: 3D mode loads a <canvas> on both admin and public donor pages with ZERO 'Cannot set x-line-number' or related r3f applyProps errors. Solid fix.",
+    "shipments.py POST /items/bulk-import (line 377) silently skips rows with empty name and clamp-failures via try/except. Good for resilience but the API only returns {imported:N} — consider also returning skipped_count so the FE can show 'Imported 2 of 3 rows (1 skipped: missing name)'.",
+    "shipments.py public_shipment (line 542) now correctly includes `pallets` (lite roster) + `container_dims_cm` — verified via test_public_payload_includes_pallets.",
+    "ShipmentDonorPage.jsx defaultMode='3d' is wired through to ContainerVisualizer — confirmed by the public donor screenshot showing a <canvas> immediately on load, even without user interaction.",
+    "estimate-from-link endpoint returned 200 with a real estimate even on example.com/dp/B000FAKE (LLM happily hallucinates dims) — consider validating that the AI's confidence is above a threshold before silently overwriting weight_kg/dims_cm on the item, otherwise an operator may not notice the values are made up. Currently it does write — see line 264 onwards."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter172_shipments.py (new — 11 tests, all passing)"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 pytest)",
+    "frontend": "95% (8/8 spec checks pass for shipment flow; only ship-donor-name testid collision affects automated tests, not real users)"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (read from /app/memory/test_credentials.md). Login uses 'identifier' field, token at response.token. REACT_APP_BACKEND_URL=https://multi-tenant-scope.preview.emergentagent.com",
+  "seed_data_creation": "Both rounds of testing self-cleaned: shipment 'TEST_iter172_FE' was deleted at end of the FE script (cleanup:200). Shipment sh_c752473bc9 ('TEST_iter172_VIZ') was deleted out-of-band via curl after the donate-dialog screenshot (cleanup:{deleted:true}). The backend pytest fixture also deletes its shipment at session teardown. No lingering TEST_ shipments expected.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-172 Container Shipments (visualizer + photo + AI link + CSV bulk-import + 3D default on donor page) is FULLY GREEN. Backend pytest at /app/backend/tests/test_iter172_shipments.py covers all 4 new flows and regressions. The R3F x-line-number visual-edits incompatibility (Main agent's fix using React.createElement instead of JSX inside ThreeCanvas) is confirmed working on both admin AND public donor pages. Only outstanding FE issue is a duplicate data-testid 'ship-donor-name' between the page hero and the donor form input — minor, doesn't block users. If retesting, you can reuse the same admin login + the seed snippet (POST /api/shipments then POST /api/shipments/{id}/items with qty_acquired>=1 to force ship-viz to render). Public donor URL pattern: /donate/shipment/{token} (token from GET /api/shipments/{id} as admin).",
+  "rca of the issue": "Bug: data-testid collision on 'ship-donor-name'. RCA: same identifier is reused for two semantically different elements in /app/frontend/src/pages/ShipmentDonorPage.jsx — the hero shipment-title <h1> on line 101 displays {data.name} (the shipment name), and the donor's name <Input> on line 242 captures the donor's name. Both got the same handle 'ship-donor-name' because both relate conceptually to a 'name' on the donor page. Repro: in Playwright run `page.fill('[data-testid=\"ship-donor-name\"]', 'X')` — locator resolves to 2 elements, fills the h1 first, throws because h1 isn't fillable. Mitigation: change one of the testids. Suggested rename: hero h1 stays 'ship-donor-name' (it identifies the shipment), and the form input becomes 'ship-donor-donor-name-input' or 'ship-donor-name-field'. Either way each testid must be globally unique on a rendered page."
+}

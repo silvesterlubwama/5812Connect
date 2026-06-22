@@ -16,6 +16,7 @@
  * matches what staff sees rotating in 3D.
  */
 import React, { useMemo, useState, Suspense } from 'react';
+import * as THREE from 'three';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -151,48 +152,57 @@ function FloorPlan2D({ layout }) {
 
 // ───────────────────────────────────────────────────────────────
 // 3D — @react-three/fiber + drei OrbitControls
+// We construct THREE objects directly and pass via <primitive object>
+// to bypass JSX prop walking (which conflicts with CRA's __source dev prop
+// and R3F's applyProps key-path resolution).
 // ───────────────────────────────────────────────────────────────
-function PalletMesh({ box }) {
-  // Convert cm to scene units (1 unit = 10 cm so the whole container fits ~120u long)
-  const sx = box.length / 10;
-  const sy = box.height / 10;
-  const sz = box.width / 10;
-  // Position the mesh from its CENTRE — translate by half-extent from the back-left corner
-  const cx = (box.x + box.length / 2) / 10;
-  const cy = (box.height / 2) / 10;
-  const cz = (box.y + box.width / 2) / 10;
-  return (
-    <mesh position={[cx, cy, cz]}>
-      <boxGeometry args={[sx, sy, sz]} />
-      <meshStandardMaterial color={box.color} opacity={0.85} transparent />
-    </mesh>
-  );
-}
+function useScene3DObjects(layout) {
+  return useMemo(() => {
+    if (!layout || layout.boxes.length === 0) return null;
+    const c = layout.container;
+    const root = new THREE.Group();
 
-function Scene3D({ layout }) {
-  if (!layout || layout.boxes.length === 0) return null;
-  const c = layout.container;
-  return (
-    <>
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[80, 100, 60]} intensity={0.7} />
-      <directionalLight position={[-60, 80, -40]} intensity={0.3} />
+    // Lights
+    const amb = new THREE.AmbientLight(0xffffff, 0.6);
+    root.add(amb);
+    const dir1 = new THREE.DirectionalLight(0xffffff, 0.7);
+    dir1.position.set(80, 100, 60);
+    root.add(dir1);
+    const dir2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    dir2.position.set(-60, 80, -40);
+    root.add(dir2);
 
-      {/* Container — translucent wireframe */}
-      <mesh position={[c.length / 20, c.height / 20, c.width / 20]}>
-        <boxGeometry args={[c.length / 10, c.height / 10, c.width / 10]} />
-        <meshBasicMaterial wireframe color="#94a3b8" />
-      </mesh>
-      {/* Floor */}
-      <mesh position={[c.length / 20, -0.1, c.width / 20]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[c.length / 10 + 4, c.width / 10 + 4]} />
-        <meshStandardMaterial color="#f1f5f9" />
-      </mesh>
+    // Container wireframe
+    const containerGeo = new THREE.BoxGeometry(c.length / 10, c.height / 10, c.width / 10);
+    const containerMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, wireframe: true });
+    const containerMesh = new THREE.Mesh(containerGeo, containerMat);
+    containerMesh.position.set(c.length / 20, c.height / 20, c.width / 20);
+    root.add(containerMesh);
 
-      {/* Pallets */}
-      {layout.boxes.map(b => <PalletMesh key={b.id} box={b} />)}
-    </>
-  );
+    // Floor
+    const floorGeo = new THREE.PlaneGeometry(c.length / 10 + 4, c.width / 10 + 4);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.position.set(c.length / 20, -0.1, c.width / 20);
+    floor.rotation.x = -Math.PI / 2;
+    root.add(floor);
+
+    // Pallets
+    for (const b of layout.boxes) {
+      const sx = b.length / 10;
+      const sy = b.height / 10;
+      const sz = b.width / 10;
+      const cx = (b.x + b.length / 2) / 10;
+      const cy = (b.height / 2) / 10;
+      const cz = (b.y + b.width / 2) / 10;
+      const geo = new THREE.BoxGeometry(sx, sy, sz);
+      const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(b.color), transparent: true, opacity: 0.85 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(cx, cy, cz);
+      root.add(mesh);
+    }
+    return root;
+  }, [layout]);
 }
 
 // Defer the @react-three imports to runtime so the rest of the page doesn't pay
@@ -203,14 +213,24 @@ const ThreeCanvas = React.lazy(async () => {
   return {
     default: function ThreeCanvasInner({ layout }) {
       const c = layout?.container || CONTAINER;
-      return (
-        <Canvas
-          camera={{ position: [c.length / 6, c.height / 5, c.width / 2], fov: 50 }}
-          style={{ width: '100%', height: 380, borderRadius: 8, background: '#fafafa' }}
-        >
-          <Scene3D layout={layout} />
-          <OrbitControls makeDefault target={[c.length / 20, c.height / 30, c.width / 20]} />
-        </Canvas>
+      const sceneRoot = useScene3DObjects(layout);
+      if (!sceneRoot) return null;
+      // NOTE: We use React.createElement (not JSX) for <primitive> and
+      // <OrbitControls> deliberately. The @emergentbase/visual-edits Babel
+      // plugin injects x-file-name / x-line-number / x-component props on
+      // every JSX element, and react-three-fiber's applyProps walker treats
+      // hyphenated prop names as Three.js property paths (e.g. "x-line-number"
+      // → tries to set mesh.x.line.number) and throws. createElement calls
+      // are NOT visited by the visual-edits transform, so the R3F children
+      // stay clean.
+      return React.createElement(
+        Canvas,
+        {
+          camera: { position: [c.length / 6, c.height / 5, c.width / 2], fov: 50 },
+          style: { width: '100%', height: 380, borderRadius: 8, background: '#fafafa' },
+        },
+        React.createElement('primitive', { object: sceneRoot }),
+        React.createElement(OrbitControls, { makeDefault: true, target: [c.length / 20, c.height / 30, c.width / 20] }),
       );
     },
   };

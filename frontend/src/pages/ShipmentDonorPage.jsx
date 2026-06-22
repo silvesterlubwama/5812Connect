@@ -22,6 +22,7 @@ import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import { useBranding } from '../context/BrandingContext';
+import ContainerVisualizer from '../components/ContainerVisualizer';
 
 const PRIORITY_BADGE = {
   urgent: 'bg-rose-100 text-rose-700',
@@ -127,6 +128,15 @@ export default function ShipmentDonorPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Container visualization (3D by default — let donors see what's in the truck) */}
+        {((data.already_acquired || []).length > 0 || (data.still_needed || []).length > 0) && (
+          <ContainerVisualizer
+            items={[...(data.already_acquired || []), ...(data.still_needed || [])]}
+            pallets={data.pallets || []}
+            defaultMode="3d"
+          />
+        )}
 
         {/* Still needed */}
         <section>

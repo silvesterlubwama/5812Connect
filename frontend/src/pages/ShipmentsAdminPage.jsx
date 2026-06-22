@@ -19,10 +19,12 @@ import { Textarea } from '../components/ui/textarea';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
+import ContainerVisualizer from '../components/ContainerVisualizer';
+import Papa from 'papaparse';
 
 const PRIORITY_BADGE = {
   urgent: 'bg-rose-100 text-rose-700',
@@ -38,6 +40,11 @@ export default function ShipmentsAdminPage() {
   const [selected, setSelected] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showCsvImport, setShowCsvImport] = useState(false);
+  const [csvRows, setCsvRows] = useState([]);
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [linkBusyId, setLinkBusyId] = useState(null);
+  const [linkUrlFor, setLinkUrlFor] = useState(null);   // {itemId, url}
   const [aiBusy, setAiBusy] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', dest_country: 'Uganda', target_ship_date: '', description: '' });
   const [itemForm, setItemForm] = useState(emptyItem());
@@ -98,6 +105,85 @@ export default function ShipmentsAdminPage() {
       await api.put(`/shipments/${selectedId}/items/${itemId}`, patch);
       await refreshDetail();
     } catch (e) { toast.error(e.response?.data?.detail || 'Update failed'); }
+  };
+
+  // ─── Per-item photo upload ────────────────────────────────────
+  const uploadItemPhoto = async (itemId, file) => {
+    if (!file) return;
+    if (!file.type?.startsWith('image/')) { toast.error('Photo must be an image'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error('Photo must be under 5 MB'); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await api.post(`/shipments/${selectedId}/items/${itemId}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Photo uploaded');
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
+  };
+
+  // ─── AI estimate weight/dims from product URL ─────────────────
+  const estimateFromLink = async (itemId, url) => {
+    if (!url || !url.startsWith('http')) { toast.error('Paste a product URL starting with http(s)'); return; }
+    setLinkBusyId(itemId);
+    try {
+      const r = await api.post(`/shipments/${selectedId}/items/${itemId}/estimate-from-link`, { url });
+      toast.success(`Estimated: ${r.data.weight_kg} kg, ${r.data.dims_cm.length}×${r.data.dims_cm.width}×${r.data.dims_cm.height} cm (${r.data.confidence})`);
+      setLinkUrlFor(null);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'AI estimate failed'); }
+    finally { setLinkBusyId(null); }
+  };
+
+  // ─── CSV import (Papaparse client-side → bulk-import endpoint) ─
+  const parseCsvFile = (file) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: h => (h || '').trim().toLowerCase().replace(/\s+/g, '_'),
+      complete: (res) => {
+        const rows = (res.data || []).map(r => ({
+          name: (r.name || r.item || '').toString().trim(),
+          category: (r.category || '').toString().trim(),
+          qty_needed: parseInt(r.qty_needed || r.quantity || r.qty || 1) || 1,
+          qty_acquired: parseInt(r.qty_acquired || r.acquired || 0) || 0,
+          weight_kg: parseFloat(r.weight_kg || r.weight || 0) || 0,
+          value_usd: parseFloat(r.value_usd || r.value || r.price || 0) || 0,
+          priority: ((r.priority || 'normal').toString().trim().toLowerCase()),
+          dims_cm: {
+            length: parseFloat(r.length_cm || r.length || 0) || 0,
+            width: parseFloat(r.width_cm || r.width || 0) || 0,
+            height: parseFloat(r.height_cm || r.height || 0) || 0,
+          },
+          notes: (r.notes || '').toString().trim(),
+        })).filter(r => r.name);
+        setCsvRows(rows);
+        if (rows.length === 0) toast.error('No valid rows found — make sure your CSV has a "name" column');
+      },
+      error: (err) => toast.error(`CSV parse error: ${err.message}`),
+    });
+  };
+
+  const submitCsvImport = async () => {
+    if (csvRows.length === 0) return;
+    setCsvBusy(true);
+    try {
+      const r = await api.post(`/shipments/${selectedId}/items/bulk-import`, { items: csvRows });
+      toast.success(`Imported ${r.data.imported} item${r.data.imported === 1 ? '' : 's'}`);
+      setCsvRows([]);
+      setShowCsvImport(false);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Import failed'); }
+    finally { setCsvBusy(false); }
+  };
+
+  const downloadCsvTemplate = () => {
+    const csv = 'name,category,qty_needed,qty_acquired,weight_kg,length_cm,width_cm,height_cm,value_usd,priority,notes\nSchool backpack,School,50,0,1.2,45,30,15,25,high,"Sturdy material please"\nMosquito net,Medical,100,0,0.3,30,20,5,8,urgent,Family-size only\n';
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'shipment-items-template.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const addPallet = async () => {
@@ -169,7 +255,7 @@ export default function ShipmentsAdminPage() {
             </div>
             <div>
               <h1 className="text-2xl font-semibold font-heading">Container Shipments</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">Manage 40' container collections + public donor links + AI packing scenarios.</p>
+              <p className="text-sm text-muted-foreground mt-0.5">Manage 40&apos; container collections + public donor links + AI packing scenarios.</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -217,7 +303,7 @@ export default function ShipmentsAdminPage() {
           <DialogContent className="max-w-md" data-testid="ship-create-dialog">
             <DialogHeader>
               <DialogTitle>New container shipment</DialogTitle>
-              <DialogDescription className="text-xs">A long-running collection effort. You'll get a public donor link to share.</DialogDescription>
+              <DialogDescription className="text-xs">A long-running collection effort. You&apos;ll get a public donor link to share.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3 mt-2">
               <div className="space-y-1"><Label className="text-xs">Name *</Label>
@@ -302,7 +388,7 @@ export default function ShipmentsAdminPage() {
               <div className="h-2 rounded bg-muted overflow-hidden">
                 <div className={`h-full ${totals.pct > 100 ? 'bg-rose-500' : totals.pct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${totals.pct}%` }} />
               </div>
-              {totals.pct > 100 && <p className="text-[11px] text-rose-700">⚠ Over the 40' container payload cap by {(totals.weight - totals.cap).toFixed(0)} kg.</p>}
+              {totals.pct > 100 && <p className="text-[11px] text-rose-700">⚠ Over the 40&apos; container payload cap by {(totals.weight - totals.cap).toFixed(0)} kg.</p>}
             </div>
           )}
         </CardContent>
@@ -333,9 +419,14 @@ export default function ShipmentsAdminPage() {
 
       {/* Items list */}
       <div>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
           <p className="text-xs font-semibold">Items ({(selected.items || []).length})</p>
-          <Button size="sm" onClick={() => setShowAddItem(true)} data-testid="ship-add-item"><Plus size={11} className="mr-1" /> Item</Button>
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => setShowCsvImport(true)} data-testid="ship-csv-import-btn">
+              <FileSpreadsheet size={11} className="mr-1" /> Import CSV
+            </Button>
+            <Button size="sm" onClick={() => setShowAddItem(true)} data-testid="ship-add-item"><Plus size={11} className="mr-1" /> Item</Button>
+          </div>
         </div>
         {(selected.items || []).length === 0 ? (
           <EmptyState compact icon={Container} title="No items yet" description="Add items donors should look for. Each item's weight + dimensions feed the AI packing scenario."
@@ -349,16 +440,27 @@ export default function ShipmentsAdminPage() {
               return (
                 <Card key={it.id} className={`rounded-lg ${covered ? 'bg-emerald-50/50' : ''}`} data-testid={`ship-item-${it.id}`}>
                   <CardContent className="p-2.5 flex items-center gap-3 flex-wrap">
+                    {/* Photo thumbnail + upload */}
+                    <label className="relative w-12 h-12 rounded border bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-primary shrink-0" title="Click to upload photo">
+                      {it.photo_url ? (
+                        <img src={it.photo_url} alt={it.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <ImageIcon size={14} className="text-muted-foreground/60" />
+                      )}
+                      <input type="file" accept="image/*" className="hidden" onChange={e => uploadItemPhoto(it.id, e.target.files?.[0])} data-testid={`ship-item-photo-${it.id}`} />
+                    </label>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-medium truncate">{it.name}</p>
                         {it.category && <Badge variant="outline" className="text-[10px]">{it.category}</Badge>}
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
+                        {it.ai_estimate && <Badge variant="outline" className="text-[10px]" title={it.ai_estimate.reasoning}>AI · {it.ai_estimate.confidence}</Badge>}
                       </div>
                       <p className="text-[10px] text-muted-foreground">
                         {it.qty_acquired || 0} of {it.qty_needed || 0}
                         {it.weight_kg ? ` · ${it.weight_kg} kg/unit` : ''}
+                        {(it.dims_cm?.length || it.dims_cm?.width || it.dims_cm?.height) ? ` · ${it.dims_cm?.length || 0}×${it.dims_cm?.width || 0}×${it.dims_cm?.height || 0} cm` : ''}
                         {it.value_usd ? ` · $${it.value_usd}/unit` : ''}
                         {it.pallet_id ? ` · ${palletsById[it.pallet_id]?.label || it.pallet_id}` : ''}
                       </p>
@@ -374,6 +476,11 @@ export default function ShipmentsAdminPage() {
                     )}
                     <Input type="number" className="h-7 w-20 text-[11px]" value={it.qty_acquired || 0}
                       onChange={e => updateItem(it.id, { qty_acquired: parseInt(e.target.value) || 0 })} title="Manual adjustment of acquired qty" />
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="AI estimate weight + size from product URL"
+                      onClick={() => setLinkUrlFor({ itemId: it.id, url: it.source_url || '' })}
+                      data-testid={`ship-item-link-${it.id}`}>
+                      <Link2 size={11} />
+                    </Button>
                     <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={() => deleteItem(it.id)} data-testid={`ship-item-delete-${it.id}`}>
                       <Trash2 size={11} />
                     </Button>
@@ -384,6 +491,9 @@ export default function ShipmentsAdminPage() {
           </div>
         )}
       </div>
+
+      {/* Container visualization — 2D / 3D */}
+      <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} />
 
       {/* AI Packing scenario */}
       <Card className="rounded-xl border-primary/20">
@@ -487,6 +597,99 @@ export default function ShipmentsAdminPage() {
               <Button className="flex-1" onClick={addItem} data-testid="ship-item-submit">Add item</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* CSV import dialog */}
+      <Dialog open={showCsvImport} onOpenChange={(o) => { if (!o) { setShowCsvImport(false); setCsvRows([]); } }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="ship-csv-dialog">
+          <DialogHeader>
+            <DialogTitle>Bulk import items from CSV</DialogTitle>
+            <DialogDescription className="text-xs">
+              Paste-friendly format. Required column: <code className="bg-muted px-1 rounded">name</code>.
+              Optional: <code className="bg-muted px-1 rounded">category, qty_needed, qty_acquired, weight_kg, length_cm, width_cm, height_cm, value_usd, priority, notes</code>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="flex gap-2 flex-wrap">
+              <Button size="sm" variant="outline" onClick={downloadCsvTemplate} data-testid="ship-csv-template">
+                <Download size={11} className="mr-1" /> Download template
+              </Button>
+              <label className="cursor-pointer">
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => e.target.files?.[0] && parseCsvFile(e.target.files[0])} data-testid="ship-csv-file" />
+                <span className="inline-flex items-center px-3 py-1.5 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+                  <Upload size={11} className="mr-1" /> Choose CSV file
+                </span>
+              </label>
+              {csvRows.length > 0 && (
+                <Badge variant="outline" className="text-[10px]">{csvRows.length} row{csvRows.length === 1 ? '' : 's'} ready</Badge>
+              )}
+            </div>
+
+            {csvRows.length > 0 && (
+              <div className="border rounded overflow-auto max-h-[40vh]">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-muted/40 sticky top-0">
+                    <tr>
+                      <th className="text-left p-2">Name</th>
+                      <th className="text-left p-2">Category</th>
+                      <th className="text-left p-2">Qty</th>
+                      <th className="text-left p-2">Weight</th>
+                      <th className="text-left p-2">L×W×H</th>
+                      <th className="text-left p-2">Value</th>
+                      <th className="text-left p-2">Priority</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvRows.slice(0, 100).map((r, idx) => (
+                      <tr key={idx} className="border-t" data-testid={`ship-csv-row-${idx}`}>
+                        <td className="p-2 font-medium">{r.name}</td>
+                        <td className="p-2 text-muted-foreground">{r.category || '—'}</td>
+                        <td className="p-2">{r.qty_needed}</td>
+                        <td className="p-2">{r.weight_kg || '—'}</td>
+                        <td className="p-2">{(r.dims_cm.length || r.dims_cm.width || r.dims_cm.height) ? `${r.dims_cm.length}×${r.dims_cm.width}×${r.dims_cm.height}` : '—'}</td>
+                        <td className="p-2">{r.value_usd ? `$${r.value_usd}` : '—'}</td>
+                        <td className="p-2">{r.priority}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {csvRows.length > 100 && <p className="text-[10px] text-muted-foreground p-2">Showing first 100 of {csvRows.length} — all will be imported.</p>}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <Button variant="ghost" className="flex-1" onClick={() => { setShowCsvImport(false); setCsvRows([]); }}>Cancel</Button>
+              <Button className="flex-1" disabled={csvRows.length === 0 || csvBusy} onClick={submitCsvImport} data-testid="ship-csv-submit">
+                {csvBusy ? 'Importing…' : `Import ${csvRows.length} item${csvRows.length === 1 ? '' : 's'}`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* URL estimate dialog */}
+      <Dialog open={!!linkUrlFor} onOpenChange={(o) => { if (!o) setLinkUrlFor(null); }}>
+        <DialogContent className="max-w-md" data-testid="ship-link-dialog">
+          <DialogHeader>
+            <DialogTitle>Estimate size & weight from product URL</DialogTitle>
+            <DialogDescription className="text-xs">
+              Paste an Amazon, Walmart, or any retailer&apos;s product link. Gemini will guess weight, dimensions, and approximate value — you can edit afterward.
+            </DialogDescription>
+          </DialogHeader>
+          {linkUrlFor && (
+            <div className="space-y-2 mt-2">
+              <Input value={linkUrlFor.url} onChange={e => setLinkUrlFor({ ...linkUrlFor, url: e.target.value })}
+                placeholder="https://www.amazon.com/dp/B0..." data-testid="ship-link-url" />
+              <p className="text-[10px] text-muted-foreground">Takes ~10–15 seconds. Confidence (high/medium/low) is shown on the item badge after.</p>
+              <div className="flex gap-2 pt-1">
+                <Button variant="ghost" className="flex-1" onClick={() => setLinkUrlFor(null)}>Cancel</Button>
+                <Button className="flex-1" disabled={linkBusyId === linkUrlFor.itemId} onClick={() => estimateFromLink(linkUrlFor.itemId, linkUrlFor.url)} data-testid="ship-link-submit">
+                  {linkBusyId === linkUrlFor.itemId ? 'Estimating…' : 'Estimate'}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
