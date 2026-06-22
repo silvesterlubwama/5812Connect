@@ -3,7 +3,22 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 176 (Feb 2026)
+## Recently Resolved — Iteration 173 (Feb 2026)
+**Variant barcode UI + Finance dialog polish backlog.**
+
+### Variant barcodes (`VariantBarcodePrint.jsx` + `routers/products.py`)
+- **Export CSV** button in the print dialog (`export-barcodes-csv-btn`) → downloads product/variant/barcode/price/currency/stock/units_per_pack/sku rows. Useful for stock-takes & supplier order sheets.
+- **Regenerate all** button (`regenerate-barcodes-btn`) → POST `/api/products/{id}/generate-barcodes?force=true` reissues fresh `5812-*` barcodes for every variant (not just missing ones). Confirms via dialog before destructive action.
+- Backend: existing endpoint now accepts `?force=true`; backward-compatible.
+
+### Finance dialog polish (`FinancialPage.jsx` + `FundRequestsPanel.jsx`)
+- **Expense rejection** dialog (`reject-expense-dialog`) replaces `window.prompt()`. Shows the expense summary (amount, category, submitter) and accepts an optional reason via Textarea.
+- **Fund-request "Mark paid"** dialog (`fund-mark-paid-dialog`) replaces `window.prompt()`. Shows request summary + accepts payment notes (txn ID, payment method) before confirming. Creates the matching expense entry exactly as before.
+
+### Testing
+- Iteration 173 test report: 4/4 backend pytest pass (force=true semantics + RBAC), reject-expense dialog fully verified E2E in Playwright, barcode + mark-paid dialog wiring + CSV export verified via direct screenshot smoke test.
+
+## Recently Resolved — Iteration 172 (Feb 2026)
 **2D + 3D pallet/container visualization, per-item photo upload, AI URL→size estimate, CSV bulk import.**
 
 ### Frontend
