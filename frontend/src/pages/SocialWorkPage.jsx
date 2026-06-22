@@ -688,7 +688,6 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
               <TabsTrigger value="notes" data-testid="cd-tab-notes" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
               <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews" className="text-xs px-2.5 py-1.5 shrink-0"><GraduationCap size={11} className="mr-1" />School</TabsTrigger>
               <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardCheck size={11} className="mr-1" />Welfare</TabsTrigger>
-              <TabsTrigger value="medical_exams" data-testid="cd-tab-medical-exams" className="text-xs px-2.5 py-1.5 shrink-0"><Heart size={11} className="mr-1" />Medical Exam</TabsTrigger>
               <TabsTrigger value="documents" data-testid="cd-tab-documents" className="text-xs px-2.5 py-1.5 shrink-0"><FileText size={11} className="mr-1" />Documents</TabsTrigger>
             </TabsList>
 
@@ -939,27 +938,41 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
 
             {/* MEDICAL */}
             <TabsContent value="medical" className="space-y-4 mt-4">
-              <div className="space-y-1.5"><Label className="text-xs">Conditions (comma-separated)</Label>
-                <Input value={(editing.medical?.conditions || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, conditions: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} data-testid="cd-conditions" />
-              </div>
-              <div className="space-y-1.5"><Label className="text-xs">Allergies (comma-separated)</Label>
-                <Input value={(editing.medical?.allergies || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, allergies: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5"><Label className="text-xs">Receives medical support?</Label>
-                  <Select value={editing.medical?.receives_medical_support ? 'yes' : 'no'} onValueChange={v => setEditing({ ...editing, medical: { ...editing.medical, receives_medical_support: v === 'yes' } })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="no">No</SelectItem><SelectItem value="yes">Yes</SelectItem></SelectContent>
-                  </Select>
+              {/* Combined Medical view — quick-edit summary + full Medical Examinations history
+                  (was two separate tabs in iter-172; user asked us to merge). Summary fields auto-sync
+                  from the form below when a new medical_exam is saved, so editing here directly is
+                  for one-off corrections between exams. */}
+              <div className="space-y-3 p-3 rounded-lg border" data-testid="cd-medical-summary">
+                <p className="text-[11px] text-muted-foreground -mb-1">Quick summary — full exam history + forms below.</p>
+                <div className="space-y-1.5"><Label className="text-xs">Conditions (comma-separated)</Label>
+                  <Input value={(editing.medical?.conditions || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, conditions: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} data-testid="cd-conditions" />
                 </div>
-                <div className="space-y-1.5"><Label className="text-xs">Primary doctor / clinic</Label>
-                  <Input value={editing.medical?.primary_doctor || ''} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, primary_doctor: e.target.value } })} />
+                <div className="space-y-1.5"><Label className="text-xs">Allergies (comma-separated)</Label>
+                  <Input value={(editing.medical?.allergies || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, allergies: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5"><Label className="text-xs">Receives medical support?</Label>
+                    <Select value={editing.medical?.receives_medical_support ? 'yes' : 'no'} onValueChange={v => setEditing({ ...editing, medical: { ...editing.medical, receives_medical_support: v === 'yes' } })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="no">No</SelectItem><SelectItem value="yes">Yes</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5"><Label className="text-xs">Primary doctor / clinic</Label>
+                    <Input value={editing.medical?.primary_doctor || ''} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, primary_doctor: e.target.value } })} />
+                  </div>
+                </div>
+                <div className="space-y-1.5"><Label className="text-xs">Medical notes</Label>
+                  <Textarea rows={2} value={editing.medical?.notes || ''} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, notes: e.target.value } })} />
+                </div>
+                <Button size="sm" onClick={() => saveSection('medical')} data-testid="cd-medical-save">Save medical summary</Button>
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">Medical notes</Label>
-                <Textarea rows={3} value={editing.medical?.notes || ''} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, notes: e.target.value } })} />
+
+              {/* Full medical-examination history (form + scan upload + OCR). Auto-syncs to
+                  child.medical.* — the summary above reads from the same fields. */}
+              <div className="pt-2 border-t" data-testid="cd-medical-exams-section">
+                <p className="text-xs font-semibold mb-2">Medical Examinations</p>
+                <SocialReviewsPanel child={editing} kind="medical_exam" />
               </div>
-              <Button size="sm" onClick={() => saveSection('medical')} data-testid="cd-medical-save">Save medical</Button>
             </TabsContent>
 
             {/* FAMILY */}
@@ -1181,6 +1194,11 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
             {/* WELFARE VISITS — home visits, protection assessment, household checks */}
             <TabsContent value="welfare_visits" className="space-y-4 mt-4">
               <SocialReviewsPanel child={editing} kind="welfare_visit" />
+            </TabsContent>
+
+            {/* DOCUMENTS — typed file-checklist (LC1, guardian ID, school reports, etc.) + bundle download */}
+            <TabsContent value="documents" className="space-y-4 mt-4">
+              <ChildDocumentsPanel child={editing} />
             </TabsContent>
           </Tabs>
         )}
