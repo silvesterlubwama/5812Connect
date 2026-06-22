@@ -3,6 +3,33 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 174 (Feb 2026)
+**Social-Work Documents checklist + Shipments full editor + Public PIN gate.**
+
+### Social Work Documents tab
+- `CHILD_FILE_DOC_TYPES` now matches the customer's "LIST OF ITEMS IN A CHILD'S FILE" reference doc 1:1 (14 items incl. 'Other'). Two synthetic items derive their state automatically: **Child Photograph** (from `child.photo_url`) and **Welfare Review Form** (from `social_review_forms` count) — no separate upload needed.
+- `ChildDocumentsPanel` shows a **progress header** "N of 13 items on file (NN%)" with red/amber/green bar and missing-items list. Synthetic rows display an "auto" badge instead of Upload (with a hint to where the source lives).
+
+### Shipments — full admin editing
+- **Container dims editor** — admin can override the 40' high-cube defaults per shipment (`ship-edit-container` → `ship-container-dialog`). Visualizer rescales to the new dims.
+- **Pallet manager** — pallet now stores footprint (length×width×stack-height), position (x_cm/y_cm in the container), color tag, notes (`ship-pallet-dialog`).
+- **Full-edit item dialog** — every item field is editable incl. dimensions, value, weight, pallet assignment, position within pallet, notes (`ship-edit-item-dialog`).
+- **2D drag-to-place** — admins can pointer-drag pallet boxes on the 2D floor plan; positions persist via `PUT /shipments/{id}/pallets/{id}` with x_cm/y_cm.
+
+### Shipments — Public PIN-gated editor
+- `POST /shipments/{id}/set-pin` (admin) — store one-way `access_pin_hash` per shipment.
+- `POST /public/shipments/{token}/login` — trade PIN for an HMAC-signed `edit_token` (12h TTL).
+- Full mirror of admin endpoints under `/public/shipments/{token}/...` gated by `require_shipment_editor` dependency (accepts EITHER admin JWT OR `X-Shipment-Edit-Token` header).
+- Donor page: PIN-login button (visible only when `pin_required=true`), editor toolbar with Item / Pallet / Container buttons, edit/delete icons per item row, token persists in `localStorage`.
+
+### Public donor-page polish
+- New 4-card stats row: **Pallets** · **Donors** · **Items in** · **Ship-in countdown** (turns red when target date is past or <7 days away).
+- **Top contributors leaderboard** (top-5 named donors by qty donated, anonymous excluded).
+- Visualizer now scales to the per-shipment container dims.
+
+### Testing
+- Iteration 174 test report: **12/12 backend pytest pass** (PIN security, container/pallet/item full-edit, doc-types catalogue). 0 critical issues, 0 minor issues. Admin /shipments + /social-work pages smoke-pass without runtime errors.
+
 ## Recently Resolved — Iteration 173 (Feb 2026)
 **Variant barcode UI + Finance dialog polish backlog.**
 
