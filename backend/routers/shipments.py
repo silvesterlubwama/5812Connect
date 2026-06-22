@@ -221,6 +221,159 @@ async def delete_item(shipment_id: str, item_id: str, current_user: dict = Depen
     return {"deleted": True}
 
 
+# ─── Item photo upload + link-to-size estimation ────────────────
+
+from fastapi import UploadFile, File  # noqa: E402
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/photo")
+async def upload_item_photo(
+    shipment_id: str, item_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+):
+    """Upload a product photo for an item. Cloud-storage with disk fallback,
+    same pattern as child-extras / receipts."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Photo must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo must be under 5 MB")
+    ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "jpg"
+    unique = f"{shipment_id}-{item_id}-{uuid.uuid4().hex[:6]}.{ext}"
+    file_url = None
+    try:
+        from storage import put_object
+        result = put_object(f"shipment-items/{unique}", data, file.content_type)
+        file_url = result.get("url", f"/api/storage/shipment-items/{unique}")
+    except Exception as e:
+        logger.warning(f"Cloud put failed, saving locally: {e}")
+        import os as _os
+        _os.makedirs("/app/backend/uploads/shipment-items", exist_ok=True)
+        with open(f"/app/backend/uploads/shipment-items/{unique}", "wb") as fh:
+            fh.write(data)
+        file_url = f"/api/uploads/shipment-items/{unique}"
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {"items.$.photo_url": file_url}},
+    )
+    return {"photo_url": file_url}
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/estimate-from-link")
+async def estimate_item_from_link(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """AI-estimate weight + dimensions from a product URL (Amazon, Walmart, etc.).
+
+    Pulls the page title + first content image (best-effort, no fancy scraping)
+    and asks Gemini-3-flash to estimate weight_kg + dims_cm + value_usd. Writes
+    the estimate onto the item — operator can edit afterward if it's off.
+
+    Body: { url: str }
+    """
+    url = (data.get("url") or "").strip()
+    if not url.startswith("http"):
+        raise HTTPException(status_code=400, detail="url must start with http/https")
+    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+
+    import os as _os
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI estimation unavailable (no LLM key configured)")
+
+    # Pull the page title + first image hint with a 6s timeout. Don't try to be
+    # clever; just grab whatever's in <title>, <meta og:image>, <meta og:title>.
+    title_hint = ""
+    image_hint = ""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (compatible; 5812Connect/1.0)"}) as client:
+            r = await client.get(url)
+            html = (r.text or "")[:50000]
+            import re
+            m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
+            if m:
+                title_hint = m.group(1).strip()[:300]
+            m = re.search(r'<meta[^>]*property=[\"\']og:image[\"\'][^>]*content=[\"\']([^\"\']+)', html, re.I)
+            if m:
+                image_hint = m.group(1).strip()[:500]
+            if not title_hint:
+                m = re.search(r'<meta[^>]*property=[\"\']og:title[\"\'][^>]*content=[\"\']([^\"\']+)', html, re.I)
+                if m:
+                    title_hint = m.group(1).strip()[:300]
+    except Exception as e:
+        logger.warning(f"link fetch failed: {e}")
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+    sys_msg = (
+        "You estimate physical dimensions, weight, and US dollar value for a product. "
+        "Output STRICT JSON: {\"weight_kg\": float, \"dims_cm\": {\"length\": float, \"width\": float, \"height\": float}, "
+        "\"value_usd\": float, \"confidence\": \"high\"|\"medium\"|\"low\", \"reasoning\": str (≤120 chars)}\n"
+        "Use the product NAME + URL TITLE HINT to identify the item, then estimate per typical retail-packaging dimensions. "
+        "If you can't identify the product confidently, set confidence=low and use conservative round-number defaults."
+    )
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"shipment_estimate_{item_id}_{uuid.uuid4().hex[:6]}",
+        system_message=sys_msg,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    user_text = (
+        f"Item name: {item.get('name', '')}\n"
+        f"Category: {item.get('category', '')}\n"
+        f"Product URL: {url}\n"
+        f"Page title hint: {title_hint or '(could not fetch)'}\n"
+        f"OG image hint: {image_hint or '(none)'}\n"
+        "Estimate the per-unit weight, dimensions, and USD value."
+    )
+    raw = await chat.send_message(UserMessage(text=user_text))
+    s_text = (raw or "").strip()
+    if s_text.startswith("```"):
+        s_text = s_text.strip("`")
+        if s_text.lower().startswith("json"):
+            s_text = s_text[4:].strip()
+    first, last = s_text.find("{"), s_text.rfind("}")
+    if first >= 0 and last > first:
+        s_text = s_text[first:last + 1]
+    import json as _json
+    try:
+        parsed = _json.loads(s_text)
+    except Exception:
+        raise HTTPException(status_code=502, detail="AI returned an unparseable response — please fill in dimensions manually")
+    weight = max(0.0, float(parsed.get("weight_kg") or 0))
+    dims = parsed.get("dims_cm") or {}
+    dims_cm = {
+        "length": max(0.0, float(dims.get("length") or 0)),
+        "width": max(0.0, float(dims.get("width") or 0)),
+        "height": max(0.0, float(dims.get("height") or 0)),
+    }
+    value = max(0.0, float(parsed.get("value_usd") or 0))
+    set_ops = {
+        "items.$.weight_kg": weight,
+        "items.$.dims_cm": dims_cm,
+        "items.$.value_usd": value,
+        "items.$.source_url": url,
+        "items.$.ai_estimate": {
+            "confidence": (parsed.get("confidence") or "medium").lower(),
+            "reasoning": (parsed.get("reasoning") or "")[:200],
+            "estimated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": set_ops},
+    )
+    return {
+        "weight_kg": weight, "dims_cm": dims_cm, "value_usd": value,
+        "confidence": (parsed.get("confidence") or "medium").lower(),
+        "reasoning": parsed.get("reasoning") or "",
+    }
+
+
 @router.post("/shipments/{shipment_id}/items/bulk-import")
 async def bulk_import_items(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
     """Body: { items: [{name, qty_needed, weight_kg, ...}] }. Skips rows with no name."""
