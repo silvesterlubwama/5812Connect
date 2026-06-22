@@ -6,6 +6,42 @@ Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, com
 ## Completed Features (Iterations 49-78)
 All features documented in /app/ADMIN_GUIDE.md and /app/memory/CHANGELOG.md.
 
+## Recently Resolved — Iteration 175 (Jun 20, 2026)
+**Social-work tabs fix + Container Shipment tracker with AI packing.**
+
+### Part A — Social work tab fix (production-affecting)
+- **Two "Medical" tabs merged into one**. The new single Medical tab now contains both the quick-edit summary (conditions / allergies / doctor / notes) AND the full Medical Examinations history (SocialReviewsPanel for `kind='medical_exam'`). Auto-sync direction unchanged — the form writes to `child.medical.*` so the quick-edit fields stay populated.
+- **Documents tab restored** — the `TabsContent` block had been dropped during an earlier dedup edit so the tab trigger existed but rendered nothing. Now wires `<ChildDocumentsPanel>` properly.
+
+### Part B — Container Shipment tracker (NEW feature)
+
+**Backend** — `routers/shipments.py` (~430 LOC):
+- Admin-only CRUD: `GET/POST/PUT/DELETE /api/shipments`, items + pallets sub-resources, bulk-import.
+- **Public token endpoint** — `GET /api/public/shipments/{token}` returns wishlist split into still-needed vs already-acquired (sorted urgent→low), totals, AI packing text. No auth, no PII in payload (donor logs stripped).
+- **Public donation** — `POST /api/public/shipments/{token}/items/{item_id}/donate` accepts `{qty, donor_name?}`, no email required. Over-pledge silently clamps to remaining. Each donation appended to per-item log.
+- **AI packing scenarios** — `POST /api/shipments/{id}/ai-packing` calls Gemini-3-flash with item/pallet/weight state; returns structured Markdown (weight summary, volume reality check, pallet plan, loading order, risks).
+- **Token rotation** — `POST /api/shipments/{id}/rotate-token` invalidates the current public link.
+
+**Frontend**:
+- New `<ShipmentsAdminPage>` (admin-only at `/shipments`): list + detail views, item CRUD with priority/weight/dims/value/notes, pallet management with item assignment, AI scenario generation, copy-link button, container fill progress bar.
+- New `<ShipmentDonorPage>` (public at `/donate/shipment/{token}`): branded header with org logo, fill-progress hero, "Still needed" list (sorted urgent first), "Already on the truck" list, AI packing plan (collapsible), one-click "I'll donate" with optional donor name.
+- Sidebar nav: "Container Shipments" link visible to Director+.
+
+### Verification
+- E2E lifecycle confirmed end-to-end: create → 3 items → pallet → public view sorted by priority → anonymous donation → over-pledge clamp → fully-covered item moves to "acquired" list → admin sees donation log → Gemini packing scenario generated (2.3 KB text with weight + container-cap + loading order).
+- 20/20 smoke + branding regression green. All 3 lint gates pass.
+
+### Action for the user
+- **Production redeploy** ships both the social-work fix (P0) AND the new shipment feature.
+- **Appliance**: auto-update tonight OR `sudo docker compose pull && up -d`.
+- After redeploy: open `/shipments` (admin), create your first shipment, click "Copy donor link" → share via WhatsApp/email/socials. Donors land on a branded public page, mark items donated in 2 clicks.
+
+### Future / Backlog
+- **2D pallet floorplan** — text scenarios are good; a top-down grid visual would help warehouse staff loading the actual container. ~80 LOC SVG.
+- **Donor email opt-in** — optional, would let admins send "thanks + shipment progress" updates to donors who choose to share an email. Trivial to add to the donate dialog.
+- **Item photos** — admins can upload but it's just a URL field today; add a real upload button like child-extras.
+- **CSV bulk-import UI** — the backend `/items/bulk-import` exists; FE could expose a "paste from spreadsheet" textarea.
+
 ## Recently Resolved — Iteration 174 (Jun 20, 2026)
 **Per-campus completeness leaderboard + finished `Promise.allSettled` sweep.**
 
