@@ -42,6 +42,9 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     try { await authApi.logout(); } catch (e) { console.warn(e.message || e); }
     secureStorage.clearAll();
+    // Notify subscribers (softphone, click-to-call cache, etc.) that the
+    // identity context has changed and they should refetch / clear.
+    try { window.dispatchEvent(new Event('auth-changed')); } catch (_) {/* SSR safety */}
     setUser(null);
   };
 

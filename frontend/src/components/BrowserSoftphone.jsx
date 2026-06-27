@@ -50,17 +50,28 @@ export default function BrowserSoftphone() {
   // ── Fetch SIP credentials on mount ────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    api.get('/pbx/me/softphone').then(r => {
+    const fetchCfg = () => api.get('/pbx/me/softphone').then(r => {
       if (cancelled) return;
       if (r.status === 204 || !r.data) { setConfig(null); return; }
       setConfig(r.data);
     }).catch(() => setConfig(null));
-    return () => { cancelled = true; };
+    fetchCfg();
+    // On auth change, refetch (a new user might have a different extension,
+    // or no extension at all — widget should hide).
+    const onAuthChange = () => { setConfig(null); fetchCfg(); };
+    window.addEventListener('auth-changed', onAuthChange);
+    return () => { cancelled = true; window.removeEventListener('auth-changed', onAuthChange); };
   }, []);
 
   // ── Register to Asterisk via JsSIP ────────────────────────────
   useEffect(() => {
-    if (!config?.ws_url) return;
+    if (!config) return;
+    if (!config.ws_url) {
+      // The user has an extension but the appliance WSS URL isn't configured
+      // (PBX_WS_URL env var). Surface a distinct state so admins know.
+      setRegState('unconfigured');
+      return;
+    }
     let cancelled = false;
     setRegState('registering');
     (async () => {
@@ -213,6 +224,7 @@ export default function BrowserSoftphone() {
     registering: 'bg-amber-100 text-amber-700',
     failed: 'bg-rose-100 text-rose-700',
     disconnected: 'bg-muted text-muted-foreground',
+    unconfigured: 'bg-amber-100 text-amber-700',
     idle: 'bg-muted text-muted-foreground',
   }[regState];
 
@@ -314,6 +326,7 @@ export default function BrowserSoftphone() {
                   {regState === 'registering' && 'Connecting to PBX…'}
                   {regState === 'failed' && 'Registration failed — check WSS URL / credentials.'}
                   {regState === 'disconnected' && 'Disconnected from PBX.'}
+                  {regState === 'unconfigured' && 'PBX appliance WSS URL not set. Ask an admin to set PBX_WS_URL.'}
                 </p>
               )}
             </div>

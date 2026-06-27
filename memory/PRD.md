@@ -3,6 +3,46 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 176 (Feb 2026)
+**In-app PBX — Phase 2 (live runtime + browser softphone + click-to-call).**
+
+### AMI bridge (`/app/backend/pbx_ami.py`)
+- Dependency-free async Asterisk Manager Interface client. One-shot socket per action (connect → login → action → logoff).
+- High-level helpers: `safe_reload()`, `safe_list_registrations()` (PJSIPShowContacts + PJSIPShowRegistrationsOutbound), `safe_originate()`. All degrade gracefully when `AMI_SECRET` is unset (skipped/empty rather than 500).
+
+### PBX router upgrades
+- `POST /api/pbx/apply` — replaces Phase-1 stub. Calls `safe_reload()` to fire `Reload` on the live Asterisk.
+- `GET /api/pbx/registrations` — merges DB roster with live AMI state. Each extension row now includes `registered`, `user_agent`, `contact_uri`, `roundtrip_ms`.
+- `POST /api/pbx/originate` — click-to-call backbone. Rings the operator's extension first; on answer Asterisk bridges to the target via the matching outbound route.
+- `GET /api/pbx/me/softphone` — returns the calling user's WSS extension + secret + WSS URL. 204 when no extension.
+- `GET /api/pbx/me/click-to-call-config` — lightweight extension info for call buttons; 204 when no extension.
+
+### Browser softphone (`BrowserSoftphone.jsx`)
+- JsSIP-based WebRTC SIP UA. Global floating widget — self-mounts in Layout, renders nothing until the user has a WSS extension.
+- Registration status pill (idle / registering / registered / failed / disconnected / **unconfigured**).
+- Full dial pad with DTMF, paste-from-clipboard, mute / hold / hangup, incoming-call ringer, in-call duration timer.
+- Listens for `window.dispatchEvent('softphone-dial', {detail:{number}})` so other components can trigger calls instantly with zero AMI roundtrip.
+- Re-fetches credentials on `auth-changed` so signing-in users immediately get their widget without a page reload.
+
+### Click-to-call (`ClickToCallButton.jsx` + UnifiedPeoplePage integration)
+- Reusable button. Routes to softphone (WSS users) or AMI Originate (hardphone users) automatically.
+- Module-level config cache shared across 100s of buttons; invalidates on logout via `auth-changed`.
+- Wired into UnifiedPeoplePage Families tab next to `primary_contact_phone`.
+
+### Appliance (`docker-compose.yml` + `pbx/entrypoint.sh`)
+- New env vars: `AMI_USERNAME`, `AMI_SECRET`.
+- Entrypoint writes `/etc/asterisk/manager.conf` from the env so Asterisk accepts AMI logins from the FastAPI pod over the docker bridge.
+
+### Testing
+- Iteration 176 test report: **15/15 backend pytest pass**, 100% frontend Playwright. Missing `import os` caught in static review pre-runtime; fixed. Two minor UX hints already addressed (unconfigured state for empty WSS URL; cache invalidation on logout).
+
+### Phase 3 Roadmap
+- CDR (call detail records) browser + outbound search/filter.
+- Call recording with retention rules + per-extension toggle.
+- Queues with skill-based routing.
+- Conference rooms + meet-me.
+- Time-of-day routing UI (storage already in place from Phase 1).
+
 ## Recently Resolved — Iteration 175 (Feb 2026)
 **In-app PBX — Phase 1 (management layer).**
 

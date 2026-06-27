@@ -33,7 +33,13 @@ async function getConfig() {
 
 export default function ClickToCallButton({ number, label, size = 'sm', variant = 'outline', className = '' }) {
   const [config, setConfig] = useState(_cachedConfig);
-  useEffect(() => { if (_cachedConfig === undefined) getConfig().then(setConfig); }, []);
+  useEffect(() => {
+    if (_cachedConfig === undefined) getConfig().then(setConfig);
+    // Drop the cache on sign-out so the next user fetches their own config
+    const onAuthChange = () => { _cachedConfig = undefined; _cachePromise = null; setConfig(undefined); };
+    window.addEventListener('auth-changed', onAuthChange);
+    return () => window.removeEventListener('auth-changed', onAuthChange);
+  }, []);
   if (!number) return null;
 
   const onClick = async (e) => {
