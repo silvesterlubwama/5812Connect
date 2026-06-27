@@ -1,0 +1,43 @@
+{
+  "summary": "Phase 2 PBX testing complete — backend (15/15 pytest passed) covers /apply graceful 200 with applied=false, /registrations live=false roster shape, /originate 400/404/503 paths, /me/softphone 204+200 (WSS payload complete), /me/click-to-call-config 204+200 (UDP→is_softphone:false, WSS→is_softphone:true), RBAC 403 for staff on /apply, /registrations, /originate, and trunk register=true requires username validation. Frontend Playwright verified: BrowserSoftphone widget hidden when no extension (Phase B), appears after WSS ext assigned (Phase C) with all expected data-testids (softphone-launcher, softphone-panel, softphone-reg-state, softphone-dialpad, softphone-number-input, softphone-call-btn, softphone-key-1/star/hash), call-btn disabled until registered, and ClickToCallButton renders next to family.primary_contact_phone on /people Families view (data-testid 'click-to-call-256888111222' confirmed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/pbx/me/softphone", "issue": "ws_url, sip_uri, sip_domain, stun_url all rely on os.environ vars (PBX_WS_URL, PBX_SIP_DOMAIN, PBX_STUN_URL); only sip_domain + stun_url have fallback defaults. ws_url defaults to empty string — softphone will silently fail to register in any pod where PBX_WS_URL is not set (the JsSIP useEffect early-returns on falsy ws_url, so reg-state stays 'idle' rather than 'registering' or 'failed'). Consider returning a clearer error/banner when ws_url is empty so admins know to configure it."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Softphone registration", "issue": "reg-state remains 'idle' in preview because backend returns ws_url=''; the useEffect skips the JsSIP boot, never transitioning to 'registering' or 'failed'. UI shows the 'Connecting to PBX…' helper only for 'registering'/'failed'/'disconnected', so an 'idle' state with empty ws_url has no user-facing hint. Suggest a banner when config exists but ws_url is empty.", "affected_selectors": ["softphone-reg-state"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter176_pbx_phase2.py",
+    "/app/test_reports/pytest/iter176_pbx_phase2.xml"
+  ],
+  "action_items": [
+    "Verified bug fix already applied: added missing `import os` at top of /app/backend/routers/pbx.py (line 34) — without it, /me/softphone would have thrown NameError('os'). Both /me/softphone and /apply use os.environ.get; only routers/pbx.py needed the import.",
+    "Optional: surface a UI hint when /me/softphone returns config but ws_url is empty so admins know PBX_WS_URL must be set on the appliance side.",
+    "Optional: when register=true & username='', return validation error consistently — already done by /trunks POST (verified)."
+  ],
+  "critical_code_review_comments": [
+    "routers/pbx.py: previously missing `import os` despite `os.environ.get` usage in /me/softphone — FIXED in this iteration.",
+    "BrowserSoftphone.jsx:62 useEffect early-returns on !config?.ws_url so reg-state never advances past 'idle' when env var is empty — consider explicit 'unconfigured' state with a helper string.",
+    "ClickToCallButton.jsx: module-level _cachedConfig is keyed globally — if a user signs out and another logs in within the same page lifetime, stale config persists. Add an event listener for auth changes to clear cache.",
+    "pbx_ami.py: AMIClient uses one-shot socket per action — fine for low-volume; if /registrations is polled by FE every few sec under multi-trunk loads, consider a connection pool.",
+    "pbx_ami.py:217-228 safe_originate raises AMIError but the router catches it and returns 503 — works, but the body message includes the env-var name 'AMI_SECRET' which is an info leak to non-admins (note: route is admin-gated, so acceptable)."
+  ],
+  "updated_files": [
+    "/app/backend/routers/pbx.py (added missing `import os`)",
+    "/app/backend/tests/test_iter176_pbx_phase2.py (new — 15 tests)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (softphone hide/show, panel testids, family ClickToCallButton render — all verified)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (admin); ephemeral guest user created via /api/auth/register for RBAC tests",
+  "seed_data_creation": "Created ext 777/778/881/882/883 via API during tests; all cleaned up in finally blocks / fixture teardown. Created one TEST guest user via /auth/register for 403 RBAC checks, cleaned up in fixture teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 PBX backend is solid. The browser softphone CANNOT fully register in this preview pod because Asterisk + WSS endpoint are not reachable — that is expected per the agent_to_agent_context_note. The only meaningful real-world test for SIP signalling is on the user's appliance. For future iterations: (1) verify softphone-dial CustomEvent path with a mocked JsSIP UA reaching 'registered' state (would need test-mode bypass), (2) verify click-to-call-config cache invalidation on logout, (3) verify /api/pbx/originate happy path once AMI is reachable. The 15-test pytest file /app/backend/tests/test_iter176_pbx_phase2.py is the regression baseline; pair it with /app/backend/tests/test_iter175_pbx.py for full PBX coverage.",
+  "rca of the issue": "Root cause for the (would-have-been) /me/softphone 500: `os.environ.get(...)` was called without `import os` at the top of routers/pbx.py. Detected via static review before runtime exposure. Fix: added `import os` next to `import secrets/uuid/re`. Verified with pytest test_softphone_returns_creds_when_wss_assigned — now returns 200 with full payload."
+}

@@ -114,6 +114,9 @@ services:
       PBX_TOKEN: ${PBX_TOKEN:-}
       PBX_API_URL: ${PBX_API_URL:-http://localhost/api/pbx}
       PBX_RELOAD_INTERVAL: ${PBX_RELOAD_INTERVAL:-60}
+      # AMI — used by the FastAPI backend for live reload + originate
+      AMI_USERNAME: ${AMI_USERNAME:-connect-app}
+      AMI_SECRET: ${AMI_SECRET:-}
     volumes:
       - ./data/asterisk-config:/etc/asterisk
       - ./data/asterisk-voicemail:/var/spool/asterisk/voicemail

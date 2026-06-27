@@ -31,6 +31,7 @@ from typing import Optional, List
 import secrets
 import uuid
 import re
+import os
 
 from deps import db, require_admin
 
@@ -814,41 +815,154 @@ async def get_config_bundle(current_user: dict = Depends(require_admin)):
 
 @router.get("/registrations")
 async def list_registrations(current_user: dict = Depends(require_admin)):
-    """Snapshot of which extensions and trunks are currently registered.
-    On the appliance this proxies to Asterisk AMI `PJSIPShowContacts`. Phase-1
-    returns the DB state with a `live=false` flag — Phase-2 wires real AMI."""
+    """Live registration status from Asterisk AMI (when configured), merged
+    with the DB roster so the UI always has *something* to render even when
+    the appliance is unreachable.
+
+    Each extension row will get `registered: true` + `user_agent: 'Yealink T48S'`
+    when AMI returns a matching ContactList event for it. Trunks get
+    `registered: true` from PJSIPShowRegistrationsOutbound.Status='Registered'.
+    """
+    from pbx_ami import safe_list_registrations
     state = await _get_all_pbx_state()
+    live = await safe_list_registrations()
+    contacts_by_aor: dict[str, dict] = {}
+    for c in live.get("contacts") or []:
+        # Each ContactList event has AOR like "endpoint/contactURI" — we only
+        # care about the endpoint portion (i.e. the extension number).
+        aor = (c.get("AOR") or "").split("/")[0]
+        if aor:
+            contacts_by_aor[aor] = c
+    trunk_reg_by_id: dict[str, dict] = {}
+    for tr in live.get("trunk_regs") or []:
+        # Outbound registration event has ObjectName like 'trunk-trk_abc123-reg'
+        obj = tr.get("ObjectName") or ""
+        if obj.startswith("trunk-") and obj.endswith("-reg"):
+            tid = obj[len("trunk-"):-len("-reg")]
+            trunk_reg_by_id[tid] = tr
     extensions = [{
+        "id": e["id"],
         "number": e["number"],
         "display_name": e.get("display_name"),
-        "registered": False,
-        "live": False,
-        "user_agent": "",
+        "registered": e["number"] in contacts_by_aor,
+        "user_agent": (contacts_by_aor.get(e["number"]) or {}).get("UserAgent", ""),
+        "contact_uri": (contacts_by_aor.get(e["number"]) or {}).get("URI", ""),
+        "roundtrip_ms": _to_ms((contacts_by_aor.get(e["number"]) or {}).get("RoundtripUsec")),
     } for e in state["extensions"]]
     trunks = [{
         "id": t["id"],
         "name": t["name"],
         "host": t["host"],
-        "registered": False,
-        "live": False,
+        "registered": (trunk_reg_by_id.get(t["id"]) or {}).get("Status") == "Registered",
+        "status_text": (trunk_reg_by_id.get(t["id"]) or {}).get("Status", ""),
     } for t in state["trunks"]]
-    return {"extensions": extensions, "trunks": trunks,
-            "note": "AMI live-status integration coming in Phase 2"}
+    return {
+        "extensions": extensions,
+        "trunks": trunks,
+        "live": live.get("live", False),
+        "reason": live.get("reason", ""),
+    }
+
+
+def _to_ms(usec: Optional[str]) -> Optional[int]:
+    try: return int(int(usec) / 1000) if usec else None
+    except Exception: return None
 
 
 @router.post("/apply")
 async def apply_config(current_user: dict = Depends(require_admin)):
-    """Trigger a config reload on the appliance Asterisk.
-    Phase-1: returns a 200 with `applied=false` + instructions on how to wire
-    the AMI/SSH reload endpoint. Phase-2 implements the AMI handshake."""
+    """Trigger a live `core reload` on the appliance Asterisk via AMI.
+    Falls back to a 'skipped' status when AMI isn't configured (e.g. when
+    you're running the management UI in a pod that can't reach the SIP host)."""
+    from pbx_ami import safe_reload
+    result = await safe_reload()
     return {
-        "applied": False,
-        "message": ("In Phase 1, your appliance pulls fresh /api/pbx/config/* files "
-                    "and runs `asterisk -rx 'core reload'` (see docker-compose appliance). "
-                    "Live AMI reload arrives in Phase 2."),
+        "applied": result.get("reloaded", False),
+        "ami_response": result,
         "config_urls": {
             "pjsip": "/api/pbx/config/pjsip.conf",
             "extensions": "/api/pbx/config/extensions.conf",
             "voicemail": "/api/pbx/config/voicemail.conf",
         },
+    }
+
+
+@router.post("/originate")
+async def originate_call(data: dict, current_user: dict = Depends(require_admin)):
+    """Click-to-call. AMI Originate rings the operator's extension first; on
+    answer Asterisk bridges them to the target number through the matching
+    outbound route.
+
+    Body: { from_extension: '101', to_number: '+15551234567', caller_id?: 'Connect Op <+15551234567>' }
+    """
+    from pbx_ami import safe_originate, AMIError
+    from_ext = (data.get("from_extension") or "").strip()
+    to_num = (data.get("to_number") or "").strip()
+    if not from_ext or not to_num:
+        raise HTTPException(status_code=400, detail="from_extension + to_number required")
+    e = await db.pbx_extensions.find_one({"number": from_ext}, {"_id": 0})
+    if not e:
+        raise HTTPException(status_code=404, detail=f"Extension {from_ext} not found")
+    caller_id = data.get("caller_id") or e.get("outbound_caller_id") or f"{e.get('display_name', from_ext)} <{from_ext}>"
+    try:
+        r = await safe_originate(
+            channel=f"PJSIP/{from_ext}",
+            exten=to_num,
+            context=ASTERISK_INTERNAL_CONTEXT,    # outbound routes live here
+            caller_id=caller_id,
+            variables={"CONNECT_ORIGINATOR": current_user.get("id") or "system"},
+        )
+    except AMIError as ex:
+        raise HTTPException(status_code=503, detail=str(ex))
+    return {"originated": True, "ami_response": r}
+
+
+# ============================================================
+# Softphone helper endpoints (Phase 2)
+# ============================================================
+
+@router.get("/me/softphone")
+async def get_my_softphone(
+    current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user),
+):
+    """Return the calling user's SIP credentials for the in-browser softphone.
+
+    The first WebRTC-transport extension assigned to this user (via
+    pbx_extensions.user_id) wins. If the user has no extension, returns 204.
+    """
+    ext = await db.pbx_extensions.find_one(
+        {"user_id": current_user["id"], "transport": "transport-wss", "is_enabled": True},
+        {"_id": 0},
+    )
+    if not ext:
+        return Response(status_code=204)
+    return {
+        "extension": ext["number"],
+        "display_name": ext.get("display_name") or ext["number"],
+        "secret": ext["secret"],
+        # WebRTC connects to Asterisk over WSS — appliance Caddy proxies /ws → asterisk:8089
+        "ws_url": os.environ.get("PBX_WS_URL", ""),
+        "sip_uri": f"sip:{ext['number']}@{os.environ.get('PBX_SIP_DOMAIN', '5812.lubwamas.org')}",
+        "sip_domain": os.environ.get("PBX_SIP_DOMAIN", "5812.lubwamas.org"),
+        "stun_url": os.environ.get("PBX_STUN_URL", "stun:stun.l.google.com:19302"),
+        "allowed_codecs": ext.get("allowed_codecs") or ["opus", "ulaw"],
+    }
+
+
+@router.get("/me/click-to-call-config")
+async def get_my_call_config(
+    current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user),
+):
+    """Lightweight: just the user's extension number for the call buttons.
+    Returns 204 when the user has no extension."""
+    ext = await db.pbx_extensions.find_one(
+        {"user_id": current_user["id"], "is_enabled": True},
+        {"_id": 0, "number": 1, "display_name": 1, "transport": 1},
+    )
+    if not ext:
+        return Response(status_code=204)
+    return {
+        "extension": ext["number"],
+        "display_name": ext.get("display_name") or ext["number"],
+        "is_softphone": ext.get("transport") == "transport-wss",
     }

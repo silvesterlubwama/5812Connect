@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield } from 'lucide-react';
+import ClickToCallButton from '../components/ClickToCallButton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -499,7 +500,13 @@ export default function UnifiedPeoplePage() {
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <input type="checkbox" className="accent-primary" checked={selFamilies.has(f.id)} onChange={() => setSelFamilies(prev => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n; })} />
-                        <div><p className="font-medium">{f.family_name}</p><p className="text-xs text-muted-foreground">{f.primary_contact_name} &middot; {f.primary_contact_phone}</p></div>
+                        <div>
+                          <p className="font-medium">{f.family_name}</p>
+                          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                            {f.primary_contact_name} · {f.primary_contact_phone}
+                            {f.primary_contact_phone && <ClickToCallButton number={f.primary_contact_phone} />}
+                          </p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="secondary" className="text-xs">{childrenForFamily(f.id).length} children</Badge>

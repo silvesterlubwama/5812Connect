@@ -26,6 +26,7 @@ import { useI18n } from '../context/I18nContext';
 import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
 import Dialer from './Dialer';
+import BrowserSoftphone from './BrowserSoftphone';
 import { useCall } from '../context/CallContext';
 
 // Role helpers
@@ -662,6 +663,9 @@ export default function Layout() {
 
         <main className="flex-1 overflow-y-auto"><Outlet /></main>
       </div>
+
+      {/* Global WebRTC softphone — renders nothing if the user has no WSS extension */}
+      <BrowserSoftphone />
 
       {/* Global Search */}
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
