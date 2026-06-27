@@ -24,7 +24,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Phone, PhoneOff, PhoneIncoming, PhoneCall, Mic, MicOff, Pause, Play, X, Hash, Delete } from 'lucide-react';
+import { Phone, PhoneOff, PhoneIncoming, PhoneCall, Mic, MicOff, Pause, Play, X, Hash, Delete, History, ArrowDownLeft, ArrowUpRight, PhoneMissed } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 
@@ -39,13 +39,16 @@ export default function BrowserSoftphone() {
   const [config, setConfig] = useState(null);   // {extension, secret, ws_url, sip_uri, sip_domain, stun_url}
   const [regState, setRegState] = useState('idle');   // idle|registering|registered|failed|disconnected
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState('dial'); // dial | history
   const [dialed, setDialed] = useState('');
   const [activeCall, setActiveCall] = useState(null); // {direction:'out'|'in', peer:'...', duration_sec:0, muted, held}
   const [incomingCall, setIncomingCall] = useState(null);
+  const [recentCalls, setRecentCalls] = useState([]); // CDR rows
   const uaRef = useRef(null);
   const sessionRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const tickRef = useRef(null);
+  const callMetaRef = useRef(null); // {call_id, direction, peer, started_at, accepted, matched}
 
   // ── Fetch SIP credentials on mount ────────────────────────────
   useEffect(() => {
@@ -106,6 +109,16 @@ export default function BrowserSoftphone() {
           const peerDigits = (session.remote_identity.uri.user || '').replace(/\D/g, '');
           let resolvedPeer = rawPeer;
           let resolvedLink = null;
+          // Seed metadata so we can log the CDR even if call ends before lookup resolves
+          callMetaRef.current = {
+            call_id: session.id || `call_${Date.now()}`,
+            direction: 'incoming',
+            peer: rawPeer,
+            peer_digits: peerDigits,
+            started_at: new Date().toISOString(),
+            accepted: false,
+            matched: null,
+          };
           if (peerDigits.length >= 4) {
             api.get('/pbx/phone-lookup', { params: { number: peerDigits } })
               .then(r => {
@@ -113,6 +126,12 @@ export default function BrowserSoftphone() {
                 if (d.kind && d.name && d.name !== 'Unknown') {
                   resolvedPeer = `${d.name} · ${d.kind}`;
                   resolvedLink = d.link;
+                  if (callMetaRef.current) {
+                    callMetaRef.current.matched = {
+                      kind: d.kind, id: d.id, name: d.name, link: d.link,
+                    };
+                    callMetaRef.current.peer = resolvedPeer;
+                  }
                   setIncomingCall(c => c ? { ...c, peer: resolvedPeer, link: resolvedLink, kind: d.kind } : c);
                 }
                 toast.info(
@@ -154,6 +173,7 @@ export default function BrowserSoftphone() {
   const bindSession = (session) => {
     session.on('accepted', () => {
       setIncomingCall(null);
+      if (callMetaRef.current) callMetaRef.current.accepted = true;
       setActiveCall({
         direction: session.direction,
         peer: session.remote_identity.display_name || session.remote_identity.uri.user,
@@ -175,8 +195,48 @@ export default function BrowserSoftphone() {
       }, 1000);
     });
     session.on('ended', () => endCall(false));
-    session.on('failed', () => endCall(false));
+    session.on('failed', () => endCall(false, 'failed'));
     sessionRef.current = session;
+  };
+
+  // ── Fetch CDR history for the Recent tab ─────────────────────
+  const fetchRecents = useCallback(() => {
+    api.get('/pbx/cdr/me', { params: { limit: 20 } })
+      .then(r => setRecentCalls(r.data || []))
+      .catch(() => {/* widget keeps working without history */});
+  }, []);
+
+  useEffect(() => {
+    if (regState === 'registered') fetchRecents();
+  }, [regState, fetchRecents]);
+
+  // Persist a CDR row to the backend. Called from endCall().
+  const logCdr = (statusOverride) => {
+    const meta = callMetaRef.current;
+    if (!meta) return;
+    const activeStarted = activeCall?.started_at;
+    const durationSec = meta.accepted && activeStarted
+      ? Math.floor((Date.now() - activeStarted) / 1000)
+      : 0;
+    const isMissed = meta.direction === 'incoming' && !meta.accepted && statusOverride !== 'failed';
+    const status = statusOverride || (meta.accepted ? 'completed' : (isMissed ? 'missed' : 'declined'));
+    const body = {
+      call_id: meta.call_id,
+      extension: config?.extension || '',
+      direction: isMissed ? 'missed' : meta.direction,
+      peer: meta.peer,
+      started_at: meta.started_at,
+      duration_sec: durationSec,
+      status,
+      matched_kind: meta.matched?.kind || null,
+      matched_id: meta.matched?.id || null,
+      matched_name: meta.matched?.name || null,
+      matched_link: meta.matched?.link || null,
+    };
+    api.post('/pbx/cdr/log', body)
+      .then(() => fetchRecents())
+      .catch(() => {/* CDR logging is best-effort */});
+    callMetaRef.current = null;
   };
 
   // ── External dial event (from click-to-call buttons) ──────────
@@ -204,16 +264,41 @@ export default function BrowserSoftphone() {
     };
     try {
       const session = ua.call(dest, options);
+      // Seed CDR metadata so the call ends up in history regardless of outcome
+      callMetaRef.current = {
+        call_id: session.id || `call_${Date.now()}`,
+        direction: 'outgoing',
+        peer: target,
+        peer_digits: target.replace(/\D/g, ''),
+        started_at: new Date().toISOString(),
+        accepted: false,
+        matched: null,
+      };
+      // Best-effort lookup so the history row shows the CRM record name
+      const digits = target.replace(/\D/g, '');
+      if (digits.length >= 4) {
+        api.get('/pbx/phone-lookup', { params: { number: digits } })
+          .then(r => {
+            const d = r.data || {};
+            if (d.kind && d.name && d.name !== 'Unknown' && callMetaRef.current) {
+              callMetaRef.current.matched = { kind: d.kind, id: d.id, name: d.name, link: d.link };
+              callMetaRef.current.peer = `${d.name} · ${d.kind}`;
+            }
+          })
+          .catch(() => {/* noop */});
+      }
       bindSession(session);
       setActiveCall({ direction: 'outgoing', peer: target, started_at: Date.now(), duration_sec: 0, muted: false, held: false });
     } catch (e) { toast.error(`Call failed: ${e.message || e}`); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, regState]);
 
-  const endCall = (terminate = true) => {
+  const endCall = (terminate = true, statusOverride = null) => {
     if (terminate && sessionRef.current) {
       try { sessionRef.current.terminate(); } catch (_) {/* noop */}
     }
+    // Log CDR before clearing state (logCdr reads activeCall.started_at)
+    logCdr(statusOverride);
     sessionRef.current = null;
     setActiveCall(null);
     setIncomingCall(null);
@@ -331,8 +416,28 @@ export default function BrowserSoftphone() {
             </div>
           )}
 
-          {/* Dial pad (always visible when no incoming, no active) */}
+          {/* Tab switcher — only shown when not in a call */}
           {!incomingCall && !activeCall && (
+            <div className="flex border-b text-[11px]">
+              <button
+                className={`flex-1 py-1.5 flex items-center justify-center gap-1 ${view === 'dial' ? 'border-b-2 border-primary text-primary font-semibold' : 'text-muted-foreground'}`}
+                onClick={() => setView('dial')}
+                data-testid="softphone-tab-dial"
+              >
+                <Hash size={11} /> Dial
+              </button>
+              <button
+                className={`flex-1 py-1.5 flex items-center justify-center gap-1 ${view === 'history' ? 'border-b-2 border-primary text-primary font-semibold' : 'text-muted-foreground'}`}
+                onClick={() => { setView('history'); fetchRecents(); }}
+                data-testid="softphone-tab-history"
+              >
+                <History size={11} /> Recent {recentCalls.length > 0 && `(${recentCalls.length})`}
+              </button>
+            </div>
+          )}
+
+          {/* Dial pad (visible when no incoming, no active, view=dial) */}
+          {!incomingCall && !activeCall && view === 'dial' && (
             <div className="p-3 space-y-2" data-testid="softphone-dialpad">
               <div className="flex gap-1">
                 <input
@@ -368,6 +473,48 @@ export default function BrowserSoftphone() {
                   {regState === 'unconfigured' && 'PBX appliance WSS URL not set. Ask an admin to set PBX_WS_URL.'}
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Recent calls (history view) */}
+          {!incomingCall && !activeCall && view === 'history' && (
+            <div className="max-h-80 overflow-y-auto" data-testid="softphone-history">
+              {recentCalls.length === 0 && (
+                <p className="p-6 text-center text-[11px] text-muted-foreground">No recent calls yet.</p>
+              )}
+              {recentCalls.map(cdr => {
+                const isMissed = cdr.status === 'missed' || cdr.direction === 'missed';
+                const isOut = cdr.direction === 'outgoing';
+                const Icon = isMissed ? PhoneMissed : (isOut ? ArrowUpRight : ArrowDownLeft);
+                const iconCls = isMissed ? 'text-rose-600' : (isOut ? 'text-blue-600' : 'text-emerald-600');
+                const when = cdr.started_at ? new Date(cdr.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                return (
+                  <div key={cdr.id} className="px-3 py-2 border-b last:border-b-0 hover:bg-muted/30 group" data-testid={`softphone-cdr-${cdr.id}`}>
+                    <div className="flex items-center gap-2">
+                      <Icon size={13} className={iconCls + ' shrink-0'} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[12px] font-medium truncate">{cdr.matched_name || cdr.peer || cdr.peer_digits || 'Unknown'}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {when}
+                          {cdr.duration_sec > 0 && ` · ${fmt(cdr.duration_sec)}`}
+                          {cdr.matched_kind && ` · ${cdr.matched_kind}`}
+                        </p>
+                      </div>
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100" title="Call back"
+                              onClick={() => { setView('dial'); placeCall(cdr.peer_digits || cdr.peer); }}
+                              data-testid={`softphone-cdr-call-${cdr.id}`}>
+                        <Phone size={11} />
+                      </Button>
+                      {cdr.matched_link && (
+                        <a href={cdr.matched_link} className="text-[10px] underline text-primary opacity-0 group-hover:opacity-100 px-1"
+                           data-testid={`softphone-cdr-link-${cdr.id}`}>
+                          open
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

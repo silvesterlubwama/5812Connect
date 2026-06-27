@@ -3,7 +3,23 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 177 (Feb 2026)
+## Recently Resolved — Iteration 178 (Feb 2026)
+**PBX softphone "Recent Calls" panel — mini-CRM in the floating widget.**
+
+### Backend
+- `POST /api/pbx/cdr/log` — idempotent CDR row insert (upsert on `{id, user_id}`). Persists direction, peer, duration, status, plus a snapshot of the matched CRM record (kind/id/name/link) so the row keeps working even if the record is later deleted.
+- `GET /api/pbx/cdr/me?limit=20` — calling-user-scoped recent calls, newest first.
+
+### Frontend (`BrowserSoftphone.jsx`)
+- New Dial / Recent tab switcher (with count badge).
+- `callMetaRef` tracks call lifecycle (call_id, direction, accepted flag, matched record) and `endCall` logs the CDR on every session end/failure.
+- Recent list shows colored direction icons (outgoing/incoming/missed), CRM-resolved name (falls back to digits), timestamp + duration, and hover actions for "Call back" and "open record".
+- Outgoing-call lookup mirrors the incoming-call screen-pop so outbound rows also get matched records in history.
+
+### Testing
+- Iteration 178: **4/4 backend pytest pass** (`test_iter178_cdr.py`) — log+retrieve round-trip, idempotency on duplicate call_id, user-scoping, missed-call status. Iteration 177 suite still 9/9 green.
+
+
 **PBX Phase 3 (screen-pop + time-of-day routing) + chat/campus filtering hardening.**
 
 ### PBX Phase 3

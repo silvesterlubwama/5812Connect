@@ -1049,3 +1049,57 @@ async def phone_lookup(
             return hit
     # Children: their parents' phone is on the family record — already covered above.
     return {"kind": None, "name": "Unknown", "phone": digits, "link": None}
+
+
+# ============================================================
+# CALL DETAIL RECORDS (CDR) — browser-softphone-logged
+# ============================================================
+# Asterisk has its own CDR via the AMI but in the preview environment the SIP
+# layer is mocked, so we let the browser softphone log every call it places /
+# receives. Each row stores the matched CRM record (if any) so the user can
+# jump back to it from history. Indexed on (user_id, started_at) for fast
+# "last 20 calls" queries.
+
+@router.post("/cdr/log")
+async def log_cdr(
+    data: dict,
+    current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user),
+):
+    """Append a Call Detail Record from the browser softphone (or any other
+    SIP client we add later). Idempotent on `call_id` so retries from flaky
+    networks don't duplicate the row."""
+    call_id = (data.get("call_id") or "").strip() or _id("call")
+    doc = {
+        "id": call_id,
+        "user_id": current_user["id"],
+        "extension": data.get("extension") or "",
+        "direction": data.get("direction") or "outgoing",  # outgoing|incoming|missed
+        "peer": (data.get("peer") or "").strip()[:80],
+        "peer_digits": "".join(c for c in (data.get("peer") or "") if c.isdigit())[-15:],
+        "started_at": data.get("started_at") or _now(),
+        "duration_sec": int(data.get("duration_sec") or 0),
+        "status": data.get("status") or "completed",  # completed|missed|failed|declined
+        # CRM match snapshot — store so the row keeps working even if the record is later deleted
+        "matched_kind": data.get("matched_kind"),
+        "matched_id": data.get("matched_id"),
+        "matched_name": data.get("matched_name"),
+        "matched_link": data.get("matched_link"),
+        "logged_at": _now(),
+    }
+    await db.pbx_cdr.update_one({"id": call_id, "user_id": current_user["id"]},
+                                 {"$set": doc}, upsert=True)
+    return {"logged": True, "id": call_id}
+
+
+@router.get("/cdr/me")
+async def my_cdr(
+    limit: int = 20,
+    current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user),
+):
+    """Return the calling user's most recent CDR rows for the softphone history panel."""
+    limit = max(1, min(int(limit or 20), 100))
+    rows = await db.pbx_cdr.find(
+        {"user_id": current_user["id"]},
+        {"_id": 0}
+    ).sort("started_at", -1).limit(limit).to_list(limit)
+    return rows
