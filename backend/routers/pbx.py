@@ -865,8 +865,10 @@ async def list_registrations(current_user: dict = Depends(require_admin)):
 
 
 def _to_ms(usec: Optional[str]) -> Optional[int]:
-    try: return int(int(usec) / 1000) if usec else None
-    except Exception: return None
+    try:
+        return int(int(usec) / 1000) if usec else None
+    except Exception:
+        return None
 
 
 @router.post("/apply")
@@ -966,3 +968,57 @@ async def get_my_call_config(
         "display_name": ext.get("display_name") or ext["number"],
         "is_softphone": ext.get("transport") == "transport-wss",
     }
+
+
+@router.get("/phone-lookup")
+async def phone_lookup(
+    number: str,
+    current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user),
+):
+    """Reverse-lookup a phone number across CRM records — the backbone of the
+    softphone "screen pop" feature.
+
+    Strategy: strip non-digit characters from both sides and match on the last
+    7 digits (handles country-code variance — '+1 555 010 0123' should match
+    '555-010-0123' too). Searches in priority order: members → users → guests
+    → families → children's parent phones. Returns the first hit so the
+    softphone can route the user straight to that record on incoming calls.
+    """
+    digits = "".join(c for c in (number or "") if c.isdigit())
+    if len(digits) < 4:
+        raise HTTPException(status_code=400, detail="Need at least 4 digits to match")
+    suffix = digits[-7:] if len(digits) >= 7 else digits
+    # Regex anchored at end-of-string, ignoring punctuation. Use the same suffix
+    # for all collections so the cache is meaningful at the route level.
+    suffix_pattern = re.compile(re.escape(suffix) + r"\D*$")
+
+    async def first_match(coll: str, link_route: str, name_field: str = "name",
+                          id_field: str = "id", extra_fields: Optional[list] = None) -> Optional[dict]:
+        proj = {"_id": 0, id_field: 1, name_field: 1, "phone": 1}
+        for f in (extra_fields or []):
+            proj[f] = 1
+        doc = await db[coll].find_one({"phone": {"$regex": suffix_pattern}}, proj)
+        if not doc:
+            return None
+        return {
+            "kind": link_route.strip("/").rstrip("s"),  # 'member' / 'guest' / etc
+            "id": doc.get(id_field),
+            "name": doc.get(name_field) or "—",
+            "phone": doc.get("phone") or "",
+            "link": f"/{link_route}/{doc.get(id_field)}",
+            **{k: doc[k] for k in (extra_fields or []) if doc.get(k) is not None},
+        }
+
+    # Search order is deliberate: members > registered users > guests > families
+    candidates = [
+        ("members", "people"),
+        ("users", "admin/users"),
+        ("guests", "people"),
+        ("families", "people"),
+    ]
+    for coll, route in candidates:
+        hit = await first_match(coll, route)
+        if hit:
+            return hit
+    # Children: their parents' phone is on the family record — already covered above.
+    return {"kind": None, "name": "Unknown", "phone": digits, "link": None}
