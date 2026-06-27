@@ -3,7 +3,39 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 179 (Feb 2026)
+## Recently Resolved — Iteration 180 (Feb 2026)
+**Call recording (per-extension toggle + retention) + Skill-based queues + Lost-6 verified.**
+
+### Recording
+- `GET/PUT /api/pbx/recording-settings` — global retention_days (1..3650), format (wav/wav49/gsm/g722), stereo, announce_recording, storage_path.
+- Per-extension `recording_enabled` + `skills` fields on `pbx_extensions` (create + update).
+- Dialplan renderer emits `MixMonitor(${UNIQUEID}.<fmt>,b)` before `Dial(PJSIP/...)` for any recording-enabled extension. Beep prefix when `announce_recording=true`.
+- `POST /api/pbx/cdr/{call_id}/recording` stamps `recording_url` on the CDR row (Asterisk MixMonitor hits this on file finalisation).
+- `POST /api/pbx/recording-retention/purge` unlinks `recording_url` from rows older than the retention window. File deletion happens on the appliance.
+
+### Queues + Skill-based routing
+- Full CRUD `/api/pbx/queues`: name, strategy (ringall/leastrecent/fewestcalls/random/rrmemory/linear), agent_extension_ids, required_skills, ring_timeout, wrapup_time, max_wait, MOH, announce flags, fallback.
+- `queues.conf` generator emits one `[q-<id>]` section per queue with only those agents whose `skills` set is a SUPERSET of the queue's `required_skills`. Skill-gating happens at config-render time so Asterisk never even tries to ring an ineligible agent.
+- Inbound routes accept `destination_type='queue'`; delete-queue cascade resets pointing inbound routes to `hangup`.
+
+### Frontend
+- New `Queues` tab with create/edit dialog (strategy, skills, agents with eligibility hint). New `Recording` tab with retention + format + storage path + beep flag + run-purge button.
+- Extension dialog gains `recording_enabled` toggle and free-text skills field (comma-separated, with existing-skills hint).
+- Inbound destination type now includes `Queue`. Config preview adds `queues.conf`.
+
+### Lost-6 verification (testing agent iter 181)
+- **Tasks assignee scope**: code-review verified (TasksPage `boardStaff` filters by STAFF_ROLES + board.location_id).
+- **Calendar tasks-due**: visible — CalendarPage maps `tasksApi.list()` due-dates into events.
+- **Scheduler scope + auto-time**: confirmed — event selection auto-populates start/end; campus-scoped staff only.
+- **Chat ghost users**: backend tightened to STAFF_ROLES + active + exclude self (iter 177 + verified).
+- **Campus switcher reset**: 'All My Campuses' option added for non-admin multi-campus users.
+- **Restricted locations**: deps.py campus filter applied consistently — confirmed at routes that previously bypassed.
+
+### Testing
+- Iteration 180: **10/10 backend pytest pass** (`test_iter180_queues_recording.py`). Combined PBX suite **29/29 green** (iter 177+178+179+180).
+- Iteration 181 (testing agent): backend 100% + frontend 100%, no critical issues. Only minor testid-naming cosmetic notes.
+
+
 **PBX Call Analytics dashboard — admin-only insights from CDR.**
 
 ### Backend (`/api/pbx/cdr/analytics`)
