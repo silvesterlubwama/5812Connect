@@ -18,7 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
-import { Phone, Server, ArrowDownToLine, ArrowUpFromLine, Users, ListTree, FileCode, Plus, Trash2, Pencil, Copy, RefreshCw, Check, X, BarChart3 } from 'lucide-react';
+import { Phone, Server, ArrowDownToLine, ArrowUpFromLine, Users, ListTree, FileCode, Plus, Trash2, Pencil, Copy, RefreshCw, Check, X, BarChart3, Mic, Headphones } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -41,6 +41,8 @@ export default function PBXAdminPage() {
   const [outbound, setOutbound] = useState([]);
   const [huntGroups, setHuntGroups] = useState([]);
   const [ivrs, setIvrs] = useState([]);
+  const [queues, setQueues] = useState([]);
+  const [recSettings, setRecSettings] = useState({ retention_days: 30, format: 'wav', stereo: true, announce_recording: false, storage_path: '/var/spool/asterisk/monitor' });
   const [configBundle, setConfigBundle] = useState(null);
   const [loading, setLoading] = useState(true);
   // Dialogs
@@ -50,6 +52,7 @@ export default function PBXAdminPage() {
   const [editingOut, setEditingOut] = useState(null);
   const [editingHg, setEditingHg] = useState(null);
   const [editingIvr, setEditingIvr] = useState(null);
+  const [editingQ, setEditingQ] = useState(null);
   const [showConfig, setShowConfig] = useState({ open: false, fname: 'pjsip.conf' });
 
   const fetchAll = async () => {
@@ -61,17 +64,21 @@ export default function PBXAdminPage() {
       ['outbound', '/pbx/outbound-routes'],
       ['hunt_groups', '/pbx/hunt-groups'],
       ['ivrs', '/pbx/ivrs'],
+      ['queues', '/pbx/queues'],
+      ['rec', '/pbx/recording-settings'],
     ];
     const results = await Promise.allSettled(calls.map(([_, url]) => api.get(url)));
     results.forEach((r, idx) => {
       const [name] = calls[idx];
-      const data = r.status === 'fulfilled' ? (r.value.data || []) : [];
-      if (name === 'extensions') setExtensions(data);
-      if (name === 'trunks') setTrunks(data);
-      if (name === 'inbound') setInbound(data);
-      if (name === 'outbound') setOutbound(data);
-      if (name === 'hunt_groups') setHuntGroups(data);
-      if (name === 'ivrs') setIvrs(data);
+      const data = r.status === 'fulfilled' ? (r.value.data ?? (Array.isArray(r.value.data) ? [] : {})) : [];
+      if (name === 'extensions') setExtensions(data || []);
+      if (name === 'trunks') setTrunks(data || []);
+      if (name === 'inbound') setInbound(data || []);
+      if (name === 'outbound') setOutbound(data || []);
+      if (name === 'hunt_groups') setHuntGroups(data || []);
+      if (name === 'ivrs') setIvrs(data || []);
+      if (name === 'queues') setQueues(data || []);
+      if (name === 'rec' && data && !Array.isArray(data)) setRecSettings(data);
     });
     setLoading(false);
   };
@@ -81,6 +88,13 @@ export default function PBXAdminPage() {
   const extsById = useMemo(() => Object.fromEntries(extensions.map(e => [e.id, e])), [extensions]);
   const hgsById = useMemo(() => Object.fromEntries(huntGroups.map(h => [h.id, h])), [huntGroups]);
   const ivrsById = useMemo(() => Object.fromEntries(ivrs.map(v => [v.id, v])), [ivrs]);
+  const queuesById = useMemo(() => Object.fromEntries(queues.map(q => [q.id, q])), [queues]);
+  const allSkills = useMemo(() => {
+    const s = new Set();
+    extensions.forEach(e => (e.skills || []).forEach(sk => s.add(sk)));
+    queues.forEach(q => (q.required_skills || []).forEach(sk => s.add(sk)));
+    return Array.from(s).sort();
+  }, [extensions, queues]);
 
   const refreshConfig = async () => {
     try {
@@ -138,7 +152,9 @@ export default function PBXAdminPage() {
           <TabsTrigger value="inbound" data-testid="pbx-tab-inbound"><ArrowDownToLine size={11} className="mr-1" /> Inbound ({inbound.length})</TabsTrigger>
           <TabsTrigger value="outbound" data-testid="pbx-tab-outbound"><ArrowUpFromLine size={11} className="mr-1" /> Outbound ({outbound.length})</TabsTrigger>
           <TabsTrigger value="hunt" data-testid="pbx-tab-hunt"><Users size={11} className="mr-1" /> Hunt groups ({huntGroups.length})</TabsTrigger>
+          <TabsTrigger value="queues" data-testid="pbx-tab-queues"><Headphones size={11} className="mr-1" /> Queues ({queues.length})</TabsTrigger>
           <TabsTrigger value="ivr" data-testid="pbx-tab-ivr"><ListTree size={11} className="mr-1" /> IVRs ({ivrs.length})</TabsTrigger>
+          <TabsTrigger value="recording" data-testid="pbx-tab-recording"><Mic size={11} className="mr-1" /> Recording</TabsTrigger>
           <TabsTrigger value="analytics" data-testid="pbx-tab-analytics"><BarChart3 size={11} className="mr-1" /> Analytics</TabsTrigger>
         </TabsList>
 
@@ -276,6 +292,43 @@ export default function PBXAdminPage() {
           </CardContent></Card>
         </TabsContent>
 
+        {/* ─── Queues ──────────────────────────────────────────────── */}
+        <TabsContent value="queues">
+          <Card><CardContent className="p-3 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs text-muted-foreground">Skill-based call queues. Add agents (extensions) and optional required skills — only agents carrying ALL required skill tags will be rung.</p>
+              <Button size="sm" onClick={() => setEditingQ({ strategy: 'ringall', agent_extension_ids: [], required_skills: [], ring_timeout: 20, wrapup_time: 5, max_wait: 120, moh_class: 'default', is_enabled: true })} data-testid="pbx-add-queue"><Plus size={11} className="mr-1" /> Queue</Button>
+            </div>
+            {queues.length === 0 && !loading && <EmptyState title="No queues yet" description="Create one to route inbound calls by agent skill." />}
+            <div className="grid gap-2">
+              {queues.map(q => {
+                const required = q.required_skills || [];
+                const eligibleAgents = (q.agent_extension_ids || []).filter(id => {
+                  const e = extsById[id];
+                  if (!e) return false;
+                  const skills = new Set(e.skills || []);
+                  return required.every(s => skills.has(s));
+                });
+                return (
+                  <div key={q.id} className="border rounded-lg p-2 flex items-center gap-3" data-testid={`pbx-queue-${q.id}`}>
+                    <Headphones size={14} className="text-primary" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{q.name}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {q.strategy} · {eligibleAgents.length}/{(q.agent_extension_ids || []).length} eligible agents · wait≤{q.max_wait}s
+                        {required.length > 0 && ` · skills: ${required.join(', ')}`}
+                      </p>
+                    </div>
+                    {!q.is_enabled && <Badge variant="outline" className="text-[10px]">disabled</Badge>}
+                    <Button size="sm" variant="ghost" className="h-7" onClick={() => setEditingQ(q)} data-testid={`pbx-queue-edit-${q.id}`}><Pencil size={11} /></Button>
+                    <Button size="sm" variant="ghost" className="h-7 text-rose-600" onClick={() => remove('queue', '/pbx/queues', q.id, setQueues)} data-testid={`pbx-queue-del-${q.id}`}><Trash2 size={11} /></Button>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent></Card>
+        </TabsContent>
+
         {/* ─── IVRs ────────────────────────────────────────────────── */}
         <TabsContent value="ivr">
           <Card><CardContent className="p-3 space-y-3">
@@ -296,6 +349,64 @@ export default function PBXAdminPage() {
                   <Button size="sm" variant="ghost" className="h-7 text-rose-600" onClick={() => remove('IVR', '/pbx/ivrs', v.id, setIvrs)}><Trash2 size={11} /></Button>
                 </div>
               ))}
+            </div>
+          </CardContent></Card>
+        </TabsContent>
+
+        {/* ─── Recording settings ─────────────────────────────────── */}
+        <TabsContent value="recording">
+          <Card><CardContent className="p-3 space-y-3" data-testid="pbx-recording-panel">
+            <p className="text-xs text-muted-foreground">Global call recording policy. Per-extension recording is toggled on each extension. Files older than the retention window are auto-unlinked from the analytics dashboard (run the purge manually below).</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Retention (days)</Label>
+                <Input type="number" min={1} max={3650} value={recSettings.retention_days}
+                       onChange={e => setRecSettings({ ...recSettings, retention_days: parseInt(e.target.value) || 1 })}
+                       data-testid="rec-retention-days" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">File format</Label>
+                <Select value={recSettings.format} onValueChange={v => setRecSettings({ ...recSettings, format: v })}>
+                  <SelectTrigger data-testid="rec-format"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="wav">wav</SelectItem>
+                    <SelectItem value="wav49">wav49 (smaller)</SelectItem>
+                    <SelectItem value="gsm">gsm</SelectItem>
+                    <SelectItem value="g722">g722 (HD)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 col-span-2">
+                <Label className="text-xs">Asterisk storage path (on the appliance)</Label>
+                <Input value={recSettings.storage_path || ''}
+                       onChange={e => setRecSettings({ ...recSettings, storage_path: e.target.value })}
+                       placeholder="/var/spool/asterisk/monitor"
+                       data-testid="rec-storage-path" />
+              </div>
+              <label className="flex items-center gap-2 text-xs col-span-2">
+                <input type="checkbox" checked={!!recSettings.stereo} onChange={e => setRecSettings({ ...recSettings, stereo: e.target.checked })} data-testid="rec-stereo" />
+                Stereo (separate channels — caller / agent)
+              </label>
+              <label className="flex items-center gap-2 text-xs col-span-2">
+                <input type="checkbox" checked={!!recSettings.announce_recording} onChange={e => setRecSettings({ ...recSettings, announce_recording: e.target.checked })} data-testid="rec-announce" />
+                Play a beep before each recorded call (compliance)
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={async () => {
+                try { await api.put('/pbx/recording-settings', recSettings); toast.success('Recording settings saved'); }
+                catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+              }} data-testid="rec-save">Save settings</Button>
+              <Button size="sm" variant="outline" onClick={async () => {
+                if (!window.confirm(`Unlink recordings older than ${recSettings.retention_days} day(s)?`)) return;
+                try {
+                  const r = await api.post('/pbx/recording-retention/purge');
+                  toast.success(`Purged ${r.data.purged} recording(s)`);
+                } catch (e) { toast.error(e.response?.data?.detail || 'Purge failed'); }
+              }} data-testid="rec-purge">Run retention purge now</Button>
+            </div>
+            <div className="border-t pt-2 text-[11px] text-muted-foreground">
+              <p>Recording is currently enabled on <strong>{extensions.filter(e => e.recording_enabled).length}</strong> of {extensions.length} extension(s).</p>
             </div>
           </CardContent></Card>
         </TabsContent>
@@ -363,6 +474,28 @@ export default function PBXAdminPage() {
               )}
               <div className="space-y-1"><Label className="text-xs">Outbound caller ID (optional)</Label>
                 <Input value={editingExt.outbound_caller_id || ''} onChange={e => setEditingExt({ ...editingExt, outbound_caller_id: e.target.value })} placeholder="+1 555 010 0000" />
+              </div>
+              <div className="space-y-1 border-t pt-2">
+                <Label className="text-xs flex items-center gap-1"><Mic size={11} /> Call recording</Label>
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={!!editingExt.recording_enabled}
+                         onChange={e => setEditingExt({ ...editingExt, recording_enabled: e.target.checked })}
+                         data-testid="pbx-ext-recording-enabled" />
+                  Record every call placed to / from this extension (Asterisk MixMonitor)
+                </label>
+                <p className="text-[10px] text-muted-foreground">Retention is configured globally on the Recording tab. Recordings appear next to the CDR row.</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Skills (comma-separated, for queue routing)</Label>
+                <Input
+                  value={(editingExt.skills || []).join(', ')}
+                  onChange={e => setEditingExt({ ...editingExt, skills: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                  placeholder="spanish, tier-2, billing"
+                  data-testid="pbx-ext-skills"
+                />
+                {allSkills.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground">Existing skills in use: {allSkills.join(', ')}</p>
+                )}
               </div>
               {editingExt.id && editingExt.secret && (
                 <div className="rounded-lg bg-muted/30 p-2 text-[11px] space-y-1">
@@ -479,6 +612,7 @@ export default function PBXAdminPage() {
                     <SelectContent>
                       <SelectItem value="extension">Extension</SelectItem>
                       <SelectItem value="hunt_group">Hunt group</SelectItem>
+                      <SelectItem value="queue">Queue</SelectItem>
                       <SelectItem value="ivr">IVR menu</SelectItem>
                       <SelectItem value="voicemail">Voicemail</SelectItem>
                       <SelectItem value="hangup">Hangup</SelectItem>
@@ -492,6 +626,7 @@ export default function PBXAdminPage() {
                       <SelectContent>
                         {editingInb.destination_type === 'extension' && extensions.map(e => <SelectItem key={e.id} value={e.id}>{e.number} · {e.display_name}</SelectItem>)}
                         {editingInb.destination_type === 'hunt_group' && huntGroups.map(h => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+                        {editingInb.destination_type === 'queue' && queues.map(q => <SelectItem key={q.id} value={q.id}>{q.name}</SelectItem>)}
                         {editingInb.destination_type === 'ivr' && ivrs.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
                         {editingInb.destination_type === 'voicemail' && extensions.filter(e => e.voicemail_enabled).map(e => <SelectItem key={e.id} value={e.id}>{e.number} · {e.display_name}</SelectItem>)}
                       </SelectContent>
@@ -683,6 +818,111 @@ export default function PBXAdminPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ─── Queue dialog ────────────────────────────────────────── */}
+      <Dialog open={!!editingQ} onOpenChange={(o) => { if (!o) setEditingQ(null); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="pbx-queue-dialog">
+          <DialogHeader>
+            <DialogTitle>{editingQ?.id ? 'Edit queue' : 'New queue'}</DialogTitle>
+            <DialogDescription className="text-xs">Skill-based call queues route inbound calls to agents tagged with the matching skills.</DialogDescription>
+          </DialogHeader>
+          {editingQ && (
+            <div className="space-y-2 mt-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Name *</Label>
+                  <Input value={editingQ.name || ''} onChange={e => setEditingQ({ ...editingQ, name: e.target.value })} placeholder="Sales — Spanish line" data-testid="pbx-queue-name" />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Internal extension (optional)</Label>
+                  <Input value={editingQ.extension_number || ''} onChange={e => setEditingQ({ ...editingQ, extension_number: e.target.value })} placeholder="e.g. 700" data-testid="pbx-queue-extension" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Strategy</Label>
+                  <Select value={editingQ.strategy || 'ringall'} onValueChange={v => setEditingQ({ ...editingQ, strategy: v })}>
+                    <SelectTrigger data-testid="pbx-queue-strategy"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ringall">Ring all at once</SelectItem>
+                      <SelectItem value="leastrecent">Least recently called</SelectItem>
+                      <SelectItem value="fewestcalls">Fewest calls handled</SelectItem>
+                      <SelectItem value="random">Random</SelectItem>
+                      <SelectItem value="rrmemory">Round robin (with memory)</SelectItem>
+                      <SelectItem value="linear">Linear (in order)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Max wait (sec)</Label>
+                  <Input type="number" min={10} max={3600} value={editingQ.max_wait || 120}
+                         onChange={e => setEditingQ({ ...editingQ, max_wait: parseInt(e.target.value) || 120 })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Ring timeout (sec)</Label>
+                  <Input type="number" min={5} max={120} value={editingQ.ring_timeout || 20}
+                         onChange={e => setEditingQ({ ...editingQ, ring_timeout: parseInt(e.target.value) || 20 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Wrapup (sec)</Label>
+                  <Input type="number" min={0} max={300} value={editingQ.wrapup_time || 5}
+                         onChange={e => setEditingQ({ ...editingQ, wrapup_time: parseInt(e.target.value) || 0 })} />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">MOH class</Label>
+                  <Input value={editingQ.moh_class || 'default'} onChange={e => setEditingQ({ ...editingQ, moh_class: e.target.value })} placeholder="default" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Required skills (comma-separated)</Label>
+                <Input
+                  value={(editingQ.required_skills || []).join(', ')}
+                  onChange={e => setEditingQ({ ...editingQ, required_skills: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                  placeholder="spanish, billing"
+                  data-testid="pbx-queue-skills"
+                />
+                <p className="text-[10px] text-muted-foreground">Agents must carry ALL listed skills to be eligible. Leave blank for no skill gating.</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Agents</Label>
+                <div className="grid grid-cols-2 gap-1 max-h-44 overflow-y-auto border rounded p-2" data-testid="pbx-queue-agents">
+                  {extensions.map(e => {
+                    const skills = new Set(e.skills || []);
+                    const eligible = (editingQ.required_skills || []).every(s => skills.has(s));
+                    return (
+                      <label key={e.id} className={`flex items-center gap-1 text-[11px] ${!eligible ? 'opacity-50' : ''}`}>
+                        <input type="checkbox" checked={(editingQ.agent_extension_ids || []).includes(e.id)} onChange={ev => setEditingQ({
+                          ...editingQ,
+                          agent_extension_ids: ev.target.checked
+                            ? [...(editingQ.agent_extension_ids || []), e.id]
+                            : (editingQ.agent_extension_ids || []).filter(x => x !== e.id),
+                        })} />
+                        {e.number} · {e.display_name}
+                        {!eligible && <span className="text-rose-600 text-[9px]">(missing skill)</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={!!editingQ.announce_position}
+                         onChange={e => setEditingQ({ ...editingQ, announce_position: e.target.checked })} />
+                  Announce queue position
+                </label>
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={!!editingQ.announce_holdtime}
+                         onChange={e => setEditingQ({ ...editingQ, announce_holdtime: e.target.checked })} />
+                  Announce hold time
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={editingQ.is_enabled !== false} onChange={e => setEditingQ({ ...editingQ, is_enabled: e.target.checked })} />
+                Enabled
+              </label>
+              <div className="flex gap-2 pt-2">
+                <Button variant="ghost" className="flex-1" onClick={() => setEditingQ(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={() => save('Queue', '/pbx/queues', editingQ, setEditingQ, setQueues)} data-testid="pbx-queue-save">Save</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* ─── IVR dialog ──────────────────────────────────────────── */}
       <Dialog open={!!editingIvr} onOpenChange={(o) => { if (!o) setEditingIvr(null); }}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="pbx-ivr-dialog">
@@ -769,7 +1009,7 @@ export default function PBXAdminPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-2 mb-2">
-            {['pjsip.conf', 'extensions.conf', 'voicemail.conf'].map(f => (
+            {['pjsip.conf', 'extensions.conf', 'voicemail.conf', 'queues.conf'].map(f => (
               <Button key={f} size="sm" variant={showConfig.fname === f ? 'default' : 'outline'} onClick={() => setShowConfig({ open: true, fname: f })} data-testid={`pbx-config-tab-${f.replace('.', '-')}`}>
                 {f}
               </Button>

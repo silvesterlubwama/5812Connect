@@ -1,0 +1,29 @@
+{
+  "summary": "Iter181 — Tested PBX recording/queues/skill routing + Lost-6 frontend sweep. All 10 iter180 backend tests pass; added cascade-on-delete spot check (queue delete -> inbound destination_type='hangup', verified). Frontend new features (Queues tab, Recording tab, Extension dialog recording/skills, Inbound dest=queue) all render and persist via UI. Lost-6 paths verified by code+UI for Scheduler event-select, Calendar task legend, Tasks boardStaff filter (code), Campus switcher (code path correct: 'All My Campuses' shown for non-global-admin with multiple locations; admin login is global-admin so shows 'All Locations' as expected).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter180_queues_recording.py",
+    "/app/test_reports/pytest/iter181_results.xml"
+  ],
+  "action_items": [
+    "Optional: rename testids `rec-save`, `rec-purge`, `rec-retention-days`, `rec-format`, `rec-stereo`, `rec-announce`, `rec-storage-path` to `pbx-rec-*` to match the names referenced in the review request prose (functional behavior is correct, only the testid names diverge from the prose).",
+    "Optional: rename `pbx-add-queue` -> `pbx-queue-new`, `pbx-add-extension` -> `pbx-ext-new`, `pbx-inb-dest-type` -> `pbx-inbound-dest-type` to align with prose; not blocking — the dialog testids `pbx-queue-dialog` and the new feature fields `pbx-ext-recording-enabled` and `pbx-ext-skills` match exactly.",
+    "Tasks-page assignee scope: the Lost-6 verification of 'only campus-scoped staff in the assignee dropdown' was confirmed via code review (boardStaff useMemo at TasksPage.jsx:64-77 filters by STAFF_ROLES AND board.location_id). No location-scoped board with location_id was available in the seeded dataset to exercise the runtime path end-to-end, so this remains a code-review-verified item rather than a runtime-verified one."
+  ],
+  "critical_code_review_comments": [
+    "PBXAdminPage.jsx is 1026 lines — close to the 700-line threshold; consider extracting Queue / Recording / Extension dialogs into sub-components.",
+    "Recording-tab testid prefix is inconsistent with the rest of the page (`rec-*` vs `pbx-*`). Minor consistency issue."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (login uses `identifier` field with placeholder 'Email, phone, or national ID'; there is no input[name=identifier] — selector must use placeholder).",
+  "seed_data_creation": "Test created (and self-cleaned within iter180 tests) extensions 1981-1986 and one TEST_Q_<ts> queue via UI was created and remains; cleanup recommended if running again.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login selector tip: use input[placeholder*='Email, phone' i], not input[name='identifier']. PBX route is `/pbx` (not `/pbx-admin`). Recording testids use `rec-*` prefix not `pbx-rec-*`. Queue 'new' button is `pbx-add-queue`. Inbound dest-type is `pbx-inb-dest-type`. The admin user is a global admin so campus switcher shows 'All Locations'; to test 'All My Campuses' you need a non-global-admin user with `location_ids.length > 1`."
+}

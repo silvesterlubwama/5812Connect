@@ -116,6 +116,10 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
         "voicemail_pin": str(data.get("voicemail_pin") or "".join([str(secrets.randbelow(10)) for _ in range(4)])),
         "voicemail_email": data.get("voicemail_email") or "",
         "outbound_caller_id": data.get("outbound_caller_id") or "",
+        # Per-extension call recording. Renders MixMonitor() in the dialplan.
+        "recording_enabled": bool(data.get("recording_enabled", False)),
+        # Skill tags for queue routing. Free-form strings, e.g. ["spanish","tier-2"].
+        "skills": list(data.get("skills") or []),
         "is_enabled": True,
         "created_at": _now(),
         "updated_at": _now(),
@@ -128,7 +132,7 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
 async def update_extension(ext_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"display_name", "user_id", "transport", "allowed_codecs", "max_contacts",
                "voicemail_enabled", "voicemail_pin", "voicemail_email",
-               "outbound_caller_id", "is_enabled"}
+               "outbound_caller_id", "recording_enabled", "skills", "is_enabled"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "number" in data:
         _validate_extension_number(data["number"])
@@ -252,7 +256,7 @@ async def list_inbound(current_user: dict = Depends(require_admin)):
 async def create_inbound(data: dict, current_user: dict = Depends(require_admin)):
     _validate_pattern(data.get("did_pattern"))
     dt = data.get("destination_type")
-    if dt not in {"extension", "hunt_group", "ivr", "voicemail", "trunk", "hangup"}:
+    if dt not in {"extension", "hunt_group", "ivr", "queue", "voicemail", "trunk", "hangup"}:
         raise HTTPException(status_code=400, detail="Invalid destination_type")
     route = {
         "id": _id("inb"),
@@ -398,6 +402,121 @@ async def delete_huntgroup(hg_id: str, current_user: dict = Depends(require_admi
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Hunt group not found")
     return {"deleted": True}
+
+
+# ============================================================
+# QUEUES — skill-based call routing
+# ============================================================
+# A queue rings a set of agents (extensions) according to a strategy. Optionally
+# requires callers to match one or more skills; only agents whose `skills` list
+# includes ALL required skills will be rung. Falls back to a configurable
+# destination on timeout / no-agents-available.
+
+_QUEUE_STRATEGIES = {"ringall", "leastrecent", "fewestcalls", "random", "rrmemory", "linear"}
+
+
+@router.get("/queues")
+async def list_queues(current_user: dict = Depends(require_admin)):
+    out: List[dict] = []
+    async for q in db.pbx_queues.find({}, {"_id": 0}).sort("name", 1):
+        out.append(q)
+    return out
+
+
+@router.post("/queues")
+async def create_queue(data: dict, current_user: dict = Depends(require_admin)):
+    strategy = (data.get("strategy") or "ringall").strip()
+    if strategy not in _QUEUE_STRATEGIES:
+        raise HTTPException(status_code=400, detail=f"Invalid strategy. Use one of: {sorted(_QUEUE_STRATEGIES)}")
+    q = {
+        "id": _id("q"),
+        "name": (data.get("name") or "").strip()[:80] or "Queue",
+        "extension_number": (data.get("extension_number") or "").strip() or None,  # Optional internal dial
+        "strategy": strategy,
+        "agent_extension_ids": list(data.get("agent_extension_ids") or []),
+        "required_skills": list(data.get("required_skills") or []),
+        "ring_timeout": int(data.get("ring_timeout") or 20),
+        "wrapup_time": int(data.get("wrapup_time") or 5),
+        "max_wait": int(data.get("max_wait") or 120),
+        "moh_class": (data.get("moh_class") or "default").strip()[:40],
+        "announce_position": bool(data.get("announce_position", False)),
+        "announce_holdtime": bool(data.get("announce_holdtime", False)),
+        "fallback_type": data.get("fallback_type") or "voicemail",
+        "fallback_id": data.get("fallback_id") or None,
+        "is_enabled": True,
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    if q["extension_number"]:
+        _validate_extension_number(q["extension_number"])
+        clash = await db.pbx_extensions.find_one({"number": q["extension_number"]})
+        if clash:
+            raise HTTPException(status_code=400, detail=f"Extension {q['extension_number']} is already a phone")
+    await db.pbx_queues.insert_one(q)
+    return {k: v for k, v in q.items() if k != "_id"}
+
+
+@router.put("/queues/{q_id}")
+async def update_queue(q_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "extension_number", "strategy", "agent_extension_ids", "required_skills",
+               "ring_timeout", "wrapup_time", "max_wait", "moh_class",
+               "announce_position", "announce_holdtime", "fallback_type", "fallback_id", "is_enabled"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    if "strategy" in update and update["strategy"] not in _QUEUE_STRATEGIES:
+        raise HTTPException(status_code=400, detail="Invalid strategy")
+    if "extension_number" in update and update["extension_number"]:
+        _validate_extension_number(update["extension_number"])
+    update["updated_at"] = _now()
+    r = await db.pbx_queues.update_one({"id": q_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Queue not found")
+    return {"updated": True}
+
+
+@router.delete("/queues/{q_id}")
+async def delete_queue(q_id: str, current_user: dict = Depends(require_admin)):
+    r = await db.pbx_queues.delete_one({"id": q_id})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Queue not found")
+    # Detach from inbound routes
+    await db.pbx_inbound_routes.update_many(
+        {"destination_type": "queue", "destination_id": q_id},
+        {"$set": {"destination_type": "hangup", "destination_id": None}}
+    )
+    return {"deleted": True}
+
+
+# ============================================================
+# RECORDING SETTINGS — global retention policy
+# ============================================================
+
+@router.get("/recording-settings")
+async def get_recording_settings(current_user: dict = Depends(require_admin)):
+    doc = await db.pbx_settings.find_one({"id": "recording"}, {"_id": 0}) or {}
+    return {
+        "retention_days": int(doc.get("retention_days") or 30),
+        "storage_path": doc.get("storage_path") or "/var/spool/asterisk/monitor",
+        "format": doc.get("format") or "wav",
+        "stereo": bool(doc.get("stereo", True)),
+        "announce_recording": bool(doc.get("announce_recording", False)),
+    }
+
+
+@router.put("/recording-settings")
+async def set_recording_settings(data: dict, current_user: dict = Depends(require_admin)):
+    update = {
+        "id": "recording",
+        "retention_days": int(data.get("retention_days") or 30),
+        "storage_path": (data.get("storage_path") or "/var/spool/asterisk/monitor").strip()[:200],
+        "format": data.get("format") or "wav",
+        "stereo": bool(data.get("stereo", True)),
+        "announce_recording": bool(data.get("announce_recording", False)),
+        "updated_at": _now(),
+    }
+    if update["format"] not in ("wav", "wav49", "gsm", "g722"):
+        raise HTTPException(status_code=400, detail="Format must be wav, wav49, gsm, or g722")
+    await db.pbx_settings.update_one({"id": "recording"}, {"$set": update}, upsert=True)
+    return {"updated": True, **{k: v for k, v in update.items() if k not in ("id", "updated_at")}}
 
 
 # ============================================================
@@ -594,10 +713,28 @@ def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
 
 def _render_extensions(extensions: List[dict], trunks: List[dict],
                         inbound: List[dict], outbound: List[dict],
-                        hunt_groups: List[dict], ivrs: List[dict]) -> str:
+                        hunt_groups: List[dict], ivrs: List[dict],
+                        queues: Optional[List[dict]] = None,
+                        recording_settings: Optional[dict] = None) -> str:
     """Render `extensions.conf` (dialplan)."""
     by_ext_id = {e["id"]: e for e in extensions}
     by_hg_id = {h["id"]: h for h in hunt_groups}
+    by_q_id = {q["id"]: q for q in (queues or [])}
+    rec_fmt = (recording_settings or {}).get("format", "wav")
+    rec_announce = (recording_settings or {}).get("announce_recording", False)
+
+    def _maybe_record(ext: dict) -> List[str]:
+        """If the extension has recording_enabled, prefix the Dial with a
+        MixMonitor() that writes <call_id>.<fmt> into the spool. The CDR row's
+        `call_id` is also derived from CALLID so the recording can be linked
+        back to the CDR entry on the analytics page."""
+        if not ext.get("recording_enabled"):
+            return []
+        out = []
+        if rec_announce:
+            out.append("    same => n,Playback(beep)")
+        out.append(f"    same => n,MixMonitor(${{UNIQUEID}}.{rec_fmt},b)")
+        return out
 
     def dest_dial(dt: str, did: str | None) -> List[str]:
         """Return Asterisk dialplan lines that route to the destination."""
@@ -605,8 +742,10 @@ def _render_extensions(extensions: List[dict], trunks: List[dict],
             e = by_ext_id.get(did or "")
             if not e:
                 return ["    exten => _X.,n,Hangup()"]
-            return [f"    same => n,Dial(PJSIP/{e['number']},25)",
-                    f"    same => n,Voicemail({e['number']}@default,u)" if e.get("voicemail_enabled") else "    same => n,Hangup()"]
+            lines = _maybe_record(e)
+            lines.append(f"    same => n,Dial(PJSIP/{e['number']},25)")
+            lines.append(f"    same => n,Voicemail({e['number']}@default,u)" if e.get("voicemail_enabled") else "    same => n,Hangup()")
+            return lines
         if dt == "hunt_group":
             h = by_hg_id.get(did or "")
             if not h:
@@ -618,6 +757,11 @@ def _render_extensions(extensions: List[dict], trunks: List[dict],
             return [f"    same => n,Dial({dial_str},{h.get('ring_timeout', 20)})"]
         if dt == "ivr":
             return [f"    same => n,Goto(ivr-{did},s,1)"]
+        if dt == "queue":
+            q = by_q_id.get(did or "")
+            if not q:
+                return ["    same => n,Hangup()"]
+            return [f"    same => n,Queue(q-{q['id']},t,,,{q.get('max_wait', 120)})"]
         if dt == "voicemail":
             e = by_ext_id.get(did or "")
             if not e:
@@ -786,8 +930,55 @@ def _render_voicemail(extensions: List[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_queues(queues: List[dict], extensions: List[dict]) -> str:
+    """Render `queues.conf`. Each queue maps to a `[q-<id>]` section. Members
+    that don't carry every required skill are silently skipped — this is the
+    backbone of skill-based routing in Asterisk app_queue."""
+    by_ext_id = {e["id"]: e for e in extensions}
+    lines = [
+        ";==============================================================",
+        "; queues.conf — auto-generated by 58:12 Global Connect PBX",
+        f"; Generated:  {_now()}",
+        ";==============================================================",
+        "",
+        "[general]",
+        "persistentmembers = yes",
+        "monitor-type = MixMonitor",
+        "",
+    ]
+    for q in [x for x in queues if x.get("is_enabled", True)]:
+        required = set(q.get("required_skills") or [])
+        agents = []
+        for ext_id in (q.get("agent_extension_ids") or []):
+            e = by_ext_id.get(ext_id)
+            if not e or not e.get("is_enabled", True):
+                continue
+            skills = set(e.get("skills") or [])
+            if required and not required.issubset(skills):
+                continue
+            agents.append(e)
+        lines += [
+            f"; Queue: {q['name']} (strategy={q['strategy']})",
+            f"[q-{q['id']}]",
+            f"strategy = {q['strategy']}",
+            f"timeout = {q.get('ring_timeout', 20)}",
+            f"wrapuptime = {q.get('wrapup_time', 5)}",
+            f"musicclass = {q.get('moh_class') or 'default'}",
+            f"announce-frequency = {30 if q.get('announce_position') else 0}",
+            f"announce-holdtime = {'yes' if q.get('announce_holdtime') else 'no'}",
+            "ringinuse = no",
+        ]
+        for a in agents:
+            lines.append(f"member => PJSIP/{a['number']},0,{a.get('display_name') or a['number']}")
+        if not agents:
+            lines.append("; (no agents match required skills — calls will fall through to fallback)")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 async def _get_all_pbx_state() -> dict:
     """Fetch the canonical PBX state from MongoDB."""
+    rec = await db.pbx_settings.find_one({"id": "recording"}, {"_id": 0}) or {}
     return {
         "extensions": [e async for e in db.pbx_extensions.find({}, {"_id": 0})],
         "trunks": [t async for t in db.pbx_trunks.find({}, {"_id": 0})],
@@ -795,13 +986,15 @@ async def _get_all_pbx_state() -> dict:
         "outbound": [o async for o in db.pbx_outbound_routes.find({}, {"_id": 0})],
         "hunt_groups": [h async for h in db.pbx_hunt_groups.find({}, {"_id": 0})],
         "ivrs": [v async for v in db.pbx_ivrs.find({}, {"_id": 0})],
+        "queues": [q async for q in db.pbx_queues.find({}, {"_id": 0})],
+        "recording": rec,
     }
 
 
 @router.get("/config/{filename}")
 async def get_config_file(filename: str, current_user: dict = Depends(require_admin)):
     """Render and return a single Asterisk config file as plain text.
-    Supported filenames: pjsip.conf, extensions.conf, voicemail.conf, all.tar.
+    Supported filenames: pjsip.conf, extensions.conf, voicemail.conf, queues.conf.
     Asterisk on the appliance pulls these via the same admin token over the
     self-hosted REST URL — no extra secret to manage."""
     state = await _get_all_pbx_state()
@@ -809,9 +1002,12 @@ async def get_config_file(filename: str, current_user: dict = Depends(require_ad
         body = _render_pjsip(state["extensions"], state["trunks"])
     elif filename == "extensions.conf":
         body = _render_extensions(state["extensions"], state["trunks"], state["inbound"],
-                                  state["outbound"], state["hunt_groups"], state["ivrs"])
+                                  state["outbound"], state["hunt_groups"], state["ivrs"],
+                                  state["queues"], state["recording"])
     elif filename == "voicemail.conf":
         body = _render_voicemail(state["extensions"])
+    elif filename == "queues.conf":
+        body = _render_queues(state["queues"], state["extensions"])
     else:
         raise HTTPException(status_code=404, detail="Unknown config file")
     return Response(content=body, media_type="text/plain",
@@ -820,13 +1016,15 @@ async def get_config_file(filename: str, current_user: dict = Depends(require_ad
 
 @router.get("/config-bundle")
 async def get_config_bundle(current_user: dict = Depends(require_admin)):
-    """Return all three config files in one JSON blob — useful for the FE preview."""
+    """Return all config files in one JSON blob — useful for the FE preview."""
     state = await _get_all_pbx_state()
     return {
         "pjsip.conf": _render_pjsip(state["extensions"], state["trunks"]),
         "extensions.conf": _render_extensions(state["extensions"], state["trunks"], state["inbound"],
-                                              state["outbound"], state["hunt_groups"], state["ivrs"]),
+                                              state["outbound"], state["hunt_groups"], state["ivrs"],
+                                              state["queues"], state["recording"]),
         "voicemail.conf": _render_voicemail(state["extensions"]),
+        "queues.conf": _render_queues(state["queues"], state["extensions"]),
         "generated_at": _now(),
         "counts": {
             "extensions": len(state["extensions"]),
@@ -835,6 +1033,7 @@ async def get_config_bundle(current_user: dict = Depends(require_admin)):
             "outbound": len(state["outbound"]),
             "hunt_groups": len(state["hunt_groups"]),
             "ivrs": len(state["ivrs"]),
+            "queues": len(state["queues"]),
         },
     }
 
@@ -1084,6 +1283,9 @@ async def log_cdr(
         "matched_id": data.get("matched_id"),
         "matched_name": data.get("matched_name"),
         "matched_link": data.get("matched_link"),
+        # Recording URL — emitted by Asterisk MixMonitor on the appliance and POSTed
+        # back here when the recording finalises. Optional; null when recording is off.
+        "recording_url": data.get("recording_url"),
         "logged_at": _now(),
     }
     await db.pbx_cdr.update_one({"id": call_id, "user_id": current_user["id"]},
@@ -1250,3 +1452,42 @@ async def cdr_analytics(
         "top_staff": top_staff,
     }
 
+
+
+# ============================================================
+# CALL RECORDINGS — link to CDR + retention enforcement
+# ============================================================
+
+@router.post("/cdr/{call_id}/recording")
+async def attach_recording(
+    call_id: str,
+    data: dict,
+    current_user: dict = Depends(require_admin),
+):
+    """Asterisk (or the operator) calls this when MixMonitor finalises a recording.
+    The CDR row gets `recording_url` stamped — admins / staff with access then
+    see a play/download affordance on the analytics dashboard."""
+    url = (data.get("recording_url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="recording_url is required")
+    r = await db.pbx_cdr.update_one({"id": call_id}, {"$set": {"recording_url": url, "recording_attached_at": _now()}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="CDR row not found")
+    return {"attached": True}
+
+
+@router.post("/recording-retention/purge")
+async def purge_old_recordings(current_user: dict = Depends(require_admin)):
+    """Apply the configured retention policy: clear `recording_url` from CDR
+    rows older than `retention_days`. The actual file deletion happens on the
+    appliance — we just unlink the URL so the dashboard stops surfacing it."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    settings = await db.pbx_settings.find_one({"id": "recording"}, {"_id": 0}) or {}
+    days = int(settings.get("retention_days") or 30)
+    cutoff = (_dt.now(_tz.utc) - _td(days=days)).isoformat()
+    r = await db.pbx_cdr.update_many(
+        {"recording_url": {"$nin": [None, ""]}, "started_at": {"$lt": cutoff}},
+        {"$unset": {"recording_url": "", "recording_attached_at": ""},
+         "$set": {"recording_purged_at": _now()}}
+    )
+    return {"purged": r.modified_count, "cutoff": cutoff, "retention_days": days}
