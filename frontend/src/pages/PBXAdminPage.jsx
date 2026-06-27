@@ -18,10 +18,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
-import { Phone, Server, ArrowDownToLine, ArrowUpFromLine, Users, ListTree, FileCode, Plus, Trash2, Pencil, Copy, RefreshCw, Check, X } from 'lucide-react';
+import { Phone, Server, ArrowDownToLine, ArrowUpFromLine, Users, ListTree, FileCode, Plus, Trash2, Pencil, Copy, RefreshCw, Check, X, BarChart3 } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
+import PBXAnalytics from '../components/PBXAnalytics';
 
 const TRANSPORTS = [
   { value: 'transport-udp', label: 'UDP (most hardphones)' },
@@ -138,6 +139,7 @@ export default function PBXAdminPage() {
           <TabsTrigger value="outbound" data-testid="pbx-tab-outbound"><ArrowUpFromLine size={11} className="mr-1" /> Outbound ({outbound.length})</TabsTrigger>
           <TabsTrigger value="hunt" data-testid="pbx-tab-hunt"><Users size={11} className="mr-1" /> Hunt groups ({huntGroups.length})</TabsTrigger>
           <TabsTrigger value="ivr" data-testid="pbx-tab-ivr"><ListTree size={11} className="mr-1" /> IVRs ({ivrs.length})</TabsTrigger>
+          <TabsTrigger value="analytics" data-testid="pbx-tab-analytics"><BarChart3 size={11} className="mr-1" /> Analytics</TabsTrigger>
         </TabsList>
 
         {/* ─── Extensions ──────────────────────────────────────────── */}
@@ -296,6 +298,11 @@ export default function PBXAdminPage() {
               ))}
             </div>
           </CardContent></Card>
+        </TabsContent>
+
+        {/* ─── Analytics ──────────────────────────────────────────── */}
+        <TabsContent value="analytics">
+          <PBXAnalytics />
         </TabsContent>
       </Tabs>
 

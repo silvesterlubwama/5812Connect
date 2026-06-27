@@ -3,7 +3,23 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 178 (Feb 2026)
+## Recently Resolved — Iteration 179 (Feb 2026)
+**PBX Call Analytics dashboard — admin-only insights from CDR.**
+
+### Backend (`/api/pbx/cdr/analytics`)
+- Single aggregate endpoint, `?days=` (1..365, default 30), optional `?user_id=` to scope to one staff member.
+- Returns `summary` (total, incoming, outgoing, missed, answered, avg_duration_sec, missed_ratio), `daily` breakdown, `top_numbers` (10), `top_contacts` (10 matched CRM records), `top_staff` (10, omitted when filtering by user_id), and a 24-entry `busiest_hour` table.
+- Pure MongoDB aggregation — no Python-side fan-out, scales with collection size.
+
+### Frontend (`PBXAnalytics.jsx`)
+- Mounted as the 7th tab in `PBXAdminPage`. KPI tiles (total / incoming / outgoing / missed+ratio / avg-duration), CSS sparkline for daily counts, a 24-square heatmap for hour-of-day, and three side-by-side tables (top numbers / top matched contacts / busiest staff).
+- Range selector (7 / 14 / 30 / 60 / 90 / 180 days) + manual refresh. No charting lib — dependency-free.
+
+### Testing
+- Iteration 179: **6/6 backend pytest pass** (`test_iter179_analytics.py`) — summary totals, daily breakdown shape, top_numbers + top_contacts correctness, 24-entry busiest_hour with sum invariant, user_id filter zeroes top_staff, unauthenticated 401/403.
+- Aggregate suite (iter 177 + 178 + 179): **19/19 green**.
+
+
 **PBX softphone "Recent Calls" panel — mini-CRM in the floating widget.**
 
 ### Backend

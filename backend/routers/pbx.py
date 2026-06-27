@@ -1103,3 +1103,150 @@ async def my_cdr(
         {"_id": 0}
     ).sort("started_at", -1).limit(limit).to_list(limit)
     return rows
+
+
+
+@router.get("/cdr/analytics")
+async def cdr_analytics(
+    days: int = 30,
+    user_id: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """Admin-only call analytics dashboard data.
+
+    Aggregates calls in the trailing `days` window into:
+      * `summary`       — totals, avg duration, missed-call ratio
+      * `daily`         — per-day call counts split by direction
+      * `top_numbers`   — most-called/most-receiving peer digits
+      * `top_contacts`  — most-touched matched CRM records
+      * `top_staff`     — busiest extensions/users (when no user_id filter)
+      * `busiest_hour`  — call counts by hour-of-day (0..23)
+
+    Optional `user_id` narrows everything to a single staff member.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    days = max(1, min(int(days or 30), 365))
+    cutoff = (_dt.now(_tz.utc) - _td(days=days)).isoformat()
+    match: dict = {"started_at": {"$gte": cutoff}}
+    if user_id:
+        match["user_id"] = user_id
+
+    # ── Summary ──────────────────────────────────────────────
+    summary_pipe = [
+        {"$match": match},
+        {"$group": {
+            "_id": None,
+            "total": {"$sum": 1},
+            "total_duration": {"$sum": "$duration_sec"},
+            "missed": {"$sum": {"$cond": [{"$eq": ["$direction", "missed"]}, 1, 0]}},
+            "incoming": {"$sum": {"$cond": [{"$eq": ["$direction", "incoming"]}, 1, 0]}},
+            "outgoing": {"$sum": {"$cond": [{"$eq": ["$direction", "outgoing"]}, 1, 0]}},
+            "answered": {"$sum": {"$cond": [{"$eq": ["$status", "completed"]}, 1, 0]}},
+        }},
+    ]
+    summary_rows = await db.pbx_cdr.aggregate(summary_pipe).to_list(1)
+    s = summary_rows[0] if summary_rows else {}
+    total = s.get("total", 0) or 0
+    answered = s.get("answered", 0) or 0
+    summary = {
+        "total": total,
+        "incoming": s.get("incoming", 0) or 0,
+        "outgoing": s.get("outgoing", 0) or 0,
+        "missed": s.get("missed", 0) or 0,
+        "answered": answered,
+        "avg_duration_sec": int((s.get("total_duration", 0) or 0) / answered) if answered else 0,
+        "missed_ratio": round((s.get("missed", 0) or 0) / total, 3) if total else 0.0,
+    }
+
+    # ── Daily breakdown ──────────────────────────────────────
+    daily_pipe = [
+        {"$match": match},
+        {"$group": {
+            "_id": {"$substr": ["$started_at", 0, 10]},
+            "total": {"$sum": 1},
+            "incoming": {"$sum": {"$cond": [{"$eq": ["$direction", "incoming"]}, 1, 0]}},
+            "outgoing": {"$sum": {"$cond": [{"$eq": ["$direction", "outgoing"]}, 1, 0]}},
+            "missed": {"$sum": {"$cond": [{"$eq": ["$direction", "missed"]}, 1, 0]}},
+        }},
+        {"$sort": {"_id": 1}},
+    ]
+    daily = [{"date": r["_id"], "total": r["total"],
+              "incoming": r["incoming"], "outgoing": r["outgoing"], "missed": r["missed"]}
+             async for r in db.pbx_cdr.aggregate(daily_pipe)]
+
+    # ── Top numbers (raw digits) ─────────────────────────────
+    top_nums_pipe = [
+        {"$match": {**match, "peer_digits": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$peer_digits", "count": {"$sum": 1},
+                    "duration": {"$sum": "$duration_sec"},
+                    "name_sample": {"$first": "$matched_name"}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]
+    top_numbers = [{"digits": r["_id"], "count": r["count"],
+                    "total_duration_sec": r["duration"], "name": r["name_sample"]}
+                   async for r in db.pbx_cdr.aggregate(top_nums_pipe)]
+
+    # ── Top matched CRM contacts ─────────────────────────────
+    top_contacts_pipe = [
+        {"$match": {**match, "matched_id": {"$nin": [None, ""]}}},
+        {"$group": {"_id": {"id": "$matched_id", "kind": "$matched_kind", "name": "$matched_name"},
+                    "count": {"$sum": 1}, "duration": {"$sum": "$duration_sec"}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]
+    top_contacts = []
+    async for r in db.pbx_cdr.aggregate(top_contacts_pipe):
+        k = r["_id"] or {}
+        top_contacts.append({
+            "id": k.get("id"), "kind": k.get("kind"), "name": k.get("name"),
+            "count": r["count"], "total_duration_sec": r["duration"],
+        })
+
+    # ── Busiest hour-of-day ──────────────────────────────────
+    hour_pipe = [
+        {"$match": match},
+        {"$project": {"hour": {"$toInt": {"$substr": ["$started_at", 11, 2]}}}},
+        {"$group": {"_id": "$hour", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]
+    by_hour = {r["_id"]: r["count"] async for r in db.pbx_cdr.aggregate(hour_pipe)}
+    busiest_hour = [{"hour": h, "count": by_hour.get(h, 0)} for h in range(24)]
+
+    # ── Top staff (only when not filtering to a single user) ──
+    top_staff: list = []
+    if not user_id:
+        staff_pipe = [
+            {"$match": match},
+            {"$group": {"_id": "$user_id", "count": {"$sum": 1},
+                        "duration": {"$sum": "$duration_sec"}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10},
+        ]
+        rows = [r async for r in db.pbx_cdr.aggregate(staff_pipe)]
+        # Resolve user names in one query
+        ids = [r["_id"] for r in rows if r.get("_id")]
+        name_by_id = {}
+        if ids:
+            async for u in db.users.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1, "role": 1}):
+                name_by_id[u["id"]] = u
+        for r in rows:
+            u = name_by_id.get(r["_id"]) or {}
+            top_staff.append({
+                "user_id": r["_id"],
+                "name": u.get("name") or "—",
+                "role": u.get("role") or "",
+                "count": r["count"],
+                "total_duration_sec": r["duration"],
+            })
+
+    return {
+        "range_days": days,
+        "summary": summary,
+        "daily": daily,
+        "top_numbers": top_numbers,
+        "top_contacts": top_contacts,
+        "busiest_hour": busiest_hour,
+        "top_staff": top_staff,
+    }
+
