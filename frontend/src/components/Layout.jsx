@@ -483,6 +483,7 @@ export default function Layout() {
               </SelectTrigger>
               <SelectContent>
                 {isGlobalAdmin && <SelectItem value="__all__">All Locations</SelectItem>}
+                {!isGlobalAdmin && hasMultipleCampuses && <SelectItem value="__all__">All My Campuses</SelectItem>}
                 {(() => {
                   // Build a sorted list: top-level campuses first, then their sub-locations indented underneath
                   const userLocs = user?.location_ids || [];

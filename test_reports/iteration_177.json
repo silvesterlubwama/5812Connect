@@ -1,0 +1,37 @@
+{
+  "summary": "PBX Phase 3 + Lost-6 backend testing (9/9 pytest passed). Covered: phone-lookup (400 on <4 digits, unknown→kind:null, member match), chat/users staff-only + excludes self, config-bundle extensions.conf renders GotoIfTime(09:00-17:00,mon&tue&wed&thu&fri,*,*?tc-0-active) plus override Dial line, campus switcher PUT (admin any-campus, non-admin 403 on unassigned top-level campus, 200 on assigned), admin /users/directory STAFF_ROLES filter + include_all gating.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/pbx/phone-lookup",
+        "issue": "Returned `kind` field is computed as `link_route.strip('/').rstrip('s')`. For collection 'members' the link_route is 'people' — `.rstrip('s')` does NOT strip the trailing 'e', so kind comes back as 'people' instead of 'member'. Same for 'guests'→'people'→'people' (loses the 'guest' semantic). The review request explicitly stipulates kind='member' for member matches. Suggested fix: derive kind from the collection name (e.g. `coll.rstrip('s')` where coll='members'→'member', 'guests'→'guest', 'users'→'user', 'families'→'familie' (so use a static map: members→member, users→user, guests→guest, families→family). Frontend screen-pop toast & navigation logic in BrowserSoftphone.jsx may key off `kind` for icon/label — verify and adjust together."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter177_phase3.py",
+    "/app/test_reports/pytest/iter177_phase3.xml"
+  ],
+  "action_items": [
+    "Fix /api/pbx/phone-lookup `kind` field: replace `link_route.strip('/').rstrip('s')` with an explicit collection→singular map ({'members':'member','users':'user','guests':'guest','families':'family'}). Verify BrowserSoftphone.jsx screen-pop still matches expected kind values after the fix."
+  ],
+  "critical_code_review_comments": [
+    "routers/pbx.py:1030 — kind derivation uses link_route ('people') which doesn't end in 's'; the rstrip is effectively a no-op for members/guests. Use the collection name or a hard-coded mapping.",
+    "routers/pbx.py:_render_extensions time_conditions block — only the rendered GotoIfTime is verified; `tc-{idx}-active` label is correctly emitted but the surrounding DIALPLAN_EXIT guard on line 706 looks dead (no place sets DIALPLAN_EXIT=1). Harmless but consider removing for clarity.",
+    "server.py:/user/active-campus PUT — auto-includes ALL sub-locations under a user's campus AND parent campus + its other subs (siblings). This is broader than the docstring 'their assigned campuses' implies. Document this so admins know that assigning a user to one sub-campus implicitly grants them switch-access to all siblings under the shared parent.",
+    "chat.py:list_chat_users — STAFF_ROLES list is duplicated between chat.py and admin.py (admin/users/directory). Extract to deps.py as a shared constant to prevent drift.",
+    "admin.py:user_directory — STAFF_ROLES here is missing 'Security Contractor' which IS present in chat.py STAFF_ROLES. Make them consistent (or intentionally different with a comment)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter177_phase3.py (new — 9 tests)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "not tested per request (backend-only)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Each test creates+deletes its own scoped data (TEST_lookup_member, TEST_TC_trunk + ext 1900 + inbound route, TEST_camp_user). All cleaned up in finally blocks.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 3 backend is essentially solid. Only outstanding bug is the phone-lookup `kind` field returning 'people' instead of 'member'/'guest'. Frontend screen-pop in BrowserSoftphone.jsx was NOT tested per the agent_to_agent_context_note — once main agent fixes the kind field, retest with `pytest backend/tests/test_iter177_phase3.py -v`. The test file is the regression baseline for: phone-lookup, /chat/users staff scope, time-of-day dialplan, campus switcher, and admin directory STAFF_ROLES filter. Pair with test_iter175_pbx.py + test_iter176_pbx_phase2.py for full PBX coverage.",
+  "rca of the issue": "phone-lookup kind bug: `link_route.rstrip('s')` was written assuming routes always end in 's' (and the singular is just route minus s). But the route table is `('members','people')`, `('guests','people')`, `('users','admin/users')` — only the collection names are plurals. Operating on link_route was the wrong variable choice."
+}

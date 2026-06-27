@@ -100,10 +100,39 @@ export default function BrowserSoftphone() {
       ua.on('newRTCSession', (data) => {
         const session = data.session;
         if (data.originator === 'remote') {
-          // Incoming call
+          // Incoming call — fire-and-forget lookup so the agent sees who's calling
+          // even if our CRM has no match (lookup falls back to "Unknown" + raw digits).
+          const rawPeer = session.remote_identity.display_name || session.remote_identity.uri.user;
+          const peerDigits = (session.remote_identity.uri.user || '').replace(/\D/g, '');
+          let resolvedPeer = rawPeer;
+          let resolvedLink = null;
+          if (peerDigits.length >= 4) {
+            api.get('/pbx/phone-lookup', { params: { number: peerDigits } })
+              .then(r => {
+                const d = r.data || {};
+                if (d.kind && d.name && d.name !== 'Unknown') {
+                  resolvedPeer = `${d.name} · ${d.kind}`;
+                  resolvedLink = d.link;
+                  setIncomingCall(c => c ? { ...c, peer: resolvedPeer, link: resolvedLink, kind: d.kind } : c);
+                }
+                toast.info(
+                  resolvedLink
+                    ? `📞 ${resolvedPeer}`
+                    : `📞 Incoming: ${rawPeer}`,
+                  {
+                    duration: 8000,
+                    description: resolvedLink ? 'Click to open record' : 'Unknown number',
+                    action: resolvedLink ? { label: 'Open', onClick: () => window.location.href = resolvedLink } : undefined,
+                    id: `softphone-pop-${session.id || Date.now()}`,
+                  }
+                );
+              })
+              .catch(() => {/* lookup failure shouldn't break the call */});
+          }
           setIncomingCall({
-            peer: session.remote_identity.display_name || session.remote_identity.uri.user,
+            peer: resolvedPeer,
             session,
+            link: resolvedLink,
           });
         }
         bindSession(session);
@@ -263,6 +292,16 @@ export default function BrowserSoftphone() {
               <PhoneIncoming size={28} className="mx-auto text-emerald-600 animate-pulse" />
               <p className="text-sm font-semibold">{incomingCall.peer}</p>
               <p className="text-xs text-muted-foreground">Incoming call…</p>
+              {incomingCall.link && (
+                <a
+                  href={incomingCall.link}
+                  className="block text-[11px] underline text-primary hover:text-primary/80"
+                  data-testid="softphone-open-record"
+                  onClick={() => setOpen(true)}
+                >
+                  Open record →
+                </a>
+              )}
               <div className="flex gap-2 justify-center">
                 <Button size="sm" variant="destructive" onClick={decline} data-testid="softphone-decline"><PhoneOff size={12} className="mr-1" /> Decline</Button>
                 <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={answer} data-testid="softphone-answer"><Phone size={12} className="mr-1" /> Answer</Button>

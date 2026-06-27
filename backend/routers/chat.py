@@ -27,8 +27,19 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
 
 @router.get("/chat/users")
 async def list_chat_users(current_user: dict = Depends(get_current_user)):
-    """Return users that the current user can message — scoped to campus for non-admins."""
-    query = {**await get_campus_filter(current_user), "status": "active", "id": {"$ne": current_user["id"]}}
+    """Return users that the current user can message — scoped to campus, staff-only,
+    excluding soft-deleted accounts. Members/Customers/Guests cannot be DM'd from
+    Comms because they don't have user accounts in the chat sense."""
+    STAFF_ROLES = ["admin", "system_admin", "Executive Director", "Adviser", "Director",
+                   "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer",
+                   "Security Contractor"]
+    campus = await get_campus_filter(current_user)
+    base = {
+        "status": "active",
+        "role": {"$in": STAFF_ROLES},
+        "id": {"$ne": current_user["id"]},
+    }
+    query = {"$and": [base, campus]} if campus else base
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(200)
     # Return only needed fields
     return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "location_id": u.get("location_id")} for u in users]

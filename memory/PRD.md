@@ -2382,7 +2382,6 @@ Verified 20/20 backend tests PASS + frontend 100%.
 - `server.py` modularization (oversized)
 - `UnifiedPeoplePage.jsx` split (~1400 lines)
 - Full PWA offline beyond Wallet Passes (app shell + last-viewed pages)
-- Wave H5 SDK native upgrade
 - Scheduled cron jobs for overdue task emails
 
 ## Architecture

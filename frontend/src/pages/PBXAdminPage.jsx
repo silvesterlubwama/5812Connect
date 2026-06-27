@@ -446,7 +446,7 @@ export default function PBXAdminPage() {
 
       {/* ─── Inbound dialog ──────────────────────────────────────── */}
       <Dialog open={!!editingInb} onOpenChange={(o) => { if (!o) setEditingInb(null); }}>
-        <DialogContent className="max-w-md" data-testid="pbx-inb-dialog">
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="pbx-inb-dialog">
           <DialogHeader><DialogTitle>{editingInb?.id ? 'Edit inbound route' : 'New inbound route'}</DialogTitle></DialogHeader>
           {editingInb && (
             <div className="space-y-2 mt-2">
@@ -491,6 +491,91 @@ export default function PBXAdminPage() {
                     </Select>
                   </div>
                 )}
+              </div>
+
+              {/* ── Time-of-day routing ─────────────────────────────── */}
+              <div className="space-y-1 pt-2 border-t">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">Time-of-day overrides</Label>
+                  <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => setEditingInb({
+                    ...editingInb,
+                    time_conditions: [...(editingInb.time_conditions || []), {
+                      days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00',
+                      destination_type: 'extension', destination_id: null,
+                    }],
+                  })} data-testid="pbx-inb-add-tc"><Plus size={10} className="mr-1" /> Add window</Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">First matching window wins; outside all windows, the default destination above is used.</p>
+                {(editingInb.time_conditions || []).map((tc, idx) => (
+                  <div key={idx} className="border rounded p-2 space-y-2 bg-muted/20" data-testid={`pbx-inb-tc-${idx}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium">Window {idx + 1}</span>
+                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-rose-600" onClick={() => setEditingInb({
+                        ...editingInb,
+                        time_conditions: (editingInb.time_conditions || []).filter((_, i) => i !== idx),
+                      })} data-testid={`pbx-inb-tc-del-${idx}`}><Trash2 size={10} /></Button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 text-center">
+                      {[['Mon', 1], ['Tue', 2], ['Wed', 3], ['Thu', 4], ['Fri', 5], ['Sat', 6], ['Sun', 7]].map(([lbl, d]) => {
+                        const checked = (tc.days || []).includes(d);
+                        return (
+                          <label key={d} className={`text-[10px] py-1 rounded cursor-pointer border ${checked ? 'bg-primary text-primary-foreground border-primary' : 'bg-background'}`}>
+                            <input type="checkbox" className="hidden" checked={checked} onChange={e => {
+                              const next = e.target.checked ? [...(tc.days || []), d] : (tc.days || []).filter(x => x !== d);
+                              const conds = [...(editingInb.time_conditions || [])];
+                              conds[idx] = { ...tc, days: next };
+                              setEditingInb({ ...editingInb, time_conditions: conds });
+                            }} />
+                            {lbl}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      <Input type="time" value={tc.start || '09:00'} onChange={e => {
+                        const conds = [...(editingInb.time_conditions || [])];
+                        conds[idx] = { ...tc, start: e.target.value };
+                        setEditingInb({ ...editingInb, time_conditions: conds });
+                      }} className="h-7 text-[11px]" data-testid={`pbx-inb-tc-start-${idx}`} />
+                      <Input type="time" value={tc.end || '17:00'} onChange={e => {
+                        const conds = [...(editingInb.time_conditions || [])];
+                        conds[idx] = { ...tc, end: e.target.value };
+                        setEditingInb({ ...editingInb, time_conditions: conds });
+                      }} className="h-7 text-[11px]" data-testid={`pbx-inb-tc-end-${idx}`} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      <Select value={tc.destination_type || 'extension'} onValueChange={v => {
+                        const conds = [...(editingInb.time_conditions || [])];
+                        conds[idx] = { ...tc, destination_type: v, destination_id: null };
+                        setEditingInb({ ...editingInb, time_conditions: conds });
+                      }}>
+                        <SelectTrigger className="h-7 text-[11px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="extension">Extension</SelectItem>
+                          <SelectItem value="hunt_group">Hunt group</SelectItem>
+                          <SelectItem value="ivr">IVR</SelectItem>
+                          <SelectItem value="voicemail">Voicemail</SelectItem>
+                          <SelectItem value="hangup">Hangup</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {tc.destination_type !== 'hangup' && (
+                        <Select value={tc.destination_id || ''} onValueChange={v => {
+                          const conds = [...(editingInb.time_conditions || [])];
+                          conds[idx] = { ...tc, destination_id: v };
+                          setEditingInb({ ...editingInb, time_conditions: conds });
+                        }}>
+                          <SelectTrigger className="h-7 text-[11px]"><SelectValue placeholder="…" /></SelectTrigger>
+                          <SelectContent>
+                            {tc.destination_type === 'extension' && extensions.map(e => <SelectItem key={e.id} value={e.id}>{e.number}</SelectItem>)}
+                            {tc.destination_type === 'hunt_group' && huntGroups.map(h => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+                            {tc.destination_type === 'ivr' && ivrs.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                            {tc.destination_type === 'voicemail' && extensions.filter(e => e.voicemail_enabled).map(e => <SelectItem key={e.id} value={e.id}>{e.number}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
               <div className="flex gap-2 pt-2">
                 <Button variant="ghost" className="flex-1" onClick={() => setEditingInb(null)}>Cancel</Button>

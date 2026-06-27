@@ -10,7 +10,6 @@
 
 ## Technical Debt (Future)
 - server.py modularization (900+ lines)
-- Wave H5 SDK upgrade (when released)
 - MongoDB index optimization
 - Bcrypt version pinning
 - Persistent pytest test suite

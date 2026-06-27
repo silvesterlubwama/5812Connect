@@ -688,6 +688,32 @@ def _render_extensions(extensions: List[dict], trunks: List[dict],
             f"exten => {ir['did_pattern']},1,NoOp(Inbound to {ir['destination_type']} {ir.get('destination_id')})",
             "    same => n,Answer()",
         ]
+        # Time-of-day conditions: when the current time matches, route to the override
+        # destination defined on the condition. Asterisk's GotoIfTime() makes this
+        # native — we generate one check per condition, falling through to the
+        # default destination at the end.
+        for idx, cond in enumerate(ir.get("time_conditions") or []):
+            try:
+                start = (cond.get("start") or "00:00").strip()
+                end = (cond.get("end") or "23:59").strip()
+                # Days: ISO 1..7 Mon..Sun → Asterisk day-of-week tokens
+                day_map = {1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat", 7: "sun"}
+                days_iso = cond.get("days") or [1, 2, 3, 4, 5]
+                days_tokens = [day_map[int(d)] for d in days_iso if int(d) in day_map]
+                days_spec = "&".join(days_tokens) if days_tokens else "*"
+                # Asterisk wants times as HH:MM-HH:MM and days as csv (mon&tue&...).
+                label = f"tc{idx}"
+                lines.append(f"    same => n,GotoIf($[\"${{DIALPLAN_EXIT}}\" = \"1\"]?:tc-{idx})")
+                lines.append(f"    same => n({label}),GotoIfTime({start}-{end},{days_spec},*,*?tc-{idx}-active)")
+                lines.append(f"    same => n,Goto(tc-{idx}-skip)")
+                lines.append(f"    same => n(tc-{idx}-active),NoOp(Time condition {idx} matched)")
+                for ln in dest_dial(cond.get("destination_type"), cond.get("destination_id")):
+                    lines.append(ln)
+                lines.append("    same => n,Hangup()")
+                lines.append(f"    same => n(tc-{idx}-skip),NoOp(skipping)")
+                lines.append(f"    same => n(tc-{idx}),NoOp(continue)")
+            except Exception:
+                continue
         lines += dest_dial(ir["destination_type"], ir.get("destination_id"))
         lines.append("    same => n,Hangup()")
         lines.append("")
