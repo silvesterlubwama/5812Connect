@@ -68,6 +68,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/comms', icon: MessageSquare, label: 'Chat' },
       { to: '/call-history', icon: PhoneCall, label: 'Call History', roles: STAFF_PLUS },
+      { to: '/pbx', icon: PhoneCall, label: 'PBX Admin', roles: ADMIN_ROLES },
     ]
   },
   {
@@ -403,6 +404,7 @@ export default function Layout() {
       '/approvals': { roles: null, module: 'finance' },
       '/funds': { roles: STAFF_PLUS, module: null },
       '/shipments': { roles: DIRECTOR_PLUS, module: null },
+      '/pbx': { roles: ADMIN_ROLES, module: null },
       '/sales': { roles: null, module: 'sales' },
       '/social-work': { roles: STAFF_PLUS, module: 'social_work' },
       // Sub-pages that piggy-back off finance/accounting/sales modules

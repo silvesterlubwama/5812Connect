@@ -87,6 +87,40 @@ services:
     # OR set COMPOSE_PROFILES=tunnel in your .env so plain `docker compose up`
     # also starts it.
 
+  # ────────────────────────────────────────────────────────────
+  # Asterisk PBX — Phase 1 of the in-app PBX.
+  #
+  # Bring up with `docker compose --profile pbx up -d` (gated so people
+  # who don't need calling don't pay the ~150 MB image cost).
+  #
+  # Required host ports:
+  #   • UDP 5060   — SIP signalling (hardphones + softphones)
+  #   • TCP 8089   — WSS for the browser softphone (Caddy proxies /ws → here)
+  #   • UDP 10000-10100 — RTP media (NAT-traversal mid-call audio)
+  #
+  # The container pulls its config from the FastAPI backend on boot/reload via
+  # `/api/pbx/config/*.conf` (admin JWT in /etc/asterisk/.pbx_token). A
+  # cron-like loop refreshes every 60s + on SIGHUP. Edit the entrypoint
+  # script in ./pbx/entrypoint.sh.
+  asterisk:
+    image: andrius/asterisk:20-current
+    restart: unless-stopped
+    depends_on:
+      - backend
+    profiles:
+      - pbx
+    network_mode: host          # Required for RTP — UDP NAT in bridge mode is fragile
+    environment:
+      PBX_TOKEN: ${PBX_TOKEN:-}
+      PBX_API_URL: ${PBX_API_URL:-http://localhost/api/pbx}
+      PBX_RELOAD_INTERVAL: ${PBX_RELOAD_INTERVAL:-60}
+    volumes:
+      - ./data/asterisk-config:/etc/asterisk
+      - ./data/asterisk-voicemail:/var/spool/asterisk/voicemail
+      - ./data/asterisk-recordings:/var/spool/asterisk/monitor
+      - ./pbx/entrypoint.sh:/usr/local/bin/connect-pbx-entrypoint.sh:ro
+    entrypoint: ["/usr/local/bin/connect-pbx-entrypoint.sh"]
+
 networks:
   default:
     name: connect-net

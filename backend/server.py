@@ -562,6 +562,8 @@ try:
     app.include_router(locations_router)
     app.include_router(settings_router)
     app.include_router(wave_router)
+    from routers.pbx import router as pbx_router
+    app.include_router(pbx_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
     from routers.seed import router as seed_router

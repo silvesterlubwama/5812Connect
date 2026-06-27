@@ -29,6 +29,7 @@ import SettingsPage from './pages/SettingsPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import FundsPage from './pages/FundsPage';
 const ShipmentsAdminPage = lazy(() => import('./pages/ShipmentsAdminPage'));
+const PBXAdminPage = lazy(() => import('./pages/PBXAdminPage'));
 const ShipmentDonorPage = lazy(() => import('./pages/ShipmentDonorPage'));
 import SchoolPortalPage from './pages/SchoolPortalPage';
 import SponsorPortalPage from './pages/SponsorPortalPage';
@@ -162,6 +163,7 @@ function AppRoutes() {
         <Route path="sales-analytics" element={<SalesAnalyticsPage />} />
         <Route path="location-analytics" element={<LocationAnalyticsPage />} />
         <Route path="comms" element={<CommsPage />} />
+        <Route path="pbx" element={<PBXAdminPage />} />
         <Route path="outreach" element={<OutreachPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="access" element={<AccessPage />} />
