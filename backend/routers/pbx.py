@@ -1037,14 +1037,15 @@ async def phone_lookup(
 
     # Search order is deliberate: members > registered users > guests > families
     candidates = [
-        ("members", "people"),
-        ("users", "admin/users"),
-        ("guests", "people"),
-        ("families", "people"),
+        ("members", "member", "people"),
+        ("users", "user", "admin/users"),
+        ("guests", "guest", "people"),
+        ("families", "family", "people"),
     ]
-    for coll, route in candidates:
-        hit = await first_match(coll, route)
+    for coll, kind, route in candidates:
+        hit = await first_match(coll, route, name_field="name", id_field="id")
         if hit:
+            hit["kind"] = kind
             return hit
     # Children: their parents' phone is on the family record — already covered above.
     return {"kind": None, "name": "Unknown", "phone": digits, "link": None}

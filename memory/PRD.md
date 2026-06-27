@@ -3,6 +3,24 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 177 (Feb 2026)
+**PBX Phase 3 (screen-pop + time-of-day routing) + chat/campus filtering hardening.**
+
+### PBX Phase 3
+- Browser softphone screen-pop on incoming calls: `newRTCSession` event fires `GET /api/pbx/phone-lookup`, resolves caller to member/user/guest/family, shows toast + "Open record" link in the incoming-call ringer.
+- Time-of-day routing UI in `PBXAdminPage.jsx` inbound route dialog — per-window day picker (Mon..Sun), start/end HH:MM, override destination type+target. Multiple windows supported; first-match wins, falls through to default destination.
+- `_render_extensions` honors `time_conditions`: emits Asterisk `GotoIfTime(HH:MM-HH:MM,day&day,*,*?tc-N-active)` labels per window plus the override `Dial(...)` line.
+- `/api/pbx/phone-lookup` now returns a stable singular `kind` (member/user/guest/family) derived from the collection name (previously returned 'people' for members).
+
+### Lost-6 follow-up fixes
+- `/api/chat/users` tightened to STAFF_ROLES (admin..Volunteer + Security Contractor) AND `status="active"` AND `id != current_user`. No more Members/Customers/Guests/soft-deleted users showing up in chat.
+- Layout campus switcher now offers "All My Campuses" reset to multi-campus non-admins (previously only system admins saw the reset).
+- Backend lint fix in `pbx.py` (`_to_ms` one-line if/except → multi-line) — this had taken down backend startup at the fork point.
+
+### Testing
+- Iteration 177: **9/9 backend pytest pass** (`/app/backend/tests/test_iter177_phase3.py`). Covers phone-lookup (short input, unknown, member match), `/chat/users` staff-only scope, time-of-day dialplan render, campus switcher (admin any-campus, non-admin 403), admin directory filter.
+
+
 ## Recently Resolved — Iteration 176 (Feb 2026)
 **In-app PBX — Phase 2 (live runtime + browser softphone + click-to-call).**
 
