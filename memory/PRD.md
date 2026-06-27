@@ -3,6 +3,39 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 175 (Feb 2026)
+**In-app PBX — Phase 1 (management layer).**
+
+Built the foundation for replacing Wave CloudUCM with a self-hosted Asterisk PBX. This iteration ships the **control plane only** — the runtime SIP/RTP layer arrives in Phase 2.
+
+### Backend (`/app/backend/routers/pbx.py`)
+- Six entity types with full CRUD: **extensions** (softphone/hardphone/WebRTC), **trunks** (SIP carrier connections, register+inbound DIDs), **inbound_routes** (DID → extension/hunt/IVR/voicemail), **outbound_routes** (pattern → trunk, with strip/prepend/CID override), **hunt_groups** (ringall/hunt/random/least_recent), **ivrs** (DTMF auto-attendant).
+- **Asterisk config renderer** — generates `pjsip.conf` (endpoints + auth + registration blocks), `extensions.conf` (dialplan with internal/inbound/outbound contexts + IVR sub-contexts), `voicemail.conf` (per-extension mailboxes).
+- Endpoints `GET /api/pbx/config/{filename}` and `GET /api/pbx/config-bundle` so the appliance Asterisk can pull fresh config on a 60-second loop.
+- Per-extension SIP secret generation (`secrets.token_urlsafe(18)`) + rotate-secret endpoint.
+- Cascade behaviour: deleting a trunk removes referencing inbound routes; deleting an extension removes hunt-group memberships.
+- Validation: extension numbers (`[1-9][0-9]{1,5}`), dial patterns (Asterisk syntax), strategy enums, and **register=true requires SIP username** (prevents bogus registration blocks).
+
+### Frontend (`/app/frontend/src/pages/PBXAdminPage.jsx`)
+- Single-page admin UI with 6 tabs (one per entity) + Asterisk-config-preview modal.
+- Each entity has an inline list + create/edit dialog with proper Select / Checkbox / number inputs.
+- SIP secret is shown in the extension dialog with copy + rotate buttons (admins only — RBAC gated end-to-end).
+- Visible to admins only via `/pbx` route; sidebar entry under Comms section.
+
+### Appliance (`/app/appliance/docker-compose.yml` + `pbx/entrypoint.sh`)
+- New `asterisk` service (gated behind the `pbx` compose profile so non-PBX deployments aren't charged the image weight).
+- Host-mode networking (required for RTP NAT), ports UDP 5060 + WSS 8089 + UDP 10000-10100 (RTP) exposed.
+- Custom entrypoint polls `/api/pbx/config/*.conf` every 60s and HUP-reloads Asterisk when changes are detected.
+
+### Testing
+- Iteration 175 test report: **25/25 backend pytest pass**, 0 critical / 0 minor UI bugs. Frontend smoke + config-preview verified. Phase-1-specific fixes from review applied: empty `outbound_auth=` line bug (would have crashed Asterisk parser) + missing register-username validation.
+
+### Known Limitations (Phase 2 roadmap)
+- `/api/pbx/apply` returns a stub — live AMI reload arrives in Phase 2.
+- `/api/pbx/registrations` returns DB state with `live=false` flag — real AMI `PJSIPShowContacts` arrives in Phase 2.
+- No browser softphone yet — JsSIP integration arrives in Phase 2.
+- Phase 3 backlog: CDR, call recording, queues with skill-based routing, time-of-day routing.
+
 ## Recently Resolved — Iteration 174 (Feb 2026)
 **Social-Work Documents checklist + Shipments full editor + Public PIN gate.**
 

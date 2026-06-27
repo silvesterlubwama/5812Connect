@@ -185,6 +185,8 @@ async def create_trunk(data: dict, current_user: dict = Depends(require_admin)):
     host = (data.get("host") or "").strip()
     if not host:
         raise HTTPException(status_code=400, detail="SIP host required (e.g. sip.provider.com)")
+    if data.get("register") and not (data.get("username") or "").strip():
+        raise HTTPException(status_code=400, detail="register=true needs a SIP username (carrier requires AOR registration)")
     trunk = {
         "id": _id("trk"),
         "name": name[:60],
@@ -550,10 +552,15 @@ def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
             "disallow=all",
             f"allow={codecs}",
             f"aors=trunk-{tid}",
-            f"auth=trunk-{tid}-auth" if tr.get("username") else "",
+        ]
+        if tr.get("username"):
+            lines += [
+                f"auth=trunk-{tid}-auth",
+                f"outbound_auth=trunk-{tid}-auth",
+            ]
+        lines += [
             f"from_user={tr.get('from_user') or tr.get('username', '')}",
             f"from_domain={tr.get('from_domain') or host}",
-            "outbound_auth=" + (f"trunk-{tid}-auth" if tr.get("username") else ""),
             "",
             f"[trunk-{tid}]",
             "type=aor",
@@ -570,14 +577,14 @@ def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
                 f"password={tr['secret']}",
                 "",
             ]
-        if tr.get("register"):
+        if tr.get("register") and tr.get("username"):
             lines += [
                 f"[trunk-{tid}-reg]",
                 "type=registration",
                 f"transport={transport}",
                 f"outbound_auth=trunk-{tid}-auth",
                 f"server_uri=sip:{host}:{port}",
-                f"client_uri=sip:{tr['username']}@{host}",
+                f"client_uri=sip:{tr.get('username')}@{host}",
                 "retry_interval=60",
                 "",
             ]
