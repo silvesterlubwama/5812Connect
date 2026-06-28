@@ -30,6 +30,49 @@ const TRANSPORTS = [
   { value: 'transport-wss', label: 'WebRTC / WSS (browser softphone)' },
 ];
 
+/**
+ * Inline panel inside the Extension dialog — shows live SIP contacts
+ * registered with this extension via the AMI bridge. Empty in preview env
+ * (AMI not connected to a real Asterisk), but the row is always rendered so
+ * admins know the feature exists.
+ */
+function RegisteredDevicesPanel({ extId }) {
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const load = React.useCallback(() => {
+    setLoading(true);
+    api.get(`/pbx/extensions/${extId}/contacts`)
+      .then(r => setData(r.data))
+      .catch(() => setData({ registered: [], count: 0, max_contacts: 5 }))
+      .finally(() => setLoading(false));
+  }, [extId]);
+  React.useEffect(() => { load(); }, [load]);
+  return (
+    <div className="rounded-lg border p-2 text-[11px] space-y-1" data-testid="pbx-ext-devices">
+      <div className="flex items-center justify-between">
+        <p className="font-semibold flex items-center gap-1"><Server size={11} /> Registered devices ({data?.count ?? 0}/{data?.max_contacts === -1 ? '∞' : (data?.max_contacts ?? 5)})</p>
+        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={load} title="Refresh">
+          <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+        </Button>
+      </div>
+      {data?.registered?.length === 0 ? (
+        <p className="text-muted-foreground">No devices currently registered. The browser softphone counts as one when this user is logged in.</p>
+      ) : (
+        <div className="space-y-1">
+          {(data?.registered || []).map((c, i) => (
+            <div key={i} className="flex items-center gap-2 border-l-2 border-emerald-500 pl-2" data-testid={`pbx-ext-device-${i}`}>
+              <Badge variant="outline" className="text-[9px]">{c.status || 'Online'}</Badge>
+              <span className="font-mono truncate flex-1">{c.uri}</span>
+              <span className="text-muted-foreground truncate">{c.user_agent}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 const CODECS = ['ulaw', 'alaw', 'opus', 'gsm', 'g722', 'g729'];
 
 export default function PBXAdminPage() {
@@ -475,6 +518,35 @@ export default function PBXAdminPage() {
               <div className="space-y-1"><Label className="text-xs">Outbound caller ID (optional)</Label>
                 <Input value={editingExt.outbound_caller_id || ''} onChange={e => setEditingExt({ ...editingExt, outbound_caller_id: e.target.value })} placeholder="+1 555 010 0000" />
               </div>
+              <div className="grid grid-cols-2 gap-2 border-t pt-2">
+                <div className="space-y-1"><Label className="text-xs">Forward to (no-answer)</Label>
+                  <Input value={editingExt.forwarding_number || ''}
+                         onChange={e => setEditingExt({ ...editingExt, forwarding_number: e.target.value })}
+                         placeholder="+15558889999"
+                         data-testid="pbx-ext-forwarding" />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Max contacts (devices)</Label>
+                  <div className="flex gap-1 items-center">
+                    <Input type="number" min={1} max={50}
+                           value={editingExt.max_contacts === -1 ? '' : (editingExt.max_contacts || 5)}
+                           disabled={editingExt.max_contacts === -1}
+                           onChange={e => setEditingExt({ ...editingExt, max_contacts: parseInt(e.target.value) || 5 })}
+                           data-testid="pbx-ext-max-contacts" />
+                    <label className="flex items-center gap-1 text-[10px] whitespace-nowrap">
+                      <input type="checkbox" checked={editingExt.max_contacts === -1}
+                             onChange={e => setEditingExt({ ...editingExt, max_contacts: e.target.checked ? -1 : 5 })}
+                             data-testid="pbx-ext-unlimited" />
+                      Unlimited
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={!!editingExt.is_fax_extension}
+                       onChange={e => setEditingExt({ ...editingExt, is_fax_extension: e.target.checked })}
+                       data-testid="pbx-ext-fax" />
+                Fax extension (T.38) — incoming faxes are emailed as PDF to VM email
+              </label>
               <div className="space-y-1 border-t pt-2">
                 <Label className="text-xs flex items-center gap-1"><Mic size={11} /> Call recording</Label>
                 <label className="flex items-center gap-2 text-xs">
@@ -514,6 +586,7 @@ export default function PBXAdminPage() {
                   </Button>
                 </div>
               )}
+              {editingExt.id && <RegisteredDevicesPanel extId={editingExt.id} />}
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={editingExt.is_enabled !== false} onChange={e => setEditingExt({ ...editingExt, is_enabled: e.target.checked })} />
                 Enabled
@@ -536,12 +609,46 @@ export default function PBXAdminPage() {
           </DialogHeader>
           {editingTrunk && (
             <div className="space-y-2 mt-2">
-              <div className="space-y-1"><Label className="text-xs">Trunk name *</Label>
-                <Input value={editingTrunk.name || ''} onChange={e => setEditingTrunk({ ...editingTrunk, name: e.target.value })} placeholder="MainStreet Voice" data-testid="pbx-trunk-name" />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1 col-span-2"><Label className="text-xs">Trunk name *</Label>
+                  <Input value={editingTrunk.name || ''} onChange={e => setEditingTrunk({ ...editingTrunk, name: e.target.value })} placeholder="MainStreet Voice" data-testid="pbx-trunk-name" />
+                </div>
+                <div className="space-y-1 col-span-2"><Label className="text-xs">Trunk type</Label>
+                  <Select value={editingTrunk.trunk_type || 'sip'} onValueChange={v => setEditingTrunk({ ...editingTrunk, trunk_type: v })}>
+                    <SelectTrigger data-testid="pbx-trunk-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sip">SIP / VoIP (carrier)</SelectItem>
+                      <SelectItem value="fxo">FXO (analog lines via ATA gateway)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">FXO converts analog phone lines into SIP. Configure the gateway address below.</p>
+                </div>
               </div>
+              {editingTrunk.trunk_type === 'fxo' && (
+                <div className="border rounded p-2 bg-amber-50 dark:bg-amber-950/20 space-y-2">
+                  <p className="text-[11px] font-semibold">FXO settings</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1"><Label className="text-xs">Analog lines</Label>
+                      <Input type="number" min={1} max={32} value={editingTrunk.fxo_lines || 0}
+                             onChange={e => setEditingTrunk({ ...editingTrunk, fxo_lines: parseInt(e.target.value) || 0 })}
+                             data-testid="pbx-trunk-fxo-lines" />
+                    </div>
+                    <div className="space-y-1"><Label className="text-xs">Gateway (host:port)</Label>
+                      <Input value={editingTrunk.fxo_gateway || ''}
+                             onChange={e => setEditingTrunk({ ...editingTrunk, fxo_gateway: e.target.value })}
+                             placeholder="192.168.1.10:5060"
+                             data-testid="pbx-trunk-fxo-gateway" />
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1 col-span-2"><Label className="text-xs">SIP host *</Label>
                   <Input value={editingTrunk.host || ''} onChange={e => setEditingTrunk({ ...editingTrunk, host: e.target.value })} placeholder="sip.provider.com" data-testid="pbx-trunk-host" />
+                </div>
+                <div className="space-y-1 col-span-2"><Label className="text-xs">Registrar domain <span className="text-muted-foreground font-normal">(optional, leave blank to use SIP host)</span></Label>
+                  <Input value={editingTrunk.registrar || ''} onChange={e => setEditingTrunk({ ...editingTrunk, registrar: e.target.value })} placeholder="registrar.provider.com" data-testid="pbx-trunk-registrar" />
+                  <p className="text-[10px] text-muted-foreground">Some carriers require this — it's the domain you SIP-REGISTER to, distinct from the call-routing host above.</p>
                 </div>
                 <div className="space-y-1"><Label className="text-xs">Port</Label>
                   <Input type="number" value={editingTrunk.port || 5060} onChange={e => setEditingTrunk({ ...editingTrunk, port: parseInt(e.target.value) || 5060 })} />
@@ -791,20 +898,34 @@ export default function PBXAdminPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1"><Label className="text-xs">Members</Label>
-                <div className="grid grid-cols-2 gap-1 max-h-44 overflow-y-auto border rounded p-2">
-                  {extensions.map(e => (
-                    <label key={e.id} className="flex items-center gap-1 text-[11px]">
-                      <input type="checkbox" checked={(editingHg.member_extension_ids || []).includes(e.id)} onChange={ev => setEditingHg({
-                        ...editingHg,
-                        member_extension_ids: ev.target.checked
-                          ? [...(editingHg.member_extension_ids || []), e.id]
-                          : (editingHg.member_extension_ids || []).filter(x => x !== e.id),
-                      })} />
-                      {e.number} · {e.display_name}
-                    </label>
-                  ))}
+              <div className="space-y-1"><Label className="text-xs">Members (priority: lower = rings first)</Label>
+                <div className="grid grid-cols-1 gap-1 max-h-52 overflow-y-auto border rounded p-2">
+                  {extensions.map(e => {
+                    const checked = (editingHg.member_extension_ids || []).includes(e.id);
+                    const priority = (editingHg.member_priorities || {})[e.id] ?? 1;
+                    return (
+                      <div key={e.id} className="flex items-center gap-2 text-[11px]">
+                        <input type="checkbox" checked={checked} onChange={ev => setEditingHg({
+                          ...editingHg,
+                          member_extension_ids: ev.target.checked
+                            ? [...(editingHg.member_extension_ids || []), e.id]
+                            : (editingHg.member_extension_ids || []).filter(x => x !== e.id),
+                        })} data-testid={`pbx-hg-member-${e.id}`} />
+                        <span className="flex-1 truncate">{e.number} · {e.display_name}</span>
+                        {checked && (
+                          <Input type="number" min={1} max={9} value={priority}
+                                 onChange={ev => setEditingHg({
+                                   ...editingHg,
+                                   member_priorities: { ...(editingHg.member_priorities || {}), [e.id]: parseInt(ev.target.value) || 1 },
+                                 })}
+                                 className="w-14 h-6 text-[10px]"
+                                 data-testid={`pbx-hg-priority-${e.id}`} />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
+                <p className="text-[10px] text-muted-foreground">Priority 1 rings first. Same-priority members ring together (with strategy=hunt).</p>
               </div>
               <div className="space-y-1"><Label className="text-xs">Ring timeout (sec)</Label>
                 <Input type="number" value={editingHg.ring_timeout || 20} onChange={e => setEditingHg({ ...editingHg, ring_timeout: parseInt(e.target.value) || 20 })} />
@@ -883,20 +1004,32 @@ export default function PBXAdminPage() {
                   {extensions.map(e => {
                     const skills = new Set(e.skills || []);
                     const eligible = (editingQ.required_skills || []).every(s => skills.has(s));
+                    const checked = (editingQ.agent_extension_ids || []).includes(e.id);
+                    const priority = (editingQ.agent_priorities || {})[e.id] ?? 0;
                     return (
-                      <label key={e.id} className={`flex items-center gap-1 text-[11px] ${!eligible ? 'opacity-50' : ''}`}>
-                        <input type="checkbox" checked={(editingQ.agent_extension_ids || []).includes(e.id)} onChange={ev => setEditingQ({
+                      <div key={e.id} className={`flex items-center gap-2 text-[11px] ${!eligible ? 'opacity-50' : ''}`}>
+                        <input type="checkbox" checked={checked} onChange={ev => setEditingQ({
                           ...editingQ,
                           agent_extension_ids: ev.target.checked
                             ? [...(editingQ.agent_extension_ids || []), e.id]
                             : (editingQ.agent_extension_ids || []).filter(x => x !== e.id),
-                        })} />
-                        {e.number} · {e.display_name}
+                        })} data-testid={`pbx-queue-agent-${e.id}`} />
+                        <span className="flex-1 truncate">{e.number} · {e.display_name}</span>
                         {!eligible && <span className="text-rose-600 text-[9px]">(missing skill)</span>}
-                      </label>
+                        {checked && (
+                          <Input type="number" min={0} max={9} value={priority}
+                                 onChange={ev => setEditingQ({
+                                   ...editingQ,
+                                   agent_priorities: { ...(editingQ.agent_priorities || {}), [e.id]: parseInt(ev.target.value) || 0 },
+                                 })}
+                                 className="w-14 h-6 text-[10px]"
+                                 data-testid={`pbx-queue-priority-${e.id}`} />
+                        )}
+                      </div>
                     );
                   })}
                 </div>
+                <p className="text-[10px] text-muted-foreground">Priority (Asterisk "penalty"): 0 rings first. Set higher numbers for backup agents.</p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex items-center gap-2 text-xs">
@@ -909,6 +1042,33 @@ export default function PBXAdminPage() {
                          onChange={e => setEditingQ({ ...editingQ, announce_holdtime: e.target.checked })} />
                   Announce hold time
                 </label>
+              </div>
+              {/* Exit / fallback when queue times out or has no available agents */}
+              <div className="space-y-1 border-t pt-2">
+                <Label className="text-xs">Exit to (when wait exceeds max or no agents available)</Label>
+                <div className="grid grid-cols-2 gap-1">
+                  <Select value={editingQ.fallback_type || 'voicemail'} onValueChange={v => setEditingQ({ ...editingQ, fallback_type: v, fallback_id: null })}>
+                    <SelectTrigger className="h-8 text-[11px]" data-testid="pbx-queue-fallback-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="voicemail">Voicemail</SelectItem>
+                      <SelectItem value="extension">Extension</SelectItem>
+                      <SelectItem value="hunt_group">Hunt group</SelectItem>
+                      <SelectItem value="ivr">IVR menu</SelectItem>
+                      <SelectItem value="hangup">Hang up</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {editingQ.fallback_type !== 'hangup' && (
+                    <Select value={editingQ.fallback_id || ''} onValueChange={v => setEditingQ({ ...editingQ, fallback_id: v })}>
+                      <SelectTrigger className="h-8 text-[11px]" data-testid="pbx-queue-fallback-id"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                      <SelectContent>
+                        {editingQ.fallback_type === 'extension' && extensions.map(e => <SelectItem key={e.id} value={e.id}>{e.number} · {e.display_name}</SelectItem>)}
+                        {editingQ.fallback_type === 'hunt_group' && huntGroups.map(h => <SelectItem key={h.id} value={h.id}>{h.name}</SelectItem>)}
+                        {editingQ.fallback_type === 'ivr' && ivrs.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                        {editingQ.fallback_type === 'voicemail' && extensions.filter(e => e.voicemail_enabled).map(e => <SelectItem key={e.id} value={e.id}>{e.number} · {e.display_name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
               </div>
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={editingQ.is_enabled !== false} onChange={e => setEditingQ({ ...editingQ, is_enabled: e.target.checked })} />

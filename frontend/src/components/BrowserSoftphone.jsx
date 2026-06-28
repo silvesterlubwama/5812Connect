@@ -329,9 +329,6 @@ export default function BrowserSoftphone() {
     else setDialed(d => d + k);
   };
 
-  // Don't render the widget at all if the user has no WebRTC extension
-  if (!config) return null;
-
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   const stateColor = {
     registered: 'bg-emerald-100 text-emerald-700',
@@ -342,6 +339,11 @@ export default function BrowserSoftphone() {
     idle: 'bg-muted text-muted-foreground',
   }[regState];
 
+  // When the user has no extension yet, show a discreet "no extension" pill —
+  // we never hide the launcher entirely so users always know the feature exists
+  // and admins can wire them up by adding an extension to their profile.
+  const noExtension = !config;
+
   return (
     <>
       <audio ref={remoteAudioRef} autoPlay playsInline />
@@ -349,8 +351,8 @@ export default function BrowserSoftphone() {
       {!open && (
         <button
           onClick={() => setOpen(true)}
-          className="fixed bottom-4 right-4 z-50 h-12 w-12 rounded-full bg-primary text-primary-foreground shadow-xl hover:bg-primary/90 flex items-center justify-center"
-          title={`Softphone — ext ${config.extension} (${regState})`}
+          className={`fixed bottom-4 right-4 z-50 h-12 w-12 rounded-full shadow-xl flex items-center justify-center ${noExtension ? 'bg-muted text-muted-foreground hover:bg-muted/80' : 'bg-primary text-primary-foreground hover:bg-primary/90'}`}
+          title={noExtension ? 'Softphone — no extension assigned' : `Softphone — ext ${config.extension} (${regState})`}
           data-testid="softphone-launcher"
         >
           <Phone size={18} />
@@ -365,14 +367,22 @@ export default function BrowserSoftphone() {
           <div className="flex items-center justify-between p-2.5 border-b">
             <div className="flex items-center gap-2">
               <Phone size={14} />
-              <span className="text-xs font-semibold">Ext {config.extension}</span>
-              <Badge className={`text-[10px] ${stateColor}`} data-testid="softphone-reg-state">{regState}</Badge>
+              <span className="text-xs font-semibold">{noExtension ? 'Softphone' : `Ext ${config.extension}`}</span>
+              <Badge className={`text-[10px] ${noExtension ? 'bg-muted text-muted-foreground' : stateColor}`} data-testid="softphone-reg-state">{noExtension ? 'no extension' : regState}</Badge>
             </div>
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setOpen(false)} data-testid="softphone-close"><X size={12} /></Button>
           </div>
 
+          {noExtension && (
+            <div className="p-4 text-center space-y-2" data-testid="softphone-no-extension">
+              <Phone size={28} className="mx-auto text-muted-foreground opacity-60" />
+              <p className="text-sm font-semibold">No extension assigned</p>
+              <p className="text-xs text-muted-foreground">Ask an admin to add an <strong>extension</strong> to your profile (Admin → Users → edit). Once set, this softphone activates automatically.</p>
+            </div>
+          )}
+
           {/* Incoming call ringer */}
-          {incomingCall && !activeCall && (
+          {!noExtension && incomingCall && !activeCall && (
             <div className="p-4 text-center space-y-3" data-testid="softphone-incoming">
               <PhoneIncoming size={28} className="mx-auto text-emerald-600 animate-pulse" />
               <p className="text-sm font-semibold">{incomingCall.peer}</p>
@@ -395,7 +405,7 @@ export default function BrowserSoftphone() {
           )}
 
           {/* Active call panel */}
-          {activeCall && (
+          {!noExtension && activeCall && (
             <div className="p-3 space-y-2 text-center" data-testid="softphone-active-call">
               <PhoneCall size={22} className="mx-auto text-primary" />
               <p className="text-sm font-semibold truncate">{activeCall.peer}</p>
@@ -417,7 +427,7 @@ export default function BrowserSoftphone() {
           )}
 
           {/* Tab switcher — only shown when not in a call */}
-          {!incomingCall && !activeCall && (
+          {!noExtension && !incomingCall && !activeCall && (
             <div className="flex border-b text-[11px]">
               <button
                 className={`flex-1 py-1.5 flex items-center justify-center gap-1 ${view === 'dial' ? 'border-b-2 border-primary text-primary font-semibold' : 'text-muted-foreground'}`}
@@ -437,7 +447,7 @@ export default function BrowserSoftphone() {
           )}
 
           {/* Dial pad (visible when no incoming, no active, view=dial) */}
-          {!incomingCall && !activeCall && view === 'dial' && (
+          {!noExtension && !incomingCall && !activeCall && view === 'dial' && (
             <div className="p-3 space-y-2" data-testid="softphone-dialpad">
               <div className="flex gap-1">
                 <input
@@ -477,7 +487,7 @@ export default function BrowserSoftphone() {
           )}
 
           {/* Recent calls (history view) */}
-          {!incomingCall && !activeCall && view === 'history' && (
+          {!noExtension && !incomingCall && !activeCall && view === 'history' && (
             <div className="max-h-80 overflow-y-auto" data-testid="softphone-history">
               {recentCalls.length === 0 && (
                 <p className="p-6 text-center text-[11px] text-muted-foreground">No recent calls yet.</p>

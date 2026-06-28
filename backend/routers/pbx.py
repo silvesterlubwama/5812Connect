@@ -103,6 +103,11 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
     _validate_extension_number(number)
     if await db.pbx_extensions.find_one({"number": number}):
         raise HTTPException(status_code=400, detail=f"Extension {number} already exists")
+    # max_contacts: how many concurrent SIP registrations are allowed. The
+    # browser softphone counts as one; desk phone, mobile JsSIP, etc. each add
+    # one. -1 means unlimited (use sparingly — Asterisk caps at ~10 in practice).
+    mc = data.get("max_contacts")
+    max_contacts = -1 if (mc == -1 or str(mc).strip() in ("", "-1", "unlimited")) else int(mc or 5)
     ext = {
         "id": _id("ext"),
         "number": number,
@@ -111,7 +116,7 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
         "secret": _gen_secret(),                  # SIP auth — softphone uses this
         "transport": data.get("transport") or "transport-udp",
         "allowed_codecs": data.get("allowed_codecs") or ["ulaw", "alaw", "opus"],
-        "max_contacts": int(data.get("max_contacts") or 3),
+        "max_contacts": max_contacts,
         "voicemail_enabled": bool(data.get("voicemail_enabled", True)),
         "voicemail_pin": str(data.get("voicemail_pin") or "".join([str(secrets.randbelow(10)) for _ in range(4)])),
         "voicemail_email": data.get("voicemail_email") or "",
@@ -120,6 +125,10 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
         "recording_enabled": bool(data.get("recording_enabled", False)),
         # Skill tags for queue routing. Free-form strings, e.g. ["spanish","tier-2"].
         "skills": list(data.get("skills") or []),
+        # Forwarding: dial this PSTN number through the configured trunk when ext doesn't answer.
+        "forwarding_number": (data.get("forwarding_number") or "").strip(),
+        # Fax-enabled extensions accept fax media (T.38) and email PDF to voicemail_email
+        "is_fax_extension": bool(data.get("is_fax_extension", False)),
         "is_enabled": True,
         "created_at": _now(),
         "updated_at": _now(),
@@ -132,7 +141,8 @@ async def create_extension(data: dict, current_user: dict = Depends(require_admi
 async def update_extension(ext_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"display_name", "user_id", "transport", "allowed_codecs", "max_contacts",
                "voicemail_enabled", "voicemail_pin", "voicemail_email",
-               "outbound_caller_id", "recording_enabled", "skills", "is_enabled"}
+               "outbound_caller_id", "recording_enabled", "skills",
+               "forwarding_number", "is_fax_extension", "is_enabled"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "number" in data:
         _validate_extension_number(data["number"])
@@ -195,7 +205,13 @@ async def create_trunk(data: dict, current_user: dict = Depends(require_admin)):
     trunk = {
         "id": _id("trk"),
         "name": name[:60],
+        # trunk_type: 'sip' (default — VoIP carrier) | 'fxo' (analog line via ATA gateway)
+        "trunk_type": data.get("trunk_type") or "sip",
         "host": host[:200],
+        # SIP registrar domain — many carriers expose `register => proxy.example.com`
+        # but require Auth-Realm + From-URI to use `sip.example.com`. When set,
+        # pjsip.conf uses this for the registrar; falls back to `host` when empty.
+        "registrar": (data.get("registrar") or "")[:200],
         "port": int(data.get("port") or 5060),
         "transport": data.get("transport") or "transport-udp",
         "username": (data.get("username") or "")[:80],
@@ -203,6 +219,9 @@ async def create_trunk(data: dict, current_user: dict = Depends(require_admin)):
         "auth_username": (data.get("auth_username") or data.get("username") or "")[:80],
         "from_user": (data.get("from_user") or data.get("username") or "")[:80],
         "from_domain": (data.get("from_domain") or host)[:200],
+        # FXO-specific: number of analog lines (channels) and the ATA gateway host:port
+        "fxo_lines": int(data.get("fxo_lines") or 0),
+        "fxo_gateway": (data.get("fxo_gateway") or "")[:200],
         "register": bool(data.get("register", True)),
         "did_numbers": data.get("did_numbers") or [],
         "outbound_caller_id": (data.get("outbound_caller_id") or "")[:80],
@@ -218,8 +237,8 @@ async def create_trunk(data: dict, current_user: dict = Depends(require_admin)):
 
 @router.put("/trunks/{trunk_id}")
 async def update_trunk(trunk_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    allowed = {"name", "host", "port", "transport", "username", "secret", "auth_username",
-               "from_user", "from_domain", "register", "did_numbers", "outbound_caller_id",
+    allowed = {"name", "trunk_type", "host", "registrar", "port", "transport", "username", "secret", "auth_username",
+               "from_user", "from_domain", "fxo_lines", "fxo_gateway", "register", "did_numbers", "outbound_caller_id",
                "max_channels", "allowed_codecs", "is_enabled"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = _now()
@@ -375,6 +394,10 @@ async def create_huntgroup(data: dict, current_user: dict = Depends(require_admi
         "name": (data.get("name") or "").strip()[:80] or "Hunt group",
         "strategy": data.get("strategy") or "ringall",
         "member_extension_ids": data.get("member_extension_ids") or [],
+        # member_priorities: {ext_id: priority_int}. Lower = rings first.
+        # Used by the dialplan to order members within a 'hunt' strategy and
+        # to group concurrent rings (band 1, then band 2, etc) for 'ringall'.
+        "member_priorities": data.get("member_priorities") or {},
         "ring_timeout": int(data.get("ring_timeout") or 20),
         "fallback_type": data.get("fallback_type") or "voicemail",
         "fallback_id": data.get("fallback_id") or None,
@@ -387,8 +410,8 @@ async def create_huntgroup(data: dict, current_user: dict = Depends(require_admi
 
 @router.put("/hunt-groups/{hg_id}")
 async def update_huntgroup(hg_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    allowed = {"name", "strategy", "member_extension_ids", "ring_timeout",
-               "fallback_type", "fallback_id", "is_enabled"}
+    allowed = {"name", "strategy", "member_extension_ids", "member_priorities",
+               "ring_timeout", "fallback_type", "fallback_id", "is_enabled"}
     update = {k: v for k, v in data.items() if k in allowed}
     r = await db.pbx_hunt_groups.update_one({"id": hg_id}, {"$set": update})
     if r.matched_count == 0:
@@ -434,6 +457,9 @@ async def create_queue(data: dict, current_user: dict = Depends(require_admin)):
         "extension_number": (data.get("extension_number") or "").strip() or None,  # Optional internal dial
         "strategy": strategy,
         "agent_extension_ids": list(data.get("agent_extension_ids") or []),
+        # agent_priorities: {ext_id: priority_int}. Lower priority numbers ring
+        # first; agents in the same band ring concurrently (per strategy).
+        "agent_priorities": data.get("agent_priorities") or {},
         "required_skills": list(data.get("required_skills") or []),
         "ring_timeout": int(data.get("ring_timeout") or 20),
         "wrapup_time": int(data.get("wrapup_time") or 5),
@@ -458,7 +484,7 @@ async def create_queue(data: dict, current_user: dict = Depends(require_admin)):
 
 @router.put("/queues/{q_id}")
 async def update_queue(q_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    allowed = {"name", "extension_number", "strategy", "agent_extension_ids", "required_skills",
+    allowed = {"name", "extension_number", "strategy", "agent_extension_ids", "agent_priorities", "required_skills",
                "ring_timeout", "wrapup_time", "max_wait", "moh_class",
                "announce_position", "announce_holdtime", "fallback_type", "fallback_id", "is_enabled"}
     update = {k: v for k, v in data.items() if k in allowed}
@@ -578,6 +604,7 @@ async def delete_ivr(ivr_id: str, current_user: dict = Depends(require_admin)):
 
 ASTERISK_INTERNAL_CONTEXT = "from-internal"
 ASTERISK_INBOUND_CONTEXT = "from-trunk"
+ASTERISK_OUTBOUND_CONTEXT = "from-internal"   # outbound routes live in the same context
 
 
 def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
@@ -648,7 +675,9 @@ def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
             "",
             f"[{n}]",
             "type=aor",
-            f"max_contacts={ext.get('max_contacts', 3)}",
+            # max_contacts: -1 (unlimited in our model) maps to a very large
+            # number for Asterisk; otherwise pass through verbatim.
+            f"max_contacts={50 if int(ext.get('max_contacts', 5)) == -1 else int(ext.get('max_contacts', 5))}",
             "qualify_frequency=60",
             "remove_existing=yes",
             "",
@@ -698,13 +727,15 @@ def _render_pjsip(extensions: List[dict], trunks: List[dict]) -> str:
                 "",
             ]
         if tr.get("register") and tr.get("username"):
+            # Use the separate registrar domain if set, otherwise fall back to host
+            registrar = (tr.get("registrar") or "").strip() or host
             lines += [
                 f"[trunk-{tid}-reg]",
                 "type=registration",
                 f"transport={transport}",
                 f"outbound_auth=trunk-{tid}-auth",
-                f"server_uri=sip:{host}:{port}",
-                f"client_uri=sip:{tr.get('username')}@{host}",
+                f"server_uri=sip:{registrar}:{port}",
+                f"client_uri=sip:{tr.get('username')}@{registrar}",
                 "retry_interval=60",
                 "",
             ]
@@ -742,26 +773,78 @@ def _render_extensions(extensions: List[dict], trunks: List[dict],
             e = by_ext_id.get(did or "")
             if not e:
                 return ["    exten => _X.,n,Hangup()"]
+            # Fax-enabled extensions: route the call into ReceiveFAX, then email
+            # the resulting TIFF/PDF to the extension's voicemail_email.
+            if e.get("is_fax_extension"):
+                fax_email = e.get("voicemail_email") or ""
+                fax_lines = [
+                    "    same => n,Set(FAXOPT(ecm)=yes)",
+                    f"    same => n,Set(FAXOPT(headerinfo)=Fax for {e.get('display_name', e['number'])})",
+                    "    same => n,ReceiveFAX(/var/spool/asterisk/fax/${UNIQUEID}.tif)",
+                ]
+                if fax_email:
+                    # Email shellout — Asterisk includes the file via the
+                    # MailMessage System() helper. Production may swap for an
+                    # async worker that uses our /api/* email helpers instead.
+                    fax_lines.append(
+                        f"    same => n,System(/usr/local/bin/fax2email.sh ${{UNIQUEID}} {fax_email})"
+                    )
+                fax_lines.append("    same => n,Hangup()")
+                return fax_lines
             lines = _maybe_record(e)
             lines.append(f"    same => n,Dial(PJSIP/{e['number']},25)")
+            # Forwarding fallback when the extension doesn't answer
+            forwarding = (e.get("forwarding_number") or "").strip()
+            if forwarding:
+                # Dial out via the first enabled trunk; if none, fall through to VM
+                lines.append(f"    same => n,Dial(Local/{forwarding}@{ASTERISK_OUTBOUND_CONTEXT},25)")
             lines.append(f"    same => n,Voicemail({e['number']}@default,u)" if e.get("voicemail_enabled") else "    same => n,Hangup()")
             return lines
         if dt == "hunt_group":
             h = by_hg_id.get(did or "")
             if not h:
                 return ["    same => n,Hangup()"]
-            members = [by_ext_id[m]["number"] for m in (h.get("member_extension_ids") or []) if m in by_ext_id]
-            if not members:
+            # Order members by priority bands. ringall: all bands ring at once.
+            # hunt/linear: bands ring in sequence, all in the same band ring concurrently.
+            priorities = h.get("member_priorities") or {}
+            members_with_p = [(by_ext_id[m]["number"], priorities.get(m, 99))
+                              for m in (h.get("member_extension_ids") or []) if m in by_ext_id]
+            if not members_with_p:
                 return ["    same => n,Hangup()"]
-            dial_str = "&".join(f"PJSIP/{m}" for m in members) if h["strategy"] == "ringall" else "/".join(f"PJSIP/{m}" for m in members)
-            return [f"    same => n,Dial({dial_str},{h.get('ring_timeout', 20)})"]
+            members_with_p.sort(key=lambda x: x[1])
+            timeout = h.get("ring_timeout", 20)
+            if h["strategy"] == "ringall":
+                # All members rung simultaneously regardless of priority band
+                dial_str = "&".join(f"PJSIP/{n}" for n, _ in members_with_p)
+                return [f"    same => n,Dial({dial_str},{timeout})"]
+            # Sequential bands: ring each band of equal-priority members, then next band
+            out: List[str] = []
+            from itertools import groupby
+            for _, group in groupby(members_with_p, key=lambda x: x[1]):
+                band = list(group)
+                dial_str = "&".join(f"PJSIP/{n}" for n, _ in band)
+                out.append(f"    same => n,Dial({dial_str},{timeout})")
+            return out
         if dt == "ivr":
             return [f"    same => n,Goto(ivr-{did},s,1)"]
         if dt == "queue":
             q = by_q_id.get(did or "")
             if not q:
                 return ["    same => n,Hangup()"]
-            return [f"    same => n,Queue(q-{q['id']},t,,,{q.get('max_wait', 120)})"]
+            # Append fallback after the Queue() call so callers exit cleanly when
+            # all agents are unavailable or the wait timer expires.
+            out_lines = [f"    same => n,Queue(q-{q['id']},t,,,{q.get('max_wait', 120)})"]
+            fb_type = q.get("fallback_type")
+            fb_id = q.get("fallback_id")
+            if fb_type and fb_type != "hangup":
+                # Recurse into dest_dial for the fallback target. Guards against
+                # cyclic queue→queue chains by short-circuiting to hangup.
+                if fb_type != "queue":
+                    out_lines.extend(dest_dial(fb_type, fb_id))
+                else:
+                    out_lines.append("    same => n,Hangup()")
+            out_lines.append("    same => n,Hangup()")
+            return out_lines
         if dt == "voicemail":
             e = by_ext_id.get(did or "")
             if not e:
@@ -948,6 +1031,7 @@ def _render_queues(queues: List[dict], extensions: List[dict]) -> str:
     ]
     for q in [x for x in queues if x.get("is_enabled", True)]:
         required = set(q.get("required_skills") or [])
+        priorities = q.get("agent_priorities") or {}
         agents = []
         for ext_id in (q.get("agent_extension_ids") or []):
             e = by_ext_id.get(ext_id)
@@ -956,7 +1040,7 @@ def _render_queues(queues: List[dict], extensions: List[dict]) -> str:
             skills = set(e.get("skills") or [])
             if required and not required.issubset(skills):
                 continue
-            agents.append(e)
+            agents.append((e, int(priorities.get(ext_id, 0))))
         lines += [
             f"; Queue: {q['name']} (strategy={q['strategy']})",
             f"[q-{q['id']}]",
@@ -968,8 +1052,10 @@ def _render_queues(queues: List[dict], extensions: List[dict]) -> str:
             f"announce-holdtime = {'yes' if q.get('announce_holdtime') else 'no'}",
             "ringinuse = no",
         ]
-        for a in agents:
-            lines.append(f"member => PJSIP/{a['number']},0,{a.get('display_name') or a['number']}")
+        for a, penalty in agents:
+            # Asterisk's `penalty` is queue terminology for priority — lower
+            # numbers ring first. Same penalty rings concurrently.
+            lines.append(f"member => PJSIP/{a['number']},{penalty},{a.get('display_name') or a['number']}")
         if not agents:
             lines.append("; (no agents match required skills — calls will fall through to fallback)")
         lines.append("")
@@ -1491,3 +1577,290 @@ async def purge_old_recordings(current_user: dict = Depends(require_admin)):
          "$set": {"recording_purged_at": _now()}}
     )
     return {"purged": r.modified_count, "cutoff": cutoff, "retention_days": days}
+
+
+
+# ============================================================
+# AUTO-SYNC FROM STAFF PROFILE
+# ============================================================
+# When an admin saves a user with `extension`, `extension_pin` and/or
+# `forward_to` set, the corresponding PBX extension is created/updated
+# automatically. Only Staff / Volunteer / leadership roles are eligible —
+# we never auto-provision SIP credentials for members/customers/guests.
+
+_AUTOSYNC_ROLES = {
+    "admin", "system_admin", "Executive Director", "Adviser", "Director",
+    "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer",
+}
+
+
+async def sync_pbx_extension_from_user(user: dict) -> Optional[dict]:
+    """Create or update the PBX extension that mirrors this user's profile.
+
+    Returns the synced extension dict (with the password) so callers can show
+    it to the admin if they want. No-ops (returns None) when:
+      - the user has no `extension` field
+      - the user's role is outside _AUTOSYNC_ROLES
+    """
+    if not user:
+        return None
+    role = (user.get("role") or "").strip()
+    if role not in _AUTOSYNC_ROLES:
+        return None
+    number = str(user.get("extension") or "").strip()
+    if not number:
+        return None
+    try:
+        _validate_extension_number(number)
+    except HTTPException:
+        return None
+
+    pin = str(user.get("extension_pin") or "").strip() or None
+    forwarding = (user.get("forward_to") or "").strip()
+    display_name = user.get("name") or f"Extension {number}"
+    email = user.get("email") or ""
+
+    existing = await db.pbx_extensions.find_one({"number": number})
+    if existing:
+        # Update: only patch the user-driven fields; preserve secret/skills/etc.
+        update = {
+            "user_id": user.get("id"),
+            "display_name": display_name,
+            "voicemail_email": email,
+            "forwarding_number": forwarding,
+            "updated_at": _now(),
+        }
+        if pin:
+            update["voicemail_pin"] = pin
+        await db.pbx_extensions.update_one({"id": existing["id"]}, {"$set": update})
+        merged = {**existing, **update}
+        merged.pop("_id", None)
+        return merged
+
+    # Create — generate a SIP secret (rotated only on explicit rotate request).
+    # Default to WSS transport so the user's browser softphone Just Works.
+    # max_contacts defaults to 5 (browser + desk + mobile + 2 spare).
+    ext = {
+        "id": _id("ext"),
+        "number": number,
+        "display_name": display_name,
+        "user_id": user.get("id"),
+        "secret": _gen_secret(),
+        "transport": "transport-wss",
+        "allowed_codecs": ["ulaw", "alaw", "opus"],
+        "max_contacts": 5,
+        "voicemail_enabled": True,
+        "voicemail_pin": pin or "".join([str(secrets.randbelow(10)) for _ in range(4)]),
+        "voicemail_email": email,
+        "outbound_caller_id": "",
+        "recording_enabled": False,
+        "skills": [],
+        "forwarding_number": forwarding,
+        "is_fax_extension": False,
+        "is_enabled": True,
+        "auto_provisioned": True,
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    await db.pbx_extensions.insert_one(ext)
+    ext.pop("_id", None)
+    return ext
+
+
+# ============================================================
+# REGISTERED CONTACTS (live from Asterisk via AMI)
+# ============================================================
+
+
+# ============================================================
+# CONTACT GROUPS — campus-scoped shared address books
+# ============================================================
+# A contact group is a campus-scoped list of phone numbers + names. Extension
+# groups (or individual extensions) can subscribe to a contact group to get
+# shared dialing entries and BLF subscription targets.
+
+@router.get("/contact-groups")
+async def list_contact_groups(current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user)):
+    """Campus-scoped contact group list. Non-admins only see groups in their active campus."""
+    from deps import get_campus_filter
+    campus = await get_campus_filter(current_user)
+    query = campus or {}
+    out = [g async for g in db.pbx_contact_groups.find(query, {"_id": 0}).sort("name", 1)]
+    return out
+
+
+@router.post("/contact-groups")
+async def create_contact_group(data: dict, current_user: dict = Depends(require_admin)):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    # Default to the admin's active campus if not explicitly set
+    location_id = (data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or "").strip()
+    g = {
+        "id": _id("cg"),
+        "name": name[:80],
+        "description": (data.get("description") or "")[:300],
+        "location_id": location_id,
+        "contacts": [
+            {"name": (c.get("name") or "").strip()[:80],
+             "phone": (c.get("phone") or "").strip()[:30],
+             "extension": (c.get("extension") or "").strip()[:10],
+             "notes": (c.get("notes") or "")[:200]}
+            for c in (data.get("contacts") or [])
+        ],
+        "shared_with_extension_group_ids": data.get("shared_with_extension_group_ids") or [],
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    await db.pbx_contact_groups.insert_one(g)
+    return {k: v for k, v in g.items() if k != "_id"}
+
+
+@router.put("/contact-groups/{cg_id}")
+async def update_contact_group(cg_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "description", "contacts", "shared_with_extension_group_ids"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = _now()
+    r = await db.pbx_contact_groups.update_one({"id": cg_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Contact group not found")
+    return {"updated": True}
+
+
+@router.delete("/contact-groups/{cg_id}")
+async def delete_contact_group(cg_id: str, current_user: dict = Depends(require_admin)):
+    r = await db.pbx_contact_groups.delete_one({"id": cg_id})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contact group not found")
+    return {"deleted": True}
+
+
+# ============================================================
+# EXTENSION GROUPS — group extensions for permissions / BLF subscriptions
+# ============================================================
+
+@router.get("/extension-groups")
+async def list_extension_groups(current_user: dict = Depends(require_admin)):
+    return [g async for g in db.pbx_extension_groups.find({}, {"_id": 0}).sort("name", 1)]
+
+
+@router.post("/extension-groups")
+async def create_extension_group(data: dict, current_user: dict = Depends(require_admin)):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    g = {
+        "id": _id("eg"),
+        "name": name[:80],
+        "description": (data.get("description") or "")[:300],
+        "extension_ids": list(data.get("extension_ids") or []),
+        "subscribed_contact_group_ids": list(data.get("subscribed_contact_group_ids") or []),
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    await db.pbx_extension_groups.insert_one(g)
+    return {k: v for k, v in g.items() if k != "_id"}
+
+
+@router.put("/extension-groups/{eg_id}")
+async def update_extension_group(eg_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "description", "extension_ids", "subscribed_contact_group_ids"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = _now()
+    r = await db.pbx_extension_groups.update_one({"id": eg_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Extension group not found")
+    return {"updated": True}
+
+
+@router.delete("/extension-groups/{eg_id}")
+async def delete_extension_group(eg_id: str, current_user: dict = Depends(require_admin)):
+    r = await db.pbx_extension_groups.delete_one({"id": eg_id})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Extension group not found")
+    return {"deleted": True}
+
+
+@router.get("/me/contact-groups")
+async def my_contact_groups(current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user)):
+    """Contact groups the current user can dial from. Returns merged list of:
+       - groups in their active campus (any extension group they're in subscribes to)
+       - groups directly shared with the user's extension group(s)
+    """
+    user_id = current_user["id"]
+    # Find the user's PBX extension(s)
+    my_exts = [e["id"] async for e in db.pbx_extensions.find({"user_id": user_id}, {"_id": 0, "id": 1})]
+    if not my_exts:
+        return []
+    # Extension groups that contain any of my extensions
+    my_groups = [g async for g in db.pbx_extension_groups.find(
+        {"extension_ids": {"$in": my_exts}}, {"_id": 0, "subscribed_contact_group_ids": 1}
+    )]
+    subscribed_ids = list({cid for g in my_groups for cid in g.get("subscribed_contact_group_ids", [])})
+    if not subscribed_ids:
+        return []
+    return [c async for c in db.pbx_contact_groups.find({"id": {"$in": subscribed_ids}}, {"_id": 0})]
+
+
+# ============================================================
+# BLF — Busy Lamp Field subscription helper
+# ============================================================
+@router.get("/blf/peers")
+async def blf_peers(current_user: dict = Depends(__import__("deps", fromlist=["get_current_user"]).get_current_user)):
+    """Return the list of extension numbers the current user is allowed to
+    BLF-subscribe to. Driven by extension-group membership: extensions in the
+    same extension group can monitor each other. Admins can monitor anyone in
+    their active campus."""
+    user_id = current_user["id"]
+    is_admin_role = (current_user.get("role") or "") in ("admin", "system_admin", "Executive Director")
+    if is_admin_role:
+        from deps import get_campus_filter
+        campus = await get_campus_filter(current_user)
+        # Admins: monitor every enabled extension in scope
+        query = {"is_enabled": True, **(campus or {})}
+        return [
+            {"number": e["number"], "name": e.get("display_name", e["number"])}
+            async for e in db.pbx_extensions.find(query, {"_id": 0, "number": 1, "display_name": 1})
+        ]
+    # Non-admin: only extensions in shared extension groups
+    my_exts = [e["id"] async for e in db.pbx_extensions.find({"user_id": user_id}, {"_id": 0, "id": 1})]
+    if not my_exts:
+        return []
+    my_groups = [g["extension_ids"] async for g in db.pbx_extension_groups.find(
+        {"extension_ids": {"$in": my_exts}}, {"_id": 0, "extension_ids": 1}
+    )]
+    peer_ids = list({e for grp in my_groups for e in grp if e not in my_exts})
+    if not peer_ids:
+        return []
+    return [
+        {"number": e["number"], "name": e.get("display_name", e["number"])}
+        async for e in db.pbx_extensions.find({"id": {"$in": peer_ids}, "is_enabled": True},
+                                                {"_id": 0, "number": 1, "display_name": 1})
+    ]
+
+
+@router.get("/extensions/{ext_id}/contacts")
+async def get_extension_contacts(ext_id: str, current_user: dict = Depends(require_admin)):
+    """List live SIP contacts registered to this extension. Pulls from the AMI
+    bridge if available, otherwise returns an empty list (preview env, etc)."""
+    ext = await db.pbx_extensions.find_one({"id": ext_id}, {"_id": 0})
+    if not ext:
+        raise HTTPException(status_code=404, detail="Extension not found")
+    contacts: List[dict] = []
+    try:
+        from pbx_ami import ami_bridge  # type: ignore
+        if ami_bridge and getattr(ami_bridge, "connected", False):
+            raw = await ami_bridge.list_contacts_for(ext["number"])
+            for c in raw or []:
+                contacts.append({
+                    "uri": c.get("Uri"),
+                    "user_agent": c.get("UserAgent"),
+                    "status": c.get("Status"),
+                    "transport": c.get("Transport"),
+                    "registered_at": c.get("RegisteredAt"),
+                })
+    except Exception:
+        # AMI not configured in preview — return empty
+        pass
+    return {"extension_number": ext["number"], "max_contacts": ext.get("max_contacts", 5),
+            "registered": contacts, "count": len(contacts)}

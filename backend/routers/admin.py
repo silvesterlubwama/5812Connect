@@ -102,6 +102,10 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         "department": data.get("department", ""),
         "location_id": primary_loc,
         "location_ids": expanded_locs,
+        # PBX fields — extension is auto-provisioned in the PBX collection if set
+        "extension": (data.get("extension") or "").strip(),
+        "extension_pin": (data.get("extension_pin") or "").strip(),
+        "forward_to": (data.get("forward_to") or "").strip(),
         "password_hash": hash_password(password),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
@@ -144,6 +148,12 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
                 await db.guests.update_one({"id": existing_guest["id"]}, {"$set": {"user_id": user_id, "is_staff_guest": True}})
 
     await _audit(current_user["id"], "create", "user", user_id, {"name": name, "role": user["role"]})
+    # Auto-sync PBX extension if the user is staff/volunteer with an extension on file
+    try:
+        from routers.pbx import sync_pbx_extension_from_user
+        await sync_pbx_extension_from_user(user)
+    except Exception:
+        pass
     return user_out
 
 
@@ -228,7 +238,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
-                      "location_id", "location_ids", "title", "extension", "forward_to",
+                      "location_id", "location_ids", "title", "extension", "extension_pin", "forward_to",
                       "gender", "date_of_birth", "group", "program"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -258,6 +268,12 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                 "assigned_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat(),
             })
     await _audit(current_user["id"], "update", "user", user_id, {"fields": list(update.keys())})
+    # Auto-sync PBX extension if the user is staff/volunteer with an extension on file
+    try:
+        from routers.pbx import sync_pbx_extension_from_user
+        await sync_pbx_extension_from_user(user)
+    except Exception:
+        pass  # PBX sync should never block user updates
     return user
 
 
