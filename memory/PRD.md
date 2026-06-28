@@ -3,7 +3,42 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 180 (Feb 2026)
+## Recently Resolved — Iteration 182 (Feb 2026)
+**PBX extension v2: auto-sync from staff profile, registrar/FXO trunks, priorities, contact groups, BLF.**
+
+### Auto-sync
+- Adding/updating a Staff/Volunteer/Director-tier user with `extension` + `extension_pin` + `forward_to` on their profile auto-creates/relinks a PBX extension (transport=wss, max_contacts=5, auto_provisioned=true). Members/Customers/Guests are skipped.
+- The browser softphone (`BrowserSoftphone.jsx`) now always renders its launcher and shows an explicit "no extension assigned" state when the user has none yet.
+
+### Trunks
+- New `registrar` field separate from `host` — Asterisk register block uses registrar in `server_uri` / `client_uri`.
+- New `trunk_type` (sip | fxo) + `fxo_lines` + `fxo_gateway` for analog lines via ATA gateways.
+
+### Extensions
+- `max_contacts` default bumped to 5; -1 (or "Unlimited" UI toggle) maps to Asterisk cap of 50.
+- `forwarding_number` adds a second `Dial(Local/...)` leg in extensions.conf before voicemail fallback.
+- `is_fax_extension` emits ReceiveFAX dialplan + email shellout to `voicemail_email`.
+- Per-extension `skills` already existed; now also reflected in the auto-sync flow.
+
+### Hunt groups + Queues
+- Both gained `member_priorities` / `agent_priorities` dicts ({ext_id: int}). Hunt-group dialplan rings same-band concurrently then advances. Queue.conf emits priorities as Asterisk `penalty` so lower = first.
+- Queue inbound destination now appends the configured `fallback` (voicemail / extension / hunt group / IVR) so callers exit cleanly on timeout or no-agents-available.
+
+### Contact groups (campus-scoped) + extension groups
+- `pbx_contact_groups` collection: name, description, contacts[{name, phone, extension, notes}], shared_with_extension_group_ids[]. Auto-scoped to caller's active campus.
+- `pbx_extension_groups` collection: name, extension_ids[], subscribed_contact_group_ids[]. Used as the access boundary for BLF subscriptions.
+- `GET /api/pbx/me/contact-groups` returns the union of every contact group the current user can dial from via their extension groups.
+
+### BLF (Busy Lamp Field)
+- `GET /api/pbx/blf/peers` returns the extensions a user is allowed to monitor (admins see all in-campus, others see only peers in shared extension groups).
+
+### Registered devices
+- `GET /api/pbx/extensions/{id}/contacts` queries the AMI bridge for live SIP contacts; returns empty list cleanly in preview (no Asterisk). Inline `RegisteredDevicesPanel` shows count + UA strings inside the extension dialog.
+
+### Testing
+- Iteration 182: **12/12 backend pytest pass** (`test_iter182_extensions_v2.py`). Testing agent run iter 182: backend 100% + frontend 100%, no critical issues. Combined PBX suite **41/41 green** (177+178+179+180+182).
+
+
 **Call recording (per-extension toggle + retention) + Skill-based queues + Lost-6 verified.**
 
 ### Recording
