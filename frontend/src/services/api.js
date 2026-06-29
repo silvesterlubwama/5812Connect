@@ -25,6 +25,7 @@ const LOGIN_PATHS_SKIP_REDIRECT = [
   '/kiosk/pin-checkin',  // public kiosk lookup — 401 here means bad PIN, NOT session expiry
   '/security/checkpoint/pair',  // bad pairing PIN — handled on the lock screen
   '/security/checkpoint/',  // device-scoped sessions use X-Checkpoint-Session, not Bearer
+  '/public/shipments/',  // PIN-gated donor pages — 401 means bad PIN or expired edit token, never main-app session
 ];
 api.interceptors.response.use(
   res => res,

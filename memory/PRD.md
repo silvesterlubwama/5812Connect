@@ -3,6 +3,19 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 188 (Feb 2026)
+**Shipment PIN login no longer kicks donors back to main login page.**
+
+### Bug
+- Donors entering the wrong PIN on `/donate/shipment/{token}` were getting redirected to the main app `/login` page instead of seeing an "Incorrect PIN" toast. Same behaviour any time an editor session expired and an API call returned 401.
+- Root cause: the global axios 401-interceptor in `services/api.js` does `window.location.href = '/login'` on every 401 unless the URL matches an allowlist. `/public/shipments/{token}/login` and `/public/shipments/{token}/items` (with expired edit token) weren't in that list.
+
+### Fix
+- Added `/public/shipments/` to `LOGIN_PATHS_SKIP_REDIRECT` in `services/api.js`. Wrong-PIN now surfaces the existing toast in `submitLogin()` and stays on the donor page. Expired edit tokens trigger the existing `logoutEditor()` + "Session expired" toast flow already in `saveItemEdit()`.
+
+### Verification
+- Production curl confirmed backend accepts the PIN and returns `edit_token` (HTTP 200). The redirect was purely client-side.
+
 ## Recently Resolved — Iteration 187 (Feb 2026)
 **Auto-prune over-pledged donations — closes the loop on the dedupe + warning work.**
 

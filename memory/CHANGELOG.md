@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 188 (Feb 2026) — Fix Shipment PIN Login Redirect
+- **Bug:** Wrong PIN on `/donate/shipment/{token}` redirected donors to the main app `/login` page instead of showing the "Incorrect PIN" toast. Cause: global axios 401-interceptor in `services/api.js` whitelisted `/auth/login`, `/kiosk/pin-checkin`, etc. but not `/public/shipments/`.
+- **Fix:** Added `/public/shipments/` to `LOGIN_PATHS_SKIP_REDIRECT`. PIN failures and expired edit-token 401s now stay on the donor page and surface the existing toasts.
+- **Verified:** production backend returns 200 + edit_token for the correct PIN; redirect was purely client-side.
+
 ## Iteration 187 (Feb 2026) — Auto-Prune Over-Pledged Donations
 - New admin endpoint `POST /api/shipments/{id}/prune-over-pledged` trims any item whose `qty_acquired > qty_needed` back to the pledged cap and logs the surplus on `items[*].surplus_redistributed` (qty/at/by) for audit. Idempotent.
 - New "Prune over-pledged (N)" button (amber, Scissors icon) on the admin shipment items list — appears only when at least one item is over-pledged.
