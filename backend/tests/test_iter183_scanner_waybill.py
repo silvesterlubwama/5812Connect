@@ -180,3 +180,20 @@ class TestWaybill:
                           headers={"X-Shipment-Edit-Token": edit_token}, timeout=10)
         assert r2.status_code == 200
         assert "<h1>Waybill" in r2.text
+
+    def test_public_waybill_query_param_token(self, shipment):
+        """window.open()-style access — edit token passed as query param
+        because browsers can't attach custom headers on plain GETs."""
+        edit_token = _editor_login(shipment["token"], "9999")
+        r = requests.get(
+            f"{BASE_URL}/api/public/shipments/{shipment['token']}/waybill",
+            params={"edit_token": edit_token}, timeout=10,
+        )
+        assert r.status_code == 200
+        assert "<h1>Waybill" in r.text
+        # Bad token rejected
+        r2 = requests.get(
+            f"{BASE_URL}/api/public/shipments/{shipment['token']}/waybill",
+            params={"edit_token": "deadbeef"}, timeout=10,
+        )
+        assert r2.status_code == 401

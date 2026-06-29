@@ -1,0 +1,23 @@
+{
+  "summary": "Iter184 — Re-tested the Waybill button bug fix from iter183. BOTH backend & frontend verified end-to-end. Backend pytest 9/9 PASS (including the new test_public_waybill_query_param_token that exercises ?edit_token=... query-param fallback, header backward-compat, and garbage-token 401 rejection). Frontend Playwright: created shipment + PIN 9999 + 1 item; opened /donate/shipment/{token}; clicked 'Editor login' → entered PIN → editor badge appeared; clicked Waybill button [data-testid='ship-donor-waybill'] → popup tab opened with URL containing 'edit_token=' AND body showing the rendered HTML waybill ('Waybill / Manifest · Iter184 Waybill Test · 1 items · Total value: $10.00 · Total weight: 0.50 kg') — NOT a 401 JSON page. Bug is fully fixed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter183_scanner_waybill.py",
+    "/app/test_reports/pytest/iter184_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is clean: require_shipment_editor (shipments.py:117-119) reads X-Shipment-Edit-Token header first, then falls back to request.query_params['edit_token']. This is the standard pattern for header-gated endpoints that must also be reachable via window.open()/<a> links.",
+    "Frontend ShipmentDonorPage.jsx:260 properly URL-encodes the editToken via encodeURIComponent before appending. Good.",
+    "Security check verified: GET with neither header nor query param → 401; GET with ?edit_token=garbage → 401 (covered by test_public_waybill_query_param_token). No token leak risk beyond what the previous header-only design already had."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% — Waybill popup opens with HTML content, edit_token query param present, no 401"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (identifier field). Donor PIN: 9999 (created per-test).",
+  "seed_data_creation": "Created sh_8c3946f8b3 + 1 item + PIN 9999 — cleaned up at end of run (DELETE returned 200).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter183 Waybill 401 bug is RESOLVED. Backend test_iter183_scanner_waybill.py is now 9 tests including the query-param token coverage. Donor-page Editor login flow: click [data-testid='ship-donor-login'] → fill [data-testid='ship-donor-pin-input'] → click [data-testid='ship-donor-pin-submit'] → wait for [data-testid='ship-donor-editor-badge']. Then [data-testid='ship-donor-waybill'] opens a popup whose URL contains edit_token=<jwt-like> and body contains '<h1>Waybill'.",
+  "rca of the issue": "Already documented in iter183. Verified the mitigation in iter184: backend require_shipment_editor now accepts ?edit_token=... as a fallback when X-Shipment-Edit-Token header is absent, and frontend Waybill button now passes the editToken via that query param. window.open() can now reach the waybill endpoint successfully because the auth signal travels in the URL instead of a header."
+}

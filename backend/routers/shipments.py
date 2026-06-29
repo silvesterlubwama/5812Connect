@@ -112,8 +112,11 @@ async def require_shipment_editor(request: Request, token: str):
                     return {"shipment_id": s["id"], "actor": "admin", "user": user}
             except Exception:
                 pass
-    # 2) edit-token path
-    edit_token = request.headers.get("X-Shipment-Edit-Token") or ""
+    # 2) edit-token path — accept it either from the header (POST/PUT calls)
+    #    or from a `?edit_token=...` query param fallback (browser-native GET).
+    edit_token = (request.headers.get("X-Shipment-Edit-Token") or "").strip()
+    if not edit_token:
+        edit_token = (request.query_params.get("edit_token") or "").strip()
     if edit_token:
         sid = _verify_edit_token(edit_token)
         if sid == s["id"]:
@@ -1292,6 +1295,9 @@ async def waybill_html(shipment_id: str, current_user: dict = Depends(require_ad
 
 @router.get("/public/shipments/{token}/waybill")
 async def public_waybill_html(token: str, request: Request):
+    """Public PIN-gated waybill. Editor token accepted either via the
+    X-Shipment-Edit-Token header (XHR/fetch) or as ?edit_token=... in the URL
+    (so `window.open()` can pop it in a new tab for printing)."""
     ctx = await require_shipment_editor(request, token)
     s = await db.shipments.find_one({"id": ctx["shipment_id"]}, {"_id": 0})
     if not s:

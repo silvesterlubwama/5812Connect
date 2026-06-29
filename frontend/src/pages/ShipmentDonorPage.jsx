@@ -257,7 +257,7 @@ export default function ShipmentDonorPage() {
           )}
           {isEditor && (
             <Button size="sm" variant="outline"
-              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/public/shipments/${token}/waybill`, '_blank')}
+              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/public/shipments/${token}/waybill?edit_token=${encodeURIComponent(editToken || '')}`, '_blank')}
               data-testid="ship-donor-waybill"
               title="Open printable waybill in new tab"
             >
