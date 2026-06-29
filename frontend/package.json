@@ -33,6 +33,8 @@
     "@radix-ui/react-tooltip": "^1.2.4",
     "@react-three/drei": "^10",
     "@react-three/fiber": "^9",
+    "@zxing/browser": "^0.2.0",
+    "@zxing/library": "^0.22.0",
     "axios": "^1.8.4",
     "camera-controls": "2.10.0",
     "chart.js": "^4.5.1",

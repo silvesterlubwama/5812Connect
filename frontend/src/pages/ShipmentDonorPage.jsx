@@ -53,6 +53,10 @@ export default function ShipmentDonorPage() {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanResult, setScanResult] = useState(null);  // result from /scan-item
   const [scanImages, setScanImages] = useState([]);    // File[] for upload
+  const [scanMode, setScanMode] = useState('barcode'); // 'barcode' | 'photo'
+  const [barcodeText, setBarcodeText] = useState(''); // ZXing live read
+  const scanVideoRef = React.useRef(null);
+  const scanControlsRef = React.useRef(null);
   const [loginBusy, setLoginBusy] = useState(false);
   // ─── PIN-scoped editing ────────────────────────────────────────
   const [editingItem, setEditingItem] = useState(null);   // existing or {} for new
@@ -198,6 +202,64 @@ export default function ShipmentDonorPage() {
       await refresh();
     } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
   };
+
+  // Start / stop the ZXing barcode reader when the scanner dialog opens in
+  // barcode mode. Auto-stops on close or when a code is found. Defined here
+  // (before any early return) so React's hook order stays stable.
+  React.useEffect(() => {
+    if (!showScanner || scanMode !== 'barcode' || scanResult) return;
+    let active = true;
+    (async () => {
+      try {
+        const { BrowserMultiFormatReader } = await import('@zxing/browser');
+        const reader = new BrowserMultiFormatReader();
+        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+        // Prefer the rear-facing camera on mobile when available
+        const back = devices.find(d => /back|rear|environment/i.test(d.label));
+        const deviceId = (back || devices[0])?.deviceId;
+        if (!deviceId || !active) return;
+        const controls = await reader.decodeFromVideoDevice(deviceId, scanVideoRef.current, async (result, err, ctrl) => {
+          if (!active) { ctrl.stop(); return; }
+          if (result) {
+            const text = (result.getText() || '').trim();
+            if (!text) return;
+            setBarcodeText(text);
+            ctrl.stop();
+            // 13-digit codes starting with 978/979 are ISBN; all-digit fallback is UPC/EAN
+            const isIsbn = /^(978|979)\d{10}$/.test(text);
+            const isUpcOrEan = /^\d{8,14}$/.test(text);
+            if (isIsbn || isUpcOrEan) {
+              setScanBusy(true);
+              try {
+                const params = new URLSearchParams();
+                params.set(isIsbn ? 'isbn' : 'upc', text);
+                const r = await api.post(
+                  `/public/shipments/${token}/scan-item?${params.toString()}`,
+                  null,
+                  { headers: { 'X-Shipment-Edit-Token': editToken || '' } },
+                );
+                setScanResult(r.data);
+              } catch (e) {
+                toast.error(e.response?.data?.detail || 'Lookup failed — try photo mode');
+              } finally {
+                setScanBusy(false);
+              }
+            }
+          }
+        });
+        scanControlsRef.current = controls;
+      } catch (e) {
+        toast.error('Camera not available — switch to photo mode');
+        setScanMode('photo');
+      }
+    })();
+    return () => {
+      active = false;
+      try { scanControlsRef.current?.stop(); } catch (_) {/* noop */}
+      scanControlsRef.current = null;
+      setBarcodeText('');
+    };
+  }, [showScanner, scanMode, scanResult, token, editToken]);
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center"><p className="text-sm text-muted-foreground">Loading shipment…</p></div>;
@@ -536,47 +598,90 @@ export default function ShipmentDonorPage() {
           <div className="space-y-3 mt-2">
             {!scanResult && (
               <>
-                <label className="block">
-                  <div className="border-2 border-dashed rounded-xl p-6 text-center hover:bg-muted/30 cursor-pointer" data-testid="ship-donor-scan-dropzone">
-                    <Camera size={32} className="mx-auto text-muted-foreground mb-2" />
-                    <p className="text-sm font-semibold">Tap to take a photo</p>
-                    <p className="text-[10px] text-muted-foreground">or pick up to 3 images</p>
-                  </div>
-                  <input type="file" accept="image/*" capture="environment" multiple className="hidden"
-                    onChange={e => setScanImages(Array.from(e.target.files || []).slice(0, 3))}
-                    data-testid="ship-donor-scan-files" />
-                </label>
-                {scanImages.length > 0 && (
-                  <div className="flex gap-1 flex-wrap" data-testid="ship-donor-scan-previews">
-                    {scanImages.map((f, i) => (
-                      <div key={i} className="w-20 h-20 border rounded overflow-hidden bg-muted">
-                        <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
+                {/* Mode switcher: barcode (camera live scan) vs. photo (AI vision) */}
+                <div className="flex border rounded-lg overflow-hidden text-[11px]" data-testid="ship-donor-scan-mode">
+                  <button
+                    className={`flex-1 py-2 ${scanMode === 'barcode' ? 'bg-primary text-primary-foreground font-semibold' : 'bg-background text-muted-foreground'}`}
+                    onClick={() => setScanMode('barcode')}
+                    data-testid="ship-donor-scan-mode-barcode"
+                  >
+                    📷 Live barcode (ISBN/UPC)
+                  </button>
+                  <button
+                    className={`flex-1 py-2 ${scanMode === 'photo' ? 'bg-primary text-primary-foreground font-semibold' : 'bg-background text-muted-foreground'}`}
+                    onClick={() => setScanMode('photo')}
+                    data-testid="ship-donor-scan-mode-photo"
+                  >
+                    🧠 Photo + AI
+                  </button>
+                </div>
+
+                {scanMode === 'barcode' && (
+                  <div className="space-y-2" data-testid="ship-donor-scan-barcode-pane">
+                    <div className="relative rounded-lg overflow-hidden bg-black aspect-[4/3]">
+                      <video ref={scanVideoRef} className="w-full h-full object-cover" autoPlay playsInline muted />
+                      <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                        <div className="w-3/4 h-20 border-2 border-emerald-400 rounded-lg shadow-[0_0_30px_rgba(52,211,153,0.6)]" />
                       </div>
-                    ))}
+                      {scanBusy && (
+                        <div className="absolute inset-0 bg-background/70 flex items-center justify-center">
+                          <Loader2 size={20} className="animate-spin" />
+                          <span className="ml-2 text-xs font-semibold">Looking up {barcodeText}…</span>
+                        </div>
+                      )}
+                    </div>
+                    {barcodeText && !scanBusy && (
+                      <p className="text-[11px] text-emerald-700 font-mono">Found: {barcodeText}</p>
+                    )}
+                    <p className="text-[10px] text-muted-foreground text-center">Point the camera at the barcode. Falls back to photo mode if your device has no camera.</p>
                   </div>
                 )}
-                <Button
-                  className="w-full bg-emerald-600 hover:bg-emerald-700"
-                  disabled={scanBusy || scanImages.length === 0}
-                  onClick={async () => {
-                    setScanBusy(true);
-                    try {
-                      const fd = new FormData();
-                      scanImages.forEach(f => fd.append('images', f));
-                      const r = await api.post(`/public/shipments/${token}/scan-item`, fd, {
-                        headers: { 'Content-Type': 'multipart/form-data', 'X-Shipment-Edit-Token': editToken || '' },
-                      });
-                      setScanResult(r.data);
-                    } catch (e) {
-                      toast.error(e.response?.data?.detail || 'Scan failed');
-                    } finally {
-                      setScanBusy(false);
-                    }
-                  }}
-                  data-testid="ship-donor-scan-submit"
-                >
-                  {scanBusy ? <><Loader2 size={12} className="mr-1 animate-spin" /> Identifying…</> : <><Sparkles size={12} className="mr-1" /> Identify with AI</>}
-                </Button>
+
+                {scanMode === 'photo' && (
+                  <>
+                    <label className="block">
+                      <div className="border-2 border-dashed rounded-xl p-6 text-center hover:bg-muted/30 cursor-pointer" data-testid="ship-donor-scan-dropzone">
+                        <Camera size={32} className="mx-auto text-muted-foreground mb-2" />
+                        <p className="text-sm font-semibold">Tap to take a photo</p>
+                        <p className="text-[10px] text-muted-foreground">or pick up to 3 images</p>
+                      </div>
+                      <input type="file" accept="image/*" capture="environment" multiple className="hidden"
+                        onChange={e => setScanImages(Array.from(e.target.files || []).slice(0, 3))}
+                        data-testid="ship-donor-scan-files" />
+                    </label>
+                    {scanImages.length > 0 && (
+                      <div className="flex gap-1 flex-wrap" data-testid="ship-donor-scan-previews">
+                        {scanImages.map((f, i) => (
+                          <div key={i} className="w-20 h-20 border rounded overflow-hidden bg-muted">
+                            <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <Button
+                      className="w-full bg-emerald-600 hover:bg-emerald-700"
+                      disabled={scanBusy || scanImages.length === 0}
+                      onClick={async () => {
+                        setScanBusy(true);
+                        try {
+                          const fd = new FormData();
+                          scanImages.forEach(f => fd.append('images', f));
+                          const r = await api.post(`/public/shipments/${token}/scan-item`, fd, {
+                            headers: { 'Content-Type': 'multipart/form-data', 'X-Shipment-Edit-Token': editToken || '' },
+                          });
+                          setScanResult(r.data);
+                        } catch (e) {
+                          toast.error(e.response?.data?.detail || 'Scan failed');
+                        } finally {
+                          setScanBusy(false);
+                        }
+                      }}
+                      data-testid="ship-donor-scan-submit"
+                    >
+                      {scanBusy ? <><Loader2 size={12} className="mr-1 animate-spin" /> Identifying…</> : <><Sparkles size={12} className="mr-1" /> Identify with AI</>}
+                    </Button>
+                  </>
+                )}
               </>
             )}
             {scanResult && (
@@ -632,7 +737,7 @@ export default function ShipmentDonorPage() {
                   </div>
                 )}
                 <div className="flex gap-2 pt-2">
-                  <Button variant="ghost" className="flex-1" onClick={() => { setScanResult(null); setScanImages([]); }} data-testid="ship-donor-scan-rescan">
+                  <Button variant="ghost" className="flex-1" onClick={() => { setScanResult(null); setScanImages([]); setBarcodeText(''); }} data-testid="ship-donor-scan-rescan">
                     Rescan
                   </Button>
                   <Button
