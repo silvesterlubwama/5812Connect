@@ -17,7 +17,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2, KeyRound, LogOut, Pencil, Trophy, Clock, Layers, Trash2, Ruler, Plus, X, ScanLine, FileText, Camera, Loader2 } from 'lucide-react';
+import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2, KeyRound, LogOut, Pencil, Trophy, Clock, Layers, Trash2, Ruler, Plus, X, ScanLine, FileText, Camera, Loader2, Images } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -217,23 +217,58 @@ export default function ShipmentDonorPage() {
   React.useEffect(() => {
     if (!showScanner || scanMode !== 'barcode' || scanResult) return;
     let active = true;
+    let mediaStream = null;
     (async () => {
       try {
-        const { BrowserMultiFormatReader } = await import('@zxing/browser');
-        const reader = new BrowserMultiFormatReader();
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-        // Prefer the rear-facing camera on mobile when available
-        const back = devices.find(d => /back|rear|environment/i.test(d.label));
-        const deviceId = (back || devices[0])?.deviceId;
-        if (!active) return;
-        if (!deviceId) {
-          // No video input devices (or browser denied enumeration without a
-          // permission prompt). Surface this with the same fallback we use
-          // when the camera throws on init.
+        // Require a secure context — getUserMedia is HTTPS-only on most browsers.
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           toast.error('Camera not available — switch to photo mode');
           setScanMode('photo');
           return;
         }
+        // 1. Trigger the permission prompt FIRST. Without this, Safari + many
+        //    Chrome versions return enumerateDevices() with empty labels and
+        //    sometimes empty deviceIds, which is why the previous flow always
+        //    fell through to "Camera not available".
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+          });
+        } catch (permErr) {
+          toast.error('Camera permission denied — switch to photo mode');
+          setScanMode('photo');
+          return;
+        }
+        if (!active) {
+          mediaStream.getTracks().forEach(t => t.stop());
+          return;
+        }
+        // Hand the live MediaStream straight to the <video> element so the
+        // user sees the feed even while ZXing is still initialising.
+        if (scanVideoRef.current) {
+          scanVideoRef.current.srcObject = mediaStream;
+          try { await scanVideoRef.current.play(); } catch (_) {/* iOS sometimes throws here */}
+        }
+
+        const { BrowserMultiFormatReader } = await import('@zxing/browser');
+        const reader = new BrowserMultiFormatReader();
+        // 2. With permission granted, device labels populate properly. Pick
+        //    the rear camera if its label looks like one; otherwise fall
+        //    back to whichever camera the stream is already using.
+        let deviceId;
+        try {
+          const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+          const back = devices.find(d => /back|rear|environment/i.test(d.label));
+          deviceId = (back || devices[0])?.deviceId;
+        } catch (_) {/* fall through */}
+        if (!deviceId) {
+          // If enumeration still failed, use the stream we already have.
+          const track = mediaStream.getVideoTracks()[0];
+          deviceId = track?.getSettings?.().deviceId;
+        }
+        if (!active) return;
+
         const controls = await reader.decodeFromVideoDevice(deviceId, scanVideoRef.current, async (result, err, ctrl) => {
           if (!active) { ctrl.stop(); return; }
           if (result) {
@@ -273,6 +308,13 @@ export default function ShipmentDonorPage() {
       active = false;
       try { scanControlsRef.current?.stop(); } catch (_) {/* noop */}
       scanControlsRef.current = null;
+      // Stop any tracks we acquired manually so the camera light goes off.
+      if (mediaStream) {
+        try { mediaStream.getTracks().forEach(t => t.stop()); } catch (_) {/* noop */}
+      }
+      if (scanVideoRef.current) {
+        try { scanVideoRef.current.srcObject = null; } catch (_) {/* noop */}
+      }
       setBarcodeText('');
     };
   }, [showScanner, scanMode, scanResult, token, editToken]);
@@ -655,25 +697,55 @@ export default function ShipmentDonorPage() {
 
                 {scanMode === 'photo' && (
                   <>
-                    <label className="block">
-                      <div className="border-2 border-dashed rounded-xl p-6 text-center hover:bg-muted/30 cursor-pointer" data-testid="ship-donor-scan-dropzone">
-                        <Camera size={32} className="mx-auto text-muted-foreground mb-2" />
-                        <p className="text-sm font-semibold">Tap to take a photo</p>
-                        <p className="text-[10px] text-muted-foreground">or pick up to 3 images</p>
-                      </div>
-                      <input type="file" accept="image/*" capture="environment" multiple className="hidden"
-                        onChange={e => setScanImages(Array.from(e.target.files || []).slice(0, 3))}
-                        data-testid="ship-donor-scan-files" />
-                    </label>
+                    <div className="grid grid-cols-2 gap-2" data-testid="ship-donor-scan-pickers">
+                      <label className={`flex flex-col items-center gap-1 border-2 border-dashed rounded-xl p-4 hover:bg-muted/30 cursor-pointer ${scanImages.length >= 3 ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <Camera size={22} className="text-muted-foreground" />
+                        <p className="text-[11px] font-semibold text-center">Take photo</p>
+                        <p className="text-[9px] text-muted-foreground text-center">Snap one at a time</p>
+                        <input type="file" accept="image/*" capture="environment" className="hidden"
+                          onChange={e => {
+                            const file = (e.target.files || [])[0];
+                            if (!file) return;
+                            setScanImages(prev => [...prev, file].slice(0, 3));
+                            // Reset the input so the user can take another photo
+                            // (browsers ignore onChange when the value doesn't change).
+                            e.target.value = '';
+                          }}
+                          data-testid="ship-donor-scan-capture" />
+                      </label>
+                      <label className={`flex flex-col items-center gap-1 border-2 border-dashed rounded-xl p-4 hover:bg-muted/30 cursor-pointer ${scanImages.length >= 3 ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <Images size={22} className="text-muted-foreground" />
+                        <p className="text-[11px] font-semibold text-center">Pick from gallery</p>
+                        <p className="text-[9px] text-muted-foreground text-center">Up to 3 — Ctrl/⌘-click</p>
+                        <input type="file" accept="image/*" multiple className="hidden"
+                          onChange={e => {
+                            const picked = Array.from(e.target.files || []);
+                            if (!picked.length) return;
+                            setScanImages(prev => [...prev, ...picked].slice(0, 3));
+                            e.target.value = '';
+                          }}
+                          data-testid="ship-donor-scan-gallery" />
+                      </label>
+                    </div>
                     {scanImages.length > 0 && (
                       <div className="flex gap-1 flex-wrap" data-testid="ship-donor-scan-previews">
                         {scanImages.map((f, i) => (
-                          <div key={i} className="w-20 h-20 border rounded overflow-hidden bg-muted">
+                          <div key={i} className="relative w-20 h-20 border rounded overflow-hidden bg-muted group">
                             <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center"
+                              onClick={() => setScanImages(prev => prev.filter((_, j) => j !== i))}
+                              data-testid={`ship-donor-scan-remove-${i}`}
+                              aria-label="Remove photo"
+                            >
+                              <X size={11} />
+                            </button>
                           </div>
                         ))}
                       </div>
                     )}
+                    <p className="text-[10px] text-muted-foreground text-center">{scanImages.length}/3 photos · cover, barcode, and a clear shot help AI accuracy</p>
                     <Button
                       className="w-full bg-emerald-600 hover:bg-emerald-700"
                       disabled={scanBusy || scanImages.length === 0}

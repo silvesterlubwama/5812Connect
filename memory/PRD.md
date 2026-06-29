@@ -3,6 +3,21 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 191 (Feb 2026)
+**Live barcode camera now opens reliably; photo mode supports true multi-shot capture.**
+
+### Bug A — Live barcode "Camera not available" on production
+- `ShipmentDonorPage.jsx` was calling `BrowserMultiFormatReader.listVideoInputDevices()` BEFORE the browser had asked for camera permission. On Safari + most Chrome builds, that returns devices with empty labels and frequently empty `deviceId` values → no device picked → "Camera not available" toast → forced switch to photo mode.
+- **Fix:** Run `navigator.mediaDevices.getUserMedia({video: {facingMode: { ideal: 'environment' }}})` FIRST. This triggers the permission prompt, immediately populates device labels, AND gives us a working MediaStream we attach to the `<video>` element so the user sees the feed instantly. ZXing then decodes against that already-running stream. Tracks are stopped on dialog close so the camera light goes off.
+- Secure-context guard added: if `navigator.mediaDevices.getUserMedia` is undefined (HTTP / unsupported browser), gracefully fall back to photo mode.
+
+### Bug B — Photo mode could only pick one image at a time
+- The combined `<input type="file" multiple capture="environment">` is broken on mobile: `capture` forces single-shot camera mode in iOS Safari and most Android browsers, so `multiple` was ignored.
+- **Fix:** Split into two input pickers side-by-side:
+  - 📷 **"Take photo"** — `capture="environment"`, single-shot, **appends** to `scanImages` so a donor can snap front → back → spine in three taps.
+  - 🖼️ **"Pick from gallery"** — no `capture`, `multiple` works → Ctrl/⌘-click in the OS file picker. Appends too.
+- Up to 3 photos total. Removed-on-hover X button per preview thumbnail. Counter shows `N/3 photos`. Input `value` is reset after each pick so the same file can be re-selected if the donor changes their mind.
+
 ## Recently Resolved — Iteration 190 (Feb 2026)
 **Broader AI item vocabulary + automatic pallet placement & stacking.**
 

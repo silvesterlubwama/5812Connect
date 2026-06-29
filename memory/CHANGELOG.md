@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 191 (Feb 2026) — Donor Scanner: Camera + Multi-Photo Fixes
+- **Live barcode bug:** `enumerateDevices()` ran before permission was granted → empty deviceId → "Camera not available" toast. Now triggers `getUserMedia({facingMode:'environment'})` first, attaches the stream to the video element, then runs ZXing decoding. Tracks stop on dialog close.
+- **Photo bug:** mobile `capture` attribute disabled `multiple`. Split into separate "Take photo" (single, append) and "Pick from gallery" (multiple, append) tiles. Up to 3 photos with per-thumbnail remove button + counter.
+- Lint clean for changed code (pre-existing apostrophe warnings on unchanged line 604 untouched).
+
 ## Iteration 190 (Feb 2026) — Broader AI Vocabulary + Auto-Stacking
 - **AI categories expanded** from 9 → 17: added Furniture, Tools, Construction, School, Agriculture, Sports, Toiletries, BabyGear, Bicycle. Prompt now explicitly mentions cement bags, rebar, wheelchairs, wheelbarrows, mattresses, strollers, solar panels, etc. with realistic weight anchors.
 - **Auto-placement helper `_auto_place_on_pallet`**: when a pallet-bound item arrives without `pallet_id`, picks the lightest pallet. When `parent_id` is empty, stacks lighter items on top of the heaviest bottom-layer item on that pallet (with proper `z_cm` offset). Returns `auto_placed`/`auto_stacked` flags so the UI can confirm to the donor.
