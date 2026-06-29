@@ -224,44 +224,80 @@ function useScene3DObjects(layout) {
     const c = layout.container;
     const root = new THREE.Group();
 
-    // Lights
-    const amb = new THREE.AmbientLight(0xffffff, 0.6);
+    // Lights — softer ambient + warmer key light that casts shadows
+    const amb = new THREE.AmbientLight(0xffffff, 0.42);
     root.add(amb);
-    const dir1 = new THREE.DirectionalLight(0xffffff, 0.7);
-    dir1.position.set(80, 100, 60);
+    const dir1 = new THREE.DirectionalLight(0xfff5e6, 0.85);
+    dir1.position.set(80, 120, 60);
+    dir1.castShadow = true;
+    dir1.shadow.mapSize.width = 1024;
+    dir1.shadow.mapSize.height = 1024;
+    dir1.shadow.camera.left = -40;
+    dir1.shadow.camera.right = 40;
+    dir1.shadow.camera.top = 40;
+    dir1.shadow.camera.bottom = -40;
+    dir1.shadow.bias = -0.0008;
     root.add(dir1);
-    const dir2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    const dir2 = new THREE.DirectionalLight(0xc6d4ff, 0.25);
     dir2.position.set(-60, 80, -40);
     root.add(dir2);
 
-    // Container wireframe
+    // Subtle hemisphere fill — adds the warm/cool gradient real warehouses have
+    const hemi = new THREE.HemisphereLight(0xfff4e0, 0x202833, 0.45);
+    root.add(hemi);
+
+    // Container wireframe — keep it light so contents stay the visual focus
     const containerGeo = new THREE.BoxGeometry(c.length / 10, c.height / 10, c.width / 10);
-    const containerMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, wireframe: true });
+    const containerMat = new THREE.MeshBasicMaterial({ color: 0x64748b, wireframe: true, transparent: true, opacity: 0.6 });
     const containerMesh = new THREE.Mesh(containerGeo, containerMat);
     containerMesh.position.set(c.length / 20, c.height / 20, c.width / 20);
     root.add(containerMesh);
 
-    // Floor
+    // Floor — soft warehouse-concrete grey with subtle roughness
     const floorGeo = new THREE.PlaneGeometry(c.length / 10 + 4, c.width / 10 + 4);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9 });
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0xd8d3cb, roughness: 0.95, metalness: 0.02,
+    });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.position.set(c.length / 20, -0.1, c.width / 20);
     floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
     root.add(floor);
 
-    // Pallets
+    // Pallets / boxes — colour by category-aware palette + warm wood pallet base
+    // (any object with kind==='pallet' gets the wood look; items inherit their
+    //  category colour from the layout caller and pick up cardboard-ish texture).
+    const palletWood = new THREE.MeshStandardMaterial({
+      color: 0xb38b5d, roughness: 0.85, metalness: 0.05,
+    });
     for (const b of layout.boxes) {
       const sx = b.length / 10;
       const sy = b.height / 10;
       const sz = b.width / 10;
       const cx = (b.x + b.length / 2) / 10;
-      const cy = (b.height / 2) / 10;
+      const cy = ((b.z || 0) + b.height / 2) / 10;   // honor z-offset for stacking
       const cz = (b.y + b.width / 2) / 10;
       const geo = new THREE.BoxGeometry(sx, sy, sz);
-      const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(b.color), transparent: true, opacity: 0.85 });
+      const isPallet = b.kind === 'pallet';
+      const mat = isPallet ? palletWood.clone() : new THREE.MeshStandardMaterial({
+        color: new THREE.Color(b.color || 0xb45309),
+        roughness: 0.78,
+        metalness: 0.04,
+        transparent: !isPallet,
+        opacity: isPallet ? 1 : 0.92,
+      });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(cx, cy, cz);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       root.add(mesh);
+
+      // Subtle edge outline for clarity at any distance
+      const edges = new THREE.EdgesGeometry(geo);
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.45 });
+      const wire = new THREE.LineSegments(edges, lineMat);
+      wire.position.copy(mesh.position);
+      root.add(wire);
     }
     return root;
   }, [layout]);
@@ -289,7 +325,8 @@ const ThreeCanvas = React.lazy(async () => {
         Canvas,
         {
           camera: { position: [c.length / 6, c.height / 5, c.width / 2], fov: 50 },
-          style: { width: '100%', height: 380, borderRadius: 8, background: '#fafafa' },
+          shadows: true,
+          style: { width: '100%', height: 380, borderRadius: 8, background: 'linear-gradient(to bottom, #1e293b 0%, #475569 60%, #94a3b8 100%)' },
         },
         React.createElement('primitive', { object: sceneRoot }),
         React.createElement(OrbitControls, { makeDefault: true, target: [c.length / 20, c.height / 30, c.width / 20] }),

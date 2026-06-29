@@ -1,0 +1,46 @@
+{
+  "summary": "Iter183 — Shipment AI scanner + waybill + extended item model. Backend: 8/8 tests in /app/backend/tests/test_iter183_scanner_waybill.py PASS against external URL (ISBN→Google Books, UPC→OpenFoodFacts, missing-signals→400, missing-token→401, extended item fields persist incl. parent_id stacking, admin & public waybill render with $40.98 / 1.20 kg totals, public waybill correctly requires X-Shipment-Edit-Token). Frontend: donor page at /donate/shipment/{token} loads, PIN login succeeds (badge ship-donor-editor-badge appears), 'Scan item' (ship-donor-open-scanner) and 'Waybill' (ship-donor-waybill) buttons both visible, scanner dialog (ship-donor-scanner-dialog) opens with dropzone + hidden file input + AI submit, file upload renders previews (ship-donor-scan-previews), Identify with AI button enables. No console errors. One real UX bug found in the Waybill button (see below).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ShipmentDonorPage Waybill button",
+        "issue": "Clicking the Waybill button (data-testid='ship-donor-waybill') calls window.open() with /api/public/shipments/{token}/waybill — but that endpoint requires the X-Shipment-Edit-Token header, which window.open() cannot send. Confirmed live: GET on that URL without the header returns 401. So the donor-page Waybill button currently leads to an Unauthorized page even after the user has logged in with the PIN. Backend test (test_public_waybill_requires_pin) is correct — the issue is on the frontend.",
+        "selector": "[data-testid='ship-donor-waybill']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Donor PIN-gated waybill print",
+        "issue": "Frontend uses window.open() but the public waybill API only accepts the edit token via header. Two acceptable fixes: (a) backend accepts ?edit_token=... query param fallback on /api/public/shipments/{token}/waybill, or (b) frontend fetches the HTML with header and opens a blob URL in a new tab.",
+        "affected_selectors": ["[data-testid='ship-donor-waybill']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter183_scanner_waybill.py",
+    "/app/test_reports/pytest/iter183_results.xml"
+  ],
+  "action_items": [
+    "Fix the donor-page Waybill button so the PIN-gated waybill actually opens. Recommended: backend accepts ?edit_token=... query param on GET /api/public/shipments/{token}/waybill (mirrors how some browsers handle attachments), OR frontend fetches HTML with X-Shipment-Edit-Token header and opens it as a blob: URL. Without this fix, Waybill button leads to 401 page.",
+    "Review request prose says donor URL is /donate/{token} — the actual mounted route is /donate/shipment/{token} (App.js line 131). Either update prose or add /donate/{token} alias.",
+    "Scanner 'Identify with AI' end-to-end (real Gemini/GPT vision) was not exercised in this run because we used a 1x1 dummy JPG. Backend ISBN/UPC paths are fully covered by pytest. If you want a full UI screenshot of the result panel (ship-donor-scan-result + container_type + pallet picker + parent picker + confirm), the easiest path is to seed an item via POST /api/shipments/{id}/items, then exercise the existing-item editor — the scanner result panel itself is straightforward React state."
+  ],
+  "critical_code_review_comments": [
+    "ShipmentDonorPage.jsx line 260: window.open(`${REACT_APP_BACKEND_URL}/api/public/shipments/${token}/waybill`) is fundamentally broken for a header-gated endpoint. This is the only real bug found in iter183.",
+    "Backend /api/public/shipments/{token}/scan-item correctly returns 400 on missing signals and 401 without editor token — good defensive validation.",
+    "Backend _waybill_html renderer produces well-formed HTML with totals ($40.98, 1.20 kg) computed correctly from qty*value and qty*weight — verified.",
+    "Item model round-trips parent_id, container_type, isbn, upc, author, publisher, ai_identified, image_urls cleanly through MongoDB — verified.",
+    "ContainerVisualizer 3D mode upgrade (hemisphere fill, wood pallet material, edge outlines, warehouse gradient) — code-reviewed only; not runtime-tested because the test shipment had no items inside its pallet. No console errors were observed on pages that load the visualizer."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "90% — all scanner UI testids render & function correctly; Waybill button has an integration bug (window.open can't pass required header → 401)."},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (login uses 'identifier' field). Donor PIN login: POST /api/public/shipments/{token}/login with {pin:'9999'}; returns edit_token used as X-Shipment-Edit-Token header.",
+  "seed_data_creation": "Created shipment sh_9d67fcb2c8 + 1 pallet + PIN 9999 for UI testing — cleaned up at end of run (delete returned 200).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Donor route is /donate/shipment/{token} NOT /donate/{token}. ISBN/UPC are query params on scan-item (?isbn=... or ?upc=...). Editor token header is X-Shipment-Edit-Token. Toast after PIN login takes ~2s; sleep 2.5s before clicking Scan item or it can intercept the click. Scan dialog appears as role='dialog' in a portal — query by [data-testid='ship-donor-scanner-dialog'] works via Playwright locator. Backend tests pass with BACKEND_URL=https://multi-tenant-scope.preview.emergentagent.com. The single open bug is the Waybill window.open header problem described above.",
+  "rca of the issue": "Waybill 401: window.open() always issues a plain GET with only cookies — it cannot attach custom request headers like X-Shipment-Edit-Token. The backend route /api/public/shipments/{token}/waybill requires that header (correctly, by design). Reproduction: (1) create shipment + set PIN, (2) open /donate/shipment/{token}, (3) submit PIN, (4) click Waybill — browser opens new tab with 401 JSON. Mitigation: either accept ?edit_token=... query param on the public waybill endpoint (server.py public router) OR change frontend to fetch with header then open a blob URL."
+}

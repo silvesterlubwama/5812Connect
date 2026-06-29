@@ -17,7 +17,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2, KeyRound, LogOut, Pencil, Trophy, Clock, Layers, Trash2, Ruler, Plus, X } from 'lucide-react';
+import { Container, Heart, Sparkles, ChevronDown, ChevronUp, Truck, CheckCircle2, KeyRound, LogOut, Pencil, Trophy, Clock, Layers, Trash2, Ruler, Plus, X, ScanLine, FileText, Camera, Loader2 } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -49,6 +49,10 @@ export default function ShipmentDonorPage() {
   });
   const [showLogin, setShowLogin] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanResult, setScanResult] = useState(null);  // result from /scan-item
+  const [scanImages, setScanImages] = useState([]);    // File[] for upload
   const [loginBusy, setLoginBusy] = useState(false);
   // ─── PIN-scoped editing ────────────────────────────────────────
   const [editingItem, setEditingItem] = useState(null);   // existing or {} for new
@@ -238,6 +242,26 @@ export default function ShipmentDonorPage() {
           {data.pin_required && !isEditor && (
             <Button size="sm" variant="outline" onClick={() => setShowLogin(true)} data-testid="ship-donor-login">
               <KeyRound size={12} className="mr-1" /> Editor login
+            </Button>
+          )}
+          {isEditor && (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => setShowScanner(true)}
+              data-testid="ship-donor-open-scanner"
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              <ScanLine size={12} className="mr-1" /> Scan item
+            </Button>
+          )}
+          {isEditor && (
+            <Button size="sm" variant="outline"
+              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/public/shipments/${token}/waybill`, '_blank')}
+              data-testid="ship-donor-waybill"
+              title="Open printable waybill in new tab"
+            >
+              <FileText size={12} className="mr-1" /> Waybill
             </Button>
           )}
           {isEditor && (
@@ -498,6 +522,148 @@ export default function ShipmentDonorPage() {
                 {loginBusy ? 'Signing in…' : 'Sign in'}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Scanner dialog (editor-only) */}
+      <Dialog open={showScanner} onOpenChange={(o) => { if (!o) { setShowScanner(false); setScanResult(null); setScanImages([]); } }}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="ship-donor-scanner-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ScanLine size={16} /> Scan an item</DialogTitle>
+            <DialogDescription className="text-xs">Take 1–3 photos — book cover, barcode, label or general shot. AI identifies title, ISBN/UPC, category, dimensions, and estimated value.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            {!scanResult && (
+              <>
+                <label className="block">
+                  <div className="border-2 border-dashed rounded-xl p-6 text-center hover:bg-muted/30 cursor-pointer" data-testid="ship-donor-scan-dropzone">
+                    <Camera size={32} className="mx-auto text-muted-foreground mb-2" />
+                    <p className="text-sm font-semibold">Tap to take a photo</p>
+                    <p className="text-[10px] text-muted-foreground">or pick up to 3 images</p>
+                  </div>
+                  <input type="file" accept="image/*" capture="environment" multiple className="hidden"
+                    onChange={e => setScanImages(Array.from(e.target.files || []).slice(0, 3))}
+                    data-testid="ship-donor-scan-files" />
+                </label>
+                {scanImages.length > 0 && (
+                  <div className="flex gap-1 flex-wrap" data-testid="ship-donor-scan-previews">
+                    {scanImages.map((f, i) => (
+                      <div key={i} className="w-20 h-20 border rounded overflow-hidden bg-muted">
+                        <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button
+                  className="w-full bg-emerald-600 hover:bg-emerald-700"
+                  disabled={scanBusy || scanImages.length === 0}
+                  onClick={async () => {
+                    setScanBusy(true);
+                    try {
+                      const fd = new FormData();
+                      scanImages.forEach(f => fd.append('images', f));
+                      const r = await api.post(`/public/shipments/${token}/scan-item`, fd, {
+                        headers: { 'Content-Type': 'multipart/form-data', 'X-Shipment-Edit-Token': editToken || '' },
+                      });
+                      setScanResult(r.data);
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Scan failed');
+                    } finally {
+                      setScanBusy(false);
+                    }
+                  }}
+                  data-testid="ship-donor-scan-submit"
+                >
+                  {scanBusy ? <><Loader2 size={12} className="mr-1 animate-spin" /> Identifying…</> : <><Sparkles size={12} className="mr-1" /> Identify with AI</>}
+                </Button>
+              </>
+            )}
+            {scanResult && (
+              <div className="space-y-2" data-testid="ship-donor-scan-result">
+                <div className="rounded-lg border p-3 space-y-1 bg-muted/30">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Identified</p>
+                  <p className="text-base font-semibold">{scanResult.name || 'Unknown'}</p>
+                  {scanResult.author && <p className="text-xs">by {scanResult.author}</p>}
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <Badge variant="outline" className="text-[10px]">{scanResult.category}</Badge>
+                    {scanResult.isbn && <Badge variant="outline" className="text-[10px]">ISBN {scanResult.isbn}</Badge>}
+                    {scanResult.upc && <Badge variant="outline" className="text-[10px]">UPC {scanResult.upc}</Badge>}
+                    {scanResult.ai_identified && <Badge className="text-[10px] bg-amber-100 text-amber-800">AI · {scanResult.ai_confidence}</Badge>}
+                    {scanResult.source && <Badge className="text-[10px] bg-blue-100 text-blue-800">{scanResult.source}</Badge>}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">~{scanResult.dims_cm?.length}×{scanResult.dims_cm?.width}×{scanResult.dims_cm?.height} cm · {scanResult.weight_kg} kg · ~${scanResult.value_usd}</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Place in</Label>
+                  <Select value={scanResult.container_type || 'container'} onValueChange={v => setScanResult({ ...scanResult, container_type: v })}>
+                    <SelectTrigger data-testid="ship-donor-scan-container-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="container">Directly in container (loose)</SelectItem>
+                      <SelectItem value="pallet">On a pallet</SelectItem>
+                      <SelectItem value="box">In a box</SelectItem>
+                      <SelectItem value="tote">In a tote</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {(scanResult.container_type === 'pallet' || scanResult.container_type === 'box' || scanResult.container_type === 'tote') && (data.pallets || []).length > 0 && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">Pallet/Box/Tote</Label>
+                    <Select value={scanResult.pallet_id || ''} onValueChange={v => setScanResult({ ...scanResult, pallet_id: v })}>
+                      <SelectTrigger data-testid="ship-donor-scan-pallet"><SelectValue placeholder="Pick…" /></SelectTrigger>
+                      <SelectContent>
+                        {(data.pallets || []).map(p => <SelectItem key={p.id} value={p.id}>{p.label || p.id.slice(0, 8)}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {(data.items || []).length > 0 && scanResult.container_type !== 'container' && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">Stack on top of (optional)</Label>
+                    <Select value={scanResult.parent_id || '__none__'} onValueChange={v => setScanResult({ ...scanResult, parent_id: v === '__none__' ? null : v })}>
+                      <SelectTrigger data-testid="ship-donor-scan-parent"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— (place on floor of pallet)</SelectItem>
+                        {(data.items || []).filter(it => it.pallet_id === scanResult.pallet_id).map(it => (
+                          <SelectItem key={it.id} value={it.id}>{it.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="flex gap-2 pt-2">
+                  <Button variant="ghost" className="flex-1" onClick={() => { setScanResult(null); setScanImages([]); }} data-testid="ship-donor-scan-rescan">
+                    Rescan
+                  </Button>
+                  <Button
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                    disabled={scanBusy || !scanResult.name}
+                    onClick={async () => {
+                      setScanBusy(true);
+                      try {
+                        await api.post(`/public/shipments/${token}/items`, {
+                          ...scanResult,
+                          qty_acquired: 1,
+                          qty_needed: 1,
+                        }, { headers: { 'X-Shipment-Edit-Token': editToken || '' } });
+                        toast.success('Item added to shipment');
+                        await refresh();
+                        setScanResult(null);
+                        setScanImages([]);
+                        setShowScanner(false);
+                      } catch (e) {
+                        toast.error(e.response?.data?.detail || 'Save failed');
+                      } finally {
+                        setScanBusy(false);
+                      }
+                    }}
+                    data-testid="ship-donor-scan-confirm"
+                  >
+                    {scanBusy ? <Loader2 size={12} className="animate-spin" /> : <>Add to shipment</>}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

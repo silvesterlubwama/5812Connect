@@ -20,11 +20,12 @@ state — text-only, fits inside a Markdown box on both the admin + public UIs.
   Internal:  12.03 m × 2.35 m × 2.69 m   (≈ 76 m³)
   Max payload: ~26,000 kg
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from typing import Optional, List
+import os
+import os as _os
 from deps import db, get_current_user, _audit, require_admin, logger
 from datetime import datetime, timezone, timedelta
-from typing import Optional
-import os
 import uuid
 import hmac
 import hashlib
@@ -268,6 +269,9 @@ def _normalise_item(data: dict) -> dict:
     priority = (data.get("priority") or "normal").lower()
     if priority not in VALID_PRIORITIES:
         priority = "normal"
+    container_type = (data.get("container_type") or "container").lower()
+    if container_type not in ("container", "pallet", "box", "tote"):
+        container_type = "container"
     return {
         "id": f"sit_{uuid.uuid4().hex[:8]}",
         "name": name[:160],
@@ -281,10 +285,26 @@ def _normalise_item(data: dict) -> dict:
             "height": max(0, float((data.get("dims_cm") or {}).get("height") or 0)),
         },
         "photo_url": (data.get("photo_url") or "")[:500],
+        # Multiple photos from the AI scanner — cover, back, spine, etc.
+        "image_urls": [(u or "")[:500] for u in (data.get("image_urls") or []) if u],
         "value_usd": max(0, float(data.get("value_usd") or 0)),
         "notes": (data.get("notes") or "")[:500],
         "priority": priority,
         "pallet_id": data.get("pallet_id") or None,
+        # Stacking: if `parent_id` points to another item, this item sits ON TOP
+        # of that one. Otherwise it sits on its pallet (or on the container floor
+        # when container_type=container).
+        "parent_id": data.get("parent_id") or None,
+        "container_type": container_type,
+        # Barcode identifiers from the scanner — used for waybill + dedupe.
+        "isbn": (data.get("isbn") or "")[:30],
+        "upc": (data.get("upc") or "")[:30],
+        "author": (data.get("author") or "")[:120],         # Books: author
+        "publisher": (data.get("publisher") or "")[:120],
+        # Audit fields — set when added via the PIN-gated public scanner
+        "scanned_by_pin_hint": (data.get("scanned_by_pin_hint") or "")[:8],
+        "scanned_at": data.get("scanned_at"),
+        "ai_identified": bool(data.get("ai_identified", False)),
         # Position WITHIN the assigned pallet (cm from pallet's back-left
         # corner). Optional — admin can set via the form-based item editor.
         "x_cm": max(0, float(data.get("x_cm") or 0)),
@@ -307,7 +327,9 @@ async def add_item(shipment_id: str, data: dict, current_user: dict = Depends(re
 @router.put("/shipments/{shipment_id}/items/{item_id}")
 async def update_item(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"name", "category", "qty_needed", "qty_acquired", "weight_kg",
-               "dims_cm", "photo_url", "value_usd", "notes", "priority", "pallet_id",
+               "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
+               "pallet_id", "parent_id", "container_type", "isbn", "upc",
+               "author", "publisher", "ai_identified",
                "x_cm", "y_cm", "z_cm"}
     set_ops = {}
     for k, v in data.items():
@@ -872,7 +894,9 @@ async def public_update_item(token: str, item_id: str, data: dict, request: Requ
     """Editor: edit any item field (name, dims, weight, pallet_id, position)."""
     ctx = await require_shipment_editor(request, token)
     allowed = {"name", "category", "qty_needed", "qty_acquired", "weight_kg",
-               "dims_cm", "photo_url", "value_usd", "notes", "priority", "pallet_id",
+               "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
+               "pallet_id", "parent_id", "container_type", "isbn", "upc",
+               "author", "publisher", "ai_identified",
                "x_cm", "y_cm", "z_cm"}
     set_ops = {}
     for k, v in data.items():
@@ -958,3 +982,318 @@ async def public_delete_pallet(token: str, pallet_id: str, request: Request):
     if r.modified_count == 0:
         raise HTTPException(status_code=404, detail="Pallet not found")
     return {"deleted": True}
+
+
+
+# ============================================================
+# AI ITEM SCANNER — public, PIN-gated
+# ============================================================
+# Volunteers logged in via the donor PIN can take 1–3 photos of an item (book
+# cover/back/spine, barcode, or general shot) and the AI identifies the title /
+# author / ISBN / UPC / category. If the photo contained a barcode, we hit
+# external catalogues (Google Books for ISBNs, OpenFoodFacts for UPCs) to fill
+# in canonical metadata before returning to the client.
+
+@router.post("/public/shipments/{token}/scan-item")
+async def public_scan_item(
+    token: str,
+    request: Request,
+    images: List[UploadFile] = File(default=[]),
+    isbn: Optional[str] = None,
+    upc: Optional[str] = None,
+):
+    """Identify a shipment item from up to 3 photos and/or a scanned barcode.
+
+    Returns a candidate item dict (NOT yet persisted) — the volunteer reviews,
+    edits, then POSTs to /items to actually add it to the shipment.
+    """
+    ctx = await require_shipment_editor(request, token)
+    pin_hint = (ctx.get("pin_used") or "")[-4:] if ctx.get("pin_used") else ""
+
+    # Sanity: at least one signal must be present
+    if not images and not isbn and not upc:
+        raise HTTPException(status_code=400, detail="Provide at least one image, ISBN, or UPC")
+
+    # 1) Try external catalogues first — they're definitive when we have a barcode
+    enriched: dict = {}
+    if isbn:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6) as cli:
+                r = await cli.get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn.strip()}")
+                if r.status_code == 200:
+                    js = r.json()
+                    if js.get("totalItems", 0) > 0:
+                        v = js["items"][0]["volumeInfo"]
+                        enriched = {
+                            "name": v.get("title") or "",
+                            "author": ", ".join(v.get("authors") or []),
+                            "publisher": v.get("publisher") or "",
+                            "category": (v.get("categories") or ["Books"])[0],
+                            "isbn": isbn.strip(),
+                            "photo_url": ((v.get("imageLinks") or {}).get("thumbnail") or "").replace("http://", "https://"),
+                            "weight_kg": 0.3,    # typical paperback
+                            "dims_cm": {"length": 20, "width": 13, "height": 2},
+                            "value_usd": float(((js["items"][0].get("saleInfo") or {}).get("listPrice") or {}).get("amount") or 12.0),
+                            "ai_identified": False,
+                            "source": "google_books",
+                        }
+        except Exception as e:
+            logger.warning(f"google books lookup failed: {e}")
+
+    if upc and not enriched:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6) as cli:
+                r = await cli.get(f"https://world.openfoodfacts.org/api/v2/product/{upc.strip()}.json")
+                if r.status_code == 200:
+                    js = r.json()
+                    if js.get("status") == 1:
+                        p = js.get("product") or {}
+                        enriched = {
+                            "name": p.get("product_name") or p.get("generic_name") or "",
+                            "category": (p.get("categories", "").split(",") or ["Food"])[0].strip()[:60],
+                            "upc": upc.strip(),
+                            "photo_url": p.get("image_front_url") or "",
+                            "weight_kg": 0.5,
+                            "dims_cm": {"length": 10, "width": 10, "height": 20},
+                            "value_usd": 4.0,
+                            "ai_identified": False,
+                            "source": "openfoodfacts",
+                        }
+        except Exception as e:
+            logger.warning(f"openfoodfacts lookup failed: {e}")
+
+    # 2) If still empty (no barcode hit), invoke AI vision with the photos
+    image_urls: List[str] = []
+    if images:
+        # Persist photos for audit + so the waybill can reference them later
+        for img in images[:3]:
+            data = await img.read()
+            if not data or len(data) > 8_000_000:
+                continue
+            from routers.shipments import _persist_shipment_image  # type: ignore
+            try:
+                url = await _persist_shipment_image(ctx["shipment_id"], data, img.content_type or "image/jpeg")
+                image_urls.append(url)
+            except Exception:
+                pass
+
+    if not enriched and image_urls:
+        api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+        if api_key:
+            try:
+                from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+                # Pull the first image back into a temp file for the AI
+                import tempfile
+                import httpx as _httpx
+                async with _httpx.AsyncClient(timeout=10) as cli:
+                    rr = await cli.get(image_urls[0])
+                    img_bytes = rr.content
+                fd, tmp = tempfile.mkstemp(suffix=".jpg")
+                with _os.fdopen(fd, "wb") as fh:
+                    fh.write(img_bytes)
+                sys_msg = (
+                    "You identify physical items from photos for a charity shipment inventory. "
+                    "Read any barcodes, ISBNs, titles, or text on the item. Output STRICT JSON: "
+                    "{\"name\": str, \"category\": str (one of: Books, Clothing, Food, Toys, Medical, Electronics, Household, Stationery, Other), "
+                    "\"author\": str, \"publisher\": str, \"isbn\": str, \"upc\": str, "
+                    "\"weight_kg\": float, \"dims_cm\": {\"length\": float, \"width\": float, \"height\": float}, "
+                    "\"value_usd\": float, \"confidence\": \"high\"|\"medium\"|\"low\"}. "
+                    "Empty string for unknown fields. Round-number conservative estimates for dims/weight/value."
+                )
+                # Primary: Gemini 3 Flash
+                chat = LlmChat(
+                    api_key=api_key,
+                    session_id=f"shipment_scan_{uuid.uuid4().hex[:6]}",
+                    system_message=sys_msg,
+                ).with_model("gemini", "gemini-3-flash-preview")
+                msg = UserMessage(
+                    text="Identify this item. Read barcodes / ISBNs / titles. Return strict JSON.",
+                    file_contents=[FileContentWithMimeType(file_path=tmp, mime_type="image/jpeg")],
+                )
+                raw = await chat.send_message(msg)
+                s = (raw or "").strip()
+                if s.startswith("```"):
+                    s = s.strip("`")
+                    if s.lower().startswith("json"):
+                        s = s[4:].strip()
+                first, last = s.find("{"), s.rfind("}")
+                if first >= 0 and last > first:
+                    s = s[first:last + 1]
+                import json as _json
+                parsed = _json.loads(s)
+                confidence = (parsed.get("confidence") or "low").lower()
+                # GPT-4o fallback if Gemini was low confidence
+                if confidence == "low":
+                    chat2 = LlmChat(
+                        api_key=api_key,
+                        session_id=f"shipment_scan_gpt_{uuid.uuid4().hex[:6]}",
+                        system_message=sys_msg,
+                    ).with_model("openai", "gpt-4o")
+                    raw2 = await chat2.send_message(msg)
+                    s2 = (raw2 or "").strip()
+                    if s2.startswith("```"):
+                        s2 = s2.strip("`")
+                        if s2.lower().startswith("json"):
+                            s2 = s2[4:].strip()
+                    f2, l2 = s2.find("{"), s2.rfind("}")
+                    if f2 >= 0 and l2 > f2:
+                        parsed = _json.loads(s2[f2:l2 + 1])
+                enriched = {
+                    "name": parsed.get("name") or "",
+                    "category": parsed.get("category") or "Other",
+                    "author": parsed.get("author") or "",
+                    "publisher": parsed.get("publisher") or "",
+                    "isbn": parsed.get("isbn") or "",
+                    "upc": parsed.get("upc") or "",
+                    "weight_kg": float(parsed.get("weight_kg") or 0.5),
+                    "dims_cm": parsed.get("dims_cm") or {"length": 20, "width": 13, "height": 5},
+                    "value_usd": float(parsed.get("value_usd") or 5.0),
+                    "ai_identified": True,
+                    "ai_confidence": parsed.get("confidence") or "low",
+                    "source": "ai_vision",
+                }
+                # If AI extracted an ISBN, try one more time to enrich via Google Books
+                if parsed.get("isbn") and not enriched.get("publisher"):
+                    try:
+                        async with _httpx.AsyncClient(timeout=4) as cli:
+                            gr = await cli.get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{parsed['isbn']}")
+                            if gr.status_code == 200 and gr.json().get("totalItems", 0) > 0:
+                                v = gr.json()["items"][0]["volumeInfo"]
+                                enriched["publisher"] = v.get("publisher") or enriched["publisher"]
+                                enriched["author"] = ", ".join(v.get("authors") or []) or enriched["author"]
+                    except Exception:
+                        pass
+                try:
+                    _os.remove(tmp)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"AI scan failed: {e}")
+
+    # 3) Final shape — always returns SOMETHING the client can show + edit
+    if not enriched:
+        enriched = {
+            "name": "Unidentified item",
+            "category": "Other",
+            "ai_identified": False,
+            "ai_confidence": "low",
+            "source": "manual",
+            "weight_kg": 0.5,
+            "dims_cm": {"length": 20, "width": 20, "height": 10},
+            "value_usd": 5.0,
+        }
+    enriched["image_urls"] = image_urls
+    enriched["photo_url"] = enriched.get("photo_url") or (image_urls[0] if image_urls else "")
+    enriched["scanned_by_pin_hint"] = pin_hint
+    enriched["scanned_at"] = datetime.now(timezone.utc).isoformat()
+    return enriched
+
+
+async def _persist_shipment_image(shipment_id: str, data: bytes, mime: str) -> str:
+    """Persist a scanned-item photo and return a URL. Cloud storage with
+    on-disk fallback — same pattern as item-photo upload."""
+    ext = (mime.split("/")[-1] if "/" in mime else "jpg")
+    name = f"shipments/{shipment_id}/scans/{uuid.uuid4().hex}.{ext}"
+    try:
+        from storage import upload_bytes      # type: ignore
+        return await upload_bytes(name, data, mime)
+    except Exception:
+        pass
+    # Disk fallback
+    import os as _o
+    base = "/app/backend/uploads/shipments"
+    _o.makedirs(base, exist_ok=True)
+    p = f"{base}/{uuid.uuid4().hex}.{ext}"
+    with open(p, "wb") as fh:
+        fh.write(data)
+    return f"/uploads/shipments/{_o.path.basename(p)}"
+
+
+# ============================================================
+# WAYBILL — printable manifest for a shipment
+# ============================================================
+
+def _waybill_html(s: dict) -> str:
+    """Render an HTML waybill. Used both for the printable preview AND as the
+    source for the PDF route below."""
+    items = s.get("items") or []
+    pallets = s.get("pallets") or []
+    total_value = sum((it.get("value_usd") or 0) * (it.get("qty_acquired") or 1) for it in items)
+    total_weight = sum((it.get("weight_kg") or 0) * (it.get("qty_acquired") or 1) for it in items)
+    by_pallet: dict = {None: []}
+    for p in pallets:
+        by_pallet[p["id"]] = []
+    for it in items:
+        by_pallet.setdefault(it.get("pallet_id"), []).append(it)
+
+    rows = []
+    for p in pallets:
+        rows.append(f"<tr style='background:#eef;'><td colspan=7><strong>Pallet {p.get('label') or p['id'][:6]}</strong> · {p.get('dims_cm', {}).get('length', 100)}×{p.get('dims_cm', {}).get('width', 80)}×{p.get('dims_cm', {}).get('height', 15)} cm</td></tr>")
+        for it in by_pallet.get(p["id"], []):
+            rows.append(
+                f"<tr><td>{it.get('name', '')}</td>"
+                f"<td>{it.get('category', '')}</td>"
+                f"<td>{it.get('isbn') or it.get('upc') or ''}</td>"
+                f"<td>{it.get('qty_acquired', 1)}</td>"
+                f"<td>${(it.get('value_usd') or 0):.2f}</td>"
+                f"<td>{(it.get('weight_kg') or 0):.2f} kg</td>"
+                f"<td>{p.get('label') or p['id'][:6]}</td></tr>"
+            )
+    # Unassigned items
+    if by_pallet.get(None):
+        rows.append("<tr style='background:#fee;'><td colspan=7><strong>Loose (no pallet)</strong></td></tr>")
+        for it in by_pallet.get(None, []):
+            rows.append(
+                f"<tr><td>{it.get('name', '')}</td>"
+                f"<td>{it.get('category', '')}</td>"
+                f"<td>{it.get('isbn') or it.get('upc') or ''}</td>"
+                f"<td>{it.get('qty_acquired', 1)}</td>"
+                f"<td>${(it.get('value_usd') or 0):.2f}</td>"
+                f"<td>{(it.get('weight_kg') or 0):.2f} kg</td>"
+                f"<td>—</td></tr>"
+            )
+
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Waybill — {s.get('name', '')}</title>
+<style>
+body {{ font-family: Inter, system-ui, sans-serif; margin: 24px; color: #111; }}
+h1 {{ margin-bottom: 4px; }}
+.subtitle {{ color: #555; margin-bottom: 16px; font-size: 13px; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
+th, td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; }}
+th {{ background: #fafafa; }}
+.totals {{ margin-top: 18px; font-size: 13px; }}
+.totals strong {{ display: inline-block; min-width: 140px; }}
+</style></head><body>
+<h1>Waybill / Manifest</h1>
+<p class="subtitle">{s.get('name', 'Untitled shipment')} · {len(items)} items · {len(pallets)} pallets · Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+<p class="subtitle"><strong>Origin:</strong> {s.get('origin', '—')} · <strong>Destination:</strong> {s.get('destination', '—')} · <strong>Ship date:</strong> {s.get('ship_date') or '—'}</p>
+<table>
+<thead><tr><th>Item</th><th>Category</th><th>ISBN / UPC</th><th>Qty</th><th>Unit value</th><th>Weight</th><th>Pallet</th></tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table>
+<div class="totals">
+<p><strong>Total items:</strong> {sum((it.get('qty_acquired') or 1) for it in items)}</p>
+<p><strong>Total value:</strong> ${total_value:.2f}</p>
+<p><strong>Total weight:</strong> {total_weight:.2f} kg</p>
+</div>
+</body></html>"""
+
+
+@router.get("/shipments/{shipment_id}/waybill")
+async def waybill_html(shipment_id: str, current_user: dict = Depends(require_admin)):
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return Response(content=_waybill_html(s), media_type="text/html")
+
+
+@router.get("/public/shipments/{token}/waybill")
+async def public_waybill_html(token: str, request: Request):
+    ctx = await require_shipment_editor(request, token)
+    s = await db.shipments.find_one({"id": ctx["shipment_id"]}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return Response(content=_waybill_html(s), media_type="text/html")
