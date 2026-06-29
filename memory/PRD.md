@@ -3,7 +3,39 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 182 (Feb 2026)
+## Recently Resolved — Iteration 183/184 (Feb 2026)
+**Shipment AI scanner + waybill + extended item model + 3D realism upgrade.**
+
+### Scanner — PIN-gated
+- `POST /api/public/shipments/{token}/scan-item` accepts up to 3 images + optional `?isbn` / `?upc`.
+- Path priority: external lookup first (Google Books for ISBN, OpenFoodFacts for UPC) → Gemini 3 Flash vision → GPT-4o fallback if Gemini confidence is low.
+- Extracted images are persisted to cloud storage with on-disk fallback; URLs returned in the response for audit.
+- Auto-extracts ISBN/UPC from photos and re-enriches via Google Books if AI saw an ISBN.
+- Returns a candidate item dict (not persisted) — volunteer reviews/edits, then POSTs to `/items` with optional `container_type` + `pallet_id` + `parent_id` (stacking).
+
+### Extended item model
+- `container_type` (container / pallet / box / tote), `parent_id` (stack-on-top), `isbn`, `upc`, `author`, `publisher`, `ai_identified`, `ai_confidence`, `image_urls`, `scanned_by_pin_hint`, `scanned_at`. All round-trip cleanly.
+
+### Waybill
+- `GET /api/shipments/{id}/waybill` (admin) and `GET /api/public/shipments/{token}/waybill` (PIN) render a printable HTML manifest grouped by pallet, including totals (count, value, weight).
+- Public route accepts editor token EITHER via `X-Shipment-Edit-Token` header OR `?edit_token=` query param (so `window.open()` works).
+
+### Frontend (`ShipmentDonorPage.jsx`)
+- New 'Scan item' + 'Waybill' buttons appear in editor mode.
+- Scanner dialog: camera capture (mobile) / multi-file upload, AI-identify, container_type + pallet + stack-on-parent pickers, Add-to-shipment.
+
+### 3D realism (`ContainerVisualizer.jsx`)
+- Hemisphere fill light, shadow-casting key light with bias, warehouse gradient background.
+- Wood-coloured pallet material (roughness 0.85), cardboard-style box material with slight transparency.
+- Subtle edge outlines on every box/pallet (LineSegments + EdgesGeometry).
+- Honors z-offset for stacked items (`b.z`).
+
+### Testing
+- Iteration 183: **9/9 backend pytest pass** (`test_iter183_scanner_waybill.py`) — including live Google Books + OpenFoodFacts lookups.
+- Iteration 183 (testing agent): backend 100% + frontend 90% — Waybill button bug flagged.
+- Iteration 184 (re-test after fix): backend 100% + frontend 100% — bug fully resolved.
+
+
 **PBX extension v2: auto-sync from staff profile, registrar/FXO trunks, priorities, contact groups, BLF.**
 
 ### Auto-sync
