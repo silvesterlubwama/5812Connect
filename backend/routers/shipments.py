@@ -418,6 +418,47 @@ async def delete_item(shipment_id: str, item_id: str, current_user: dict = Depen
     return {"deleted": True}
 
 
+@router.post("/shipments/{shipment_id}/prune-over-pledged")
+async def prune_over_pledged(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Trim every item's `qty_acquired` down to its `qty_needed` cap. Surplus
+    is logged on each item under `surplus_redistributed` for audit so packers
+    can reroute it to another shipment or storage bin.
+
+    Returns `{ trimmed: [{item_id, name, surplus}], total_surplus }`. No-op
+    rows are skipped entirely so the audit log stays clean.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    trimmed = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for it in (s.get("items") or []):
+        needed = int(it.get("qty_needed") or 0)
+        acquired = int(it.get("qty_acquired") or 0)
+        if needed <= 0 or acquired <= needed:
+            continue
+        surplus = acquired - needed
+        # Append to redistribution log + reset qty
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": it["id"]},
+            {
+                "$set": {
+                    "items.$.qty_acquired": needed,
+                    "items.$.updated_at": now_iso,
+                },
+                "$push": {
+                    "items.$.surplus_redistributed": {
+                        "qty": surplus,
+                        "at": now_iso,
+                        "by": current_user.get("email") or current_user.get("id"),
+                    },
+                },
+            },
+        )
+        trimmed.append({"item_id": it["id"], "name": it.get("name") or "", "surplus": surplus})
+    return {"trimmed": trimmed, "total_surplus": sum(t["surplus"] for t in trimmed)}
+
+
 # ─── Item photo upload + link-to-size estimation ────────────────
 
 from fastapi import UploadFile, File  # noqa: E402

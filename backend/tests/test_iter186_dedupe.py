@@ -146,3 +146,53 @@ class TestDedupe:
         assert r.status_code == 200
         assert r.json()["merged"] is True
         assert r.json()["qty_acquired"] == 2
+
+
+class TestPruneOverPledged:
+    def test_prune_trims_and_logs(self, shipment, headers):
+        sid = shipment["id"]
+        # Create an item with qty_needed=2 then push qty_acquired to 5 directly
+        r = requests.post(f"{BASE_URL}/api/shipments/{sid}/items",
+                          headers=headers, json={
+                              "name": "Overflow Books",
+                              "isbn": "8881118880001",
+                              "container_type": "container",
+                              "qty_needed": 2, "qty_acquired": 5,
+                          }, timeout=10)
+        assert r.status_code == 200
+        item = r.json()
+        assert item["over_pledged"] is True
+
+        # Add a non-overpledged item — must NOT be trimmed
+        requests.post(f"{BASE_URL}/api/shipments/{sid}/items",
+                      headers=headers, json={
+                          "name": "Right-sized item", "qty_needed": 3, "qty_acquired": 1,
+                      }, timeout=10)
+
+        # Prune
+        pr = requests.post(f"{BASE_URL}/api/shipments/{sid}/prune-over-pledged",
+                           headers=headers, timeout=10)
+        assert pr.status_code == 200
+        body = pr.json()
+        assert len(body["trimmed"]) == 1
+        assert body["trimmed"][0]["surplus"] == 3
+        assert body["total_surplus"] == 3
+
+        # Verify item now at exactly qty_needed and surplus logged
+        items = _list_items(sid, headers)
+        trimmed_item = next(i for i in items if i.get("isbn") == "8881118880001")
+        assert trimmed_item["qty_acquired"] == 2
+        assert len(trimmed_item.get("surplus_redistributed") or []) == 1
+        assert trimmed_item["surplus_redistributed"][0]["qty"] == 3
+
+        # Idempotent: pruning again is a no-op
+        pr2 = requests.post(f"{BASE_URL}/api/shipments/{sid}/prune-over-pledged",
+                            headers=headers, timeout=10)
+        assert pr2.json()["trimmed"] == []
+        assert pr2.json()["total_surplus"] == 0
+
+    def test_prune_requires_admin(self, shipment):
+        # No auth header
+        r = requests.post(f"{BASE_URL}/api/shipments/{shipment['id']}/prune-over-pledged",
+                          timeout=10)
+        assert r.status_code in (401, 403)

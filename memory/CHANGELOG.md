@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 187 (Feb 2026) — Auto-Prune Over-Pledged Donations
+- New admin endpoint `POST /api/shipments/{id}/prune-over-pledged` trims any item whose `qty_acquired > qty_needed` back to the pledged cap and logs the surplus on `items[*].surplus_redistributed` (qty/at/by) for audit. Idempotent.
+- New "Prune over-pledged (N)" button (amber, Scissors icon) on the admin shipment items list — appears only when at least one item is over-pledged.
+- `test_iter186_dedupe.py` extended with 2 prune tests → **7/7 pytest pass**.
+
 ## Iteration 186 (Feb 2026) — Shipment Inventory Dedupe + Over-pledge Warning
 - Backend: `_add_or_merge_item` in `routers/shipments.py` merges items with the same ISBN/UPC on the same pallet (increments `qty_acquired`) instead of inserting duplicates. Wired into both admin (`POST /api/shipments/{id}/items`) and PIN-gated public (`POST /api/public/shipments/{token}/items`) routes.
 - Response now includes `merged: true` and `over_pledged: true` flags.

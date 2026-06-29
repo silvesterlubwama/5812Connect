@@ -19,7 +19,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -344,8 +344,22 @@ export default function ShipmentsAdminPage() {
       pct: Math.min(100, (weight / (selected.max_payload_kg || 26000)) * 100),
       needed: items.filter(i => (i.qty_needed || 0) - (i.qty_acquired || 0) > 0).length,
       acquired: items.filter(i => (i.qty_needed || 0) - (i.qty_acquired || 0) <= 0).length,
+      overPledged: items.filter(i => (Number(i.qty_acquired) || 0) > (Number(i.qty_needed) || 0)).length,
     };
   }, [selected]);
+
+  const pruneOverPledged = async () => {
+    if (!selected) return;
+    if (!window.confirm(`Trim ${totals?.overPledged || 0} over-pledged item(s) back to pledged qty? Surplus is logged for audit but qty_acquired will drop.`)) return;
+    try {
+      const r = await api.post(`/shipments/${selected.id}/prune-over-pledged`);
+      const { trimmed, total_surplus } = r.data || {};
+      toast.success(`Trimmed ${trimmed?.length || 0} item(s) — ${total_surplus || 0} surplus units logged`);
+      await refreshDetail();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Prune failed');
+    }
+  };
 
   // ─── LIST view ────────────────────────────────────────────────
   if (!selectedId) {
@@ -535,6 +549,11 @@ export default function ShipmentsAdminPage() {
         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
           <p className="text-xs font-semibold">Items ({(selected.items || []).length})</p>
           <div className="flex gap-1.5">
+            {(totals?.overPledged || 0) > 0 && (
+              <Button size="sm" variant="outline" className="text-amber-700 border-amber-300 hover:bg-amber-50" onClick={pruneOverPledged} data-testid="ship-prune-overpledged-btn" title="Trim over-pledged items back to their pledged quantity. Surplus is logged for redistribution.">
+                <Scissors size={11} className="mr-1" /> Prune over-pledged ({totals.overPledged})
+              </Button>
+            )}
             <Button size="sm" variant="outline" onClick={() => setShowCsvImport(true)} data-testid="ship-csv-import-btn">
               <FileSpreadsheet size={11} className="mr-1" /> Import CSV
             </Button>

@@ -3,6 +3,20 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 187 (Feb 2026)
+**Auto-prune over-pledged donations — closes the loop on the dedupe + warning work.**
+
+### Backend (`routers/shipments.py`)
+- `POST /api/shipments/{id}/prune-over-pledged` (admin only). Walks every item, finds rows where `qty_acquired > qty_needed`, trims `qty_acquired` back to the pledged cap, and appends `{qty, at, by}` to `items[*].surplus_redistributed` for audit so packers can reroute the surplus elsewhere.
+- Returns `{ trimmed: [{item_id, name, surplus}], total_surplus }` — empty when no rows are over-pledged (idempotent no-op).
+
+### Frontend (`ShipmentsAdminPage.jsx`)
+- New amber **"Prune over-pledged (N)"** button (Scissors icon) appears next to "Import CSV" only when at least one item is over-pledged. Confirm dialog explains surplus is logged but qty drops.
+- Counter `totals.overPledged` added to the existing totals memo so the button hides when N=0.
+
+### Testing
+- Extended `test_iter186_dedupe.py` → **7/7 pytest pass**: trim correctness, surplus log shape, non-over-pledged untouched, idempotent re-run, admin-required.
+
 ## Recently Resolved — Iteration 186 (Feb 2026)
 **Shipment inventory deduplication + over-pledge warning — finishes the in-progress task from iter 185.**
 
