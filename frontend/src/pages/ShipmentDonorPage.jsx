@@ -217,7 +217,15 @@ export default function ShipmentDonorPage() {
         // Prefer the rear-facing camera on mobile when available
         const back = devices.find(d => /back|rear|environment/i.test(d.label));
         const deviceId = (back || devices[0])?.deviceId;
-        if (!deviceId || !active) return;
+        if (!active) return;
+        if (!deviceId) {
+          // No video input devices (or browser denied enumeration without a
+          // permission prompt). Surface this with the same fallback we use
+          // when the camera throws on init.
+          toast.error('Camera not available — switch to photo mode');
+          setScanMode('photo');
+          return;
+        }
         const controls = await reader.decodeFromVideoDevice(deviceId, scanVideoRef.current, async (result, err, ctrl) => {
           if (!active) { ctrl.stop(); return; }
           if (result) {

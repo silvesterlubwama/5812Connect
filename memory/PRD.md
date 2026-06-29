@@ -3,7 +3,23 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 183/184 (Feb 2026)
+## Recently Resolved — Iteration 185 (Feb 2026)
+**Client-side ZXing barcode scanner — instant, AI-free ISBN/UPC reading.**
+
+### Frontend
+- Mode switcher inside scanner dialog: **Live barcode** (ZXing camera) ↔ **Photo + AI** (existing path).
+- Barcode mode opens the rear camera, decodes any common product format (EAN-13, UPC-A, ISBN, Code128), parses ISBN by `978/979` prefix vs UPC/EAN, and POSTs to the existing `/scan-item?isbn=` or `?upc=` endpoint.
+- Empty-devices and permission-denied paths both surface a "Camera not available — switch to photo mode" toast and auto-flip to photo mode.
+- ZXing dynamically imported (`import('@zxing/browser')`) so it's only loaded when the dialog opens.
+
+### Deps
+- `@zxing/browser@0.2.0` + `@zxing/library@0.22.0` (peer dependency — tester caught the missing peer install on a clean tree and added it; now explicit in package.json).
+
+### Testing
+- Iteration 185 (testing agent): backend **9/9 pytest pass**, frontend **100% on in-scope UI surface**. Mode switcher renders, both buttons visible, barcode default selected, &lt;video&gt; renders in barcode pane, photo↔barcode switching works, no React hook-order errors, 0 console errors, waybill regression intact.
+- One minor fallback edge case flagged + fixed in-iteration: when `listVideoInputDevices()` returns an empty array (vs throwing), explicit toast + auto-flip to photo mode.
+
+
 **Shipment AI scanner + waybill + extended item model + 3D realism upgrade.**
 
 ### Scanner — PIN-gated
