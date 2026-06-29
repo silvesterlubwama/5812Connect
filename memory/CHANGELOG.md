@@ -1,5 +1,11 @@
 # 58:12 Connect — Changelog
 
+## Iteration 186 (Feb 2026) — Shipment Inventory Dedupe + Over-pledge Warning
+- Backend: `_add_or_merge_item` in `routers/shipments.py` merges items with the same ISBN/UPC on the same pallet (increments `qty_acquired`) instead of inserting duplicates. Wired into both admin (`POST /api/shipments/{id}/items`) and PIN-gated public (`POST /api/public/shipments/{token}/items`) routes.
+- Response now includes `merged: true` and `over_pledged: true` flags.
+- Frontend `ShipmentDonorPage.jsx`: manual-add + scan-confirm paths both surface `toast.success("Merged…")` and `toast.warning("Over-pledged…")` reading the new flags.
+- New `test_iter186_dedupe.py` — **5/5 pytest pass** (ISBN merge, UPC merge, over-pledge flag, cross-pallet stays separate, public endpoint dedupes).
+
 ## Iteration 86 (May 3, 2026) — Marketplace Invoices + Resource Barcodes
 **Verified 14/14 backend tests PASS + frontend fix applied.**
 

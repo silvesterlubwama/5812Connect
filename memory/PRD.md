@@ -3,6 +3,24 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 186 (Feb 2026)
+**Shipment inventory deduplication + over-pledge warning — finishes the in-progress task from iter 185.**
+
+### Backend (`routers/shipments.py`)
+- `_add_or_merge_item(shipment_id, item)` helper centralises the dedupe path. Both `POST /api/shipments/{id}/items` (admin) and `POST /api/public/shipments/{token}/items` (PIN editor) call it.
+- Dedupe key: same `isbn` OR same `upc` AND same `pallet_id` AND same `container_type` → merge by `$inc items.$.qty_acquired`; otherwise insert a new row.
+- Response is annotated with `merged: true` when a row was merged and `over_pledged: true` whenever the resulting `qty_acquired > qty_needed`.
+- Same-product items on **different pallets** stay as separate rows (intentional — they live in physically distinct locations).
+
+### Frontend (`ShipmentDonorPage.jsx`)
+- Both add paths (manual editor dialog + AI/ZXing scan-confirm) now read the API response and surface:
+  - `toast.success("Merged with existing — qty now N")` when `body.merged`.
+  - `toast.warning("Over-pledged: X/Y for \"name\"")` whenever `body.over_pledged`.
+- No new state, no new API calls — purely a richer read of the existing response.
+
+### Testing
+- New `test_iter186_dedupe.py` — **5/5 pytest pass**: same-ISBN merge, same-UPC merge, over-pledge flag, different-pallet stays separate, public PIN endpoint dedupes.
+
 ## Recently Resolved — Iteration 185 (Feb 2026)
 **Client-side ZXing barcode scanner — instant, AI-free ISBN/UPC reading.**
 

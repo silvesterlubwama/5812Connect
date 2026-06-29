@@ -16,7 +16,6 @@
 - Route ordering automated tests
 
 ## Nice-to-Have (Future)
-- Scheduled overdue task email reminders (needs cron)
 - Offline QR scanning (cache members for kiosk)
 - PWA service worker for wallet badges
 - Multi-language translation files

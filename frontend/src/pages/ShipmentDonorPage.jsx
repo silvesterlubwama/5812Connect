@@ -123,7 +123,7 @@ export default function ShipmentDonorPage() {
         ? `/public/shipments/${token}/items`
         : `/public/shipments/${token}/items/${editingItem.id}`;
       const method = isNew ? api.post : api.put;
-      await method(url, {
+      const resp = await method(url, {
         name: editingItem.name,
         category: editingItem.category,
         priority: editingItem.priority,
@@ -142,7 +142,15 @@ export default function ShipmentDonorPage() {
         z_cm: Number(editingItem.z_cm) || 0,
         notes: editingItem.notes || '',
       }, { headers: authHeaders() });
-      toast.success(isNew ? 'Item added' : 'Item updated');
+      const body = resp?.data || {};
+      if (body.merged) {
+        toast.success(`Merged with existing — qty now ${body.qty_acquired}`);
+      } else {
+        toast.success(isNew ? 'Item added' : 'Item updated');
+      }
+      if (body.over_pledged) {
+        toast.warning(`Over-pledged: ${body.qty_acquired}/${body.qty_needed} for "${body.name}"`);
+      }
       setEditingItem(null);
       await refresh();
     } catch (e) {
@@ -754,12 +762,20 @@ export default function ShipmentDonorPage() {
                     onClick={async () => {
                       setScanBusy(true);
                       try {
-                        await api.post(`/public/shipments/${token}/items`, {
+                        const resp = await api.post(`/public/shipments/${token}/items`, {
                           ...scanResult,
                           qty_acquired: 1,
                           qty_needed: 1,
                         }, { headers: { 'X-Shipment-Edit-Token': editToken || '' } });
-                        toast.success('Item added to shipment');
+                        const body = resp?.data || {};
+                        if (body.merged) {
+                          toast.success(`Merged with existing — qty now ${body.qty_acquired}`);
+                        } else {
+                          toast.success('Item added to shipment');
+                        }
+                        if (body.over_pledged) {
+                          toast.warning(`Over-pledged: ${body.qty_acquired}/${body.qty_needed} for "${body.name}"`);
+                        }
                         await refresh();
                         setScanResult(null);
                         setScanImages([]);
