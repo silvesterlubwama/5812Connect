@@ -321,9 +321,57 @@ def _normalise_item(data: dict) -> dict:
 @router.post("/shipments/{shipment_id}/items")
 async def add_item(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
     item = _normalise_item(data)
-    r = await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
-    if r.matched_count == 0:
+    return await _add_or_merge_item(shipment_id, item)
+
+
+async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
+    """Add an item, OR — if another item in this shipment has the same
+    ISBN/UPC AND the same pallet placement — increment its qty_acquired
+    instead of creating a near-duplicate row.
+
+    Also annotates the response with `over_pledged: true` when the merged
+    qty exceeds qty_needed so the UI can warn the packer.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
+    existing_items = s.get("items") or []
+    # Dedupe key: same ISBN or same UPC AND same pallet+container_type
+    # (so the same book on two different pallets stays as two rows).
+    dedupe_id = None
+    if item.get("isbn") or item.get("upc"):
+        for it in existing_items:
+            if it.get("pallet_id") != item.get("pallet_id"):
+                continue
+            if it.get("container_type") != item.get("container_type"):
+                continue
+            same_isbn = item.get("isbn") and it.get("isbn") == item["isbn"]
+            same_upc = item.get("upc") and it.get("upc") == item["upc"]
+            if same_isbn or same_upc:
+                dedupe_id = it["id"]
+                break
+    if dedupe_id:
+        # Increment qty + refresh photo if we have a new one
+        new_qty_delta = max(1, int(item.get("qty_acquired") or 1))
+        set_ops = {"items.$.updated_at": datetime.now(timezone.utc).isoformat()}
+        if item.get("photo_url"):
+            set_ops["items.$.photo_url"] = item["photo_url"]
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": dedupe_id},
+            {"$inc": {"items.$.qty_acquired": new_qty_delta}, "$set": set_ops},
+        )
+        # Re-read the merged item so we can report over-pledge status
+        s2 = await db.shipments.find_one(
+            {"id": shipment_id, "items.id": dedupe_id},
+            {"_id": 0, "items.$": 1},
+        )
+        merged = (s2 or {}).get("items", [{}])[0]
+        merged["merged"] = True
+        merged["over_pledged"] = merged.get("qty_acquired", 0) > merged.get("qty_needed", 1)
+        return merged
+    # New row
+    await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
+    item["over_pledged"] = item.get("qty_acquired", 0) > item.get("qty_needed", 1)
     return item
 
 
@@ -885,11 +933,11 @@ async def public_update_container(token: str, data: dict, request: Request):
 
 @router.post("/public/shipments/{token}/items")
 async def public_add_item(token: str, data: dict, request: Request):
-    """Editor: add an item to this shipment."""
+    """Editor: add an item to this shipment. Items with the same ISBN/UPC on
+    the same pallet are merged (qty_acquired incremented) instead of duplicated."""
     ctx = await require_shipment_editor(request, token)
     item = _normalise_item(data)
-    await db.shipments.update_one({"id": ctx["shipment_id"]}, {"$push": {"items": item}})
-    return item
+    return await _add_or_merge_item(ctx["shipment_id"], item)
 
 
 @router.put("/public/shipments/{token}/items/{item_id}")
