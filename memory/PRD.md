@@ -3,6 +3,22 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 189 (Feb 2026)
+**Photo+AI shipment scanner failed in production — always returned "Unknown" / low confidence.**
+
+### Bug (two layers)
+1. `_persist_shipment_image` called `await upload_bytes(...)` from `storage.py`, but that module only exposes a SYNC `put_object()`. The await raised an exception, so **every** photo silently fell through to the disk fallback.
+2. The disk fallback returned a relative URL (`/uploads/shipments/{name}`) with no `/api/` prefix, and the AI scan code then re-downloaded the photo via `httpx.get(image_urls[0])` — which obviously fails on a relative URL. The exception was swallowed, the AI got an empty file, and the response always became `name="Unidentified item"`, `ai_confidence="low"`.
+
+### Fix (`routers/shipments.py`)
+- AI path no longer re-downloads anything. Raw bytes are captured during upload and written straight to the temp file Gemini reads.
+- `_persist_shipment_image` now correctly calls the sync `put_object` via `asyncio.to_thread`, returning the cloud-storage URL when available.
+- Disk fallback URL is now `/api/uploads/shipments/{name}` (was missing the `/api/` prefix, would have been unreachable from the frontend through the kubernetes ingress).
+
+### Testing
+- New `test_iter189_scan_photo_ai.py` — **2/2 pytest pass**: photo-only scan returns 200 with properly-shaped image URLs (https:// or `/api/…`); ISBN+photo mode still hits Google Books fast path.
+- Full regression: **18/18 pytest pass** across iter 183 (scanner+waybill), iter 186 (dedupe+prune), iter 189 (photo AI).
+
 ## Recently Resolved — Iteration 188 (Feb 2026)
 **Shipment PIN login no longer kicks donors back to main login page.**
 

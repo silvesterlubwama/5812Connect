@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 189 (Feb 2026) — Fix: Photo+AI Scanner Always Returned "Unknown"
+- **Bug:** `_persist_shipment_image` awaited a non-existent `storage.upload_bytes`, so every photo fell to the disk fallback. AI scan then tried to re-download via `httpx.get(image_urls[0])` against a relative path → failed silently → AI got an empty file → always `name="Unidentified item"`, `ai_confidence="low"`.
+- **Fix:** AI now uses raw bytes already in memory (no re-download). Storage uses the correct sync `put_object` via `asyncio.to_thread`. Disk fallback URL now correctly prefixed with `/api/`.
+- **Tests:** new `test_iter189_scan_photo_ai.py` (2/2 pass). Combined regression suite **18/18 pass**.
+
 ## Iteration 188 (Feb 2026) — Fix Shipment PIN Login Redirect
 - **Bug:** Wrong PIN on `/donate/shipment/{token}` redirected donors to the main app `/login` page instead of showing the "Incorrect PIN" toast. Cause: global axios 401-interceptor in `services/api.js` whitelisted `/auth/login`, `/kiosk/pin-checkin`, etc. but not `/public/shipments/`.
 - **Fix:** Added `/public/shipments/` to `LOGIN_PATHS_SKIP_REDIRECT`. PIN failures and expired edit-token 401s now stay on the donor page and surface the existing toasts.

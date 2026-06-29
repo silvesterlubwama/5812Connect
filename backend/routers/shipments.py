@@ -1158,12 +1158,14 @@ async def public_scan_item(
 
     # 2) If still empty (no barcode hit), invoke AI vision with the photos
     image_urls: List[str] = []
+    image_bytes_list: List[bytes] = []  # keep raw bytes for AI — avoids broken re-download from relative URLs in production
     if images:
         # Persist photos for audit + so the waybill can reference them later
         for img in images[:3]:
             data = await img.read()
             if not data or len(data) > 8_000_000:
                 continue
+            image_bytes_list.append(data)
             from routers.shipments import _persist_shipment_image  # type: ignore
             try:
                 url = await _persist_shipment_image(ctx["shipment_id"], data, img.content_type or "image/jpeg")
@@ -1171,20 +1173,20 @@ async def public_scan_item(
             except Exception:
                 pass
 
-    if not enriched and image_urls:
+    if not enriched and image_bytes_list:
         api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
         if api_key:
             try:
                 from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
-                # Pull the first image back into a temp file for the AI
+                # Write the first photo straight to a temp file — no httpx
+                # round-trip. The previous version re-fetched image_urls[0]
+                # which silently failed when storage fell back to disk
+                # (relative `/uploads/...` URL), giving the AI an empty file
+                # and producing "Unknown" + low confidence on every scan.
                 import tempfile
-                import httpx as _httpx
-                async with _httpx.AsyncClient(timeout=10) as cli:
-                    rr = await cli.get(image_urls[0])
-                    img_bytes = rr.content
                 fd, tmp = tempfile.mkstemp(suffix=".jpg")
                 with _os.fdopen(fd, "wb") as fh:
-                    fh.write(img_bytes)
+                    fh.write(image_bytes_list[0])
                 sys_msg = (
                     "You identify physical items from photos for a charity shipment inventory. "
                     "Read any barcodes, ISBNs, titles, or text on the item. Output STRICT JSON: "
@@ -1249,6 +1251,7 @@ async def public_scan_item(
                 # If AI extracted an ISBN, try one more time to enrich via Google Books
                 if parsed.get("isbn") and not enriched.get("publisher"):
                     try:
+                        import httpx as _httpx
                         async with _httpx.AsyncClient(timeout=4) as cli:
                             gr = await cli.get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{parsed['isbn']}")
                             if gr.status_code == 200 and gr.json().get("totalItems", 0) > 0:
@@ -1289,8 +1292,13 @@ async def _persist_shipment_image(shipment_id: str, data: bytes, mime: str) -> s
     ext = (mime.split("/")[-1] if "/" in mime else "jpg")
     name = f"shipments/{shipment_id}/scans/{uuid.uuid4().hex}.{ext}"
     try:
-        from storage import upload_bytes      # type: ignore
-        return await upload_bytes(name, data, mime)
+        from storage import put_object      # type: ignore
+        # put_object is sync — run in a worker thread so we don't block the
+        # event loop. (Earlier code awaited `upload_bytes` which doesn't
+        # exist, so every photo silently went to the disk fallback below.)
+        import asyncio as _asyncio
+        result = await _asyncio.to_thread(put_object, name, data, mime)
+        return result.get("url") or f"/api/storage/{name}"
     except Exception:
         pass
     # Disk fallback
@@ -1300,7 +1308,7 @@ async def _persist_shipment_image(shipment_id: str, data: bytes, mime: str) -> s
     p = f"{base}/{uuid.uuid4().hex}.{ext}"
     with open(p, "wb") as fh:
         fh.write(data)
-    return f"/uploads/shipments/{_o.path.basename(p)}"
+    return f"/api/uploads/shipments/{_o.path.basename(p)}"
 
 
 # ============================================================
