@@ -196,3 +196,73 @@ class TestPruneOverPledged:
         r = requests.post(f"{BASE_URL}/api/shipments/{shipment['id']}/prune-over-pledged",
                           timeout=10)
         assert r.status_code in (401, 403)
+
+
+class TestAutoStack:
+    def test_auto_assigns_lightest_pallet(self, shipment, headers):
+        sid = shipment["id"]
+        # Create two pallets
+        p1 = requests.post(f"{BASE_URL}/api/shipments/{sid}/pallets",
+                           headers=headers, json={"label": "Heavy"}, timeout=10).json()
+        p2 = requests.post(f"{BASE_URL}/api/shipments/{sid}/pallets",
+                           headers=headers, json={"label": "Light"}, timeout=10).json()
+        # Load p1 with a heavy item
+        requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Cement bags", "container_type": "pallet", "pallet_id": p1["id"],
+            "weight_kg": 25, "qty_acquired": 10,
+        }, timeout=10)
+        # Add new pallet-bound item without specifying pallet → should land on p2 (lighter)
+        r = requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Toolkit", "container_type": "pallet", "weight_kg": 5,
+        }, timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["pallet_id"] == p2["id"]
+        assert body.get("auto_placed") is True
+
+    def test_loose_container_items_not_auto_placed(self, shipment, headers):
+        sid = shipment["id"]
+        requests.post(f"{BASE_URL}/api/shipments/{sid}/pallets",
+                      headers=headers, json={"label": "Solo"}, timeout=10)
+        # container_type='container' means loose on floor — must NOT be re-assigned
+        r = requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Floor crate", "container_type": "container", "weight_kg": 50,
+        }, timeout=10)
+        body = r.json()
+        assert body["pallet_id"] is None
+        assert body.get("auto_placed") is not True
+
+    def test_auto_stacks_lighter_item_on_heavier(self, shipment, headers):
+        sid = shipment["id"]
+        p1 = requests.post(f"{BASE_URL}/api/shipments/{sid}/pallets",
+                           headers=headers, json={"label": "Stack"}, timeout=10).json()
+        # Heavy bottom item
+        bottom = requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Toolbox", "container_type": "pallet", "pallet_id": p1["id"],
+            "weight_kg": 20, "dims_cm": {"length": 60, "width": 40, "height": 25},
+        }, timeout=10).json()
+        # Light item on the same pallet — should auto-stack on top of toolbox
+        r = requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Stationery box", "container_type": "pallet", "pallet_id": p1["id"],
+            "weight_kg": 2, "dims_cm": {"length": 30, "width": 20, "height": 10},
+        }, timeout=10)
+        body = r.json()
+        assert body["parent_id"] == bottom["id"]
+        assert body.get("auto_stacked") is True
+        assert body["z_cm"] == 25  # height of bottom item
+
+    def test_similar_weight_items_dont_stack(self, shipment, headers):
+        sid = shipment["id"]
+        p1 = requests.post(f"{BASE_URL}/api/shipments/{sid}/pallets",
+                           headers=headers, json={"label": "Side"}, timeout=10).json()
+        requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Cement A", "container_type": "pallet", "pallet_id": p1["id"],
+            "weight_kg": 25,
+        }, timeout=10)
+        # Second similar-weight item — within 10% — should stay side-by-side
+        r = requests.post(f"{BASE_URL}/api/shipments/{sid}/items", headers=headers, json={
+            "name": "Cement B", "container_type": "pallet", "pallet_id": p1["id"],
+            "weight_kg": 24,
+        }, timeout=10)
+        assert r.json().get("parent_id") is None
+        assert r.json().get("auto_stacked") is not True

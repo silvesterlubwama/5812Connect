@@ -3,6 +3,21 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 190 (Feb 2026)
+**Broader AI item vocabulary + automatic pallet placement & stacking.**
+
+### Expanded AI categories (`routers/shipments.py`, scan-item prompt)
+- Gemini's allowed categories grew from the original 9 to: **Books, Clothing, Food, Toys, Medical, Electronics, Household, Furniture, Tools, Construction, School, Agriculture, Sports, Toiletries, BabyGear, Bicycle, Other.**
+- Prompt explicitly names construction/agricultural inputs (cement bags, rebar, PVC pipes, solar panels, seeds, fertilizer), tools (hammers, drills, wheelbarrows), furniture (chairs, tables, mattresses), baby gear (strollers, car seats), bicycles, and gives realistic weight anchors for heavy/bulky items.
+
+### Auto-placement (`_auto_place_on_pallet` in `_add_or_merge_item`)
+- When a new item's `container_type` is **pallet/box/tote** AND `pallet_id` is missing → assigned to the **lightest** pallet by current total weight. Response sets `auto_placed: true` so the UI can show a "placed on pallet X" toast.
+- When a `pallet_id` is set but `parent_id` is missing → auto-stacks on the **heaviest existing bottom-layer item** on that pallet, IF our item is < 90% of the heaviest's weight (otherwise stays side-by-side). Sets `parent_id`, `z_cm` (= bottom item height), and `auto_stacked: true`.
+- Loose floor items (`container_type='container'`) are never auto-placed.
+
+### Testing
+- Extended `test_iter186_dedupe.py` with `TestAutoStack` → 4 new tests, **all 11/11 pytest pass**: lightest-pallet selection, loose container not re-assigned, lighter-on-heavier stacking with correct z_cm, similar-weight items stay side-by-side.
+
 ## Recently Resolved — Iteration 189 (Feb 2026)
 **Photo+AI shipment scanner failed in production — always returned "Unknown" / low confidence.**
 

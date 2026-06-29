@@ -332,7 +332,7 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
     Also annotates the response with `over_pledged: true` when the merged
     qty exceeds qty_needed so the UI can warn the packer.
     """
-    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "pallets": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     existing_items = s.get("items") or []
@@ -369,10 +369,55 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
         merged["merged"] = True
         merged["over_pledged"] = merged.get("qty_acquired", 0) > merged.get("qty_needed", 1)
         return merged
+    # Auto-placement BEFORE persistence:
+    # 1. If destined for a pallet but no specific pallet picked, pick the
+    #    lightest one so weight spreads evenly across the container.
+    # 2. If a pallet is set but no parent_id, stack on top of the heaviest
+    #    item already on that pallet (bigger/heavier goes at the bottom).
+    _auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
     # New row
     await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
     item["over_pledged"] = item.get("qty_acquired", 0) > item.get("qty_needed", 1)
     return item
+
+
+def _auto_place_on_pallet(item: dict, existing_items: list, pallets: list) -> None:
+    """Mutates `item` in-place to fill in `pallet_id` and/or `parent_id`
+    when the caller left them blank. Only runs when container_type is a
+    palletised type — loose floor items (container_type='container') stay
+    on the floor of the container."""
+    ctype = (item.get("container_type") or "").lower()
+    if ctype not in ("pallet", "box", "tote"):
+        return
+    # Step 1 — auto-assign to lightest pallet if none picked
+    if not item.get("pallet_id") and pallets:
+        per_pallet_weight: dict = {p["id"]: 0.0 for p in pallets}
+        for it in existing_items:
+            pid = it.get("pallet_id")
+            if pid in per_pallet_weight:
+                per_pallet_weight[pid] += (
+                    float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0)
+                )
+        lightest = min(per_pallet_weight.items(), key=lambda x: x[1])[0]
+        item["pallet_id"] = lightest
+        item["auto_placed"] = True
+    # Step 2 — auto-stack on the heaviest existing item on the same pallet
+    # so the densest layers stay at the bottom. Only stack if our item is
+    # noticeably lighter than the candidate (otherwise side-by-side is fine).
+    if item.get("pallet_id") and not item.get("parent_id"):
+        bottom_layer = [
+            it for it in existing_items
+            if it.get("pallet_id") == item["pallet_id"]
+            and not it.get("parent_id")  # only stack on items that aren't already stacked
+        ]
+        if bottom_layer:
+            our_w = float(item.get("weight_kg") or 0)
+            heaviest = max(bottom_layer, key=lambda it: float(it.get("weight_kg") or 0))
+            heaviest_w = float(heaviest.get("weight_kg") or 0)
+            if heaviest_w > 0 and our_w < heaviest_w * 0.9:
+                item["parent_id"] = heaviest["id"]
+                item["z_cm"] = float((heaviest.get("dims_cm") or {}).get("height") or 0)
+                item["auto_stacked"] = True
 
 
 @router.put("/shipments/{shipment_id}/items/{item_id}")
@@ -1189,12 +1234,26 @@ async def public_scan_item(
                     fh.write(image_bytes_list[0])
                 sys_msg = (
                     "You identify physical items from photos for a charity shipment inventory. "
+                    "Items can be ANYTHING a humanitarian container carries — books, clothing, "
+                    "shoes, food (canned/dry/baby formula), toys, medical supplies (gauze, "
+                    "syringes, crutches, wheelchairs), electronics, household goods (kitchenware, "
+                    "linens, soap, mosquito nets), furniture (chairs, tables, beds, mattresses), "
+                    "tools and construction equipment (hammers, drills, wheelbarrows, cement bags, "
+                    "rebar, PVC pipes, paint cans, solar panels), school/stationery supplies, "
+                    "agricultural inputs (seeds, fertilizer, hand tools), sports equipment, "
+                    "personal-care/toiletries, baby gear (strollers, car seats), and bicycles. "
                     "Read any barcodes, ISBNs, titles, or text on the item. Output STRICT JSON: "
-                    "{\"name\": str, \"category\": str (one of: Books, Clothing, Food, Toys, Medical, Electronics, Household, Stationery, Other), "
+                    "{\"name\": str, \"category\": str (one of: Books, Clothing, Food, Toys, "
+                    "Medical, Electronics, Household, Furniture, Tools, Construction, School, "
+                    "Agriculture, Sports, Toiletries, BabyGear, Bicycle, Other), "
                     "\"author\": str, \"publisher\": str, \"isbn\": str, \"upc\": str, "
                     "\"weight_kg\": float, \"dims_cm\": {\"length\": float, \"width\": float, \"height\": float}, "
                     "\"value_usd\": float, \"confidence\": \"high\"|\"medium\"|\"low\"}. "
-                    "Empty string for unknown fields. Round-number conservative estimates for dims/weight/value."
+                    "Empty string for unknown fields. Round-number conservative estimates for "
+                    "dims/weight/value. For heavy/bulky items (furniture, construction, tools) "
+                    "give realistic weights — a wheelbarrow is ~15kg, a chair ~5kg, a cement bag "
+                    "~25kg. Confidence reflects how certain you are of the IDENTIFICATION, not "
+                    "the dimensions."
                 )
                 # Primary: Gemini 3 Flash
                 chat = LlmChat(

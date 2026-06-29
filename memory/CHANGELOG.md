@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 190 (Feb 2026) — Broader AI Vocabulary + Auto-Stacking
+- **AI categories expanded** from 9 → 17: added Furniture, Tools, Construction, School, Agriculture, Sports, Toiletries, BabyGear, Bicycle. Prompt now explicitly mentions cement bags, rebar, wheelchairs, wheelbarrows, mattresses, strollers, solar panels, etc. with realistic weight anchors.
+- **Auto-placement helper `_auto_place_on_pallet`**: when a pallet-bound item arrives without `pallet_id`, picks the lightest pallet. When `parent_id` is empty, stacks lighter items on top of the heaviest bottom-layer item on that pallet (with proper `z_cm` offset). Returns `auto_placed`/`auto_stacked` flags so the UI can confirm to the donor.
+- **Tests:** 4 new `TestAutoStack` cases in `test_iter186_dedupe.py` → **11/11 pytest pass**.
+
 ## Iteration 189 (Feb 2026) — Fix: Photo+AI Scanner Always Returned "Unknown"
 - **Bug:** `_persist_shipment_image` awaited a non-existent `storage.upload_bytes`, so every photo fell to the disk fallback. AI scan then tried to re-download via `httpx.get(image_urls[0])` against a relative path → failed silently → AI got an empty file → always `name="Unidentified item"`, `ai_confidence="low"`.
 - **Fix:** AI now uses raw bytes already in memory (no re-download). Storage uses the correct sync `put_object` via `asyncio.to_thread`. Disk fallback URL now correctly prefixed with `/api/`.
