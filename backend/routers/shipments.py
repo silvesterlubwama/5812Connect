@@ -56,9 +56,11 @@ def _hash_pin(pin: str) -> str:
     return hashlib.sha256(_PIN_SALT + pin.encode("utf-8")).hexdigest()
 
 
-def _make_edit_token(shipment_id: str) -> str:
-    """HMAC-signed 'shipment_id:expires_iso' token. Base64-url encoded."""
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=EDIT_TOKEN_TTL_HOURS)).isoformat()
+def _make_edit_token(shipment_id: str, ttl_hours: int = EDIT_TOKEN_TTL_HOURS) -> str:
+    """HMAC-signed 'shipment_id:expires_iso' token. Base64-url encoded.
+    `ttl_hours` lets the caller request a longer session (capped to 24h)."""
+    ttl = max(1, min(24, int(ttl_hours or EDIT_TOKEN_TTL_HOURS)))
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl)).isoformat()
     payload = f"{shipment_id}|{expires_at}"
     sig = hmac.new(_PIN_SECRET, payload.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode().rstrip("=")
@@ -975,7 +977,8 @@ async def public_donate(token: str, item_id: str, data: dict):
 
 @router.post("/public/shipments/{token}/login")
 async def public_login(token: str, data: dict):
-    """Trade a PIN for an edit_token (valid 12h). 401 if PIN doesn't match."""
+    """Trade a PIN for an edit_token. Default TTL 12h; the caller may pass
+    `ttl_hours` (capped to 24h) to extend the session for long pack days."""
     pin = (data.get("pin") or "").strip()
     if not pin:
         raise HTTPException(status_code=400, detail="PIN required")
@@ -988,9 +991,10 @@ async def public_login(token: str, data: dict):
         raise HTTPException(status_code=403, detail="No PIN is set on this shipment. Ask the admin to set one.")
     if not hmac.compare_digest(s["access_pin_hash"], _hash_pin(pin)):
         raise HTTPException(status_code=401, detail="Incorrect PIN")
+    ttl = max(1, min(24, int(data.get("ttl_hours") or EDIT_TOKEN_TTL_HOURS)))
     return {
-        "edit_token": _make_edit_token(s["id"]),
-        "ttl_hours": EDIT_TOKEN_TTL_HOURS,
+        "edit_token": _make_edit_token(s["id"], ttl_hours=ttl),
+        "ttl_hours": ttl,
         "shipment_id": s["id"],
     }
 

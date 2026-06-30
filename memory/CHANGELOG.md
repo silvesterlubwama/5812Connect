@@ -1,5 +1,11 @@
 # 58:12 Connect — Changelog
 
+## Iteration 192 (Feb 2026) — Torch, Auto-place Tooltip, 24h Session
+- **Flashlight torch** in the donor barcode scanner: probes `track.getCapabilities().torch`; if supported, an overlay button toggles `applyConstraints({advanced:[{torch:bool}]})`. Mostly Android Chrome.
+- **Auto-placed badge** on admin item cards: 🤖 indigo pill with native tooltip explaining which pallet/parent was auto-picked and why.
+- **24h editor session toggle**: `_make_edit_token(ttl_hours=...)` capped to 24; `POST /api/public/shipments/{token}/login` accepts `ttl_hours` body field; PIN dialog has a "Stay signed in for 24 hours" checkbox.
+- **Tests:** `TestEditTokenTTL` added (3 cases) → **14/14 pytest pass**.
+
 ## Iteration 191 (Feb 2026) — Donor Scanner: Camera + Multi-Photo Fixes
 - **Live barcode bug:** `enumerateDevices()` ran before permission was granted → empty deviceId → "Camera not available" toast. Now triggers `getUserMedia({facingMode:'environment'})` first, attaches the stream to the video element, then runs ZXing decoding. Tracks stop on dialog close.
 - **Photo bug:** mobile `capture` attribute disabled `multiple`. Split into separate "Take photo" (single, append) and "Pick from gallery" (multiple, append) tiles. Up to 3 photos with per-thumbnail remove button + counter.

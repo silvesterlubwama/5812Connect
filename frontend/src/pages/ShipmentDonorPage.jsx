@@ -55,9 +55,13 @@ export default function ShipmentDonorPage() {
   const [scanImages, setScanImages] = useState([]);    // File[] for upload
   const [scanMode, setScanMode] = useState('barcode'); // 'barcode' | 'photo'
   const [barcodeText, setBarcodeText] = useState(''); // ZXing live read
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
   const scanVideoRef = React.useRef(null);
   const scanControlsRef = React.useRef(null);
+  const scanStreamRef = React.useRef(null);
   const [loginBusy, setLoginBusy] = useState(false);
+  const [pinLongSession, setPinLongSession] = useState(false);
   // ─── PIN-scoped editing ────────────────────────────────────────
   const [editingItem, setEditingItem] = useState(null);   // existing or {} for new
   const [editingPallet, setEditingPallet] = useState(null);
@@ -96,15 +100,32 @@ export default function ShipmentDonorPage() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Could not record donation'); }
   };
 
+  const toggleTorch = async () => {
+    const stream = scanStreamRef.current;
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: !torchOn }] });
+      setTorchOn(t => !t);
+    } catch (e) {
+      toast.error('Flashlight not available on this device');
+      setTorchSupported(false);
+    }
+  };
+
   // ─── Editor login flow ───────────────────────────────────────────
   const submitLogin = async () => {
     setLoginBusy(true);
     try {
-      const r = await api.post(`/public/shipments/${token}/login`, { pin: pinInput.trim() });
+      const r = await api.post(`/public/shipments/${token}/login`, {
+        pin: pinInput.trim(),
+        ttl_hours: pinLongSession ? 24 : 12,
+      });
       try { localStorage.setItem(`ship-edit-token:${token}`, r.data.edit_token); } catch { /* ignore */ }
       setEditToken(r.data.edit_token);
       toast.success(`Editor session unlocked — ${r.data.ttl_hours}h`);
-      setShowLogin(false); setPinInput('');
+      setShowLogin(false); setPinInput(''); setPinLongSession(false);
     } catch (e) { toast.error(e.response?.data?.detail || 'Incorrect PIN'); }
     finally { setLoginBusy(false); }
   };
@@ -235,6 +256,12 @@ export default function ShipmentDonorPage() {
             video: { facingMode: { ideal: 'environment' } },
             audio: false,
           });
+          scanStreamRef.current = mediaStream;
+          // Probe torch capability — Chrome on Android exposes it via track.getCapabilities().
+          const vt = mediaStream.getVideoTracks()[0];
+          const caps = vt && vt.getCapabilities ? vt.getCapabilities() : {};
+          setTorchSupported(Boolean(caps && 'torch' in caps && caps.torch !== false));
+          setTorchOn(false);
         } catch (permErr) {
           toast.error('Camera permission denied — switch to photo mode');
           setScanMode('photo');
@@ -312,6 +339,9 @@ export default function ShipmentDonorPage() {
       if (mediaStream) {
         try { mediaStream.getTracks().forEach(t => t.stop()); } catch (_) {/* noop */}
       }
+      scanStreamRef.current = null;
+      setTorchOn(false);
+      setTorchSupported(false);
       if (scanVideoRef.current) {
         try { scanVideoRef.current.srcObject = null; } catch (_) {/* noop */}
       }
@@ -636,8 +666,17 @@ export default function ShipmentDonorPage() {
                 onKeyDown={e => e.key === 'Enter' && submitLogin()}
                 data-testid="ship-donor-pin-input" />
             </div>
+            <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={pinLongSession}
+                onChange={e => setPinLongSession(e.target.checked)}
+                data-testid="ship-donor-pin-long-session"
+              />
+              Stay signed in for 24 hours (long pack day)
+            </label>
             <div className="flex gap-2 pt-1">
-              <Button variant="ghost" className="flex-1" onClick={() => { setShowLogin(false); setPinInput(''); }}>Cancel</Button>
+              <Button variant="ghost" className="flex-1" onClick={() => { setShowLogin(false); setPinInput(''); setPinLongSession(false); }}>Cancel</Button>
               <Button className="flex-1" onClick={submitLogin} disabled={loginBusy || !pinInput.trim()} data-testid="ship-donor-pin-submit">
                 {loginBusy ? 'Signing in…' : 'Sign in'}
               </Button>
@@ -681,6 +720,18 @@ export default function ShipmentDonorPage() {
                       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                         <div className="w-3/4 h-20 border-2 border-emerald-400 rounded-lg shadow-[0_0_30px_rgba(52,211,153,0.6)]" />
                       </div>
+                      {torchSupported && (
+                        <button
+                          type="button"
+                          onClick={toggleTorch}
+                          className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center text-lg shadow-lg ${torchOn ? 'bg-amber-400 text-black' : 'bg-black/60 text-white'}`}
+                          data-testid="ship-donor-scan-torch"
+                          aria-label="Toggle flashlight"
+                          title={torchOn ? 'Turn flashlight off' : 'Turn flashlight on'}
+                        >
+                          {torchOn ? '🔦' : '💡'}
+                        </button>
+                      )}
                       {scanBusy && (
                         <div className="absolute inset-0 bg-background/70 flex items-center justify-center">
                           <Loader2 size={20} className="animate-spin" />

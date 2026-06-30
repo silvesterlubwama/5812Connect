@@ -3,6 +3,27 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 192 (Feb 2026)
+**P1 polish pass: flashlight torch, auto-placement explainer badge, 24h editor session.**
+
+### 1. Flashlight torch in live barcode scanner (`ShipmentDonorPage.jsx`)
+- New `scanStreamRef` keeps the MediaStream we acquire via `getUserMedia` so we can call `track.applyConstraints({advanced:[{torch:bool}]})` to toggle the flashlight.
+- Capability probe via `track.getCapabilities().torch` — button only renders on devices that actually support it (most modern Android phones, Chrome only). Hidden on iOS Safari which doesn't expose torch.
+- 💡 / 🔦 icon button overlays the top-right of the video feed. Amber background when on.
+
+### 2. Auto-placement explainer badge (`ShipmentsAdminPage.jsx`)
+- Each item card now shows a **🤖 Auto-placed** indigo badge when the row carries `auto_placed` or `auto_stacked` flags.
+- Native `title=` tooltip explains the placement: e.g. *"Auto-assigned to 'Pallet B' (lightest pallet at the time). Stacked on top of 'Toolbox' (heavier, sturdier base) at z=25cm"*. Looks up the parent item by id from the live items array.
+- `data-testid` on the badge for testing.
+
+### 3. Configurable editor session length (`routers/shipments.py` + donor login dialog)
+- `_make_edit_token` now accepts optional `ttl_hours` (capped between 1 and 24).
+- `POST /api/public/shipments/{token}/login` reads `ttl_hours` from request body — defaults to 12, validates and clamps to 24. Response includes the actual `ttl_hours` used.
+- PIN login dialog has a new "Stay signed in for 24 hours (long pack day)" checkbox. Submit sends the appropriate `ttl_hours`.
+
+### Testing
+- Extended `test_iter186_dedupe.py` with `TestEditTokenTTL` → **14/14 pytest pass**: default 12h, opt-in 24h, capped at 24h when caller asks for 999. Frontend lint clean for changed code.
+
 ## Recently Resolved — Iteration 191 (Feb 2026)
 **Live barcode camera now opens reliably; photo mode supports true multi-shot capture.**
 

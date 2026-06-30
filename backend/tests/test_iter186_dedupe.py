@@ -266,3 +266,30 @@ class TestAutoStack:
         }, timeout=10)
         assert r.json().get("parent_id") is None
         assert r.json().get("auto_stacked") is not True
+
+
+class TestEditTokenTTL:
+    def test_default_ttl_is_12h(self, shipment):
+        r = requests.post(
+            f"{BASE_URL}/api/public/shipments/{shipment['token']}/login",
+            json={"pin": "7777"}, timeout=10,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["ttl_hours"] == 12
+
+    def test_long_session_24h(self, shipment):
+        r = requests.post(
+            f"{BASE_URL}/api/public/shipments/{shipment['token']}/login",
+            json={"pin": "7777", "ttl_hours": 24}, timeout=10,
+        )
+        assert r.status_code == 200
+        assert r.json()["ttl_hours"] == 24
+
+    def test_ttl_capped_at_24h(self, shipment):
+        # Sneaky caller asks for a week — must be clamped to 24h.
+        r = requests.post(
+            f"{BASE_URL}/api/public/shipments/{shipment['token']}/login",
+            json={"pin": "7777", "ttl_hours": 999}, timeout=10,
+        )
+        assert r.status_code == 200
+        assert r.json()["ttl_hours"] == 24

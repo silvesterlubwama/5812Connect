@@ -588,6 +588,19 @@ export default function ShipmentsAdminPage() {
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
                         {it.ai_estimate && <Badge variant="outline" className="text-[10px]" title={it.ai_estimate.reasoning}>AI · {it.ai_estimate.confidence}</Badge>}
+                        {(it.auto_placed || it.auto_stacked) && (() => {
+                          const palletLabel = palletsById[it.pallet_id]?.label || it.pallet_id || '—';
+                          const parent = it.parent_id ? (selected.items || []).find(x => x.id === it.parent_id) : null;
+                          const parts = [];
+                          if (it.auto_placed) parts.push(`Auto-assigned to "${palletLabel}" (lightest pallet at the time)`);
+                          if (it.auto_stacked && parent) parts.push(`Stacked on top of "${parent.name}" (heavier, sturdier base) at z=${it.z_cm}cm`);
+                          const reason = parts.join('. ') || 'Auto-placed by scanner';
+                          return (
+                            <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200 cursor-help" title={reason} data-testid={`ship-item-auto-${it.id}`}>
+                              🤖 Auto-placed
+                            </Badge>
+                          );
+                        })()}
                       </div>
                       <p className="text-[10px] text-muted-foreground">
                         {it.qty_acquired || 0} of {it.qty_needed || 0}
