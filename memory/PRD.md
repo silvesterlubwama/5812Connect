@@ -3,6 +3,43 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 196 (Feb 2026)
+**Modularization, single pass — shipments security + PBX helpers carved out.**
+
+### `backend/shipment_security.py` (NEW)
+Extracts the entire shipment PIN / edit-token security layer out of `routers/shipments.py`:
+- Constants: `_PIN_SECRET`, `_PIN_SALT`, `EDIT_TOKEN_TTL_HOURS`
+- `hash_pin(pin)` — SHA-256 salted PIN hash
+- `make_edit_token(shipment_id, ttl_hours=12)` — HMAC-signed session token (1–24h)
+- `verify_edit_token(token)` — returns `shipment_id` or `None`
+- `require_shipment_editor(request, token)` — FastAPI dependency that accepts a logged-in admin JWT, header `X-Shipment-Edit-Token`, or query-param `?edit_token=…`
+- Lazy `from deps import db, _decode_jwt` keeps the module leaf-importable.
+- `routers/shipments.py` now imports + re-exports under the old `_hash_pin`/`_make_edit_token`/`_verify_edit_token`/`require_shipment_editor` names, so all call sites + route signatures stay untouched.
+
+### `backend/pbx_helpers.py` (NEW)
+Pure (no-DB) validators + id helpers from `routers/pbx.py`:
+- `pbx_now()`, `gen_pbx_secret()`, `pbx_id(prefix)`
+- `validate_extension_number(num)` — regex `[1-9][0-9]{1,5}`
+- `validate_pattern(pat)` — Asterisk dialplan grammar
+- `routers/pbx.py` imports + aliases as `_now`, `_gen_secret`, `_id`, `_validate_extension_number`, `_validate_pattern`. `_next_extension_number` stays in `pbx.py` because it queries `db`.
+
+### Combined effect
+- `shipments.py` shed ~80 lines of security code.
+- `pbx.py` shed ~25 lines of pure helpers.
+- Three helper modules in `backend/` now form a stable, testable foundation: `shipment_helpers.py` (placement), `shipment_security.py` (PIN/token), `pbx_helpers.py` (validation/id).
+- No route paths changed. No HTTP behaviour changed. Re-export shims preserve all old internal names.
+
+### Testing
+- **22/22 pytest pass** in the unit + integration suites I exercised post-refactor:
+  - `test_iter186_dedupe.py` (14 — dedupe, prune, autostack, TTL)
+  - `test_iter195_shipment_helpers.py` (8 — pure placement)
+- **5/5 pytest pass** for `test_iter194_kiosk_warmup.py` + `test_iter189_scan_photo_ai.py`
+- Live curl on `GET /api/pbx/extensions` returns 200 — PBX router boot is clean.
+- Backend lint clean across all 4 touched files.
+
+### Explicit deferral — `server.py` scheduler
+`_run_due_date_reminder_scheduler`, `_fire_overdue_task_emails`, `_fire_scheduled_customer_statements`, etc. reference ~10 module-level names in `server.py` (`logger`, `db`, `_send_push_to_user`, `_fire_birthday_anniversary_notifications`, `_fire_overdue_payment_reminders`, `_fire_payday_payslip_generation`, `_fire_auto_backup`, `_last_auto_backup_date`). Extracting these cleanly needs dependency injection, not a copy-paste — that's a dedicated session.
+
 ## Recently Resolved — Iteration 195 (Feb 2026)
 **First safe modularization carve-out + mobile fix on the donor photo previews.**
 

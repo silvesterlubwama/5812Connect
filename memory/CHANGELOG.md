@@ -1,5 +1,12 @@
 # 58:12 Connect — Changelog
 
+## Iteration 196 (Feb 2026) — Modularization Single Pass
+- **`backend/shipment_security.py`** (NEW) — `_PIN_SECRET`, `_PIN_SALT`, `EDIT_TOKEN_TTL_HOURS`, `hash_pin`, `make_edit_token`, `verify_edit_token`, `require_shipment_editor`. `routers/shipments.py` re-exports under old names.
+- **`backend/pbx_helpers.py`** (NEW) — `pbx_now`, `gen_pbx_secret`, `pbx_id`, `validate_extension_number`, `validate_pattern`. `routers/pbx.py` aliases under old `_now`/`_id`/etc.
+- No route paths or HTTP behaviour changed. Backend lint clean.
+- **Tests:** 22/22 unit+integration + 5/5 warmup/AI tests + live PBX curl smoke. All green.
+- **Server.py scheduler:** explicitly deferred — too tightly coupled to module-local helpers for a safe single-pass extraction.
+
 ## Iteration 195 (Feb 2026) — Modularization Slice 1 + Mobile Photo Fix
 - **Mobile fix:** photo-preview X button now visible on touch (`opacity-100 sm:opacity-0 group-hover:opacity-100`) — phone donors can now remove a bad scan.
 - **Modularization:** new `backend/shipment_helpers.py` with pure `auto_place_on_pallet`. `routers/shipments.py` imports + delegates. Back-compat shim preserved.

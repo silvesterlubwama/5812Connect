@@ -41,36 +41,18 @@ router = APIRouter(prefix="/api/pbx", tags=["pbx"])
 # ============================================================
 # Helpers
 # ============================================================
+#
+# The pure (no-DB) validation / id-generation helpers live in
+# `pbx_helpers.py`. We import + alias them under the older underscore
+# names so the rest of this router file doesn't need to be touched.
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _gen_secret() -> str:
-    """SIP auth secret — Asterisk-safe base64-url, 24 chars."""
-    return secrets.token_urlsafe(18)
-
-
-def _id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
-
-
-def _validate_extension_number(num: str) -> str:
-    """Internal extension — 2-6 digits, no leading zero."""
-    if not re.fullmatch(r"[1-9][0-9]{1,5}", num or ""):
-        raise HTTPException(status_code=400, detail="Extension must be 2-6 digits and not start with 0")
-    return num
-
-
-def _validate_pattern(pat: str) -> str:
-    """Asterisk dialplan pattern: `_NXXNXXXXXX`, `_X.`, `_+1NXXNXXXXXX`, or literal digits."""
-    p = (pat or "").strip()
-    if not p:
-        raise HTTPException(status_code=400, detail="Dial pattern required")
-    # Allow literal digits + asterisk pattern syntax (underscore + N/X/Z/0-9/./[]/+)
-    if not re.fullmatch(r"_?\+?[0-9NXZ\.\[\]\-]+", p):
-        raise HTTPException(status_code=400, detail="Invalid dial pattern")
-    return p
+from pbx_helpers import (  # noqa: E402  -- intentional re-exports
+    pbx_now as _now,
+    gen_pbx_secret as _gen_secret,
+    pbx_id as _id,
+    validate_extension_number as _validate_extension_number,
+    validate_pattern as _validate_pattern,
+)
 
 
 async def _next_extension_number(start: int = 100) -> str:
