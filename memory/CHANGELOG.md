@@ -1,5 +1,13 @@
 # 58:12 Connect — Changelog
 
+## Iteration 198 (Feb 2026) — AI Find-Link + Buy Surface
+- **NEW** `POST /api/shipments/{id}/items/{item_id}/find-link` — Gemini picks best retailer + builds search URL. 19 retailers supported including MAC.bid, Amazon, Walmart, eBay, Home Depot, AbeBooks, etc.
+- Search-URL-only strategy (never deep ASIN/SKU guesses → no 404 link rot). ISBN/UPC short-circuit when available.
+- "🛒 Buy at [retailer] ↗" link surfaces in admin item rows when `source_url` is set.
+- "🤖 Find link" button added to the existing link dialog.
+- PIN editors can now save `source_url` via the public update endpoint.
+- **Tests:** 4/4 new pass + 54 regression still green.
+
 ## Iteration 197 (Feb 2026) — Imperial/Metric Toggle + Retail-aware AI
 - **NEW** `backend/shipment_units.py` + `frontend/src/services/shipmentUnits.js` — parse `2'9"`, `5lb 8oz`, `0.84m`, etc.
 - Shipments gained `units` field (metric|imperial). `_normalise_item` parses all dim/weight inputs through the parser.

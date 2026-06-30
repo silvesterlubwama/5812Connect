@@ -3,6 +3,26 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 198 (Feb 2026)
+**Find-link AI + buy-link surfacing for not-yet-acquired items.**
+
+### Backend (`routers/shipments.py`)
+- **NEW** `POST /api/shipments/{id}/items/{item_id}/find-link` (admin) — given an item with no `source_url`, asks Gemini-3-flash to pick the best retailer for its category and returns a **guaranteed-working search URL** (not a deep ASIN/SKU which would 404). 19 retailers supported: Amazon, Walmart, Target, eBay, Home Depot, Lowe's, Harbor Freight, Best Buy, IKEA, Wayfair, **MAC.bid**, AbeBooks, Better World Books, Tractor Supply, Buy Buy Baby, Dick's, Decathlon, Henry Schein, AliExpress.
+- Smart fallback: if the item has an ISBN and the picked retailer is book-friendly, the query uses the ISBN (more specific). If the item has a UPC, the query uses the UPC. Saves `source_url`, `source_retailer`, `source_found_at` on the item.
+- `public_update_item` allowed-set extended with `source_url` so PIN editors can also paste a manual link they sourced.
+
+### Frontend (`ShipmentsAdminPage.jsx`)
+- The existing **Estimate from URL** dialog now has a second action: **🤖 Find link** — calls the new endpoint, fills the URL field, persists `source_url` in one click.
+- Every wishlist item that has a `source_url` now shows a **🛒 Buy [retailer] ↗** inline link. Volunteers click straight from the items list to the retailer's pre-filled search.
+
+### Testing
+- New `test_iter198_find_link.py` → **4/4 pytest pass**:
+  - Find-link returns a real search URL with retailer + query
+  - Find-link persists `source_url` + `source_retailer` on the item
+  - PIN editors can save a manual `source_url` via the public update endpoint
+  - Admin items endpoint accepts placeholder items correctly
+- Combined regression: **54+ tests still green** across iter 186 / 189 / 194 / 195 / 197 / 198.
+
 ## Recently Resolved — Iteration 197 (Feb 2026)
 **Imperial/metric per-shipment toggle + smart input parser + retail-aware AI prompt.**
 

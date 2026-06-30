@@ -466,6 +466,130 @@ async def upload_item_photo(
     return {"photo_url": file_url}
 
 
+@router.post("/shipments/{shipment_id}/items/{item_id}/find-link")
+async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
+    """Given an item that has no `source_url` yet, ask Gemini to pick the
+    best retailer for its category and return a guaranteed-working SEARCH
+    URL. We deliberately don't ask for deep ASIN/SKU links because those
+    drift / 404 — search URLs always resolve.
+
+    Returns: { url: str, retailer: str, query: str } and stores `source_url`
+    on the item so volunteers can click straight from the wishlist.
+    """
+    s = await db.shipments.find_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+    name = (item.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Item has no name to search")
+    category = (item.get("category") or "").strip()
+    isbn = (item.get("isbn") or "").strip()
+    upc = (item.get("upc") or "").strip()
+
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key configured)")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+
+    sys_msg = (
+        "You pick the best retailer to buy a donation-bound item and return a "
+        "SEARCH URL (never a deep ASIN/SKU — those rot). Retailers to choose "
+        "from, by category fit:\n"
+        "  Books / educational           → amazon, abebooks, betterworldbooks\n"
+        "  Food / pantry / baby formula  → walmart, amazon, target\n"
+        "  Medical / first-aid           → amazon, walmart, henryschein\n"
+        "  Electronics                   → amazon, bestbuy, walmart\n"
+        "  Household / kitchen / linen   → walmart, ikea, amazon\n"
+        "  Furniture                     → ikea, wayfair, amazon, macbid\n"
+        "  Tools / Construction          → homedepot, lowes, harborfreight, amazon\n"
+        "  Agriculture / Seeds           → tractor_supply, amazon\n"
+        "  Sports                        → dickssportinggoods, amazon, walmart\n"
+        "  Toiletries / personal care    → walmart, target, amazon\n"
+        "  BabyGear / strollers          → target, amazon, buybuybaby\n"
+        "  Bicycle                       → walmart, amazon, decathlon\n"
+        "  Toys                          → target, walmart, amazon\n"
+        "Output STRICT JSON: {\"retailer\": str, \"query\": str (≤80 chars, "
+        "what to put in the retailer's search box), \"reason\": str (≤80 chars)}."
+        " Strip brand spam from the query; keep it precise."
+    )
+    user_text = (
+        f"Item: {name}\n"
+        f"Category: {category or '(unspecified)'}\n"
+        f"ISBN: {isbn or '-'}\n"
+        f"UPC: {upc or '-'}\n"
+        "Pick the BEST retailer and a clean search query."
+    )
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"shipment_findlink_{item_id}_{uuid.uuid4().hex[:6]}",
+        system_message=sys_msg,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    raw = await chat.send_message(UserMessage(text=user_text))
+    s_text = (raw or "").strip()
+    if s_text.startswith("```"):
+        s_text = s_text.strip("`")
+        if s_text.lower().startswith("json"):
+            s_text = s_text[4:].strip()
+    first, last = s_text.find("{"), s_text.rfind("}")
+    if first >= 0 and last > first:
+        s_text = s_text[first:last + 1]
+    import json as _json
+    try:
+        parsed = _json.loads(s_text)
+    except Exception:
+        # Fallback — Amazon search of the item name
+        parsed = {"retailer": "amazon", "query": name, "reason": "AI fallback"}
+    retailer = (parsed.get("retailer") or "amazon").strip().lower()
+    query = (parsed.get("query") or name).strip()
+    # ISBN/UPC short-circuit — always more specific than a name search.
+    if isbn and retailer in ("amazon", "abebooks", "betterworldbooks"):
+        query = isbn
+    elif upc:
+        query = upc
+
+    import urllib.parse as _u
+    q = _u.quote_plus(query)
+    SEARCH_URLS = {
+        "amazon": f"https://www.amazon.com/s?k={q}",
+        "walmart": f"https://www.walmart.com/search?q={q}",
+        "target": f"https://www.target.com/s?searchTerm={q}",
+        "ebay": f"https://www.ebay.com/sch/i.html?_nkw={q}",
+        "homedepot": f"https://www.homedepot.com/s/{q}",
+        "lowes": f"https://www.lowes.com/search?searchTerm={q}",
+        "harborfreight": f"https://www.harborfreight.com/search?q={q}",
+        "bestbuy": f"https://www.bestbuy.com/site/searchpage.jsp?st={q}",
+        "ikea": f"https://www.ikea.com/us/en/search/?q={q}",
+        "wayfair": f"https://www.wayfair.com/keyword.php?keyword={q}",
+        "macbid": f"https://www.mac.bid/search?text={q}",
+        "abebooks": f"https://www.abebooks.com/servlet/SearchResults?kn={q}",
+        "betterworldbooks": f"https://www.betterworldbooks.com/search/results?q={q}",
+        "tractor_supply": f"https://www.tractorsupply.com/tsc/search/{q}",
+        "buybuybaby": f"https://www.buybuybaby.com/store/s/{q}",
+        "dickssportinggoods": f"https://www.dickssportinggoods.com/search/SearchDisplay?searchTerm={q}",
+        "decathlon": f"https://www.decathlon.com/search?q={q}",
+        "henryschein": f"https://www.henryschein.com/us-en/Search.aspx?searchkeyWord={q}",
+        "aliexpress": f"https://www.aliexpress.com/wholesale?SearchText={q}",
+    }
+    url = SEARCH_URLS.get(retailer) or SEARCH_URLS["amazon"]
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {
+            "items.$.source_url": url,
+            "items.$.source_retailer": retailer,
+            "items.$.source_found_at": datetime.now(timezone.utc).isoformat(),
+            "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"url": url, "retailer": retailer, "query": query, "reason": parsed.get("reason") or ""}
+
+
 @router.post("/shipments/{shipment_id}/items/{item_id}/estimate-from-link")
 async def estimate_item_from_link(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
     """AI-estimate weight + dimensions from a product URL (Amazon, Walmart, etc.).
@@ -960,7 +1084,7 @@ async def public_update_item(token: str, item_id: str, data: dict, request: Requ
     allowed = {"name", "category", "qty_needed", "qty_acquired", "weight_kg",
                "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
                "pallet_id", "parent_id", "container_type", "isbn", "upc",
-               "author", "publisher", "ai_identified",
+               "author", "publisher", "ai_identified", "source_url",
                "x_cm", "y_cm", "z_cm"}
     set_ops = {}
     for k, v in data.items():

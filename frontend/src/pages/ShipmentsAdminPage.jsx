@@ -145,6 +145,18 @@ export default function ShipmentsAdminPage() {
     finally { setLinkBusyId(null); }
   };
 
+  // ─── AI finds the best retailer search URL for a needed item ──
+  const findLinkAi = async (itemId) => {
+    setLinkBusyId(itemId);
+    try {
+      const r = await api.post(`/shipments/${selectedId}/items/${itemId}/find-link`);
+      toast.success(`Linked to ${r.data.retailer} search · "${r.data.query}"`);
+      setLinkUrlFor({ itemId, url: r.data.url });
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'AI find-link failed'); }
+    finally { setLinkBusyId(null); }
+  };
+
   // ─── CSV import (Papaparse client-side → bulk-import endpoint) ─
   const parseCsvFile = (file) => {
     Papa.parse(file, {
@@ -641,6 +653,18 @@ export default function ShipmentsAdminPage() {
                         {it.value_usd ? ` · $${it.value_usd}/unit` : ''}
                         {it.pallet_id ? ` · ${palletsById[it.pallet_id]?.label || it.pallet_id}` : ''}
                       </p>
+                      {it.source_url && (
+                        <a
+                          href={it.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 mt-0.5 text-[10px] text-emerald-700 hover:text-emerald-900 hover:underline"
+                          data-testid={`ship-item-buy-${it.id}`}
+                          title={it.source_retailer ? `Open ${it.source_retailer} search` : 'Open product link'}
+                        >
+                          🛒 Buy {it.source_retailer ? `at ${it.source_retailer}` : 'link'} <ExternalLink size={9} />
+                        </a>
+                      )}
                     </div>
                     {(selected.pallets || []).length > 0 && (
                       <Select value={it.pallet_id || 'none'} onValueChange={v => updateItem(it.id, { pallet_id: v === 'none' ? null : v })}>
@@ -1045,20 +1069,24 @@ export default function ShipmentsAdminPage() {
       <Dialog open={!!linkUrlFor} onOpenChange={(o) => { if (!o) setLinkUrlFor(null); }}>
         <DialogContent className="max-w-md" data-testid="ship-link-dialog">
           <DialogHeader>
-            <DialogTitle>Estimate size & weight from product URL</DialogTitle>
+            <DialogTitle>Product link · AI estimate</DialogTitle>
             <DialogDescription className="text-xs">
-              Paste an Amazon, Walmart, or any retailer&apos;s product link. Gemini will guess weight, dimensions, and approximate value — you can edit afterward.
+              Paste an Amazon/Walmart/eBay/Home Depot URL and Gemini will estimate weight, dimensions, and value.
+              Or tap <strong>Find link (AI)</strong> and Gemini will pick the best retailer + search query for you.
             </DialogDescription>
           </DialogHeader>
           {linkUrlFor && (
             <div className="space-y-2 mt-2">
               <Input value={linkUrlFor.url} onChange={e => setLinkUrlFor({ ...linkUrlFor, url: e.target.value })}
                 placeholder="https://www.amazon.com/dp/B0..." data-testid="ship-link-url" />
-              <p className="text-[10px] text-muted-foreground">Takes ~10–15 seconds. Confidence (high/medium/low) is shown on the item badge after.</p>
-              <div className="flex gap-2 pt-1">
-                <Button variant="ghost" className="flex-1" onClick={() => setLinkUrlFor(null)}>Cancel</Button>
-                <Button className="flex-1" disabled={linkBusyId === linkUrlFor.itemId} onClick={() => estimateFromLink(linkUrlFor.itemId, linkUrlFor.url)} data-testid="ship-link-submit">
-                  {linkBusyId === linkUrlFor.itemId ? 'Estimating…' : 'Estimate'}
+              <p className="text-[10px] text-muted-foreground">Estimate takes ~10–15s · search URLs always resolve · ASIN/SKU deep-links may rot.</p>
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                <Button variant="ghost" onClick={() => setLinkUrlFor(null)}>Cancel</Button>
+                <Button variant="outline" disabled={linkBusyId === linkUrlFor.itemId} onClick={() => findLinkAi(linkUrlFor.itemId)} data-testid="ship-link-find-ai">
+                  🤖 Find link
+                </Button>
+                <Button disabled={linkBusyId === linkUrlFor.itemId || !linkUrlFor.url} onClick={() => estimateFromLink(linkUrlFor.itemId, linkUrlFor.url)} data-testid="ship-link-submit">
+                  {linkBusyId === linkUrlFor.itemId ? 'Working…' : 'Estimate'}
                 </Button>
               </div>
             </div>
