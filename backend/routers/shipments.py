@@ -25,6 +25,7 @@ from typing import Optional, List
 import os
 import os as _os
 from deps import db, get_current_user, _audit, require_admin, logger
+from shipment_helpers import auto_place_on_pallet
 from datetime import datetime, timezone, timedelta
 import uuid
 import hmac
@@ -376,50 +377,19 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
     #    lightest one so weight spreads evenly across the container.
     # 2. If a pallet is set but no parent_id, stack on top of the heaviest
     #    item already on that pallet (bigger/heavier goes at the bottom).
-    _auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
+    auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
     # New row
     await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
     item["over_pledged"] = item.get("qty_acquired", 0) > item.get("qty_needed", 1)
     return item
 
 
+# Backwards-compat shim — older code paths in this module called
+# `_auto_place_on_pallet(...)` directly. The real logic now lives in
+# `shipment_helpers.auto_place_on_pallet` (pure, unit-testable). Leaving
+# this thin wrapper keeps any straggler call sites working.
 def _auto_place_on_pallet(item: dict, existing_items: list, pallets: list) -> None:
-    """Mutates `item` in-place to fill in `pallet_id` and/or `parent_id`
-    when the caller left them blank. Only runs when container_type is a
-    palletised type — loose floor items (container_type='container') stay
-    on the floor of the container."""
-    ctype = (item.get("container_type") or "").lower()
-    if ctype not in ("pallet", "box", "tote"):
-        return
-    # Step 1 — auto-assign to lightest pallet if none picked
-    if not item.get("pallet_id") and pallets:
-        per_pallet_weight: dict = {p["id"]: 0.0 for p in pallets}
-        for it in existing_items:
-            pid = it.get("pallet_id")
-            if pid in per_pallet_weight:
-                per_pallet_weight[pid] += (
-                    float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0)
-                )
-        lightest = min(per_pallet_weight.items(), key=lambda x: x[1])[0]
-        item["pallet_id"] = lightest
-        item["auto_placed"] = True
-    # Step 2 — auto-stack on the heaviest existing item on the same pallet
-    # so the densest layers stay at the bottom. Only stack if our item is
-    # noticeably lighter than the candidate (otherwise side-by-side is fine).
-    if item.get("pallet_id") and not item.get("parent_id"):
-        bottom_layer = [
-            it for it in existing_items
-            if it.get("pallet_id") == item["pallet_id"]
-            and not it.get("parent_id")  # only stack on items that aren't already stacked
-        ]
-        if bottom_layer:
-            our_w = float(item.get("weight_kg") or 0)
-            heaviest = max(bottom_layer, key=lambda it: float(it.get("weight_kg") or 0))
-            heaviest_w = float(heaviest.get("weight_kg") or 0)
-            if heaviest_w > 0 and our_w < heaviest_w * 0.9:
-                item["parent_id"] = heaviest["id"]
-                item["z_cm"] = float((heaviest.get("dims_cm") or {}).get("height") or 0)
-                item["auto_stacked"] = True
+    auto_place_on_pallet(item, existing_items, pallets)
 
 
 @router.put("/shipments/{shipment_id}/items/{item_id}")

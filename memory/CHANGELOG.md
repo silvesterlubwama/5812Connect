@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 195 (Feb 2026) — Modularization Slice 1 + Mobile Photo Fix
+- **Mobile fix:** photo-preview X button now visible on touch (`opacity-100 sm:opacity-0 group-hover:opacity-100`) — phone donors can now remove a bad scan.
+- **Modularization:** new `backend/shipment_helpers.py` with pure `auto_place_on_pallet`. `routers/shipments.py` imports + delegates. Back-compat shim preserved.
+- **Tests:** new `test_iter195_shipment_helpers.py` (pure-fn, 0.02s) → 8/8 pass. Integration regression 17/17.
+
 ## Iteration 194 (Feb 2026) — Kiosk Cache Warmup
 - **Backend:** new `GET /api/checkins/kiosk-warmup` returns a thin directory of `{parent, children}` entries scoped to the event's campus.
 - **Frontend:** `CheckInsPage` auto-fires warmup whenever the operator selects an event and seeds `kioskCache` against id/phone/email/name — first scans of the morning are already cache-hot.

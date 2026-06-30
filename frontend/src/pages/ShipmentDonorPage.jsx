@@ -785,12 +785,12 @@ export default function ShipmentDonorPage() {
                             <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
                             <button
                               type="button"
-                              className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center"
+                              className="absolute top-0.5 right-0.5 w-6 h-6 rounded-full bg-black/70 text-white opacity-100 sm:opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
                               onClick={() => setScanImages(prev => prev.filter((_, j) => j !== i))}
                               data-testid={`ship-donor-scan-remove-${i}`}
                               aria-label="Remove photo"
                             >
-                              <X size={11} />
+                              <X size={13} />
                             </button>
                           </div>
                         ))}

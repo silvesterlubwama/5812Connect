@@ -3,6 +3,27 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 195 (Feb 2026)
+**First safe modularization carve-out + mobile fix on the donor photo previews.**
+
+### Mobile fix (`ShipmentDonorPage.jsx`)
+- The X-to-remove button on each scan photo preview used `opacity-0 group-hover:opacity-100` — invisible on touch devices where hover doesn't exist, so phone donors couldn't remove a bad photo. Now `opacity-100 sm:opacity-0 group-hover:opacity-100`: always visible on mobile, hover-only on desktop. Button bumped from 5×5 to 6×6 with a slightly darker background for better contact on small screens.
+
+### Modularization (slice 1 of N)
+- New `backend/shipment_helpers.py` — pure (no-DB) helpers extracted from `routers/shipments.py`. First extraction: `auto_place_on_pallet(item, existing_items, pallets)`. Same algorithm, now unit-testable in isolation.
+- `routers/shipments.py` imports `auto_place_on_pallet` from the new module and delegates. A back-compat `_auto_place_on_pallet` shim stays so any straggler call sites keep working.
+- **Pattern proven safe** — module imports, route paths, MongoDB writes all untouched. This is the template for further carve-outs.
+
+### Testing
+- New `test_iter195_shipment_helpers.py` — **8/8 pytest pass** (loose untouched, unknown ctype untouched, lightest pallet picked, respects caller's pallet_id, stacks lighter-on-heavier with z_cm, similar weights stay side-by-side, never stacks on already-stacked, brand-new shipment still gets assigned). Runs in 0.02s — no DB, no HTTP.
+- Integration suite still **17/17 pass** (iter186 dedupe + iter194 warmup). Lint clean.
+
+### Deferred (explicit)
+- Remaining shipments.py carve-outs (PIN/HMAC helpers, scan-item endpoint, persistence helper) — proven pattern, can roll forward in next session.
+- `pbx.py` / `server.py` modularization — separate sessions.
+- Multi-language i18n — out of scope per your direction.
+- Surplus redistribute picker — out of scope per your direction.
+
 ## Recently Resolved — Iteration 194 (Feb 2026)
 **Proactive kiosk cache warming — turn cold mornings into instant offline-ready check-ins.**
 
