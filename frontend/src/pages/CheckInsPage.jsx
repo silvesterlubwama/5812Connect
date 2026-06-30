@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
 import { ChildTag, ParentBadge } from '../components/PrintableBadges';
 import { checkinsApi, eventsApi, membersApi, locationsApi } from '../services/api';
+import { rememberLookup, recallLookup, isLikelyOffline } from '../services/kioskCache';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { NfcCheckInDialog } from '../components/checkins/NfcCheckInDialog';
@@ -138,7 +139,21 @@ export default function CheckInsPage() {
       if ((res.data.children || []).length === 0) {
         toast.info('No children found for this parent');
       }
+      // Cache success for offline fallback during the same event
+      rememberLookup('parent', parentLookup.trim(), { parent: res.data.parent, children: res.data.children || [] });
     } catch (err) {
+      // Network died? Try the local cache before surfacing the error.
+      if (isLikelyOffline(err)) {
+        const hit = recallLookup('parent', parentLookup.trim());
+        if (hit) {
+          setParentData(hit.parent);
+          setParentChildren(hit.children || []);
+          setSelectedChildIds((hit.children || []).map(c => c.id));
+          toast.warning('Offline — showing cached match. Check-in will sync when network returns.');
+          setLookingUp(false);
+          return;
+        }
+      }
       toast.error(err.response?.data?.detail || 'Parent not found');
     } finally { setLookingUp(false); }
   };

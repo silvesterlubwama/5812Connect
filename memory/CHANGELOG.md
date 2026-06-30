@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 193 (Feb 2026) — Offline Kiosk QR + P2 Audit
+- **NEW:** `services/kioskCache.js` — TTL-12h, max-200 LRU in localStorage for parent/QR/PIN lookups. Wired into both branches of `CheckInsPage`'s parent lookup. Network drop → cached match + amber "Offline" toast. Cached only on success.
+- Cleaned dangling orphan JSX block in `CheckInsPage.jsx` (parser-error blocker).
+- Audited remaining P2 items: PWA service worker (`sw.js` + register) and bulk barcode printing dialogs already exist. Modularization / i18n / mobile-audit explicitly deferred — too broad for single-pass safe execution.
+
 ## Iteration 192 (Feb 2026) — Torch, Auto-place Tooltip, 24h Session
 - **Flashlight torch** in the donor barcode scanner: probes `track.getCapabilities().torch`; if supported, an overlay button toggles `applyConstraints({advanced:[{torch:bool}]})`. Mostly Android Chrome.
 - **Auto-placed badge** on admin item cards: 🤖 indigo pill with native tooltip explaining which pallet/parent was auto-picked and why.

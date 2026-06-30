@@ -3,6 +3,24 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 193 (Feb 2026)
+**P2 sweep: offline kiosk QR caching + verified pre-existing PWA/barcode infra.**
+
+### Offline QR scanning for kiosk (NEW)
+- New `services/kioskCache.js` — small localStorage-backed LRU (max 200, TTL 12h) for kiosk lookups. Stores by lookup key (QR code / phone / member id) scoped per use-case (e.g. `parent:<lookup>`).
+- `CheckInsPage.jsx` now caches every **successful** `parentLookup` (both QR scanner branch + manual form). On API failure that smells like a network drop (`err.response` missing OR 5xx 502–504), falls back to the cached match and shows `toast.warning('Offline — showing cached match')`.
+- Cached only on success — never poisons the cache with 404s. Read only as a fallback so the canonical online path stays authoritative.
+- Cleaned up a pre-existing dangling orphan JSX block at the bottom of `CheckInsPage.jsx` that was triggering a parser-error blocker.
+
+### Verified already-shipped P2 items
+- **PWA service worker** — `frontend/public/sw.js` exists (wallet-pass caching, prefetch message handler) and is registered in `src/index.js`. `WalletBadgePage` already messages the SW to prefetch on load. ✓ done.
+- **Bulk barcode printing UI** — `BulkBarcodeLabelDialog` and `VariantBarcodePrint` both exist and are wired into Resources + Products pages. ✓ done.
+
+### Deferred (genuinely require dedicated sessions)
+- `server.py` / `pbx.py` / `shipments.py` modularization — too risky for a single pass per the user's "watch out for existing paths" guidance.
+- Multi-language i18n — every page touches user-facing text; needs a coordinated translation effort, not a one-shot.
+- Mobile responsiveness audit — broad scope, needs per-page review with a real device.
+
 ## Recently Resolved — Iteration 192 (Feb 2026)
 **P1 polish pass: flashlight torch, auto-placement explainer badge, 24h editor session.**
 
