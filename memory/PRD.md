@@ -3,6 +3,34 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 197 (Feb 2026)
+**Imperial/metric per-shipment toggle + smart input parser + retail-aware AI prompt.**
+
+### New modules
+- `backend/shipment_units.py` — pure parsers + formatters for dimensions and weight.
+  - `parse_dim_to_cm(value, units)` — accepts `33`, `33"`, `2'9"`, `2ft 9in`, `0.84m`, `84cm`, `200mm`, etc. Bare numbers fall back to the shipment's unit preference.
+  - `parse_weight_to_kg(value, units)` — accepts `5`, `5lb`, `5 lbs`, `5lb 8oz`, `8oz`, `2.3kg`, `2300g`.
+  - `format_dim_cm(cm, units)`, `format_weight_kg(kg, units)` for display.
+- `frontend/src/services/shipmentUnits.js` — JS mirror so input/display round-trips client-side too.
+
+### Storage stays canonical (cm + kg)
+- Shipments have a new `units` field (`"metric"` default, `"imperial"` opt-in). `POST /api/shipments` accepts `units` on create; `PUT /api/shipments/{id}` allows `units` swap.
+- `_normalise_item(data, units)` runs all weight/dim/x/y/z inputs through the unit parser. So a packer can type `2'9"` and the backend stores `83.82`. Round-tripping `83.82 → "2'9""` on display gives the same string back.
+
+### Frontend (`ShipmentsAdminPage.jsx`)
+- New **cm/kg ↔ ft·in/lb·oz** toggle in the totals card. Flipping it PUTs `units` and re-renders all dim/weight strings instantly.
+- Item editor dimensions + weight changed from `<input type="number">` to `<input type="text">` with smart placeholders (`e.g. 2'9" or 33in`). The value renders via the formatter so reopening the dialog shows the same human string the user typed.
+- All inline item rows + pallet badges + totals card use the formatters — units flip immediately propagates to the whole UI.
+
+### AI prompt upgrade
+The Gemini scan prompt now explicitly references **Amazon, Walmart, eBay, Target, Home Depot, Lowe's, AbeBooks, MAC.bid, Costco, IKEA, AliExpress, and Alibaba** as the cross-reference sources for description / dimensions / weight / price. Response schema gained a new `source` field so the UI can later show "verified via Amazon" / "estimated from eBay" provenance.
+
+### Testing
+- `test_iter197_units.py` (pure-fn, 19/19 pass) covers every parse + format case.
+- `test_iter197_units_endpoint.py` (live API, 10/10 pass) verifies imperial inputs survive the full POST→Mongo→GET round-trip — including the hero `2'9"` → 83.82cm and `5lb 8oz` → 2.494kg cases.
+- Combined backend regression: **50/50 pytest pass** (units 19 + units endpoint 10 + dedupe 14 + helpers 8).
+- Lint clean across all changed files.
+
 ## Recently Resolved — Iteration 196 (Feb 2026)
 **Modularization, single pass — shipments security + PBX helpers carved out.**
 

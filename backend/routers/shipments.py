@@ -60,6 +60,7 @@ from shipment_security import (  # noqa: E402,F401  -- intentional re-exports
     verify_edit_token as _verify_edit_token,
     require_shipment_editor,
 )
+from shipment_units import parse_dim_to_cm, parse_weight_to_kg  # noqa: E402
 
 
 # ============================================================
@@ -101,6 +102,7 @@ async def create_shipment(data: dict, current_user: dict = Depends(require_admin
         "description": (data.get("description") or "")[:1000],
         "target_ship_date": (data.get("target_ship_date") or "")[:10],
         "status": "planning",
+        "units": "imperial" if (data.get("units") == "imperial") else "metric",
         "max_payload_kg": float(data.get("max_payload_kg") or CONTAINER_40FT_HC["max_payload_kg"]),
         "container_dims_cm": CONTAINER_40FT_HC,
         "items": [],
@@ -132,10 +134,12 @@ async def get_shipment(shipment_id: str, current_user: dict = Depends(require_ad
 @router.put("/shipments/{shipment_id}")
 async def update_shipment(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"name", "dest_country", "description", "target_ship_date", "status",
-               "max_payload_kg", "container_dims_cm"}
+               "max_payload_kg", "container_dims_cm", "units"}
     set_ops = {k: v for k, v in data.items() if k in allowed}
     if "status" in set_ops and set_ops["status"] not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(VALID_STATUSES)}")
+    if "units" in set_ops and set_ops["units"] not in ("metric", "imperial"):
+        raise HTTPException(status_code=400, detail="units must be 'metric' or 'imperial'")
     if "container_dims_cm" in set_ops:
         c = set_ops["container_dims_cm"] or {}
         set_ops["container_dims_cm"] = {
@@ -202,8 +206,13 @@ async def rotate_token(shipment_id: str, current_user: dict = Depends(require_ad
 # Items (admin only)
 # ============================================================
 
-def _normalise_item(data: dict) -> dict:
-    """Coerce + clamp item fields. Used by both create and bulk-import."""
+def _normalise_item(data: dict, units: str = "metric") -> dict:
+    """Coerce + clamp item fields. Used by both create and bulk-import.
+
+    `units` lets the caller pass imperial OR metric inputs — `weight_kg`,
+    `dims_cm`, `x_cm`, `y_cm`, `z_cm` all run through the unit parsers
+    which accept strings like `2'9"`, `5lb 8oz`, `33in`, `0.84m`, `84cm`,
+    or bare numbers (which fall back to the shipment's unit preference)."""
     name = (data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="item.name is required")
@@ -213,17 +222,18 @@ def _normalise_item(data: dict) -> dict:
     container_type = (data.get("container_type") or "container").lower()
     if container_type not in ("container", "pallet", "box", "tote"):
         container_type = "container"
+    dims_in = data.get("dims_cm") or {}
     return {
         "id": f"sit_{uuid.uuid4().hex[:8]}",
         "name": name[:160],
         "category": (data.get("category") or "")[:60],
         "qty_needed": max(1, int(data.get("qty_needed") or 1)),
         "qty_acquired": max(0, int(data.get("qty_acquired") or 0)),
-        "weight_kg": max(0, float(data.get("weight_kg") or 0)),
+        "weight_kg": max(0.0, parse_weight_to_kg(data.get("weight_kg") or 0, units)),
         "dims_cm": {
-            "length": max(0, float((data.get("dims_cm") or {}).get("length") or 0)),
-            "width": max(0, float((data.get("dims_cm") or {}).get("width") or 0)),
-            "height": max(0, float((data.get("dims_cm") or {}).get("height") or 0)),
+            "length": max(0.0, parse_dim_to_cm(dims_in.get("length") or 0, units)),
+            "width":  max(0.0, parse_dim_to_cm(dims_in.get("width")  or 0, units)),
+            "height": max(0.0, parse_dim_to_cm(dims_in.get("height") or 0, units)),
         },
         "photo_url": (data.get("photo_url") or "")[:500],
         # Multiple photos from the AI scanner — cover, back, spine, etc.
@@ -248,17 +258,23 @@ def _normalise_item(data: dict) -> dict:
         "ai_identified": bool(data.get("ai_identified", False)),
         # Position WITHIN the assigned pallet (cm from pallet's back-left
         # corner). Optional — admin can set via the form-based item editor.
-        "x_cm": max(0, float(data.get("x_cm") or 0)),
-        "y_cm": max(0, float(data.get("y_cm") or 0)),
-        "z_cm": max(0, float(data.get("z_cm") or 0)),
+        "x_cm": max(0.0, parse_dim_to_cm(data.get("x_cm") or 0, units)),
+        "y_cm": max(0.0, parse_dim_to_cm(data.get("y_cm") or 0, units)),
+        "z_cm": max(0.0, parse_dim_to_cm(data.get("z_cm") or 0, units)),
         "donations": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
+async def _shipment_units(shipment_id: str) -> str:
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "units": 1})
+    return (s or {}).get("units") or "metric"
+
+
 @router.post("/shipments/{shipment_id}/items")
 async def add_item(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    item = _normalise_item(data)
+    units = await _shipment_units(shipment_id)
+    item = _normalise_item(data, units)
     return await _add_or_merge_item(shipment_id, item)
 
 
@@ -570,12 +586,13 @@ async def bulk_import_items(shipment_id: str, data: dict, current_user: dict = D
     rows = data.get("items") or []
     if not isinstance(rows, list):
         raise HTTPException(status_code=400, detail="items must be a list")
+    units = await _shipment_units(shipment_id)
     items = []
     for r in rows:
         if not (r.get("name") or "").strip():
             continue
         try:
-            items.append(_normalise_item(r))
+            items.append(_normalise_item(r, units))
         except HTTPException:
             continue
     if items:
@@ -931,7 +948,8 @@ async def public_add_item(token: str, data: dict, request: Request):
     """Editor: add an item to this shipment. Items with the same ISBN/UPC on
     the same pallet are merged (qty_acquired incremented) instead of duplicated."""
     ctx = await require_shipment_editor(request, token)
-    item = _normalise_item(data)
+    units = await _shipment_units(ctx["shipment_id"])
+    item = _normalise_item(data, units)
     return await _add_or_merge_item(ctx["shipment_id"], item)
 
 
@@ -1151,13 +1169,24 @@ async def public_scan_item(
                     "rebar, PVC pipes, paint cans, solar panels), school/stationery supplies, "
                     "agricultural inputs (seeds, fertilizer, hand tools), sports equipment, "
                     "personal-care/toiletries, baby gear (strollers, car seats), and bicycles. "
-                    "Read any barcodes, ISBNs, titles, or text on the item. Output STRICT JSON: "
+                    "Read any barcodes, ISBNs, titles, or text on the item. "
+                    "\n\nUSE YOUR KNOWLEDGE OF MAJOR ECOMMERCE LISTINGS: cross-reference what "
+                    "Amazon, Walmart, eBay, Target, Home Depot, Lowe's, AbeBooks, MAC.bid, "
+                    "Costco, IKEA, AliExpress, and Alibaba would list this exact item as. Pick "
+                    "the description + dimensions + weight + retail price that matches the most "
+                    "authoritative listing. If multiple variants exist (size/color), default to "
+                    "the most common SKU. Use the MEDIAN current US retail price in USD as "
+                    "value_usd; if not sold in the US, use the nearest comparable. "
+                    "\n\nOutput STRICT JSON: "
                     "{\"name\": str, \"category\": str (one of: Books, Clothing, Food, Toys, "
                     "Medical, Electronics, Household, Furniture, Tools, Construction, School, "
                     "Agriculture, Sports, Toiletries, BabyGear, Bicycle, Other), "
                     "\"author\": str, \"publisher\": str, \"isbn\": str, \"upc\": str, "
                     "\"weight_kg\": float, \"dims_cm\": {\"length\": float, \"width\": float, \"height\": float}, "
-                    "\"value_usd\": float, \"confidence\": \"high\"|\"medium\"|\"low\"}. "
+                    "\"value_usd\": float, \"source\": str (the retailer or listing site you "
+                    "primarily drew the data from, e.g. 'amazon', 'walmart', 'ebay', "
+                    "'home_depot', 'abebooks', 'macbid', 'inferred'), "
+                    "\"confidence\": \"high\"|\"medium\"|\"low\"}. "
                     "Empty string for unknown fields. Round-number conservative estimates for "
                     "dims/weight/value. For heavy/bulky items (furniture, construction, tools) "
                     "give realistic weights — a wheelbarrow is ~15kg, a chair ~5kg, a cement bag "

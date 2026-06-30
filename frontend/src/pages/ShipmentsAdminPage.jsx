@@ -19,6 +19,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { formatDimCm, formatWeightKg, parseDimToCm, parseWeightToKg, dimPlaceholder, weightPlaceholder } from '../services/shipmentUnits';
 import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
@@ -505,13 +506,44 @@ export default function ShipmentsAdminPage() {
           {totals && (
             <div className="space-y-1.5" data-testid="ship-totals">
               <div className="flex items-center justify-between text-xs">
-                <span>{totals.weight} kg of {totals.cap.toLocaleString()} kg cap</span>
+                <span>{formatWeightKg(Number(totals.weight) || 0, selected.units)} of {formatWeightKg(totals.cap, selected.units)} cap</span>
                 <span className="text-muted-foreground">{totals.acquired} of {totals.acquired + totals.needed} items fully covered · est. value ${totals.value}</span>
               </div>
               <div className="h-2 rounded bg-muted overflow-hidden">
                 <div className={`h-full ${totals.pct > 100 ? 'bg-rose-500' : totals.pct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${totals.pct}%` }} />
               </div>
-              {totals.pct > 100 && <p className="text-[11px] text-rose-700">⚠ Over the 40&apos; container payload cap by {(totals.weight - totals.cap).toFixed(0)} kg.</p>}
+              {totals.pct > 100 && <p className="text-[11px] text-rose-700">⚠ Over the 40&apos; container payload cap by {formatWeightKg((Number(totals.weight) || 0) - totals.cap, selected.units)}.</p>}
+              <div className="flex items-center justify-end gap-1.5 pt-1">
+                <span className="text-[10px] text-muted-foreground">Units:</span>
+                <div className="inline-flex rounded border overflow-hidden text-[10px]">
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 ${(selected.units || 'metric') === 'metric' ? 'bg-primary text-primary-foreground font-semibold' : 'bg-background hover:bg-muted'}`}
+                    onClick={async () => {
+                      if ((selected.units || 'metric') === 'metric') return;
+                      try {
+                        await api.put(`/shipments/${selected.id}`, { units: 'metric' });
+                        await refreshDetail();
+                        toast.success('Display switched to metric (cm/kg)');
+                      } catch (e) { toast.error('Failed to switch units'); }
+                    }}
+                    data-testid="ship-units-metric"
+                  >cm/kg</button>
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 ${selected.units === 'imperial' ? 'bg-primary text-primary-foreground font-semibold' : 'bg-background hover:bg-muted'}`}
+                    onClick={async () => {
+                      if (selected.units === 'imperial') return;
+                      try {
+                        await api.put(`/shipments/${selected.id}`, { units: 'imperial' });
+                        await refreshDetail();
+                        toast.success('Display switched to imperial (ft·in / lb·oz)');
+                      } catch (e) { toast.error('Failed to switch units'); }
+                    }}
+                    data-testid="ship-units-imperial"
+                  >ft·in / lb·oz</button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>
@@ -533,8 +565,8 @@ export default function ShipmentsAdminPage() {
               <div key={p.id} className="px-3 py-1.5 rounded border text-xs flex items-center gap-2" data-testid={`ship-pallet-${p.id}`} style={p.color ? { borderLeft: `4px solid ${p.color}` } : {}}>
                 <span className="font-medium">{p.label}</span>
                 <span className="text-muted-foreground">
-                  · {palletItems.length} items · {w.toFixed(0)} kg
-                  {(p.length_cm && p.width_cm) ? ` · ${p.length_cm}×${p.width_cm}×${p.height_cm || 0} cm` : ''}
+                  · {palletItems.length} items · {formatWeightKg(w, selected.units)}
+                  {(p.length_cm && p.width_cm) ? ` · ${formatDimCm(p.length_cm, selected.units)} × ${formatDimCm(p.width_cm, selected.units)} × ${formatDimCm(p.height_cm || 0, selected.units)}` : ''}
                 </span>
                 <button onClick={() => setEditingPallet({ ...p })} className="text-primary hover:text-primary/80" title="Edit pallet" data-testid={`ship-pallet-edit-${p.id}`}><Pencil size={10} /></button>
                 <button onClick={() => deletePallet(p.id)} className="text-rose-600 hover:text-rose-800" title="Delete" data-testid={`ship-pallet-del-${p.id}`}><Trash2 size={10} /></button>
@@ -604,8 +636,8 @@ export default function ShipmentsAdminPage() {
                       </div>
                       <p className="text-[10px] text-muted-foreground">
                         {it.qty_acquired || 0} of {it.qty_needed || 0}
-                        {it.weight_kg ? ` · ${it.weight_kg} kg/unit` : ''}
-                        {(it.dims_cm?.length || it.dims_cm?.width || it.dims_cm?.height) ? ` · ${it.dims_cm?.length || 0}×${it.dims_cm?.width || 0}×${it.dims_cm?.height || 0} cm` : ''}
+                        {it.weight_kg ? ` · ${formatWeightKg(it.weight_kg, selected.units)}/unit` : ''}
+                        {(it.dims_cm?.length || it.dims_cm?.width || it.dims_cm?.height) ? ` · ${formatDimCm(it.dims_cm?.length || 0, selected.units)} × ${formatDimCm(it.dims_cm?.width || 0, selected.units)} × ${formatDimCm(it.dims_cm?.height || 0, selected.units)}` : ''}
                         {it.value_usd ? ` · $${it.value_usd}/unit` : ''}
                         {it.pallet_id ? ` · ${palletsById[it.pallet_id]?.label || it.pallet_id}` : ''}
                       </p>
@@ -729,19 +761,26 @@ export default function ShipmentsAdminPage() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1"><Label className="text-xs">Weight per unit (kg)</Label>
-                  <Input type="number" step="0.01" value={editingItem.weight_kg || 0} onChange={e => setEditingItem({ ...editingItem, weight_kg: parseFloat(e.target.value) || 0 })} />
+                <div className="space-y-1"><Label className="text-xs">Weight per unit</Label>
+                  <Input type="text" placeholder={weightPlaceholder(selected.units)} value={editingItem.weight_raw ?? (editingItem.weight_kg ? formatWeightKg(editingItem.weight_kg, selected.units) : '')}
+                    onChange={e => setEditingItem({ ...editingItem, weight_raw: e.target.value, weight_kg: parseWeightToKg(e.target.value, selected.units) })} />
                 </div>
                 <div className="space-y-1"><Label className="text-xs">Value per unit (USD)</Label>
                   <Input type="number" step="0.01" value={editingItem.value_usd || 0} onChange={e => setEditingItem({ ...editingItem, value_usd: parseFloat(e.target.value) || 0 })} />
                 </div>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Dimensions (cm) — L × W × H</Label>
+                <Label className="text-xs">Dimensions — L × W × H <span className="text-muted-foreground">({selected.units === 'imperial' ? `try 2'9"` : 'cm or m'})</span></Label>
                 <div className="grid grid-cols-3 gap-2">
-                  <Input type="number" placeholder="length" value={editingItem.dims_cm?.length || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, length: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-length" />
-                  <Input type="number" placeholder="width" value={editingItem.dims_cm?.width || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, width: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-width" />
-                  <Input type="number" placeholder="height" value={editingItem.dims_cm?.height || 0} onChange={e => setEditingItem({ ...editingItem, dims_cm: { ...editingItem.dims_cm, height: parseFloat(e.target.value) || 0 } })} data-testid="ship-edit-item-height" />
+                  <Input type="text" placeholder={dimPlaceholder(selected.units)} value={editingItem.dim_length_raw ?? (editingItem.dims_cm?.length ? formatDimCm(editingItem.dims_cm.length, selected.units) : '')}
+                    onChange={e => setEditingItem({ ...editingItem, dim_length_raw: e.target.value, dims_cm: { ...editingItem.dims_cm, length: parseDimToCm(e.target.value, selected.units) } })}
+                    data-testid="ship-edit-item-length" />
+                  <Input type="text" placeholder={dimPlaceholder(selected.units)} value={editingItem.dim_width_raw ?? (editingItem.dims_cm?.width ? formatDimCm(editingItem.dims_cm.width, selected.units) : '')}
+                    onChange={e => setEditingItem({ ...editingItem, dim_width_raw: e.target.value, dims_cm: { ...editingItem.dims_cm, width: parseDimToCm(e.target.value, selected.units) } })}
+                    data-testid="ship-edit-item-width" />
+                  <Input type="text" placeholder={dimPlaceholder(selected.units)} value={editingItem.dim_height_raw ?? (editingItem.dims_cm?.height ? formatDimCm(editingItem.dims_cm.height, selected.units) : '')}
+                    onChange={e => setEditingItem({ ...editingItem, dim_height_raw: e.target.value, dims_cm: { ...editingItem.dims_cm, height: parseDimToCm(e.target.value, selected.units) } })}
+                    data-testid="ship-edit-item-height" />
                 </div>
               </div>
               {(selected.pallets || []).length > 0 && (

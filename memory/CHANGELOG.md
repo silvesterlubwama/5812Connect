@@ -1,5 +1,12 @@
 # 58:12 Connect — Changelog
 
+## Iteration 197 (Feb 2026) — Imperial/Metric Toggle + Retail-aware AI
+- **NEW** `backend/shipment_units.py` + `frontend/src/services/shipmentUnits.js` — parse `2'9"`, `5lb 8oz`, `0.84m`, etc.
+- Shipments gained `units` field (metric|imperial). `_normalise_item` parses all dim/weight inputs through the parser.
+- `ShipmentsAdminPage` has a units toggle + smart text inputs for dims/weight with imperial-friendly placeholders.
+- Gemini scan prompt now cites Amazon/Walmart/eBay/MAC.bid/Home Depot/Lowe's/AbeBooks/Costco/IKEA/AliExpress as cross-reference sources + returns a `source` field.
+- **Tests:** 50/50 backend pytest pass (19 unit + 10 endpoint + 14 dedupe + 8 helpers).
+
 ## Iteration 196 (Feb 2026) — Modularization Single Pass
 - **`backend/shipment_security.py`** (NEW) — `_PIN_SECRET`, `_PIN_SALT`, `EDIT_TOKEN_TTL_HOURS`, `hash_pin`, `make_edit_token`, `verify_edit_token`, `require_shipment_editor`. `routers/shipments.py` re-exports under old names.
 - **`backend/pbx_helpers.py`** (NEW) — `pbx_now`, `gen_pbx_secret`, `pbx_id`, `validate_extension_number`, `validate_pattern`. `routers/pbx.py` aliases under old `_now`/`_id`/etc.
