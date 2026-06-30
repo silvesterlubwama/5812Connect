@@ -1,5 +1,10 @@
 # 58:12 Connect — Changelog
 
+## Iteration 194 (Feb 2026) — Kiosk Cache Warmup
+- **Backend:** new `GET /api/checkins/kiosk-warmup` returns a thin directory of `{parent, children}` entries scoped to the event's campus.
+- **Frontend:** `CheckInsPage` auto-fires warmup whenever the operator selects an event and seeds `kioskCache` against id/phone/email/name — first scans of the morning are already cache-hot.
+- **Tests:** `test_iter194_kiosk_warmup.py` → 3/3 pass.
+
 ## Iteration 193 (Feb 2026) — Offline Kiosk QR + P2 Audit
 - **NEW:** `services/kioskCache.js` — TTL-12h, max-200 LRU in localStorage for parent/QR/PIN lookups. Wired into both branches of `CheckInsPage`'s parent lookup. Network drop → cached match + amber "Offline" toast. Cached only on success.
 - Cleaned dangling orphan JSX block in `CheckInsPage.jsx` (parser-error blocker).

@@ -3,6 +3,19 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 194 (Feb 2026)
+**Proactive kiosk cache warming — turn cold mornings into instant offline-ready check-ins.**
+
+### Backend (`routers/events.py`)
+- New `GET /api/checkins/kiosk-warmup?event_id=...&limit=500` (auth required). Returns a thin directory of `{parent, children}` entries scoped to the event's campus (or the operator's active campus when no event is selected). Cap 50–1000, default 500.
+- Implementation pulls `db.guests` where `is_parent=True` and the matching `db.children` rows (by `family_id` or `parent_ids`). Keeps payload minimal — id/name/phone/email/photo_url only.
+
+### Frontend (`CheckInsPage.jsx`)
+- New `useEffect` watching `parentEventId`: on each event selection, fires the warmup endpoint and seeds `kioskCache` against every key a kiosk operator might tap or scan (parent id, phone, email, name). Best-effort — failures are silently ignored since the next manual lookup still works.
+
+### Testing
+- New `test_iter194_kiosk_warmup.py` → **3/3 pytest pass**: directory shape, limit respected, auth required. Combined backend regression still 17/17 (14 iter186 + 3 iter194).
+
 ## Recently Resolved — Iteration 193 (Feb 2026)
 **P2 sweep: offline kiosk QR caching + verified pre-existing PWA/barcode infra.**
 

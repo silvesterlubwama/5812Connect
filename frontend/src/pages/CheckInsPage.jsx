@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
 import { ChildTag, ParentBadge } from '../components/PrintableBadges';
 import { checkinsApi, eventsApi, membersApi, locationsApi } from '../services/api';
+import api from '../services/api';
 import { rememberLookup, recallLookup, isLikelyOffline } from '../services/kioskCache';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -274,6 +275,30 @@ export default function CheckInsPage() {
   useEffect(() => {
     eventsApi.list({ status: 'upcoming' }).then(res => setEvents(res.data)).catch(() => {});
   }, []);
+
+  // Pre-seed the offline kiosk cache whenever the operator selects an event
+  // for parent check-in. This way the very first scan of the morning is
+  // already cache-hot even if wifi drops mid-event.
+  useEffect(() => {
+    if (!parentEventId) return;
+    let abort = false;
+    (async () => {
+      try {
+        const r = await api.get(`/checkins/kiosk-warmup?event_id=${encodeURIComponent(parentEventId)}`);
+        if (abort) return;
+        for (const e of (r.data.entries || [])) {
+          const p = e.parent || {};
+          const payload = { parent: p, children: e.children || [] };
+          // Cache by every key the operator might tap in / scan
+          if (p.id) rememberLookup('parent', p.id, payload);
+          if (p.phone) rememberLookup('parent', p.phone, payload);
+          if (p.email) rememberLookup('parent', p.email, payload);
+          if (p.name) rememberLookup('parent', p.name, payload);
+        }
+      } catch { /* warming is best-effort */ }
+    })();
+    return () => { abort = true; };
+  }, [parentEventId]);
 
   const handleAdd = async (e) => {
     e.preventDefault();

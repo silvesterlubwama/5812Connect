@@ -682,6 +682,67 @@ async def _notify_parent_checkin(parent, checked_in, event_name=""):
 
 
 
+@router.get("/checkins/kiosk-warmup")
+async def kiosk_warmup(event_id: str = "", limit: int = 500, current_user: dict = Depends(get_current_user)):
+    """Return a thin directory of parent lookup keys for a kiosk to pre-seed
+    its offline cache when the host opens check-in for an event. We hand
+    back ONLY the minimum each cached entry will key off — id, name, phone,
+    email, and the child list — so the payload stays small even on big
+    family rolls."""
+    cap = max(50, min(1000, int(limit or 500)))
+    # Anchor to the event's campus when available; otherwise fall back to
+    # the operator's active campus so we don't leak cross-campus data.
+    location_id = None
+    if event_id:
+        ev = await db.events.find_one({"id": event_id}, {"_id": 0, "location_id": 1})
+        if ev:
+            location_id = ev.get("location_id")
+    if not location_id:
+        location_id = current_user.get("active_campus_id") or current_user.get("location_id")
+
+    base_filter: dict = {"is_parent": True}
+    if location_id:
+        base_filter["location_id"] = location_id
+
+    parents = await db.guests.find(
+        base_filter,
+        {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1, "family_id": 1, "location_id": 1},
+    ).to_list(cap)
+
+    # Pull children scoped to the parents we found
+    family_ids = [p["family_id"] for p in parents if p.get("family_id")]
+    parent_ids = [p["id"] for p in parents if p.get("id")]
+    child_filter = {"$or": []}
+    if family_ids:
+        child_filter["$or"].append({"family_id": {"$in": family_ids}})
+    if parent_ids:
+        child_filter["$or"].append({"parent_ids": {"$in": parent_ids}})
+    if not child_filter["$or"]:
+        children_by_parent: dict = {}
+    else:
+        kids = await db.children.find(
+            child_filter,
+            {"_id": 0, "id": 1, "name": 1, "photo_url": 1, "family_id": 1, "parent_ids": 1},
+        ).to_list(cap * 4)
+        children_by_parent = {}
+        for k in kids:
+            for pid in (k.get("parent_ids") or []):
+                children_by_parent.setdefault(pid, []).append(k)
+            if k.get("family_id"):
+                children_by_parent.setdefault(f"family:{k['family_id']}", []).append(k)
+
+    entries = []
+    for p in parents:
+        kids = []
+        if p.get("id") and p["id"] in children_by_parent:
+            kids = children_by_parent[p["id"]]
+        elif p.get("family_id"):
+            kids = children_by_parent.get(f"family:{p['family_id']}", [])
+        entries.append({"parent": p, "children": kids})
+    return {"event_id": event_id, "location_id": location_id, "count": len(entries), "entries": entries}
+
+
+
 @router.post("/checkins/parent-lookup")
 async def parent_lookup_checkin(data: dict, current_user: dict = Depends(get_current_user)):
     """Look up children by parent phone, ID, email, or QR code and optionally check them in.
