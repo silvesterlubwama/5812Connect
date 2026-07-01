@@ -20,7 +20,7 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { formatDimCm, formatWeightKg, parseDimToCm, parseWeightToKg, dimPlaceholder, weightPlaceholder } from '../services/shipmentUnits';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors, Loader2 } from 'lucide-react';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -155,6 +155,26 @@ export default function ShipmentsAdminPage() {
       await refreshDetail();
     } catch (e) { toast.error(e.response?.data?.detail || 'AI find-link failed'); }
     finally { setLinkBusyId(null); }
+  };
+
+  // ─── Bulk find-links for every item still missing a source_url ─
+  const [bulkFindBusy, setBulkFindBusy] = useState(false);
+  const bulkFindLinks = async () => {
+    const missing = (selected?.items || []).filter(i => !i.source_url && (i.qty_acquired || 0) < (i.qty_needed || 0));
+    if (missing.length === 0) { toast.info('All needed items already have a link'); return; }
+    if (!window.confirm(`Ask AI to find buy-links for ${missing.length} un-linked item${missing.length === 1 ? '' : 's'}? Runs sequentially so you'll see progress.`)) return;
+    setBulkFindBusy(true);
+    let ok = 0, failed = 0;
+    for (const it of missing) {
+      try {
+        await api.post(`/shipments/${selectedId}/items/${it.id}/find-link`);
+        ok += 1;
+      } catch { failed += 1; }
+    }
+    await refreshDetail();
+    setBulkFindBusy(false);
+    if (failed === 0) toast.success(`Linked ${ok} items`);
+    else toast.warning(`Linked ${ok} · ${failed} failed`);
   };
 
   // ─── CSV import (Papaparse client-side → bulk-import endpoint) ─
@@ -592,7 +612,16 @@ export default function ShipmentsAdminPage() {
       <div>
         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
           <p className="text-xs font-semibold">Items ({(selected.items || []).length})</p>
-          <div className="flex gap-1.5">
+          <div className="flex gap-1.5 flex-wrap">
+            {(() => {
+              const unlinked = (selected.items || []).filter(i => !i.source_url && (i.qty_acquired || 0) < (i.qty_needed || 0)).length;
+              if (unlinked === 0) return null;
+              return (
+                <Button size="sm" variant="outline" className="text-indigo-700 border-indigo-300 hover:bg-indigo-50" onClick={bulkFindLinks} disabled={bulkFindBusy} data-testid="ship-bulk-findlink-btn" title="Ask AI to pick a best-fit retailer search link for every needed item that isn't linked yet">
+                  {bulkFindBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Finding…</> : <>🤖 Find links ({unlinked})</>}
+                </Button>
+              );
+            })()}
             {(totals?.overPledged || 0) > 0 && (
               <Button size="sm" variant="outline" className="text-amber-700 border-amber-300 hover:bg-amber-50" onClick={pruneOverPledged} data-testid="ship-prune-overpledged-btn" title="Trim over-pledged items back to their pledged quantity. Surplus is logged for redistribution.">
                 <Scissors size={11} className="mr-1" /> Prune over-pledged ({totals.overPledged})

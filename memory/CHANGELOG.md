@@ -1,5 +1,9 @@
 # 58:12 Connect — Changelog
 
+## Iteration 199 (Feb 2026) — Bulk Find-Links
+- New "🤖 Find links (N)" button in shipment items header. Sequentially runs `find-link` on every wishlist item still missing `source_url`. Confirm dialog + progress toast.
+- Code-review report triaged rather than blind-applied — most items were false positives; documented rationale.
+
 ## Iteration 198 (Feb 2026) — AI Find-Link + Buy Surface
 - **NEW** `POST /api/shipments/{id}/items/{item_id}/find-link` — Gemini picks best retailer + builds search URL. 19 retailers supported including MAC.bid, Amazon, Walmart, eBay, Home Depot, AbeBooks, etc.
 - Search-URL-only strategy (never deep ASIN/SKU guesses → no 404 link rot). ISBN/UPC short-circuit when available.

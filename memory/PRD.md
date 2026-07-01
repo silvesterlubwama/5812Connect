@@ -3,6 +3,18 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 199 (Feb 2026)
+**Bulk "Find links (AI)" button — one-tap link every un-purchased wishlist item.**
+
+### Frontend (`ShipmentsAdminPage.jsx`)
+- New **🤖 Find links (N)** button in the items header, visible only when there are items with `source_url` empty AND `qty_acquired < qty_needed` (i.e. still on the wishlist).
+- Runs sequentially through the missing set so the AI backend isn't hammered in parallel. Progress spinner + failure count shown in the closing toast (`Linked 8 · 2 failed`).
+- Confirm dialog before running so a coordinator with a 200-row CSV doesn't accidentally fire 200 Gemini calls.
+- Refreshes the item list after — 🛒 Buy badges appear on every newly-linked row.
+
+### Also: pushed back on the "code quality report"
+Reviewed each item against actual code — most items were false positives (e.g. `htmlEscape.js` doesn't call `document.write`, it's the mitigation) or intentional (`/* ignore */` on hardware-cleanup catches). Documented the triage instead of applying blind sweeps that would degrade the codebase.
+
 ## Recently Resolved — Iteration 198 (Feb 2026)
 **Find-link AI + buy-link surfacing for not-yet-acquired items.**
 
