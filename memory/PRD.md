@@ -3,6 +3,18 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 202 (Feb 2026)
+**Finance bulk delete + expense "Paid From" account picker.**
+
+### Delivered
+- `ExpenseCreate.paid_from_account_id` added — expenses can now be tagged with the funding account.
+- Bulk-delete endpoints for donations, expenses, assets, budgets (financial.py) and journal entries (accounting.py, posted entries skipped — must reverse instead).
+- FinancialPage.jsx: bulk select + BulkActionBar on donations, expenses, budgets, and assets tabs; expense form gained a "Paid From" account picker showing live balances and "balance after this expense" preview.
+- AccountingPage.jsx: multi-select on entries with bulk-delete + skipped-count feedback.
+
+### Testing
+- `test_iter202_finance_bulk_delete_and_paid_from.py` → **15/15 pytest pass** (testing_agent_v3_fork iter 202).
+
 ## Recently Resolved — Iteration 201 (Feb 2026)
 **Accounting reversal correctness + hide-by-default UI.**
 

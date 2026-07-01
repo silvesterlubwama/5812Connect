@@ -1,5 +1,13 @@
 # 58:12 Connect — Changelog
 
+## Iteration 202 (Feb 2026) — Finance Bulk Delete + Expense "Paid From" Picker
+- **Backend:** `ExpenseCreate.paid_from_account_id` field added (`financial.py`). Stored on the expense so future reconciliation can attribute the spend to a specific cash/bank account.
+- **Backend:** Bulk-delete endpoints added — `POST /api/financial/donations/bulk-delete`, `/expenses/bulk-delete`, `/assets/bulk-delete`, `/budgets/bulk-delete`, and `/api/accounting/entries/bulk-delete` (skips posted entries — they must be reversed instead).
+- **Frontend:** `FinancialPage.jsx` gains checkboxes + BulkActionBar on donations, expenses, budgets, and assets tabs. The expense entry dialog now shows a "Paid From" account picker with live balance display (and a low-balance warning + "balance after" preview).
+- **Frontend:** `AccountingPage.jsx` gains multi-select on journal entries with a bulk-delete action that surfaces how many posted entries were skipped.
+- **Tests:** 15/15 iter202 pass (`test_iter202_finance_bulk_delete_and_paid_from.py`).
+
+
 ## Iteration 201 (Feb 2026) — Accounting Reversal Fix + Hide-by-default
 - **Bug fix:** `reverse_entry` now marks the original as `is_reversed`, auto-posts the reversal (was staying in draft), is idempotent (double-reverse returns same id, no more duplicates), and back-links via `reverses`.
 - **Visibility:** `GET /entries` and `GET /sales` gained `include_reversed`/`include_voided` (default off) — reversed pairs hidden until opted-in. Shown pairs get strike-through + 60% opacity + inline badges.
