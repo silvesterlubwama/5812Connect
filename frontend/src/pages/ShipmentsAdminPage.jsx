@@ -159,6 +159,7 @@ export default function ShipmentsAdminPage() {
 
   // ─── Bulk find-links for every item still missing a source_url ─
   const [bulkFindBusy, setBulkFindBusy] = useState(false);
+  const [packDialogFor, setPackDialogFor] = useState(null);  // {item: {...}}
   const bulkFindLinks = async () => {
     const missing = (selected?.items || []).filter(i => !i.source_url && (i.qty_acquired || 0) < (i.qty_needed || 0));
     if (missing.length === 0) { toast.info('All needed items already have a link'); return; }
@@ -706,6 +707,24 @@ export default function ShipmentsAdminPage() {
                     )}
                     <Input type="number" className="h-7 w-20 text-[11px]" value={it.qty_acquired || 0}
                       onChange={e => updateItem(it.id, { qty_acquired: parseInt(e.target.value) || 0 })} title="Manual adjustment of acquired qty" />
+                    {(() => {
+                      const packed = it.qty_packed || 0;
+                      const acquired = it.qty_acquired || 0;
+                      const mode = it.transport_mode || 'container';
+                      const modeIcon = mode === 'suitcase' ? '🧳' : mode === 'holdback' ? '⏸' : '🚢';
+                      return (
+                        <div className="flex items-center gap-1" title={`${packed} of ${acquired} acquired have been packed for shipping (${mode})`}>
+                          <Badge className={`text-[10px] ${packed > acquired ? 'bg-rose-100 text-rose-700 border-rose-300' : packed > 0 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+                            {modeIcon} Packed {packed}/{acquired}
+                          </Badge>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
+                            title="Mark N units as packed for shipping"
+                            onClick={() => setPackDialogFor({ item: it })}
+                            data-testid={`ship-item-pack-${it.id}`}
+                          >📦</Button>
+                        </div>
+                      );
+                    })()}
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Edit details (dimensions, pallet, position…)"
                       onClick={() => openItemEdit(it)} data-testid={`ship-item-edit-${it.id}`}>
                       <Pencil size={11} />
@@ -1117,6 +1136,55 @@ export default function ShipmentsAdminPage() {
                 <Button disabled={linkBusyId === linkUrlFor.itemId || !linkUrlFor.url} onClick={() => estimateFromLink(linkUrlFor.itemId, linkUrlFor.url)} data-testid="ship-link-submit">
                   {linkBusyId === linkUrlFor.itemId ? 'Working…' : 'Estimate'}
                 </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Pack dialog — mark N units as packed for shipping */}
+      <Dialog open={!!packDialogFor} onOpenChange={(o) => { if (!o) setPackDialogFor(null); }}>
+        <DialogContent className="max-w-sm" data-testid="ship-pack-dialog">
+          <DialogHeader>
+            <DialogTitle>Pack item</DialogTitle>
+            <DialogDescription className="text-xs">
+              {packDialogFor?.item?.name} — <strong>{packDialogFor?.item?.qty_acquired || 0} acquired</strong>, <strong>{packDialogFor?.item?.qty_packed || 0} already packed</strong>.
+              Packing is INDEPENDENT of acquired count — the difference stays home or ships next trip.
+            </DialogDescription>
+          </DialogHeader>
+          {packDialogFor && (
+            <div className="space-y-3 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Quantity to pack</Label>
+                <Input type="number" min="1" defaultValue={Math.max(1, (packDialogFor.item.qty_acquired || 0) - (packDialogFor.item.qty_packed || 0))}
+                  onChange={e => setPackDialogFor({ ...packDialogFor, qty: parseInt(e.target.value) || 1 })}
+                  data-testid="ship-pack-qty" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Transport mode</Label>
+                <Select defaultValue={packDialogFor.item.transport_mode || 'container'}
+                  onValueChange={v => setPackDialogFor({ ...packDialogFor, mode: v })}>
+                  <SelectTrigger data-testid="ship-pack-mode"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="container">🚢 Container (sea)</SelectItem>
+                    <SelectItem value="suitcase">🧳 Suitcase (air)</SelectItem>
+                    <SelectItem value="holdback">⏸ Hold-back (stays home)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button variant="ghost" className="flex-1" onClick={() => setPackDialogFor(null)}>Cancel</Button>
+                <Button className="flex-1" data-testid="ship-pack-submit" onClick={async () => {
+                  const qty = packDialogFor.qty || Math.max(1, (packDialogFor.item.qty_acquired || 0) - (packDialogFor.item.qty_packed || 0));
+                  const mode = packDialogFor.mode || packDialogFor.item.transport_mode || 'container';
+                  try {
+                    const r = await api.post(`/shipments/${selectedId}/items/${packDialogFor.item.id}/pack`, { qty, mode });
+                    if (r.data.over_packed) toast.warning(`Over-packed: ${r.data.qty_packed}/${r.data.qty_acquired} for "${packDialogFor.item.name}"`);
+                    else toast.success(`Packed ${qty} → ${mode}`);
+                    setPackDialogFor(null);
+                    await refreshDetail();
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Pack failed'); }
+                }}>Pack</Button>
               </div>
             </div>
           )}

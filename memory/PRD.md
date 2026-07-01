@@ -3,6 +3,40 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 200 (Feb 2026)
+**Acquired vs Packed vs Transport-mode split — the shipment now separates "what's donated" from "what's actually going on the container".**
+
+### Data model
+- Items grew two new fields: `qty_packed` (int, default 0) and `transport_mode` (enum: `container` / `suitcase` / `holdback`, default `container`).
+- `qty_acquired` and `qty_packed` are **independent counters**. Packing 15 units of a 20-acquired item leaves acquired at 20; the delta represents held-back stock.
+- `_normalise_item` accepts + validates both new fields; unknown modes fall back to `container`.
+
+### New endpoints
+- **`POST /api/shipments/{id}/items/{item_id}/pack`** (admin) — body `{qty, mode}`. Increments `qty_packed` by `qty`, sets `transport_mode` to `mode`. Response includes `over_packed: bool`.
+- **`POST /api/public/shipments/{token}/items/{item_id}/pack`** (PIN editor) — same behaviour, gated by the shipment edit-token.
+- `public_update_item` allowed set extended with `qty_packed` and `transport_mode` so PIN editors can also correct these directly.
+
+### Two-tier public visibility on `GET /api/public/shipments/{token}`
+- **No PIN (anonymous browser)** → returns a **stripped wishlist** payload. Each item exposes ONLY: `id, name, category, qty_needed, qty_acquired, photo_url, priority, source_url, source_retailer`. Weight, dims, pallet placement, image_urls, ISBN/UPC, container_type, transport_mode, qty_packed are ALL stripped. `container_dims_cm`, `pallets`, `ai_packing_text` are also hidden. Container weight totals only count `container`-mode items so the public gauge doesn't leak suitcase counts.
+- **With `?edit_token=X` (PIN unlocked) OR admin JWT** → full manifest with everything the admin sees.
+- Response includes `unlocked: bool` so the frontend can toggle its own UI.
+
+### Frontend
+- **Admin (`ShipmentsAdminPage.jsx`):** each item row now shows a `🚢/🧳/⏸ Packed N/M` badge (red when over-packed, blue when partially packed, grey when nothing packed) + a 📦 button. Clicking 📦 opens a **Pack dialog** with quantity + mode dropdown. On submit → toast + list refresh.
+- **Donor (`ShipmentDonorPage.jsx`):** `refresh()` now passes `?edit_token=X` to the public GET whenever the editor is unlocked, so the packing manifest actually renders after PIN.
+
+### Testing
+- New `test_iter200_pack_and_visibility.py` → **9/9 pytest pass**:
+  - Pack action increments `qty_packed` without touching `qty_acquired`
+  - Over-packed flag fires when packed > acquired
+  - Invalid mode rejected (400)
+  - Anonymous public view strips `weight_kg`, `dims_cm`, `pallet_id`, `qty_packed`, `transport_mode`, `image_urls`, `isbn`, `upc`
+  - Anonymous view hides `container_dims_cm`, `pallets`, `ai_packing_text`
+  - Unlocked view (with edit_token) shows everything including `weight_kg` + `qty_packed`
+  - New items default to `qty_packed=0`, `transport_mode='container'`
+  - Suitcase mode accepted on create
+  - Unknown modes fall back to container
+
 ## Recently Resolved — Iteration 199 (Feb 2026)
 **Bulk "Find links (AI)" button — one-tap link every un-purchased wishlist item.**
 

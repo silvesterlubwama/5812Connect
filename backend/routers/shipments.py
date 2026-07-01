@@ -40,6 +40,7 @@ CONTAINER_40FT_HC = {"length_cm": 1203, "width_cm": 235, "height_cm": 269, "max_
 
 VALID_PRIORITIES = {"low", "normal", "high", "urgent"}
 VALID_STATUSES = {"planning", "collecting", "packed", "shipped", "delivered", "cancelled"}
+VALID_TRANSPORT_MODES = {"container", "suitcase", "holdback"}
 
 
 # ============================================================
@@ -247,6 +248,16 @@ def _normalise_item(data: dict, units: str = "metric") -> dict:
         # when container_type=container).
         "parent_id": data.get("parent_id") or None,
         "container_type": container_type,
+        # Acquired ≠ packed. `qty_acquired` counts what has physically arrived at
+        # the warehouse; `qty_packed` counts what's been loaded for shipping.
+        # Independent counters — an item can be 20 acquired, 15 packed, 5 held back.
+        "qty_packed": max(0, int(data.get("qty_packed") or 0)),
+        # How this item is travelling: sea container, staff suitcase, or held
+        # back entirely for a future shipment. Determines the visibility rules
+        # on the donor page.
+        "transport_mode": (data.get("transport_mode") or "container").lower()
+            if (data.get("transport_mode") or "container").lower() in VALID_TRANSPORT_MODES
+            else "container",
         # Barcode identifiers from the scanner — used for waybill + dedupe.
         "isbn": (data.get("isbn") or "")[:30],
         "upc": (data.get("upc") or "")[:30],
@@ -895,36 +906,78 @@ async def generate_packing_scenario(shipment_id: str, current_user: dict = Depen
 # PUBLIC — read + mark-as-donated (no auth)
 # ============================================================
 
+PUBLIC_ITEM_WISHLIST_FIELDS = {
+    "id", "name", "category", "qty_needed", "qty_acquired",
+    "photo_url", "priority", "source_url", "source_retailer",
+}
+
+
 @router.get("/public/shipments/{token}")
-async def public_shipment(token: str):
-    """Public view — anyone with the token sees the wishlist. Returns the
-    items + pallets but NOT the admin metadata (no created_by, no donor lists)."""
+async def public_shipment(token: str, request: Request):
+    """Public view. Two modes:
+
+    - **No edit-token** (default) → wishlist-only. Each item exposes just
+      `name / category / photo / priority / qty_needed / qty_acquired /
+      source_url`. Everything else (weight, dims, pallet placement,
+      transport_mode, qty_packed, image_urls, ISBN/UPC) is stripped so
+      random link-clickers can't see what's actually going on the container
+      or which items are travelling by suitcase.
+    - **Valid `?edit_token=...`** query param OR admin JWT → full manifest
+      with packing state, transport mode, and pallet layout. Same shape
+      the admin sees.
+    """
     s = await db.shipments.find_one({"token": token}, {"_id": 0})
     if not s or s.get("status") == "cancelled":
         raise HTTPException(status_code=404, detail="Shipment not found")
+
+    # Detect whether the caller is unlocked (PIN or admin JWT). We do it
+    # here rather than as a Depends so that the endpoint stays fully open
+    # in the wishlist case (no 401 for anonymous callers).
+    unlocked = False
+    edit_token = (request.query_params.get("edit_token") or "").strip()
+    if edit_token and _verify_edit_token(edit_token) == s["id"]:
+        unlocked = True
+    if not unlocked:
+        auth = request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer "):
+            try:
+                from deps import _decode_jwt  # type: ignore
+                payload = _decode_jwt(auth.split(" ", 1)[1])
+                user = await db.users.find_one({"id": payload.get("user_id") or payload.get("id")}, {"_id": 0, "role": 1})
+                if user and user.get("role") in ("admin", "super_admin"):
+                    unlocked = True
+            except Exception:
+                pass
+
     items = s.get("items") or []
     still_needed = []
     already_acquired = []
     for i in items:
-        # Sanitise — strip the donation log from the public payload (donor names
-        # may be sensitive). Show the running counts only.
-        snap = {k: v for k, v in i.items() if k not in ("donations", "created_at", "updated_at")}
+        if unlocked:
+            snap = {k: v for k, v in i.items() if k not in ("donations", "created_at", "updated_at")}
+        else:
+            snap = {k: i.get(k) for k in PUBLIC_ITEM_WISHLIST_FIELDS if k in i}
         snap["qty_remaining"] = max(0, int(i.get("qty_needed") or 0) - int(i.get("qty_acquired") or 0))
         if snap["qty_remaining"] > 0:
             still_needed.append(snap)
         else:
             already_acquired.append(snap)
-    # Sort still-needed by priority (urgent → low), then name
     pri_rank = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
     still_needed.sort(key=lambda x: (pri_rank.get(x.get("priority", "normal"), 2), x.get("name", "").lower()))
     already_acquired.sort(key=lambda x: x.get("name", "").lower())
 
-    total_weight = sum(float(i.get("weight_kg") or 0) * int(i.get("qty_acquired") or 0) for i in items)
+    # Totals are ALWAYS derived from the FULL item list so the public
+    # wishlist progress bar stays accurate — we just don't reveal HOW that
+    # weight is distributed unless unlocked. For anonymous callers we
+    # count container-bound items only; suitcase + holdback items shouldn't
+    # bump the container weight the donor sees.
+    def _counts_for_container(items_):
+        return sum(float(x.get("weight_kg") or 0) * int(x.get("qty_acquired") or 0)
+                   for x in items_ if (x.get("transport_mode") or "container") == "container")
+    total_weight = sum(float(i.get("weight_kg") or 0) * int(i.get("qty_acquired") or 0) for i in items) if unlocked else _counts_for_container(items)
     total_value = sum(float(i.get("value_usd") or 0) * int(i.get("qty_acquired") or 0) for i in items)
     cap = float(s.get("max_payload_kg") or 26000)
-    # Lightweight pallet roster (INCLUDING dims + positions so the visualizer
-    # can render boxes to scale + label them).
-    pallets_lite = [{
+    pallets_lite = ([{
         "id": p.get("id"), "label": p.get("label"),
         "length_cm": p.get("length_cm") or 120,
         "width_cm":  p.get("width_cm")  or 80,
@@ -932,8 +985,7 @@ async def public_shipment(token: str):
         "x_cm": p.get("x_cm") or 0,
         "y_cm": p.get("y_cm") or 0,
         "color": p.get("color") or "",
-    } for p in (s.get("pallets") or [])]
-    # Donor leaderboard (top 5 by total qty donated, anonymous excluded)
+    } for p in (s.get("pallets") or [])]) if unlocked else []
     donor_totals: dict[str, int] = {}
     donor_set = set()
     for it in items:
@@ -953,8 +1005,10 @@ async def public_shipment(token: str):
         "description": s.get("description"),
         "target_ship_date": s.get("target_ship_date"),
         "status": s.get("status"),
+        "units": s.get("units") or "metric",
+        "unlocked": unlocked,
         "max_payload_kg": cap,
-        "container_dims_cm": s.get("container_dims_cm") or CONTAINER_40FT_HC,
+        "container_dims_cm": (s.get("container_dims_cm") or CONTAINER_40FT_HC) if unlocked else None,
         "still_needed": still_needed,
         "already_acquired": already_acquired,
         "pallets": pallets_lite,
@@ -968,9 +1022,78 @@ async def public_shipment(token: str):
             "donor_count": len(donor_set),
             "leaderboard": leaderboard,
         },
-        "ai_packing_text": s.get("ai_packing_text") or "",
-        "ai_packing_generated_at": s.get("ai_packing_generated_at"),
+        "ai_packing_text": (s.get("ai_packing_text") or "") if unlocked else "",
+        "ai_packing_generated_at": s.get("ai_packing_generated_at") if unlocked else None,
         "pin_required": bool(s.get("access_pin_hash")),
+    }
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/pack")
+async def pack_item(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Move N units of an item into packed state. `mode` selects the transport
+    channel — container / suitcase / holdback. Independent counter — never
+    touches qty_acquired."""
+    qty = max(1, int(data.get("qty") or 1))
+    mode = (data.get("mode") or "container").lower()
+    if mode not in VALID_TRANSPORT_MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {sorted(VALID_TRANSPORT_MODES)}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {
+            "$inc": {"items.$.qty_packed": qty},
+            "$set": {
+                "items.$.transport_mode": mode,
+                "items.$.updated_at": now_iso,
+            },
+        },
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    s = await db.shipments.find_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    it = (s or {}).get("items", [{}])[0]
+    return {
+        "qty_packed": it.get("qty_packed") or 0,
+        "qty_acquired": it.get("qty_acquired") or 0,
+        "transport_mode": it.get("transport_mode") or "container",
+        "over_packed": (it.get("qty_packed") or 0) > (it.get("qty_acquired") or 0),
+    }
+
+
+@router.post("/public/shipments/{token}/items/{item_id}/pack")
+async def public_pack_item(token: str, item_id: str, data: dict, request: Request):
+    """PIN-gated packing action — same shape as the admin route."""
+    ctx = await require_shipment_editor(request, token)
+    qty = max(1, int(data.get("qty") or 1))
+    mode = (data.get("mode") or "container").lower()
+    if mode not in VALID_TRANSPORT_MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {sorted(VALID_TRANSPORT_MODES)}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    r = await db.shipments.update_one(
+        {"id": ctx["shipment_id"], "items.id": item_id},
+        {
+            "$inc": {"items.$.qty_packed": qty},
+            "$set": {
+                "items.$.transport_mode": mode,
+                "items.$.updated_at": now_iso,
+            },
+        },
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    s = await db.shipments.find_one(
+        {"id": ctx["shipment_id"], "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    it = (s or {}).get("items", [{}])[0]
+    return {
+        "qty_packed": it.get("qty_packed") or 0,
+        "qty_acquired": it.get("qty_acquired") or 0,
+        "transport_mode": it.get("transport_mode") or "container",
+        "over_packed": (it.get("qty_packed") or 0) > (it.get("qty_acquired") or 0),
     }
 
 
@@ -1081,9 +1204,10 @@ async def public_add_item(token: str, data: dict, request: Request):
 async def public_update_item(token: str, item_id: str, data: dict, request: Request):
     """Editor: edit any item field (name, dims, weight, pallet_id, position)."""
     ctx = await require_shipment_editor(request, token)
-    allowed = {"name", "category", "qty_needed", "qty_acquired", "weight_kg",
-               "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
-               "pallet_id", "parent_id", "container_type", "isbn", "upc",
+    allowed = {"name", "category", "qty_needed", "qty_acquired", "qty_packed",
+               "weight_kg", "dims_cm", "photo_url", "image_urls", "value_usd",
+               "notes", "priority", "pallet_id", "parent_id", "container_type",
+               "transport_mode", "isbn", "upc",
                "author", "publisher", "ai_identified", "source_url",
                "x_cm", "y_cm", "z_cm"}
     set_ops = {}

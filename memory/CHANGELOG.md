@@ -1,5 +1,13 @@
 # 58:12 Connect — Changelog
 
+## Iteration 200 (Feb 2026) — Acquired ≠ Packed + Two-tier Public Visibility
+- Items gained `qty_packed` (independent counter) + `transport_mode` (container/suitcase/holdback).
+- New endpoints: `POST /shipments/{id}/items/{item_id}/pack` and public PIN mirror.
+- `GET /public/shipments/{token}` splits into stripped wishlist (anonymous) vs full manifest (with edit_token or admin JWT). Sensitive fields (weight, dims, pallet, packed, transport_mode, image_urls) are stripped for anonymous callers.
+- Admin UI: per-item Packed badge (🚢/🧳/⏸) + 📦 dialog for quantity + mode.
+- Donor page: refresh now passes edit_token when unlocked.
+- **Tests:** 9/9 iter200 pass.
+
 ## Iteration 199 (Feb 2026) — Bulk Find-Links
 - New "🤖 Find links (N)" button in shipment items header. Sequentially runs `find-link` on every wishlist item still missing `source_url`. Confirm dialog + progress toast.
 - Code-review report triaged rather than blind-applied — most items were false positives; documented rationale.

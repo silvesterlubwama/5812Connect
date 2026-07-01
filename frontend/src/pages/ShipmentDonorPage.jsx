@@ -73,14 +73,20 @@ export default function ShipmentDonorPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get(`/public/shipments/${token}`);
+      // Pass the edit_token when we have it so the backend returns the full
+      // packing manifest (weight/dims/pallets/qty_packed/transport_mode).
+      // Without it the response is the stripped wishlist view — no leaks.
+      const url = editToken
+        ? `/public/shipments/${token}?edit_token=${encodeURIComponent(editToken)}`
+        : `/public/shipments/${token}`;
+      const r = await api.get(url);
       setData(r.data);
       setError(null);
     } catch (e) {
       setError(e.response?.status === 404 ? 'This link is no longer valid.' : 'Could not load the shipment.');
       setData(null);
     } finally { setLoading(false); }
-  }, [token]);
+  }, [token, editToken]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
