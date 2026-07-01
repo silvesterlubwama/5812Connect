@@ -3,6 +3,43 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 201 (Feb 2026)
+**Accounting reversal correctness + hide-by-default UI.**
+
+### Bug (three-part user report)
+1. "Reversal creates the reversal entry but original still shows as active" ← original wasn't being marked
+2. "Reversal button does nothing / errors" ← reversal entry was left as `draft` so it never affected the ledger
+3. "Some worked and others duplicate when reversed" ← no guard against double-reverse
+
+### Fix (`routers/accounting.py`)
+- `POST /entries/{id}/reverse` now:
+  1. **Marks the original** with `is_reversed=true`, `reversed_by=<new_id>`, `reversed_at`, `reversed_by_user`
+  2. **Auto-posts the reversal** (not draft) so the ledger actually cancels the original
+  3. **Idempotent**: second reverse on the same entry returns the existing reversal instead of creating a duplicate
+  4. **Links** the reversal back with a `reverses=<original_id>` field
+- `GET /entries` gained an `include_reversed=false` default query param. Hides both the original AND its reversal by default. Pass `?include_reversed=true` to see both.
+
+### Sales visibility
+- `GET /api/sales` gained `include_voided=false` default. Voided sales no longer show in the sales list unless the caller opts in.
+
+### Frontend (`AccountingPage.jsx`)
+- New "Show reversed entries" checkbox in the Journal Entries tab. Off by default — passes `include_reversed=true` when checked.
+- When shown, reversed pairs render at 60% opacity + strike-through on the entry number, with an inline "reversed" / "reversal" badge showing the link.
+- The Reverse action button is now hidden on entries that are either already reversed OR are themselves reversals — no more "some duplicated on reverse" symptom.
+
+### Testing
+- New `test_iter201_accounting_reversal.py` → **4/4 pytest pass**:
+  - Reversal marks the original with `is_reversed` + `reversed_by`
+  - Second reverse returns the same reversal (idempotent)
+  - Default list hides both original and reversal
+  - `include_reversed=true` shows them again
+
+### Explicit deferrals (scoped for next session)
+1. **Bulk delete on all finance sub-pages** — user asked for Transactions, Journal, Sales, Reversals, Accounts, Budgets, Assets. This touches 4 route files + 4 page files + safety rules (drafts vs posted, orphaned lines, cash reconciliation). Deferred so the reversal fix isn't blocked behind a much larger surface.
+2. **"Paid from" account picker on expense entry** — needs a UI change on the expense form + a `paid_from_account_id` field on expenses + a balance-summary query per account. Straightforward but medium scope.
+
+Both are queued as the next iteration's focus.
+
 ## Recently Resolved — Iteration 200 (Feb 2026)
 **Acquired vs Packed vs Transport-mode split — the shipment now separates "what's donated" from "what's actually going on the container".**
 

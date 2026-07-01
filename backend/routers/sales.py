@@ -45,8 +45,10 @@ class SaleCreate(BaseModel):
 # ========== SALES ==========
 
 @router.get("/sales")
-async def list_sales(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+async def list_sales(skip: int = 0, limit: int = 100, include_voided: bool = False, current_user: dict = Depends(get_current_user)):
     query = {**await get_campus_filter(current_user)}
+    if not include_voided:
+        query["voided"] = {"$ne": True}
     return await db.sales.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 @router.post("/sales")

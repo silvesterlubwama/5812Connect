@@ -1,5 +1,11 @@
 # 58:12 Connect — Changelog
 
+## Iteration 201 (Feb 2026) — Accounting Reversal Fix + Hide-by-default
+- **Bug fix:** `reverse_entry` now marks the original as `is_reversed`, auto-posts the reversal (was staying in draft), is idempotent (double-reverse returns same id, no more duplicates), and back-links via `reverses`.
+- **Visibility:** `GET /entries` and `GET /sales` gained `include_reversed`/`include_voided` (default off) — reversed pairs hidden until opted-in. Shown pairs get strike-through + 60% opacity + inline badges.
+- **Tests:** 4/4 iter201 pass.
+- Bulk delete + expense "Paid from" picker explicitly deferred to iter 202 (larger scope).
+
 ## Iteration 200 (Feb 2026) — Acquired ≠ Packed + Two-tier Public Visibility
 - Items gained `qty_packed` (independent counter) + `transport_mode` (container/suitcase/holdback).
 - New endpoints: `POST /shipments/{id}/items/{item_id}/pack` and public PIN mirror.

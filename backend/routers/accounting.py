@@ -406,6 +406,7 @@ async def list_entries(
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_reversed: bool = False,
     limit: int = 200,
     current_user: dict = Depends(require_finance_view),
 ):
@@ -424,6 +425,12 @@ async def list_entries(
     scope = await get_campus_filter(current_user)
     if scope:
         query.update(scope)
+    # Hide reversed pairs by default — the original AND its reversal both
+    # carry linking metadata (`is_reversed=true` on original, `reverses=<id>`
+    # on the reversal). Pass `?include_reversed=true` to unhide.
+    if not include_reversed:
+        query["is_reversed"] = {"$ne": True}
+        query["reverses"] = {"$exists": False}
     return await db.accounting_entries.find(query, {"_id": 0}).sort("date", -1).to_list(min(limit, 1000))
 
 
@@ -579,12 +586,24 @@ async def cancel_entry(entry_id: str, current_user: dict = Depends(require_direc
 
 @router.post("/entries/{entry_id}/reverse")
 async def reverse_entry(entry_id: str, data: dict = None, current_user: dict = Depends(require_director)):
-    """Create a reverse entry (debits become credits and vice versa) on the given date."""
+    """Create a reverse entry (debits become credits and vice versa) on the given date.
+
+    Idempotent — if the original was already reversed, returns the existing
+    reversal instead of creating a duplicate. Marks the original with
+    `is_reversed=true`, `reversed_by`, and `reversed_at` so UI filters can
+    hide reversed pairs by default."""
     entry = await db.accounting_entries.find_one({"id": entry_id}, {"_id": 0})
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     if entry["status"] != "posted":
         raise HTTPException(status_code=400, detail="Only posted entries can be reversed")
+    # Guard against duplicates — user reported "some duplicated on reverse".
+    if entry.get("is_reversed") and entry.get("reversed_by"):
+        existing = await db.accounting_entries.find_one(
+            {"id": entry["reversed_by"]}, {"_id": 0},
+        )
+        if existing:
+            return existing  # idempotent — return the prior reversal
     data = data or {}
     rev_date = (data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
     lines = await db.accounting_entry_lines.find({"entry_id": entry_id}, {"_id": 0}).to_list(200)
@@ -598,6 +617,30 @@ async def reverse_entry(entry_id: str, data: dict = None, current_user: dict = D
         "location_id": entry.get("location_id"),
         "currency": entry.get("currency"),
     }, current_user)
+    # Post the reversal immediately (matches the intent — a reversal in draft
+    # state is useless, it needs to affect the ledger to cancel the original).
+    await db.accounting_entries.update_one(
+        {"id": new["id"]},
+        {"$set": {
+            "status": "posted",
+            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_by": current_user["id"],
+            "reverses": entry_id,  # link back to the original
+        }},
+    )
+    # Mark the ORIGINAL as reversed so the UI can hide it (this was the
+    # missing step — user reported "original sale still shows as active").
+    await db.accounting_entries.update_one(
+        {"id": entry_id},
+        {"$set": {
+            "is_reversed": True,
+            "reversed_by": new["id"],
+            "reversed_at": datetime.now(timezone.utc).isoformat(),
+            "reversed_by_user": current_user["id"],
+        }},
+    )
+    new["reverses"] = entry_id
+    new["status"] = "posted"
     return new
 
 

@@ -72,6 +72,7 @@ export default function AccountingPage() {
     }
   }, [user, isFinanceAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [showReversed, setShowReversed] = useState(false);
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -79,7 +80,7 @@ export default function AccountingPage() {
         api.get('/accounting/accounts', { params: { location_id: locationFilter } }).catch(() => ({ data: [] })),
         api.get('/accounting/journals').catch(() => ({ data: [] })),
         api.get('/accounting/account-types').catch(() => ({ data: [] })),
-        api.get('/accounting/entries', { params: { limit: 100 } }).catch(() => ({ data: [] })),
+        api.get('/accounting/entries', { params: { limit: 100, include_reversed: showReversed } }).catch(() => ({ data: [] })),
         api.get('/accounting/taxes').catch(() => ({ data: [] })),
         api.get('/accounting/fiscal-periods').catch(() => ({ data: [] })),
         api.get('/accounting/reports/trial-balance', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
@@ -96,7 +97,7 @@ export default function AccountingPage() {
       setFiscalPeriods((fpRes.data || []).filter(f => !f.location_id || f.location_id === locationFilter));
       setTb(tbRes.data); setPl(plRes.data); setBs(bsRes.data);
     } finally { setLoading(false); }
-  }, [locationFilter]);
+  }, [locationFilter, showReversed]);
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const seedDefault = async () => {
@@ -295,26 +296,37 @@ export default function AccountingPage() {
 
         {/* ENTRIES */}
         <TabsContent value="entries" className="space-y-3">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showReversed}
+                onChange={e => setShowReversed(e.target.checked)}
+                data-testid="acc-show-reversed"
+              />
+              Show reversed entries (originals + their reversals)
+            </label>
             <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
           </div>
           {entries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No entries yet.</p> : (
             <div className="space-y-2">
               {entries.map(e => (
-                <Card key={e.id} className="rounded-xl" data-testid={`acc-entry-${e.id}`}>
+                <Card key={e.id} className={`rounded-xl ${(e.is_reversed || e.reverses) ? 'opacity-60' : ''}`} data-testid={`acc-entry-${e.id}`}>
                   <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openEntry(e)}>
-                      <p className="text-sm font-medium font-mono">{e.number}</p>
+                      <p className={`text-sm font-medium font-mono ${(e.is_reversed || e.reverses) ? 'line-through' : ''}`}>{e.number}</p>
                       <p className="text-xs text-muted-foreground">{e.date} · {e.journal_code} · {e.narration || e.ref || '—'}</p>
                     </div>
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold">{fmt(e.total_debit)}</p>
+                      {e.is_reversed && <Badge className="text-[10px] bg-slate-200 text-slate-700" title={`Reversed by ${e.reversed_by || ''} on ${e.reversed_at || ''}`}>reversed</Badge>}
+                      {e.reverses && <Badge className="text-[10px] bg-slate-200 text-slate-700" title={`Reverses ${e.reverses}`}>reversal</Badge>}
                       <Badge className={`text-[10px] ${STATUS_COLORS[e.status] || ''}`}>{e.status}</Badge>
                       {e.status === 'draft' && <>
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => postEntry(e.id)} data-testid={`acc-post-${e.id}`}><Check size={12} className="mr-1" />Post</Button>
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => cancelEntry(e.id)} data-testid={`acc-cancel-${e.id}`}><X size={12} /></Button>
                       </>}
-                      {e.status === 'posted' && (
+                      {e.status === 'posted' && !e.is_reversed && !e.reverses && (
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reverseEntry(e.id)} data-testid={`acc-reverse-${e.id}`}><RotateCcw size={12} className="mr-1" />Reverse</Button>
                       )}
                     </div>
