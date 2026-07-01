@@ -644,6 +644,37 @@ async def reverse_entry(entry_id: str, data: dict = None, current_user: dict = D
     return new
 
 
+@router.delete("/entries/{entry_id}")
+async def delete_entry(entry_id: str, current_user: dict = Depends(require_admin)):
+    """Hard-delete a draft or cancelled journal entry. Posted entries must be reversed, not deleted."""
+    entry = await db.accounting_entries.find_one({"id": entry_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") == "posted":
+        raise HTTPException(status_code=400, detail="Posted entries cannot be deleted — reverse them instead")
+    await db.accounting_entries.delete_one({"id": entry_id})
+    await db.accounting_entry_lines.delete_many({"entry_id": entry_id})
+    await _audit(current_user["id"], "delete", "accounting_entry", entry_id)
+    return {"deleted": True}
+
+
+@router.post("/entries/bulk-delete")
+async def bulk_delete_entries(data: dict, current_user: dict = Depends(require_admin)):
+    """Bulk-delete draft/cancelled journal entries. Posted entries are skipped (must be reversed)."""
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    # Fetch matching entries once so we can distinguish missing vs posted vs deletable
+    matching = await db.accounting_entries.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "status": 1}).to_list(len(ids))
+    deletable_ids = [m["id"] for m in matching if m.get("status") != "posted"]
+    skipped_posted = sum(1 for m in matching if m.get("status") == "posted")
+    if deletable_ids:
+        await db.accounting_entries.delete_many({"id": {"$in": deletable_ids}})
+        await db.accounting_entry_lines.delete_many({"entry_id": {"$in": deletable_ids}})
+    await _audit(current_user["id"], "bulk_delete", "accounting_entries", None, {"count": len(deletable_ids), "skipped_posted": skipped_posted})
+    return {"deleted": len(deletable_ids), "skipped_posted": skipped_posted}
+
+
 # ============================================================
 # REPORTS: TRIAL BALANCE + P&L + BALANCE SHEET
 # ============================================================

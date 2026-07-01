@@ -56,7 +56,10 @@ const expenseCategoryColors = {
 export default function FinancialPage() {
   const { user } = useAuth();
   const [summary, setSummary] = useState(null);
-  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [selectedIds, setSelectedIds] = useState(new Set());  // donations
+  const [selectedExpenseIds, setSelectedExpenseIds] = useState(new Set());
+  const [selectedBudgetIds, setSelectedBudgetIds] = useState(new Set());
+  const [selectedAssetIds, setSelectedAssetIds] = useState(new Set());
   const [donations, setDonations] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +141,7 @@ export default function FinancialPage() {
   const [expenseForm, setExpenseForm] = useState(() => ({
     title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '',
     vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '',
+    paid_from_account_id: '',
   }));
 
   // Default non-admin users to their campus
@@ -251,7 +255,7 @@ export default function FinancialPage() {
       const res = await financialApi.createExpense({ ...expenseForm, amount: parseFloat(expenseForm.amount) });
       setExpenses(prev => [res.data, ...prev]);
       setShowExpense(false);
-      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '' });
+      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '', sublocation_id: '', vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '', paid_from_account_id: '' });
       toast.success('Expense recorded!');
       fetchAll();
     } catch (err) {
@@ -507,7 +511,22 @@ export default function FinancialPage() {
               ) : donations.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    {selectedIds.size > 0 && <div className="mb-2"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => exportToCSV(donations.filter(d => selectedIds.has(d.id)), 'donations-export.csv')} /></div>}
+                    {selectedIds.size > 0 && <div className="mb-2"><BulkActionBar
+                      selectedIds={selectedIds}
+                      onClear={() => setSelectedIds(new Set())}
+                      onBulkExport={() => exportToCSV(donations.filter(d => selectedIds.has(d.id)), 'donations-export.csv')}
+                      onBulkDelete={isFinanceAdmin ? async () => {
+                        if (!window.confirm(`Delete ${selectedIds.size} donation(s)? This cannot be undone.`)) return;
+                        try {
+                          const ids = Array.from(selectedIds);
+                          const r = await financialApi.bulkDeleteDonations(ids);
+                          setDonations(prev => prev.filter(d => !selectedIds.has(d.id)));
+                          setSelectedIds(new Set());
+                          toast.success(`Deleted ${r.data.deleted}`);
+                          fetchAll();
+                        } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+                      } : undefined}
+                    /></div>}
                     <thead><tr className="text-left border-b border-border">
                       <th className="pb-2 w-8"><input type="checkbox" className="accent-primary" checked={selectedIds.size > 0 && donations.every(d => selectedIds.has(d.id))} onChange={() => { if (selectedIds.size === donations.length) setSelectedIds(new Set()); else setSelectedIds(new Set(donations.map(d => d.id))); }} /></th>
                       <th className="pb-2 font-medium text-muted-foreground">Donor</th>
@@ -555,8 +574,25 @@ export default function FinancialPage() {
                 <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 bg-muted animate-pulse rounded" />)}</div>
               ) : expenses.length > 0 ? (
                 <div className="overflow-x-auto">
+                  {selectedExpenseIds.size > 0 && <div className="mb-2"><BulkActionBar
+                    selectedIds={selectedExpenseIds}
+                    onClear={() => setSelectedExpenseIds(new Set())}
+                    onBulkExport={() => exportToCSV(expenses.filter(e => selectedExpenseIds.has(e.id)), 'expenses-export.csv')}
+                    onBulkDelete={isFinanceAdmin ? async () => {
+                      if (!window.confirm(`Delete ${selectedExpenseIds.size} expense(s)? This cannot be undone.`)) return;
+                      try {
+                        const ids = Array.from(selectedExpenseIds);
+                        const r = await financialApi.bulkDeleteExpenses(ids);
+                        setExpenses(prev => prev.filter(e => !selectedExpenseIds.has(e.id)));
+                        setSelectedExpenseIds(new Set());
+                        toast.success(`Deleted ${r.data.deleted}`);
+                        fetchAll();
+                      } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+                    } : undefined}
+                  /></div>}
                   <table className="w-full text-sm">
                     <thead><tr className="text-left border-b border-border">
+                      <th className="pb-2 w-8"><input type="checkbox" className="accent-primary" data-testid="expense-select-all" checked={selectedExpenseIds.size > 0 && expenses.every(e => selectedExpenseIds.has(e.id))} onChange={() => { if (selectedExpenseIds.size === expenses.length) setSelectedExpenseIds(new Set()); else setSelectedExpenseIds(new Set(expenses.map(e => e.id))); }} /></th>
                       <th className="pb-2 font-medium text-muted-foreground">Title</th>
                       <th className="pb-2 font-medium text-muted-foreground">Amount</th>
                       <th className="pb-2 font-medium text-muted-foreground">Category</th>
@@ -566,7 +602,8 @@ export default function FinancialPage() {
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {expenses.map(e => (
-                        <tr key={e.id} className={`hover:bg-accent/30 transition-colors ${e.status === 'pending' ? 'bg-amber-50/50 dark:bg-amber-950/10' : e.status === 'rejected' ? 'opacity-50' : ''}`}>
+                        <tr key={e.id} className={`hover:bg-accent/30 transition-colors ${e.status === 'pending' ? 'bg-amber-50/50 dark:bg-amber-950/10' : e.status === 'rejected' ? 'opacity-50' : ''} ${selectedExpenseIds.has(e.id) ? 'bg-primary/5' : ''}`}>
+                          <td className="py-3 w-8"><input type="checkbox" className="accent-primary" data-testid={`expense-select-${e.id}`} checked={selectedExpenseIds.has(e.id)} onChange={() => setSelectedExpenseIds(prev => { const n = new Set(prev); n.has(e.id) ? n.delete(e.id) : n.add(e.id); return n; })} /></td>
                           <td className="py-3 font-medium">
                             {e.title}
                             {e.status === 'pending' && <Badge variant="outline" className="ml-2 text-[10px] border-amber-300 text-amber-700">Pending approval</Badge>}
@@ -631,10 +668,29 @@ export default function FinancialPage() {
           <div className="flex justify-end">
             <Button size="sm" className="gap-1.5" onClick={() => { setBudgetForm({ department: '', period: new Date().toISOString().slice(0, 7), amount: '', category: 'general' }); setShowBudget(true); }} data-testid="create-budget-btn">Add Budget</Button>
           </div>
+          {selectedBudgetIds.size > 0 && <BulkActionBar
+            selectedIds={selectedBudgetIds}
+            onClear={() => setSelectedBudgetIds(new Set())}
+            onBulkExport={() => exportToCSV((budgets || []).filter(b => selectedBudgetIds.has(b.id)), 'budgets-export.csv')}
+            onBulkDelete={isFinanceAdmin ? async () => {
+              if (!window.confirm(`Delete ${selectedBudgetIds.size} budget(s)? This cannot be undone.`)) return;
+              try {
+                const ids = Array.from(selectedBudgetIds);
+                const r = await financialApi.bulkDeleteBudgets(ids);
+                setBudgets(prev => (prev || []).filter(b => !selectedBudgetIds.has(b.id)));
+                setSelectedBudgetIds(new Set());
+                toast.success(`Deleted ${r.data.deleted}`);
+              } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+            } : undefined}
+          />}
           <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
-            <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">Department</th><th className="p-3 text-left text-xs text-muted-foreground">Period</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Category</th></tr></thead>
-            <tbody>{(budgets || []).map(b => <tr key={b.id} className="border-b last:border-0"><td className="p-3">{b.department || b.location_id}</td><td className="p-3">{b.period}</td><td className="p-3 text-right font-medium">{(b.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground">{b.category}</td></tr>)}
-            {(!budgets || budgets.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs">No budgets set</td></tr>}
+            <table className="w-full text-sm"><thead><tr className="border-b">
+              <th className="p-3 w-8"><input type="checkbox" className="accent-primary" data-testid="budget-select-all" checked={(budgets || []).length > 0 && selectedBudgetIds.size > 0 && (budgets || []).every(b => selectedBudgetIds.has(b.id))} onChange={() => { if (selectedBudgetIds.size === (budgets || []).length) setSelectedBudgetIds(new Set()); else setSelectedBudgetIds(new Set((budgets || []).map(b => b.id))); }} /></th>
+              <th className="p-3 text-left text-xs text-muted-foreground">Department</th><th className="p-3 text-left text-xs text-muted-foreground">Period</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Category</th></tr></thead>
+            <tbody>{(budgets || []).map(b => <tr key={b.id} className={`border-b last:border-0 ${selectedBudgetIds.has(b.id) ? 'bg-primary/5' : ''}`}>
+              <td className="p-3 w-8"><input type="checkbox" className="accent-primary" data-testid={`budget-select-${b.id}`} checked={selectedBudgetIds.has(b.id)} onChange={() => setSelectedBudgetIds(prev => { const n = new Set(prev); n.has(b.id) ? n.delete(b.id) : n.add(b.id); return n; })} /></td>
+              <td className="p-3">{b.department || b.location_id}</td><td className="p-3">{b.period}</td><td className="p-3 text-right font-medium">{(b.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground">{b.category}</td></tr>)}
+            {(!budgets || budgets.length === 0) && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground text-xs">No budgets set</td></tr>}
             </tbody></table>
           </CardContent></Card>
         </TabsContent>
@@ -703,11 +759,28 @@ export default function FinancialPage() {
                     <h3 className="font-semibold text-sm">Assets & Property</h3>
                     <Button size="sm" variant="outline" className="gap-1 text-xs h-7" onClick={() => setShowAssetForm(true)}>+ Add Asset</Button>
                   </div>
+                  {selectedAssetIds.size > 0 && <div className="mb-3"><BulkActionBar
+                    selectedIds={selectedAssetIds}
+                    onClear={() => setSelectedAssetIds(new Set())}
+                    onBulkExport={() => exportToCSV(assets.filter(a => selectedAssetIds.has(a.id)), 'assets-export.csv')}
+                    onBulkDelete={isFinanceAdmin ? async () => {
+                      if (!window.confirm(`Delete ${selectedAssetIds.size} asset(s)? This cannot be undone.`)) return;
+                      try {
+                        const ids = Array.from(selectedAssetIds);
+                        const r = await financialApi.bulkDeleteAssets(ids);
+                        setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id)));
+                        setSelectedAssetIds(new Set());
+                        toast.success(`Deleted ${r.data.deleted}`);
+                      } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+                    } : undefined}
+                  /></div>}
                   {assets.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-4">No assets recorded. Track equipment, vehicles, property values here.</p>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead><tr className="text-left border-b"><th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Method</th>{isFinanceAdmin && <th className="pb-2 w-20"></th>}</tr></thead>
+                      <thead><tr className="text-left border-b">
+                        {isFinanceAdmin && <th className="pb-2 w-8"><input type="checkbox" className="accent-primary" data-testid="asset-select-all" checked={assets.length > 0 && selectedAssetIds.size > 0 && assets.every(a => selectedAssetIds.has(a.id))} onChange={() => { if (selectedAssetIds.size === assets.length) setSelectedAssetIds(new Set()); else setSelectedAssetIds(new Set(assets.map(a => a.id))); }} /></th>}
+                        <th className="pb-2 text-xs text-muted-foreground">Asset</th><th className="pb-2 text-xs text-muted-foreground">Category</th><th className="pb-2 text-xs text-muted-foreground">Purchase Value</th><th className="pb-2 text-xs text-muted-foreground">Current Value</th><th className="pb-2 text-xs text-muted-foreground">Method</th>{isFinanceAdmin && <th className="pb-2 w-20"></th>}</tr></thead>
                       <tbody className="divide-y">
                         {assets.map(a => {
                           const age = a.purchase_date ? (new Date().getFullYear() - new Date(a.purchase_date).getFullYear()) : 0;
@@ -715,7 +788,8 @@ export default function FinancialPage() {
                           const rate = a.depreciation_years > 0 ? 1 / a.depreciation_years : 0.03;
                           const currentVal = a.current_value != null ? a.current_value : (method === 'depreciation' ? Math.max(0, (a.value || 0) * (1 - rate * Math.min(age, a.depreciation_years || 10))) : (a.value || 0) * (1 + rate * age));
                           return (
-                            <tr key={a.id || a.name}>
+                            <tr key={a.id || a.name} className={selectedAssetIds.has(a.id) ? 'bg-primary/5' : ''}>
+                              {isFinanceAdmin && <td className="py-2 w-8"><input type="checkbox" className="accent-primary" data-testid={`asset-select-${a.id}`} checked={selectedAssetIds.has(a.id)} onChange={() => setSelectedAssetIds(prev => { const n = new Set(prev); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} /></td>}
                               <td className="py-2 font-medium">{a.name}</td>
                               <td className="py-2 text-muted-foreground capitalize">{a.category}</td>
                               <td className="py-2">{fmt(a.value)}</td>
@@ -916,6 +990,38 @@ export default function FinancialPage() {
                 <SelectContent><SelectItem value="_none">Campus default</SelectItem>{subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
+            {(subAccounts?.accounts?.length || 0) > 0 && (
+              <div className="space-y-2">
+                <Label>Paid From (Account) *</Label>
+                <Select value={expenseForm.paid_from_account_id || '_none'} onValueChange={v => setExpenseForm({...expenseForm, paid_from_account_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger className="h-9" data-testid="expense-paid-from-select"><SelectValue placeholder="Which account funded this?" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {(subAccounts?.accounts || []).map(a => {
+                      const insufficient = (a.balance || 0) < (parseFloat(expenseForm.amount) || 0);
+                      return (
+                        <SelectItem key={a.id} value={a.id} data-testid={`paid-from-opt-${a.id}`}>
+                          <span className={insufficient && expenseForm.amount ? 'text-amber-700' : ''}>
+                            {a.location_name || 'Savings'} — {a.currency} {(a.balance || 0).toLocaleString()}{insufficient && expenseForm.amount ? ' ⚠︎ low' : ''}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {expenseForm.paid_from_account_id && (() => {
+                  const acct = subAccounts.accounts.find(a => a.id === expenseForm.paid_from_account_id);
+                  const amt = parseFloat(expenseForm.amount) || 0;
+                  if (!acct) return null;
+                  const remaining = (acct.balance || 0) - amt;
+                  return (
+                    <p className={`text-xs ${remaining < 0 ? 'text-red-600' : 'text-muted-foreground'}`} data-testid="expense-paid-from-balance-hint">
+                      Balance after this expense: {acct.currency} {remaining.toLocaleString()}
+                    </p>
+                  );
+                })()}
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Notes *</Label>
               <Input placeholder="Notes (required)" value={expenseForm.notes} onChange={e => setExpenseForm({...expenseForm, notes: e.target.value})} required />

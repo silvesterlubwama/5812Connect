@@ -73,6 +73,18 @@ export default function AccountingPage() {
   }, [user, isFinanceAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [showReversed, setShowReversed] = useState(false);
+  const [selectedEntryIds, setSelectedEntryIds] = useState(new Set());
+  const bulkDeleteEntries = async () => {
+    if (selectedEntryIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedEntryIds.size} entr(ies)? Posted entries will be skipped — reverse them instead.`)) return;
+    try {
+      const ids = Array.from(selectedEntryIds);
+      const r = await api.post('/accounting/entries/bulk-delete', { ids });
+      toast.success(`Deleted ${r.data.deleted}${r.data.skipped_posted ? ` (${r.data.skipped_posted} posted skipped — reverse instead)` : ''}`);
+      setSelectedEntryIds(new Set());
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+  };
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -306,13 +318,39 @@ export default function AccountingPage() {
               />
               Show reversed entries (originals + their reversals)
             </label>
-            <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
+            <div className="flex items-center gap-2">
+              {selectedEntryIds.size > 0 && (
+                <>
+                  <Badge className="text-xs" data-testid="acc-bulk-count">{selectedEntryIds.size} selected</Badge>
+                  <Button size="sm" variant="destructive" className="h-7 text-xs gap-1" onClick={bulkDeleteEntries} data-testid="acc-bulk-delete-btn"><Trash2 size={12} /> Delete</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedEntryIds(new Set())}><X size={12} /></Button>
+                </>
+              )}
+              <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
+            </div>
           </div>
           {entries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No entries yet.</p> : (
             <div className="space-y-2">
+              <label className="flex items-center gap-2 text-[11px] text-muted-foreground pl-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  data-testid="acc-select-all"
+                  checked={entries.length > 0 && entries.every(e => selectedEntryIds.has(e.id))}
+                  onChange={() => { if (selectedEntryIds.size === entries.length) setSelectedEntryIds(new Set()); else setSelectedEntryIds(new Set(entries.map(e => e.id))); }}
+                />
+                Select all visible
+              </label>
               {entries.map(e => (
-                <Card key={e.id} className={`rounded-xl ${(e.is_reversed || e.reverses) ? 'opacity-60' : ''}`} data-testid={`acc-entry-${e.id}`}>
+                <Card key={e.id} className={`rounded-xl ${(e.is_reversed || e.reverses) ? 'opacity-60' : ''} ${selectedEntryIds.has(e.id) ? 'ring-2 ring-primary/40' : ''}`} data-testid={`acc-entry-${e.id}`}>
                   <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <input
+                      type="checkbox"
+                      className="accent-primary"
+                      data-testid={`acc-select-${e.id}`}
+                      checked={selectedEntryIds.has(e.id)}
+                      onChange={() => setSelectedEntryIds(prev => { const n = new Set(prev); n.has(e.id) ? n.delete(e.id) : n.add(e.id); return n; })}
+                      onClick={ev => ev.stopPropagation()}
+                    />
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openEntry(e)}>
                       <p className={`text-sm font-medium font-mono ${(e.is_reversed || e.reverses) ? 'line-through' : ''}`}>{e.number}</p>
                       <p className="text-xs text-muted-foreground">{e.date} · {e.journal_code} · {e.narration || e.ref || '—'}</p>

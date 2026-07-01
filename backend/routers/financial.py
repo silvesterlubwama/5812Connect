@@ -57,7 +57,8 @@ class ExpenseCreate(BaseModel):
     vendor: Optional[str] = None  # Who was paid (e.g. "Bulunzi bugagga farm supply")
     purpose: Optional[str] = None  # Purpose/Beneficiary/Notes — free text
     receipt_number: Optional[str] = None  # Reff./Receipt# for reconciliation
-    account: Optional[str] = None  # Payment source: CASH DRAWER, MTN MOMO, AIRTEL MONEY, BANK, etc.
+    account: Optional[str] = None  # Payment source label (legacy free-text/enum)
+    paid_from_account_id: Optional[str] = None  # FK → financial_accounts.id (which cash/bank account funded this expense)
     department: Optional[str] = None  # FARM, SHELTER, OUTREACH, ADMIN/OPS, SECURITY, EDUCATION, MAINTENANCE
     budget_category: Optional[str] = None  # Uganda Farm, Petty Cash, Wages & Salaries, Bank Fees, etc.
     usd_equivalent: Optional[float] = None  # For multi-currency tracking
@@ -323,6 +324,48 @@ async def delete_expense(expense_id: str, current_user: dict = Depends(require_a
     await db.expenses.delete_one({"id": expense_id})
     await _audit(current_user["id"], "delete", "expense", expense_id)
     return {"message": "Expense deleted"}
+
+
+# ========== BULK DELETE (Finance module) ==========
+
+@router.post("/financial/donations/bulk-delete")
+async def bulk_delete_donations(data: dict, current_user: dict = Depends(require_admin)):
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    result = await db.donations.delete_many({"id": {"$in": ids}})
+    await _audit(current_user["id"], "bulk_delete", "donations", None, {"count": result.deleted_count})
+    return {"deleted": result.deleted_count}
+
+
+@router.post("/financial/expenses/bulk-delete")
+async def bulk_delete_expenses(data: dict, current_user: dict = Depends(require_admin)):
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    result = await db.expenses.delete_many({"id": {"$in": ids}})
+    await _audit(current_user["id"], "bulk_delete", "expenses", None, {"count": result.deleted_count})
+    return {"deleted": result.deleted_count}
+
+
+@router.post("/financial/assets/bulk-delete")
+async def bulk_delete_assets(data: dict, current_user: dict = Depends(require_admin)):
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    result = await db.assets.delete_many({"id": {"$in": ids}})
+    await _audit(current_user["id"], "bulk_delete", "assets", None, {"count": result.deleted_count})
+    return {"deleted": result.deleted_count}
+
+
+@router.post("/financial/budgets/bulk-delete")
+async def bulk_delete_budgets(data: dict, current_user: dict = Depends(require_manager)):
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    result = await db.financial_budgets.delete_many({"id": {"$in": ids}})
+    await _audit(current_user["id"], "bulk_delete", "budgets", None, {"count": result.deleted_count})
+    return {"deleted": result.deleted_count}
 
 
 
