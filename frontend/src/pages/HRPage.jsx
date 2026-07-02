@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, Download, RefreshCw, Settings, Pencil, History } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -233,6 +233,7 @@ export default function HRPage() {
           <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
           <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
           <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
+          <TabsTrigger value="onboarding" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -391,6 +392,9 @@ export default function HRPage() {
         </TabsContent>
         <TabsContent value="timesheets" className="mt-4">
           <TimesheetsPanel />
+        </TabsContent>
+        <TabsContent value="onboarding" className="mt-4">
+          <OnboardingPanel />
         </TabsContent>
       </Tabs>
 
@@ -1384,4 +1388,81 @@ function TimesheetsPanel() {
   );
 }
 
+
+
+
+// ========== ONBOARDING CHECKLIST PANEL ==========
+function OnboardingPanel() {
+  const [data, setData] = React.useState({ total: 0, fully_onboarded: 0, needs_attention: 0, rows: [] });
+  const [loading, setLoading] = React.useState(true);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/hr/onboarding/checklist');
+      setData(r.data || { rows: [] });
+    } catch { setData({ rows: [] }); }
+    finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const check = (ok) => ok ? <CheckCircle2 size={14} className="inline text-green-600" /> : <XCircle size={14} className="inline text-red-500" />;
+
+  return (
+    <Card className="rounded-xl">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div>
+            <p className="text-sm font-semibold">Staff onboarding status</p>
+            <p className="text-xs text-muted-foreground">Every new hire needs contract → salary → cash account access before payslips can flow properly.</p>
+          </div>
+          <div className="flex items-center gap-4 ml-auto text-xs">
+            <div><span className="text-muted-foreground">Fully onboarded:</span> <span className="font-semibold text-green-700" data-testid="onboarding-fully">{data.fully_onboarded}</span></div>
+            <div><span className="text-muted-foreground">Needs attention:</span> <span className="font-semibold text-amber-700" data-testid="onboarding-needs">{data.needs_attention}</span></div>
+            <div><span className="text-muted-foreground">Total:</span> <span className="font-semibold" data-testid="onboarding-total">{data.total}</span></div>
+            <Button size="sm" variant="ghost" className="h-7" onClick={load}><RefreshCw size={12} /></Button>
+          </div>
+        </div>
+
+        {loading ? <p className="text-xs text-muted-foreground text-center py-6">Loading…</p> : data.rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No staff found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left border-b text-xs text-muted-foreground">
+                <th className="pb-2">Staff</th>
+                <th>Role · Dept</th>
+                <th className="text-center">Dept</th>
+                <th className="text-center">Location</th>
+                <th className="text-center">Contract</th>
+                <th className="text-center">Salary</th>
+                <th className="text-center">Cash Acct</th>
+                <th>Salary</th>
+                <th className="text-right">%</th>
+              </tr></thead>
+              <tbody className="divide-y">
+                {data.rows.map(r => (
+                  <tr key={r.staff_id} className={`hover:bg-accent/30 ${r.completion_pct === 100 ? '' : 'bg-amber-50/40 dark:bg-amber-950/10'}`} data-testid={`onboarding-row-${r.staff_id}`}>
+                    <td className="py-2 font-medium">{r.staff_name || '(unnamed)'}<div className="text-[10px] text-muted-foreground">{r.email}</div></td>
+                    <td className="text-xs text-muted-foreground">{r.role || '—'}{r.department ? ` · ${r.department}` : ''}</td>
+                    <td className="text-center" data-testid={`onb-${r.staff_id}-dept`}>{check(r.checks.has_department)}</td>
+                    <td className="text-center" data-testid={`onb-${r.staff_id}-loc`}>{check(r.checks.has_location)}</td>
+                    <td className="text-center" data-testid={`onb-${r.staff_id}-contract`}>{check(r.checks.has_contract)}</td>
+                    <td className="text-center" data-testid={`onb-${r.staff_id}-salary`}>{check(r.checks.has_salary)}</td>
+                    <td className="text-center" data-testid={`onb-${r.staff_id}-acct`}>{check(r.checks.has_chart_account)}</td>
+                    <td className="text-[11px] text-muted-foreground">{r.salary_summary || '—'}</td>
+                    <td className="text-right">
+                      <Badge className={`text-[10px] ${r.completion_pct === 100 ? '' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40'}`} data-testid={`onb-pct-${r.staff_id}`}>{r.completion_pct}%</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 

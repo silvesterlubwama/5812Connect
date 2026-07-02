@@ -90,6 +90,18 @@ export default function PortalProfile() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
+  const downloadPayslipPdf = async (p) => {
+    try {
+      const res = await api.get(`/hr/payslips/${p.id}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payslip-${(p.staff_name || 'staff').replace(/\s+/g, '_')}-${p.period}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) { toast.error(e.response?.data?.detail || 'PDF download failed'); }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -275,7 +287,7 @@ export default function PortalProfile() {
                   </div>
                   <div className="flex gap-1">
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setViewingPayslip(p)} data-testid={`payslip-view-${p.id}`}>Review</Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print" onClick={() => { setViewingPayslip(p); setTimeout(() => window.print(), 400); }}><Download size={12} /></Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download PDF" onClick={() => downloadPayslipPdf(p)} data-testid={`payslip-pdf-${p.id}`}><Download size={12} /></Button>
                   </div>
                 </div>
               ))}
@@ -376,7 +388,7 @@ export default function PortalProfile() {
               {viewingPayslip.paid_at && <p className="text-xs text-muted-foreground">Paid on {viewingPayslip.paid_at.slice(0, 10)}</p>}
               <div className="flex gap-2 pt-2 print:hidden">
                 <Button variant="outline" className="flex-1" onClick={() => setViewingPayslip(null)}>Close</Button>
-                <Button className="flex-1" onClick={() => window.print()} data-testid="payslip-print-btn"><Download size={12} className="mr-1" /> Print / Save PDF</Button>
+                <Button className="flex-1" onClick={() => downloadPayslipPdf(viewingPayslip)} data-testid="payslip-print-btn"><Download size={12} className="mr-1" /> Download PDF</Button>
               </div>
             </div>
           )}

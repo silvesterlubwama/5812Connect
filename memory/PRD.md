@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 207 (Feb 2026)
+**Payslip PDF export + HR Onboarding Checklist.**
+
+- Server-rendered payslip PDFs at `/api/hr/payslips/{id}/pdf` (WeasyPrint, branded, A4). PortalProfile now downloads instead of browser-printing.
+- `/api/hr/onboarding/checklist` — 5-check completeness matrix per staff (dept, location, contract, salary, chart-account) + summary counters.
+- New HRPage "Onboarding" tab shows gaps at a glance so new hires can be brought to payslip-ready state fast.
+
 ## Recently Resolved — Iteration 206 (Feb 2026)
 **Reversal line-status bug fix + HR Payslip self-service workflow.**
 

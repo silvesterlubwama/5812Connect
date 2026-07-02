@@ -1,5 +1,12 @@
 # 58:12 Connect — Changelog
 
+## Iteration 207 (Feb 2026) — Payslip PDF Export + HR Onboarding Checklist
+- **Server-side payslip PDF:** `GET /api/hr/payslips/{id}/pdf` renders a WeasyPrint-styled A4 PDF (58:12 branded header, staff meta grid, line-items table, summary + status). Access restricted to admins/HR + the payslip owner. Filename: `payslip-<Staff_Name>-<period>.pdf`.
+- **Frontend PortalProfile:** payslip Download button and Review dialog now call the PDF endpoint via authenticated `api.get(..., {responseType:'blob'})` and trigger a browser download — no more browser-print workaround.
+- **HR Onboarding Checklist:** `GET /api/hr/onboarding/checklist` returns per-staff completeness across 5 checks (department, location, contract, salary, chart-account). Response: `{total, fully_onboarded, needs_attention, rows[{staff_id, staff_name, email, role, checks:{...}, completion_pct, salary_summary}]}`. Rows sorted by completion_pct so gaps float to the top.
+- **HR page Onboarding tab:** new `OnboardingPanel` renders a per-row grid of green-check/red-X across the 5 checks, salary summary, and completion badge. Refresh button + summary counters.
+
+
 ## Iteration 206 (Feb 2026) — Reversal Line-Status Fix + HR Payslip Workflow
 ### 🔴 P0 Bug fix — reversed transactions still counted in Income / P&L / Trial Balance
 - **Root cause:** `reverse_entry` marked the reversal ENTRY as `posted` but forgot to update its `accounting_entry_lines` from `draft` to `posted`. Line-level report queries filter by `status='posted'`, so the reversal was invisible while the original still counted — user saw already-reversed amounts as income.

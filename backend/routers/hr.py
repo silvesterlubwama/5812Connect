@@ -1767,3 +1767,175 @@ async def get_my_payslip(payslip_id: str, current_user: dict = Depends(get_curre
     if not p:
         raise HTTPException(status_code=404, detail="Payslip not found")
     return p
+
+
+
+# ========== PAYSLIP PDF EXPORT ==========
+
+@router.get("/payslips/{payslip_id}/pdf")
+async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_user)):
+    """Server-rendered payslip PDF. Access: admins + the owning staff member only."""
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    role = (current_user.get("role") or "").lower()
+    is_hr = role in {"admin", "system_admin", "hr", "director", "executive director"}
+    if not is_hr and p.get("staff_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your payslip")
+
+    loc_name = ""
+    if p.get("location_id"):
+        loc = await db.locations.find_one({"id": p["location_id"]}, {"_id": 0, "name": 1})
+        if loc:
+            loc_name = loc.get("name") or ""
+
+    cur = p.get("currency") or "UGX"
+    def fmt(x): return f"{cur} {(x or 0):,.2f}"
+    line_rows = ""
+    for li in (p.get("line_items") or []):
+        sign = "&minus;" if li.get("type") == "deduction" else "+"
+        color = "#b45309" if li.get("type") == "deduction" else "#047857"
+        amt = li.get("calculated_amount", li.get("amount", 0)) or 0
+        details = f" <span class='meta'>({li['details']})</span>" if li.get("details") else ""
+        line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{amt:,.2f}</td></tr>"
+    if not line_rows:
+        line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
+
+    paid_note = ""
+    if p.get("status") == "paid" and p.get("paid_at"):
+        paid_note = f"<p class='meta' style='text-align:center;margin-top:14mm'>Paid on {p['paid_at'][:10]}</p>"
+
+    html = f"""<html><head><meta charset='utf-8' /><style>
+@page {{ size: A4; margin: 16mm; }}
+body {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color:#0f172a; }}
+.head {{ display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:10px; border-bottom:2px solid #0f172a; }}
+.logo {{ height:38px; }}
+h1 {{ font-size:22px; margin:0; }}
+h2 {{ font-size:13px; margin:16px 0 6px 0; text-transform:uppercase; letter-spacing:0.4px; color:#334155; border-bottom:1px solid #e2e8f0; padding-bottom:4px; }}
+table {{ width:100%; border-collapse:collapse; font-size:11.5px; }}
+th, td {{ padding:6px 8px; border-bottom:1px solid #e2e8f0; text-align:left; }}
+th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
+.meta {{ font-size:10px; color:#64748b; }}
+.grid {{ display:grid; grid-template-columns:1fr 1fr; gap:6px 20px; font-size:11px; margin-top:8px; }}
+.grid .k {{ color:#64748b; }}
+.summary {{ margin-top:14px; padding:10px 12px; background:#f1f5f9; border-radius:6px; }}
+.row {{ display:flex; justify-content:space-between; padding:3px 0; font-size:12px; }}
+.total {{ display:flex; justify-content:space-between; padding:8px 0 0; margin-top:8px; border-top:2px solid #0f172a; font-size:16px; font-weight:700; }}
+.status {{ display:inline-block; padding:2px 8px; border-radius:99px; font-size:10px; font-weight:600; text-transform:uppercase; background:#e2e8f0; color:#0f172a; }}
+.status.paid {{ background:#dcfce7; color:#166534; }}
+.status.draft {{ background:#fef3c7; color:#92400e; }}
+</style></head><body>
+  <div class='head'>
+    <div>
+      <img src='https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1' class='logo' />
+      <p class='meta' style='margin:6px 0 0 0'>58:12 Global &middot; Payslip</p>
+    </div>
+    <div style='text-align:right'>
+      <h1>Payslip &middot; {p.get('period','')}</h1>
+      <p class='meta' style='margin:2px 0 0 0'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p style='margin:6px 0 0 0'><span class='status {p.get("status","")}'>{p.get('status','draft')}</span></p>
+    </div>
+  </div>
+
+  <div class='grid'>
+    <div><span class='k'>Staff:</span> <strong>{p.get('staff_name','')}</strong></div>
+    <div><span class='k'>Payslip ID:</span> {p.get('id','')}</div>
+    <div><span class='k'>Department:</span> {p.get('department','') or '&mdash;'}</div>
+    <div><span class='k'>Location:</span> {loc_name or p.get('location_id','') or '&mdash;'}</div>
+    <div><span class='k'>Period:</span> {p.get('period','')}</div>
+    <div><span class='k'>Currency:</span> {cur}</div>
+    <div><span class='k'>Working days:</span> {p.get('working_days','&mdash;')}</div>
+    <div><span class='k'>Days worked:</span> {p.get('days_worked','&mdash;')}</div>
+    <div><span class='k'>Unpaid leave days:</span> {p.get('unpaid_leave_days',0)}</div>
+    <div><span class='k'>PTO days:</span> {p.get('pto_days',0)}</div>
+  </div>
+
+  <h2>Line Items</h2>
+  <table>
+    <thead><tr><th>Description</th><th style='text-align:right'>Amount</th></tr></thead>
+    <tbody>{line_rows}</tbody>
+  </table>
+
+  <div class='summary'>
+    <div class='row'><span>Gross salary</span><span>{fmt(p.get('gross_salary'))}</span></div>
+    <div class='row' style='color:#047857'><span>+ Allowances</span><span>{fmt(p.get('allowances'))}</span></div>
+    <div class='row' style='color:#b45309'><span>&minus; Deductions</span><span>{fmt(p.get('deductions'))}</span></div>
+    <div class='total'><span>Net Pay</span><span>{fmt(p.get('net_salary'))}</span></div>
+  </div>
+
+  {paid_note}
+  <p class='meta' style='margin-top:18mm; text-align:center'>This payslip is automatically generated. For corrections contact HR.</p>
+</body></html>"""
+
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Payslip PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = (p.get("staff_name") or "staff").replace(" ", "_")[:30]
+    filename = f"payslip-{safe_name}-{p.get('period','')}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ========== ONBOARDING CHECKLIST ==========
+
+@router.get("/onboarding/checklist")
+async def onboarding_checklist(location_id: Optional[str] = None, current_user: dict = Depends(require_hr)):
+    """Per-staff onboarding completeness (contract, salary, chart-account, dept, location)."""
+    user_query = {"active": {"$ne": False}, "role": {"$ne": "system_admin"}}
+    if location_id:
+        user_query["$or"] = [{"location_id": location_id}, {"location_ids": location_id}, {"active_campus_id": location_id}]
+    users = await db.users.find(user_query, {
+        "_id": 0, "id": 1, "name": 1, "email": 1, "role": 1,
+        "department": 1, "location_id": 1, "active_campus_id": 1, "location_ids": 1,
+    }).to_list(2000)
+
+    salaries_map = {}
+    async for s in db.hr_salaries.find({"status": "active"}, {"_id": 0, "staff_id": 1, "base_salary": 1, "currency": 1, "pay_frequency": 1}):
+        salaries_map[s["staff_id"]] = s
+
+    contract_ids = set()
+    async for c in db.hr_contracts.find({"status": {"$in": ["signed", "active"]}}, {"_id": 0, "staff_id": 1}):
+        contract_ids.add(c["staff_id"])
+
+    account_users = set()
+    async for a in db.chart_accounts.find({"active": {"$ne": False}}, {"_id": 0, "assigned_user_ids": 1}):
+        for uid in (a.get("assigned_user_ids") or []):
+            account_users.add(uid)
+
+    rows = []
+    for u in users:
+        checks = {
+            "has_department": bool(u.get("department")),
+            "has_location": bool(u.get("active_campus_id") or u.get("location_id") or (u.get("location_ids") or [])),
+            "has_contract": u["id"] in contract_ids,
+            "has_salary": u["id"] in salaries_map,
+            "has_chart_account": u["id"] in account_users,
+        }
+        completion_pct = round(sum(1 for v in checks.values() if v) / len(checks) * 100)
+        sal = salaries_map.get(u["id"])
+        rows.append({
+            "staff_id": u["id"],
+            "staff_name": u.get("name", ""),
+            "email": u.get("email", ""),
+            "role": u.get("role", ""),
+            "department": u.get("department", ""),
+            "location_id": u.get("active_campus_id") or u.get("location_id") or "",
+            "checks": checks,
+            "completion_pct": completion_pct,
+            "salary_summary": f"{sal.get('currency','UGX')} {sal.get('base_salary',0):,.0f} / {sal.get('pay_frequency','monthly')}" if sal else "",
+        })
+    rows.sort(key=lambda r: (r["completion_pct"], r["staff_name"].lower()))
+    return {
+        "total": len(rows),
+        "fully_onboarded": sum(1 for r in rows if r["completion_pct"] == 100),
+        "needs_attention": sum(1 for r in rows if r["completion_pct"] < 100),
+        "rows": rows,
+    }
