@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 204 (Feb 2026)
+**Finance edit/delete UI restored + POS auto-tag + batch balance perf.**
+
+- CoA / Journals / Taxes tabs on Accounting page now expose Edit + Delete icons (backend endpoints already existed).
+- POS sales auto-tag `deposit_to_account_id` from `store_settings.default_cash/bank/momo_account_id`. Explicit callers override. Products page → store settings dialog surfaces the 3 pickers.
+- `_batch_compute_balances` reduces list-view balance queries from O(6·N) to O(5) constant.
+- `test_iter204_finance_edit_delete_and_pos_autotag.py` → **16/16 pass**.
+
 ## Recently Resolved — Iteration 203 (Feb 2026)
 **Chart cash accounts with per-user assignments (cash / bank / mobile money accountability).**
 

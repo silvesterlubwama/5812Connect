@@ -484,24 +484,28 @@ async def set_financial_balance(opening_balance: float, current_user: dict = Dep
 
 @router.get("/store-settings/{location_id}")
 async def get_store_settings(location_id: str, current_user: dict = Depends(get_current_user)):
-    """Get store configuration for a specific location."""
-    doc = await db.store_settings.find_one({"location_id": location_id}, {"_id": 0})
-    return doc or {
+    """Get store configuration for a specific location.
+    Merges any new default keys over stored docs so legacy locations always see the full schema."""
+    defaults = {
         "location_id": location_id,
         "store_name": "",
         "payment_methods": ["cash", "mobile_money"],
         "mobile_money_providers": [],
         "tax_rate": 0,
         "receipt_footer": "",
-        "receipt_paper_size": "80mm",  # 58mm / 80mm / A4 / A5
+        "receipt_paper_size": "80mm",
         "receipt_show_logo": True,
         "receipt_show_qr": True,
         "api_integrations": [],
         "currency": "UGX",
-        "default_cash_account_id": "",  # auto-tag POS cash sales to this chart account
-        "default_bank_account_id": "",  # auto-tag POS card/bank sales
-        "default_momo_account_id": "",  # auto-tag POS mobile-money sales
+        "default_cash_account_id": "",
+        "default_bank_account_id": "",
+        "default_momo_account_id": "",
     }
+    doc = await db.store_settings.find_one({"location_id": location_id}, {"_id": 0})
+    if doc:
+        return {**defaults, **doc}
+    return defaults
 
 
 @router.put("/store-settings/{location_id}")

@@ -1,5 +1,13 @@
 # 58:12 Connect — Changelog
 
+## Iteration 204 (Feb 2026) — Finance Edit/Delete Restoration + POS Auto-tag + Balance Perf
+- **P0 Bug fix — Edit/Delete UI restored everywhere:** Chart of Accounts (CoA), Journals, and Taxes tabs in `AccountingPage.jsx` gained inline Edit + Delete icons for admins. Dialogs now handle both create and edit modes (title + button label switch on `form.id`). Backend endpoints (already existed at `PUT/DELETE /api/accounting/accounts|journals|taxes/{id}`) are now wired.
+- **P1 — POS auto-tag to real cash accounts:** `store_settings` gained `default_cash_account_id`, `default_bank_account_id`, `default_momo_account_id`. `create_sale` auto-populates `deposit_to_account_id` based on the sale's `payment_method` (cash → default_cash; card/bank → default_bank; mobile_money → default_momo; with cash as fallback). Explicit `deposit_to_account_id` on the sale still wins. Sale gets `deposit_auto_tagged: true` for transparency. Products page store-settings dialog gained three new pickers so admins can wire the defaults.
+- **P2 — Batch balance perf:** `_batch_compute_balances(account_ids)` — 5 aggregation round-trips regardless of N accounts. `list` and `mine` refactored to use it. Old O(6·N) hot path eliminated.
+- **P2 — Store-settings default merge:** GET `/api/store-settings/{loc}` now merges the default schema over stored docs so legacy locations always see the new keys (`{**defaults, **doc}`).
+- **Tests:** `test_iter204_finance_edit_delete_and_pos_autotag.py` → **16/16 pytest pass** via testing_agent_v3_fork iter 204.
+
+
 ## Iteration 203 (Feb 2026) — Chart Cash Accounts with User Assignments
 - **NEW backend router:** `/api/financial/chart-accounts/*` (`chart_accounts.py`) — real-world cash / bank / mobile-money / credit / petty-cash accounts. Each account has assignable `assigned_user_ids`. Only admins bypass; regular users can only spend from or deposit to accounts they're assigned to.
 - **Live balance:** `starting_balance + Σ donations(deposit_to_account_id) + Σ approved expenses(paid_from_account_id) [negative] + Σ non-voided sales(deposit_to_account_id) + Σ transfers(in/out)`. Pending expenses do not affect balance until approved.
