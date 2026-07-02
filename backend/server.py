@@ -1357,6 +1357,23 @@ async def _ensure_indexes():
         except Exception as _e:
             # Pre-existing non-TTL index on audit_log.timestamp — leave it alone.
             pass
+        # Chart-account balance hot path (iter208) — _batch_compute_balances runs 5
+        # aggregations across donations/sales/expenses/transfers scoped by account_id.
+        # Without these, each call was a full collection scan on every list view.
+        await db.chart_accounts.create_index("id", unique=True)
+        await db.chart_accounts.create_index([("location_id", 1), ("active", 1)])
+        await db.chart_accounts.create_index("assigned_user_ids")
+        await db.donations.create_index("deposit_to_account_id")
+        await db.donations.create_index([("location_id", 1), ("date", -1)])
+        await db.expenses.create_index("paid_from_account_id")
+        await db.expenses.create_index([("status", 1), ("paid_from_account_id", 1)])
+        await db.expenses.create_index([("location_id", 1), ("date", -1)])
+        await db.sales.create_index([("deposit_to_account_id", 1), ("voided", 1)])
+        await db.chart_account_transfers.create_index("from_account_id")
+        await db.chart_account_transfers.create_index("to_account_id")
+        # Auto-posted journal entry lookup by source (donation/expense delete cascade)
+        await db.accounting_entries.create_index([("auto_generated_from", 1), ("source_id", 1)])
+        await db.accounting_entries.create_index([("status", 1), ("is_reversed", 1)])
         logger.info("Indexes ensured (idempotent)")
     except Exception as e:
         logger.warning(f"Index ensure: {e}")

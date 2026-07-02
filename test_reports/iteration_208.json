@@ -1,0 +1,35 @@
+{
+  "summary": "Iter 208 backend regression for chart-account balance cache + hot-path indexes. All 8 pytest cases pass in 34s: (1) list endpoint shape unchanged w/ balance field, (2) active_only=false is superset of active_only=true, (3) donation create → balance +delta within cache window; delete reverts (cache invalidated on both write paths), (4) expense create+approve+delete flow reflects correctly, (5) transfer between two accounts updates BOTH from- and to-side balances immediately (cache flushed for both ids), (6) bulk-delete of 2 donations wipes entire balance cache (returns to baseline immediately after delete), (7) POST /api/financial/repair-orphaned-journals still idempotent (reversed=0 as expected from prior iter207 run), (8) /api/accounting/reports/trial-balance still balanced (total_debit==total_credit) proving new indexes did not break aggregations.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/financial/expenses/{id}/approve", "issue": "Approve handler does NOT call invalidate_balance_cache. If a client read the balance while the expense was still pending (cached) and then approved, the balance won't reflect the newly-countable outflow until TTL (5s) elapses. Low impact (5s max staleness) but inconsistent with donation/expense/sale/transfer write paths. Fix: add `invalidate_balance_cache([expense['paid_from_account_id']])` in approve_expense (~line 469 of financial.py). Also applies to /reject if reject flips status back and to /financial/expenses/{id} (edit) if edit can change paid_from_account_id or amount."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter208_chart_account_balance_cache.py",
+    "/app/test_reports/pytest/iter208_results.xml"
+  ],
+  "action_items": [
+    "Consider adding invalidate_balance_cache in /financial/expenses/{id}/approve, /reject, and edit paths for consistency (minor, 5s window staleness only).",
+    "Consider extending _batch_compute_balances aggregations to use `hint()` once index existence is confirmed (micro-optimization, not required)."
+  ],
+  "critical_code_review_comments": [
+    "chart_accounts.py:_BAL_CACHE is module-global (in-process); safe under single-worker uvicorn but would drift under multi-worker gunicorn. Acceptable for current deployment; document if scaling to multiple workers.",
+    "invalidate_balance_cache(account_ids=None) flushes the entire cache — used by bulk-delete. Good choice given bulk paths don't fetch account ids.",
+    "financial.py bulk_delete flushes cache AFTER delete_many — correct ordering (any concurrent read between reverse_je and delete would still hit stale, but window is sub-millisecond).",
+    "Indexes added in server.py:_ensure_indexes are all appropriate and non-unique (except chart_accounts.id which is unique) — matches the hot-path queries in _batch_compute_balances exactly.",
+    "approve_expense (financial.py ~line 464) does not invalidate cache after status flip — minor inconsistency; see backend_issues.minor above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter208_chart_account_balance_cache.py (new)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "n/a (frontend testing skipped per request)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "All test data is TEST_iter208_* prefixed and cleaned up in the same test (donations/expenses created→deleted, seed donation for transfer test also deleted). Chart-account transfer records are NOT deleted (no delete endpoint exposed) — one TEST_iter208 transfer row remains in chart_account_transfers per test run; net effect on balances is zero since it moved money between two internal accounts.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Cache TTL is 5s (chart_accounts.py:_BAL_TTL_SECONDS). Every regression that reads balance immediately after a write depends on that write path having called invalidate_balance_cache. Currently invalidated on: donation create/delete, expense create/delete, sale insert, transfer, bulk-delete donations/expenses. NOT invalidated on: expense approve/reject, expense edit (if it changes amount or paid_from_account_id), donation edit — verify these next iteration if any of those endpoints get modified. Test file uses time.sleep(6) before baseline reads to guarantee any residual cache from prior tests is expired; add the same guard if you write follow-up cache tests.",
+  "rca of the issue": "N/A — no bugs. Balance cache + indexes work as designed. Only nit is that expense approve/reject/edit paths don't invalidate the cache (5s max staleness window)."
+}

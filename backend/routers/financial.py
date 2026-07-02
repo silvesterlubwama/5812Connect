@@ -172,6 +172,9 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
             doc["deposit_to_account_id"] = ss["default_cash_account_id"]
             doc["deposit_auto_tagged"] = True
     await db.donations.insert_one(doc); doc.pop("_id", None)
+    if doc.get("deposit_to_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["deposit_to_account_id"]])
     await _audit(current_user["id"], "create", "donation", doc["id"])
     # Auto-post to accounting ledger (silent no-op if CoA not configured)
     try:
@@ -349,6 +352,9 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
     if doc.get("sublocation_id") and not doc.get("location_id"):
         doc["location_id"] = doc["sublocation_id"]
     await db.expenses.insert_one(doc); doc.pop("_id", None)
+    if doc.get("paid_from_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["paid_from_account_id"]])
     await _audit(current_user["id"], "create", "expense", doc["id"])
     return doc
 
@@ -356,8 +362,12 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
 @router.delete("/financial/donations/{donation_id}")
 async def delete_donation(donation_id: str, current_user: dict = Depends(require_admin)):
     """Admin delete a donation entry — also reverses any auto-posted JE so ledger stays consistent."""
+    doc = await db.donations.find_one({"id": donation_id}, {"_id": 0, "deposit_to_account_id": 1})
     await _reverse_auto_posted_je("donation", donation_id, current_user)
     await db.donations.delete_one({"id": donation_id})
+    if doc and doc.get("deposit_to_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["deposit_to_account_id"]])
     await _audit(current_user["id"], "delete", "donation", donation_id)
     return {"message": "Donation deleted"}
 
@@ -365,8 +375,12 @@ async def delete_donation(donation_id: str, current_user: dict = Depends(require
 @router.delete("/financial/expenses/{expense_id}")
 async def delete_expense(expense_id: str, current_user: dict = Depends(require_admin)):
     """Admin delete an expense entry — also reverses any auto-posted JE so ledger stays consistent."""
+    doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0, "paid_from_account_id": 1})
     await _reverse_auto_posted_je("expense", expense_id, current_user)
     await db.expenses.delete_one({"id": expense_id})
+    if doc and doc.get("paid_from_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["paid_from_account_id"]])
     await _audit(current_user["id"], "delete", "expense", expense_id)
     return {"message": "Expense deleted"}
 
@@ -382,6 +396,8 @@ async def bulk_delete_donations(data: dict, current_user: dict = Depends(require
     for did in ids:
         reversed_count += await _reverse_auto_posted_je("donation", did, current_user)
     result = await db.donations.delete_many({"id": {"$in": ids}})
+    from routers.chart_accounts import invalidate_balance_cache
+    invalidate_balance_cache()  # bulk — clear all
     await _audit(current_user["id"], "bulk_delete", "donations", None, {"count": result.deleted_count, "je_reversed": reversed_count})
     return {"deleted": result.deleted_count, "je_reversed": reversed_count}
 
@@ -395,6 +411,8 @@ async def bulk_delete_expenses(data: dict, current_user: dict = Depends(require_
     for eid in ids:
         reversed_count += await _reverse_auto_posted_je("expense", eid, current_user)
     result = await db.expenses.delete_many({"id": {"$in": ids}})
+    from routers.chart_accounts import invalidate_balance_cache
+    invalidate_balance_cache()  # bulk — clear all
     await _audit(current_user["id"], "bulk_delete", "expenses", None, {"count": result.deleted_count, "je_reversed": reversed_count})
     return {"deleted": result.deleted_count, "je_reversed": reversed_count}
 

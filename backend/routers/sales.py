@@ -137,6 +137,9 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
                 doc["deposit_to_account_id"] = default_acct_id
                 doc["deposit_auto_tagged"] = True
     await db.sales.insert_one(doc)
+    if doc.get("deposit_to_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["deposit_to_account_id"]])
     # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
     for item in data.items:
         if item.get("product_id"):

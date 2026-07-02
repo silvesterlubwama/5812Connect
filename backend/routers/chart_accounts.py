@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
+import time
 import uuid
 
 from deps import (
@@ -16,6 +17,47 @@ from deps import (
 )
 
 router = APIRouter(prefix="/api/financial/chart-accounts", tags=["chart-accounts"])
+
+
+# In-process TTL cache for balance deltas (iter208). Keeps hot list views snappy
+# without introducing Redis. TTL is intentionally short so writes don't create
+# stale reads for long. Cache is invalidated explicitly on any write path that
+# mutates donations/expenses/sales/transfers.
+_BAL_CACHE: dict = {}   # {account_id: (expiry_epoch, delta)}
+_BAL_TTL_SECONDS = 5
+
+
+def _cache_get(ids: list) -> dict:
+    """Return {aid: delta} for whichever ids are still hot in cache."""
+    now = time.time()
+    hits = {}
+    stale = []
+    for aid in ids:
+        entry = _BAL_CACHE.get(aid)
+        if entry and entry[0] > now:
+            hits[aid] = entry[1]
+        elif entry:
+            stale.append(aid)
+    for aid in stale:
+        _BAL_CACHE.pop(aid, None)
+    return hits
+
+
+def _cache_set(deltas: dict) -> None:
+    expiry = time.time() + _BAL_TTL_SECONDS
+    for aid, val in deltas.items():
+        _BAL_CACHE[aid] = (expiry, val)
+
+
+def invalidate_balance_cache(account_ids: Optional[list] = None) -> None:
+    """Drop cached balances. Callers that write donations/expenses/sales/transfers
+    must invoke this for the affected account_id so the next read is fresh."""
+    if account_ids is None:
+        _BAL_CACHE.clear()
+        return
+    for aid in account_ids:
+        if aid:
+            _BAL_CACHE.pop(aid, None)
 
 
 ACCOUNT_KINDS = {"cash", "bank", "mobile_money", "credit", "petty_cash", "other"}
@@ -62,42 +104,53 @@ async def _compute_balance(account_id: str, starting_balance: float = 0) -> floa
 async def _batch_compute_balances(account_ids: list) -> dict:
     """Batch-compute the DELTA (excluding starting_balance) for a list of account IDs
     in a small, fixed number of aggregation round-trips (5 total, regardless of N).
-    Returns {account_id: delta}. Callers add starting_balance themselves."""
+    Returns {account_id: delta}. Callers add starting_balance themselves.
+
+    Uses an in-process TTL cache (iter208) — the same list view rendering under
+    a burst of requests only pays the 5 aggregations once per _BAL_TTL_SECONDS."""
     if not account_ids:
         return {}
-    ids = list(account_ids)
-    delta = {aid: 0.0 for aid in ids}
+    ids = list(set(account_ids))  # dedupe
+    # Fast path: fully cached
+    hits = _cache_get(ids)
+    misses = [aid for aid in ids if aid not in hits]
+    if not misses:
+        return {aid: hits[aid] for aid in ids}
+    delta = {aid: 0.0 for aid in misses}
     # Donation inflows
     async for r in db.donations.aggregate([
-        {"$match": {"deposit_to_account_id": {"$in": ids}}},
+        {"$match": {"deposit_to_account_id": {"$in": misses}}},
         {"$group": {"_id": "$deposit_to_account_id", "total": {"$sum": "$amount"}}},
     ]):
         delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
     # Sales inflows (non-voided)
     async for r in db.sales.aggregate([
-        {"$match": {"deposit_to_account_id": {"$in": ids}, "voided": {"$ne": True}}},
+        {"$match": {"deposit_to_account_id": {"$in": misses}, "voided": {"$ne": True}}},
         {"$group": {"_id": "$deposit_to_account_id", "total": {"$sum": "$total"}}},
     ]):
         delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
     # Expense outflows (approved/legacy only)
     async for r in db.expenses.aggregate([
-        {"$match": {"paid_from_account_id": {"$in": ids}, "status": {"$in": ["approved", None]}}},
+        {"$match": {"paid_from_account_id": {"$in": misses}, "status": {"$in": ["approved", None]}}},
         {"$group": {"_id": "$paid_from_account_id", "total": {"$sum": "$amount"}}},
     ]):
         delta[r["_id"]] = delta.get(r["_id"], 0) - (r.get("total") or 0)
     # Transfer in
     async for r in db.chart_account_transfers.aggregate([
-        {"$match": {"to_account_id": {"$in": ids}}},
+        {"$match": {"to_account_id": {"$in": misses}}},
         {"$group": {"_id": "$to_account_id", "total": {"$sum": "$amount"}}},
     ]):
         delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
     # Transfer out
     async for r in db.chart_account_transfers.aggregate([
-        {"$match": {"from_account_id": {"$in": ids}}},
+        {"$match": {"from_account_id": {"$in": misses}}},
         {"$group": {"_id": "$from_account_id", "total": {"$sum": "$amount"}}},
     ]):
         delta[r["_id"]] = delta.get(r["_id"], 0) - (r.get("total") or 0)
-    return delta
+    # Persist to cache and merge with earlier hits
+    _cache_set(delta)
+    merged = {**hits, **delta}
+    return {aid: merged.get(aid, 0.0) for aid in ids}
 
 
 async def _load_account_or_404(account_id: str) -> dict:
@@ -337,6 +390,7 @@ async def transfer_between_accounts(data: dict, current_user: dict = Depends(req
     }
     await db.chart_account_transfers.insert_one(doc)
     doc.pop("_id", None)
+    invalidate_balance_cache([from_id, to_id])  # both sides changed — bust cache
     await _audit(current_user["id"], "create", "chart_account_transfer", doc["id"], {"amount": amount, "from": from_id, "to": to_id})
     return doc
 
