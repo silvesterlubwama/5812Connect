@@ -248,6 +248,9 @@ export const financialApi = {
   bulkDeleteBudgets: (ids) => api.post('/financial/budgets/bulk-delete', { ids }),
   // NUCLEAR — admin only. Wipes test transactions across finance collections.
   resetModule: (payload) => api.post('/financial/reset', payload),
+  // Reconciliation: compare sub-location total vs chart cash account totals
+  reconciliation: (locationId) => api.get('/financial/reconciliation', { params: { location_id: locationId } }),
+  reconciliationAutoTag: (payload) => api.post('/financial/reconciliation/auto-tag', payload),
 };
 
 // ---- CHART ACCOUNTS (cash / bank / mobile money — assigned to users) ----

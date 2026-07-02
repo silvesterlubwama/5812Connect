@@ -500,6 +500,7 @@ export default function FinancialPage() {
           <TabsTrigger value="budgets" data-testid="tab-budgets">Budgets</TabsTrigger>
           <TabsTrigger value="balance" data-testid="tab-balance" onClick={fetchBalanceSheet}>Balance Sheet</TabsTrigger>
           <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
+          <TabsTrigger value="reconcile" data-testid="tab-reconcile">Reconcile</TabsTrigger>
         </TabsList>
 
         <TabsContent value="donations" className="mt-4">
@@ -886,6 +887,11 @@ export default function FinancialPage() {
               </Card>
             </>
           ) : <p className="text-sm text-muted-foreground text-center py-8">Select a campus to view sub-location accounts</p>}
+        </TabsContent>
+
+        {/* Reconciliation Tab — verifies Finance sub-location totals match Chart cash accounts */}
+        <TabsContent value="reconcile" className="mt-4">
+          <ReconciliationPanel locationFilter={locationFilter} subLocations={subLocations} isFinanceAdmin={isFinanceAdmin} onDone={fetchAll} />
         </TabsContent>
 
       </Tabs>
@@ -1577,3 +1583,106 @@ export default function FinancialPage() {
     </div>
   );
 }
+
+
+// ============== RECONCILIATION PANEL ==============
+function ReconciliationPanel({ locationFilter, subLocations, isFinanceAdmin, onDone }) {
+  const [loc, setLoc] = useState(locationFilter || '');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [tagging, setTagging] = useState(false);
+
+  const load = async (locId) => {
+    if (!locId) { setData(null); return; }
+    setLoading(true);
+    try {
+      const r = await financialApi.reconciliation(locId);
+      setData(r.data);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Load failed'); setData(null); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { if (loc) load(loc); }, [loc]);
+
+  const runAutoTag = async () => {
+    if (!loc) return;
+    if (!window.confirm(`Auto-tag all currently-untagged donations and expenses at this location to the default cash account?`)) return;
+    setTagging(true);
+    try {
+      const r = await financialApi.reconciliationAutoTag({ location_id: loc });
+      toast.success(`Tagged ${r.data.donations_tagged} donation(s) + ${r.data.expenses_tagged} expense(s)`);
+      await load(loc);
+      onDone && onDone();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Auto-tag failed'); }
+    finally { setTagging(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <Card className="rounded-xl">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex-1">
+              <p className="text-sm font-semibold">Finance ↔ Cash Accounts Reconciliation</p>
+              <p className="text-xs text-muted-foreground">Sub-location totals should equal the sum of chart cash-account activity. Untagged rows explain any drift.</p>
+            </div>
+            <Select value={loc || '_none'} onValueChange={v => setLoc(v === '_none' ? '' : v)}>
+              <SelectTrigger className="h-8 w-56 text-xs" data-testid="recon-loc-select"><SelectValue placeholder="Pick a location" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_none">— Pick location —</SelectItem>
+                {subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {!loc ? (
+            <p className="text-xs text-muted-foreground text-center py-8">Select a location to run reconciliation.</p>
+          ) : loading ? (
+            <p className="text-xs text-muted-foreground text-center py-6">Computing…</p>
+          ) : !data ? null : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="p-3 rounded border bg-muted/30"><p className="text-[10px] text-muted-foreground uppercase">Sub-location Net</p><p className="text-lg font-bold" data-testid="recon-sub-net">{(data.sublocation_net || 0).toLocaleString()}</p></div>
+                <div className="p-3 rounded border bg-muted/30"><p className="text-[10px] text-muted-foreground uppercase">Cash Accts Δ</p><p className="text-lg font-bold" data-testid="recon-chart-delta">{(data.chart_delta_sum || 0).toLocaleString()}</p></div>
+                <div className="p-3 rounded border bg-muted/30"><p className="text-[10px] text-muted-foreground uppercase">Untagged</p><p className="text-lg font-bold" data-testid="recon-untagged">{(data.untagged_net || 0).toLocaleString()}</p></div>
+                <div className={`p-3 rounded border ${data.matches ? 'border-green-500/40 bg-green-50/40 dark:bg-green-950/20' : 'border-amber-500/40 bg-amber-50/40 dark:bg-amber-950/20'}`}><p className="text-[10px] text-muted-foreground uppercase">Drift</p><p className={`text-lg font-bold ${data.matches ? 'text-green-700' : 'text-amber-700'}`} data-testid="recon-drift">{(data.drift || 0).toLocaleString()} {data.matches ? '✓' : '⚠︎'}</p></div>
+              </div>
+
+              {isFinanceAdmin && !data.matches && (data.untagged_donations.length > 0 || data.untagged_expenses_list.length > 0) && (
+                <div className="flex items-center gap-2 p-2 rounded border border-amber-500/40 bg-amber-50/40 dark:bg-amber-950/20">
+                  <p className="text-xs flex-1">{data.untagged_donations.length + data.untagged_expenses_list.length} untagged row(s) explain the drift. One click will tag them all to this location&apos;s default cash account.</p>
+                  <Button size="sm" onClick={runAutoTag} disabled={tagging} data-testid="recon-autotag-btn">{tagging ? 'Tagging…' : 'Auto-tag remaining'}</Button>
+                </div>
+              )}
+
+              {data.chart_accounts.length > 0 && (
+                <div className="overflow-x-auto">
+                  <p className="text-xs font-semibold mb-1">Cash accounts at this location</p>
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-left border-b text-muted-foreground"><th className="py-1">Account</th><th>Kind</th><th className="text-right">Starting</th><th className="text-right">Activity</th><th className="text-right">Balance</th></tr></thead>
+                    <tbody className="divide-y">
+                      {data.chart_accounts.map(a => (
+                        <tr key={a.id}><td className="py-1 font-medium">{a.name}</td><td className="capitalize text-muted-foreground">{a.kind}</td><td className="text-right font-mono">{(a.starting_balance || 0).toLocaleString()}</td><td className="text-right font-mono">{(a.activity || 0).toLocaleString()}</td><td className="text-right font-mono font-bold">{(a.balance || 0).toLocaleString()}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {(data.untagged_donations.length + data.untagged_expenses_list.length > 0) && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground py-1">Show {data.untagged_donations.length + data.untagged_expenses_list.length} untagged row(s)</summary>
+                  <div className="mt-2 space-y-1">
+                    {data.untagged_donations.map(d => <div key={d.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-don-${d.id}`}><span>{d.date} · {d.donor_name}</span><span className="font-mono text-green-700">+{(d.amount || 0).toLocaleString()}</span></div>)}
+                    {data.untagged_expenses_list.map(e => <div key={e.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-exp-${e.id}`}><span>{e.date} · {e.title || e.vendor}</span><span className="font-mono text-red-700">-{(e.amount || 0).toLocaleString()}</span></div>)}
+                  </div>
+                </details>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+

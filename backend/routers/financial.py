@@ -164,6 +164,13 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     if doc.get("sublocation_id") and not doc.get("location_id"):
         doc["location_id"] = doc["sublocation_id"]
+    # Auto-tag to the location's default cash account when caller left it blank,
+    # so Finance sub-location totals stay in lockstep with Chart cash account balances.
+    if not doc.get("deposit_to_account_id") and doc.get("location_id"):
+        ss = await db.store_settings.find_one({"location_id": doc["location_id"]}, {"_id": 0, "default_cash_account_id": 1}) or {}
+        if ss.get("default_cash_account_id"):
+            doc["deposit_to_account_id"] = ss["default_cash_account_id"]
+            doc["deposit_auto_tagged"] = True
     await db.donations.insert_one(doc); doc.pop("_id", None)
     await _audit(current_user["id"], "create", "donation", doc["id"])
     # Auto-post to accounting ledger (silent no-op if CoA not configured)
@@ -314,6 +321,13 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
     doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    # Auto-tag to the location's default cash account when caller left it blank,
+    # so Finance sub-location totals stay in lockstep with Chart cash account balances.
+    if not doc.get("paid_from_account_id") and doc.get("location_id"):
+        ss = await db.store_settings.find_one({"location_id": doc["location_id"]}, {"_id": 0, "default_cash_account_id": 1}) or {}
+        if ss.get("default_cash_account_id"):
+            doc["paid_from_account_id"] = ss["default_cash_account_id"]
+            doc["paid_auto_tagged"] = True
     if doc.get("sublocation_id") and not doc.get("location_id"):
         doc["location_id"] = doc["sublocation_id"]
     await db.expenses.insert_one(doc); doc.pop("_id", None)
@@ -1232,6 +1246,90 @@ async def delete_financial_category(cat_id: str, current_user: dict = Depends(re
 # ========== ASSETS (appreciation default, manual depreciation) ==========
 
 @router.put("/financial/assets/{asset_id}/valuation")
+
+
+# ========== RECONCILIATION (Finance <-> Chart cash accounts) ==========
+
+@router.get("/financial/reconciliation")
+async def financial_reconciliation(location_id: str, current_user: dict = Depends(require_finance_view)):
+    """For a given location, compare:
+      - Finance sub-location aggregate (all donations − all approved expenses at location_id)
+      - Sum of Chart cash account activity at the same location
+    Highlights untagged rows so the user can fix drift with one click."""
+    # Sub-location totals (all rows at location_id)
+    inc = await db.donations.aggregate([{"$match": {"location_id": location_id}}, {"$group": {"_id": None, "t": {"$sum": "$amount"}}}]).to_list(1)
+    exp = await db.expenses.aggregate([{"$match": {"location_id": location_id, "status": {"$in": ["approved", None]}}}, {"$group": {"_id": None, "t": {"$sum": "$amount"}}}]).to_list(1)
+    sublocation_income = (inc[0]["t"] if inc else 0) or 0
+    sublocation_expenses = (exp[0]["t"] if exp else 0) or 0
+    sublocation_net = round(sublocation_income - sublocation_expenses, 2)
+
+    # Chart cash accounts at this location — sum their activity (excluding starting_balance)
+    accts = await db.chart_accounts.find({"location_id": location_id, "active": {"$ne": False}}, {"_id": 0}).to_list(200)
+    from routers.chart_accounts import _batch_compute_balances
+    deltas = await _batch_compute_balances([a["id"] for a in accts]) if accts else {}
+    chart_delta_sum = round(sum(deltas.values()), 2)
+    for a in accts:
+        a["balance"] = round(float(a.get("starting_balance", 0) or 0) + deltas.get(a["id"], 0), 2)
+        a["activity"] = round(deltas.get(a["id"], 0), 2)
+
+    # Untagged rows at this location
+    untagged_don = await db.donations.find({"location_id": location_id, "$or": [{"deposit_to_account_id": {"$exists": False}}, {"deposit_to_account_id": ""}, {"deposit_to_account_id": None}]}, {"_id": 0, "id": 1, "date": 1, "donor_name": 1, "amount": 1, "notes": 1}).to_list(500)
+    untagged_exp = await db.expenses.find({"location_id": location_id, "status": {"$in": ["approved", None]}, "$or": [{"paid_from_account_id": {"$exists": False}}, {"paid_from_account_id": ""}, {"paid_from_account_id": None}]}, {"_id": 0, "id": 1, "date": 1, "title": 1, "amount": 1, "vendor": 1}).to_list(500)
+    untagged_income = round(sum((d.get("amount") or 0) for d in untagged_don), 2)
+    untagged_expenses = round(sum((e.get("amount") or 0) for e in untagged_exp), 2)
+    untagged_net = round(untagged_income - untagged_expenses, 2)
+
+    # Matches when: sub-location net == chart_delta_sum. Untagged transactions explain any drift.
+    matches = abs(sublocation_net - chart_delta_sum) < 0.01
+    return {
+        "location_id": location_id,
+        "sublocation_income": round(sublocation_income, 2),
+        "sublocation_expenses": round(sublocation_expenses, 2),
+        "sublocation_net": sublocation_net,
+        "chart_delta_sum": chart_delta_sum,
+        "untagged_income": untagged_income,
+        "untagged_expenses": untagged_expenses,
+        "untagged_net": untagged_net,
+        "matches": matches,
+        "drift": round(sublocation_net - chart_delta_sum, 2),
+        "chart_accounts": accts,
+        "untagged_donations": untagged_don,
+        "untagged_expenses_list": untagged_exp,
+    }
+
+
+@router.post("/financial/reconciliation/auto-tag")
+async def reconciliation_auto_tag(data: dict, current_user: dict = Depends(require_finance_admin)):
+    """Batch-tag all currently-untagged donations/expenses at a location to a
+    caller-picked chart account (default: the location's default_cash_account_id).
+    Body: { location_id: str, account_id?: str (falls back to default_cash), only?: 'donations'|'expenses'|'both' }"""
+    location_id = data.get("location_id")
+    if not location_id:
+        raise HTTPException(status_code=400, detail="location_id required")
+    only = data.get("only") or "both"
+    account_id = data.get("account_id") or ""
+    if not account_id:
+        ss = await db.store_settings.find_one({"location_id": location_id}, {"_id": 0, "default_cash_account_id": 1}) or {}
+        account_id = ss.get("default_cash_account_id") or ""
+    if not account_id:
+        raise HTTPException(status_code=400, detail="No account_id given and no default_cash_account_id set on this location")
+    # Validate account exists + belongs to (or is org-wide) location
+    acct = await db.chart_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not acct:
+        raise HTTPException(status_code=404, detail="Chart account not found")
+
+    results = {"donations_tagged": 0, "expenses_tagged": 0, "account_id": account_id}
+    untagged_filter_don = {"location_id": location_id, "$or": [{"deposit_to_account_id": {"$exists": False}}, {"deposit_to_account_id": ""}, {"deposit_to_account_id": None}]}
+    untagged_filter_exp = {"location_id": location_id, "$or": [{"paid_from_account_id": {"$exists": False}}, {"paid_from_account_id": ""}, {"paid_from_account_id": None}]}
+    if only in ("donations", "both"):
+        r = await db.donations.update_many(untagged_filter_don, {"$set": {"deposit_to_account_id": account_id, "deposit_auto_tagged_batch": True}})
+        results["donations_tagged"] = r.modified_count
+    if only in ("expenses", "both"):
+        r = await db.expenses.update_many(untagged_filter_exp, {"$set": {"paid_from_account_id": account_id, "paid_auto_tagged_batch": True}})
+        results["expenses_tagged"] = r.modified_count
+    await _audit(current_user["id"], "batch_tag", "reconciliation", None, {"location_id": location_id, **results})
+    return results
+
 async def update_asset_valuation(asset_id: str, data: dict, current_user: dict = Depends(require_manager)):
     """Manually update asset current value. Supports appreciation (default) or depreciation."""
     new_value = data.get("current_value")
