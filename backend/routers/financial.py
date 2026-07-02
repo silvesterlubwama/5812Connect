@@ -468,6 +468,9 @@ async def approve_expense(expense_id: str, data: dict = None, current_user: dict
     if not expense: raise HTTPException(status_code=404, detail="Expense not found")
     update = {"status": "approved", "approved_by": current_user["id"], "approved_by_name": current_user.get("name", ""), "approved_at": datetime.now(timezone.utc).isoformat(), "approval_comment": data.get("comment", "")}
     await db.expenses.update_one({"id": expense_id}, {"$set": update})
+    if expense.get("paid_from_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([expense["paid_from_account_id"]])
     await _audit(current_user["id"], "update", "expense_approval", expense_id)
     # Auto-post to accounting ledger on approval (silent no-op if CoA not configured)
     try:
@@ -490,6 +493,9 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
     if not expense: raise HTTPException(status_code=404, detail="Expense not found")
     update = {"status": "rejected", "rejected_by": current_user["id"], "rejected_by_name": current_user.get("name", ""), "rejected_at": datetime.now(timezone.utc).isoformat(), "rejection_comment": data.get("comment", "")}
     await db.expenses.update_one({"id": expense_id}, {"$set": update})
+    if expense.get("paid_from_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([expense["paid_from_account_id"]])
     await _audit(current_user["id"], "update", "expense_rejection", expense_id)
     if expense.get("created_by"):
         try:

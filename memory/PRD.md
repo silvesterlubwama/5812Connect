@@ -4,13 +4,13 @@
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
 ## Recently Resolved — Iteration 208 (Feb 2026)
-**Finance ↔ Accounting Trial Balance drift fixed (orphaned journal entries).**
+**Finance ↔ Accounting Trial Balance drift fixed + Chart-account balance cache + hot-path indexes.**
 
-- Root cause: deleting a donation/expense in Finance did not cascade to the auto-posted journal entry in Accounting, causing Trial Balance to diverge from Finance totals.
-- Delete handlers (`delete_donation`, `delete_expense`, bulk variants) in `financial.py` now call `_reverse_auto_posted_je` to create a reversing entry — audit trail preserved, net ledger effect = 0.
-- NEW endpoint `POST /api/financial/repair-orphaned-journals` (admin-only, idempotent) scans every auto-posted JE (`auto_generated_from ∈ {donation, expense}`) and reverses the ones whose source record was deleted. Production run reversed 186 pre-existing orphans on dev DB.
-- New `acc-repair-orphans-btn` in `AccountingPage.jsx` (next to `acc-repair-reversals-btn`) — admin-facing one-click repair.
-- Iter 207 tester: **9/9 backend pass** + frontend button + toast verified. No regressions.
+- **Drift fix**: delete handlers in `financial.py` (`delete_donation`, `delete_expense`, bulk variants) now cascade-reverse the auto-posted journal entry via `_reverse_auto_posted_je`. Audit trail preserved; net ledger effect = 0.
+- **Retroactive repair**: `POST /api/financial/repair-orphaned-journals` (admin-only, idempotent) reverses every auto-posted JE whose source donation/expense was deleted. Dev DB run reversed 186 pre-existing orphans; second run 0 (idempotent ✓). UI: `acc-repair-orphans-btn` on Accounting page.
+- **Hot-path indexes** (in `server.py::_ensure_indexes`): `chart_accounts.id/location_id/assigned_user_ids`, `donations.deposit_to_account_id`, `expenses.paid_from_account_id + status`, `sales.deposit_to_account_id`, `chart_account_transfers.{from,to}_account_id`, `accounting_entries.{auto_generated_from,source_id}` + `{status,is_reversed}`. Eliminates full-collection-scans on every balance read.
+- **In-process TTL cache** (5s) for `_batch_compute_balances` in `chart_accounts.py`. Invalidated on: donation/expense create+delete+approve+reject, sale insert, transfer, bulk-delete.
+- **Tested**: iter207 (9/9) + iter208 (8/8) backend regression. Trial balance still balanced. No regressions.
 
 ## Recently Resolved — Iteration 207 (Feb 2026)
 **Payslip PDF export + HR Onboarding Checklist.**
