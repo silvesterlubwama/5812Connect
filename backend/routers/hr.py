@@ -1,7 +1,7 @@
 """HR Module: contracts, salaries, payslips, document requests, per-campus settings"""
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional, List
 import uuid
 
@@ -226,12 +226,24 @@ async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = 
 
 @router.post("/payslips/generate")
 async def generate_payslips(data: dict, current_user: dict = Depends(require_director)):
-    """Generate payslips for a pay period. Body: {period: '2026-02', location_id?}"""
-    period = data.get("period", "")
-    location_id = data.get("location_id") or current_user.get("active_campus_id", "")
-    if not period:
-        raise HTTPException(status_code=400, detail="Pay period required (e.g. 2026-02)")
-    return await _generate_payslips_for(period, location_id, current_user)
+    """Generate payslips for a pay period. Body:
+    { period: 'YYYY-MM',
+      location_id?: str,
+      days_worked_override?: {staff_id: days},
+      pto_days_override?: {staff_id: days},
+      use_timesheets?: bool  (default true — pulls approved timesheets for the period)
+    }"""
+    period = data.get("period") or datetime.now(timezone.utc).strftime("%Y-%m")
+    location_id = data.get("location_id")
+    days_worked = dict(data.get("days_worked_override") or {})
+    pto_days = dict(data.get("pto_days_override") or {})
+    use_timesheets = data.get("use_timesheets", True)
+    # Merge in approved timesheets — explicit overrides win
+    if use_timesheets:
+        async for ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
+            days_worked.setdefault(ts["staff_id"], ts.get("days_worked"))
+            pto_days.setdefault(ts["staff_id"], ts.get("pto_days", 0))
+    return await _generate_payslips_for(period, location_id, current_user, days_worked, pto_days)
 
 
 @router.post("/payslips/manual")
@@ -398,10 +410,20 @@ async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
     return (unpaid_total, working)
 
 
-async def _generate_payslips_for(period: str, location_id: str, current_user: dict) -> dict:
+async def _generate_payslips_for(period: str, location_id: str, current_user: dict, days_worked_override: dict = None, pto_days_override: dict = None) -> dict:
     """Shared helper: generate missing payslips for a period + optional location.
     Applies automatic unpaid-leave proration: gross is reduced by (unpaid_days / working_days)
-    and a transparent line-item 'Unpaid leave proration' is added so payslip math is auditable."""
+    and a transparent line-item 'Unpaid leave proration' is added so payslip math is auditable.
+
+    New optional dicts:
+    - days_worked_override: {staff_id: days} — override with an explicit day count
+      (from an approved timesheet or manager input). Prorates gross by
+      days_worked/working_days.
+    - pto_days_override: {staff_id: days} — paid time off (does NOT reduce gross,
+      informational only, printed on payslip).
+    """
+    days_worked_override = days_worked_override or {}
+    pto_days_override = pto_days_override or {}
     query = {"status": "active"}
     if location_id:
         query["location_id"] = location_id
@@ -415,7 +437,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         deductions = 0
         allowances = 0
         items = []
-        # ---- Unpaid leave proration (NEW) ----
+        # ---- Unpaid leave proration (existing) ----
         unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
         proration_amount = 0.0
         effective_gross = base_gross
@@ -432,6 +454,29 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
                 "details": f"{unpaid_days} unpaid day(s) ÷ {working_days} working days",
             })
             deductions += proration_amount
+
+        # ---- Manual days_worked override (from timesheet or director) ----
+        override_days = days_worked_override.get(sal["staff_id"])
+        pto_days = pto_days_override.get(sal["staff_id"])
+        if override_days is not None and working_days > 0 and base_gross > 0:
+            # Recompute gross based on actual days worked
+            wd_after_unpaid = max(0, working_days - unpaid_days)
+            days_worked_val = float(override_days)
+            if wd_after_unpaid > 0 and days_worked_val < wd_after_unpaid:
+                short_days = wd_after_unpaid - days_worked_val
+                short_amount = round(effective_gross * (short_days / wd_after_unpaid), 2)
+                effective_gross = max(0.0, effective_gross - short_amount)
+                items.append({
+                    "name": "Days-worked adjustment",
+                    "type": "deduction",
+                    "amount": short_amount,
+                    "is_percentage": False,
+                    "calculated_amount": short_amount,
+                    "auto_generated": True,
+                    "details": f"{days_worked_val} of {wd_after_unpaid} days worked ({short_days} day(s) short)",
+                })
+                deductions += short_amount
+
         gross = effective_gross  # Allowances / % deductions compute against the post-proration gross
         for li in (sal.get("line_items") or []):
             amt = float(li.get("amount", 0))
@@ -444,7 +489,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
                 allowances += amt
                 items.append({**li, "calculated_amount": amt})
         # Net is computed against original base for transparency: base + allowances - deductions
-        # (deductions already includes the unpaid-leave proration)
+        # (deductions already includes the unpaid-leave proration + days-worked adjustment)
         net = base_gross + allowances - deductions
         payslip = {
             "id": f"ps_{uuid.uuid4().hex[:8]}",
@@ -460,6 +505,8 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "net_salary": net,
             "unpaid_leave_days": unpaid_days,
             "working_days": working_days,
+            "days_worked": override_days if override_days is not None else (max(0, working_days - unpaid_days)),
+            "pto_days": pto_days if pto_days is not None else 0,
             "unpaid_leave_proration": proration_amount,
             "currency": sal.get("currency", "UGX"),
             "line_items": items,
@@ -570,7 +617,9 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
 
 async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
     """Upsert ONE expense line per (location, date) that totals all paid payslips that day.
-    Notes show "Payroll for N staff, period YYYY-MM" — no individual staff names."""
+    Notes show "Payroll for N staff, period YYYY-MM" — no individual staff names.
+    Auto-tags paid_from_account_id from store_settings.default_cash_account_id so the
+    payment draws down the store's real cash account balance."""
     loc_id = payslip.get("location_id") or current_user.get("active_campus_id") or ""
     if not loc_id:
         return
@@ -578,17 +627,23 @@ async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
     period = payslip.get("period", "")
     expense_id = f"payroll_{loc_id}_{today}"
     net = float(payslip.get("net_salary") or 0)
-    # Check if today's payroll expense already exists
+    # Look up the location's default cash account (from store_settings)
+    store_setting = await db.store_settings.find_one({"location_id": loc_id}, {"_id": 0, "default_cash_account_id": 1}) or {}
+    paid_from = store_setting.get("default_cash_account_id") or ""
     existing = await db.expenses.find_one({"id": expense_id})
     if existing:
         new_total = float(existing.get("amount", 0)) + net
         new_count = int(existing.get("payroll_count", 0)) + 1
-        await db.expenses.update_one({"id": expense_id}, {"$set": {
+        update = {
             "amount": new_total,
             "payroll_count": new_count,
             "notes": f"Payroll for {new_count} staff, period {period}",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }})
+        }
+        # Only set paid_from if it wasn't set before and we have a default
+        if paid_from and not existing.get("paid_from_account_id"):
+            update["paid_from_account_id"] = paid_from
+        await db.expenses.update_one({"id": expense_id}, {"$set": update})
     else:
         await db.expenses.insert_one({
             "id": expense_id,
@@ -601,6 +656,7 @@ async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
             "date": today,
             "notes": f"Payroll for 1 staff, period {period}",
             "location_id": loc_id,
+            "paid_from_account_id": paid_from,  # auto-tag so cash-account balance updates
             "status": "approved",
             "source": "hr_payroll_aggregate",
             "payroll_count": 1,
@@ -1589,3 +1645,125 @@ async def compensation_summary(staff_id: str, year: Optional[int] = None, format
         headers={"Content-Disposition": f'attachment; filename="compensation-{safe_name}-{yr}.pdf"'},
     )
 
+
+
+# ========== TIMESHEETS (staff-submitted, manager-approved) ==========
+# Note: attendance/summary already exists above at line 1444 and returns a
+# list of {staff_id, staff_name, total_minutes, days_present, ...}. The FE
+# uses that endpoint to auto-populate days_worked in the payslip generation
+# UI. This section adds staff-submitted timesheets for cases where clock-in
+# data is missing or insufficient (e.g. remote work, ad-hoc contracts).
+
+@router.get("/timesheets")
+async def list_timesheets(period: Optional[str] = None, staff_id: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List timesheets. Non-HR users see only their own."""
+    q = {}
+    if period:
+        q["period"] = period
+    if staff_id:
+        q["staff_id"] = staff_id
+    if status:
+        q["status"] = status
+    if (current_user.get("role") or "").lower() not in {"admin", "system_admin", "hr", "director", "executive director"}:
+        q["staff_id"] = current_user["id"]
+    return await db.hr_timesheets.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(500)
+
+
+@router.post("/timesheets")
+async def submit_timesheet(data: dict, current_user: dict = Depends(get_current_user)):
+    """Staff submits a timesheet for a pay period. Body:
+    { period: 'YYYY-MM' | 'YYYY-Www', days_worked: int, pto_days?: int, notes?, location_id? }"""
+    period = (data.get("period") or "").strip()
+    if not period:
+        raise HTTPException(status_code=400, detail="period required")
+    days_worked = float(data.get("days_worked") or 0)
+    if days_worked < 0 or days_worked > 100:
+        raise HTTPException(status_code=400, detail="days_worked out of range")
+    # Prevent duplicate submissions (staff × period) — replace instead
+    existing = await db.hr_timesheets.find_one({"staff_id": current_user["id"], "period": period, "status": {"$in": ["draft", "submitted", "rejected"]}})
+    doc = {
+        "id": existing["id"] if existing else f"ts_{uuid.uuid4().hex[:10]}",
+        "staff_id": current_user["id"],
+        "staff_name": current_user.get("name", ""),
+        "department": current_user.get("department", ""),
+        "location_id": data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or "",
+        "period": period,
+        "days_worked": days_worked,
+        "pto_days": float(data.get("pto_days") or 0),
+        "notes": (data.get("notes") or "")[:1000],
+        "status": "submitted",
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if existing:
+        await db.hr_timesheets.update_one({"id": doc["id"]}, {"$set": doc})
+    else:
+        await db.hr_timesheets.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "submit" if not existing else "resubmit", "timesheet", doc["id"], {"period": period, "days_worked": days_worked})
+    return doc
+
+
+@router.put("/timesheets/{ts_id}/approve")
+async def approve_timesheet(ts_id: str, data: dict = None, current_user: dict = Depends(require_director)):
+    ts = await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+    if not ts:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    if ts.get("status") == "approved":
+        return ts
+    await db.hr_timesheets.update_one({"id": ts_id}, {"$set": {
+        "status": "approved",
+        "approved_by": current_user["id"],
+        "approved_by_name": current_user.get("name", ""),
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "review_notes": ((data or {}).get("notes") or "")[:500],
+    }})
+    await _audit(current_user["id"], "approve", "timesheet", ts_id, {"staff_id": ts["staff_id"], "period": ts["period"]})
+    return await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+
+
+@router.put("/timesheets/{ts_id}/reject")
+async def reject_timesheet(ts_id: str, data: dict = None, current_user: dict = Depends(require_director)):
+    ts = await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+    if not ts:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    await db.hr_timesheets.update_one({"id": ts_id}, {"$set": {
+        "status": "rejected",
+        "rejected_by": current_user["id"],
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "review_notes": ((data or {}).get("reason") or "Please revise")[:500],
+    }})
+    return await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+
+
+@router.delete("/timesheets/{ts_id}")
+async def delete_timesheet(ts_id: str, current_user: dict = Depends(get_current_user)):
+    ts = await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+    if not ts:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    # Staff can only delete their own drafts / rejected
+    role = (current_user.get("role") or "").lower()
+    is_hr = role in {"admin", "system_admin", "hr", "director", "executive director"}
+    if not is_hr:
+        if ts["staff_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not your timesheet")
+        if ts.get("status") == "approved":
+            raise HTTPException(status_code=400, detail="Approved timesheets cannot be deleted — contact HR")
+    await db.hr_timesheets.delete_one({"id": ts_id})
+    return {"deleted": True}
+
+
+# ========== MY PAYSLIPS (staff self-service) ==========
+
+@router.get("/payslips/mine")
+async def my_payslips(limit: int = 50, current_user: dict = Depends(get_current_user)):
+    """Return payslips for the currently authenticated user (self-service)."""
+    return await db.hr_payslips.find({"staff_id": current_user["id"]}, {"_id": 0}).sort("period", -1).limit(limit).to_list(limit)
+
+
+@router.get("/payslips/{payslip_id}/mine")
+async def get_my_payslip(payslip_id: str, current_user: dict = Depends(get_current_user)):
+    """Staff can fetch only their own payslip."""
+    p = await db.hr_payslips.find_one({"id": payslip_id, "staff_id": current_user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    return p

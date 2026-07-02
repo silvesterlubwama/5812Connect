@@ -178,14 +178,41 @@ export default function AccountingPage() {
   const [selectedEntryIds, setSelectedEntryIds] = useState(new Set());
   const bulkDeleteEntries = async () => {
     if (selectedEntryIds.size === 0) return;
-    if (!window.confirm(`Delete ${selectedEntryIds.size} entr(ies)? Posted entries will be skipped — reverse them instead.`)) return;
+    if (!window.confirm(`Delete ${selectedEntryIds.size} entr(ies)? Posted entries will be skipped — use Bulk Reverse for those.`)) return;
     try {
       const ids = Array.from(selectedEntryIds);
       const r = await api.post('/accounting/entries/bulk-delete', { ids });
-      toast.success(`Deleted ${r.data.deleted}${r.data.skipped_posted ? ` (${r.data.skipped_posted} posted skipped — reverse instead)` : ''}`);
+      if (r.data.skipped_posted) {
+        toast.success(`Deleted ${r.data.deleted} draft entries. ${r.data.skipped_posted} posted entries were skipped — click Bulk Reverse to reverse them instead.`, { duration: 6000 });
+      } else {
+        toast.success(`Deleted ${r.data.deleted} entr(ies)`);
+      }
       setSelectedEntryIds(new Set());
       fetchAll();
     } catch (err) { toast.error(err.response?.data?.detail || 'Bulk delete failed'); }
+  };
+  const bulkReverseEntries = async () => {
+    if (selectedEntryIds.size === 0) return;
+    if (!window.confirm(`Reverse ${selectedEntryIds.size} posted entr(ies)? Each will create a mirror entry that cancels the original.`)) return;
+    try {
+      const ids = Array.from(selectedEntryIds);
+      const r = await api.post('/accounting/entries/bulk-reverse', { ids });
+      const parts = [];
+      if (r.data.reversed) parts.push(`Reversed ${r.data.reversed}`);
+      if (r.data.skipped_already_reversed) parts.push(`${r.data.skipped_already_reversed} already reversed`);
+      if (r.data.skipped_not_posted) parts.push(`${r.data.skipped_not_posted} not posted`);
+      toast.success(parts.join(' · ') || 'Nothing to reverse', { duration: 5000 });
+      setSelectedEntryIds(new Set());
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Bulk reverse failed'); }
+  };
+  const repairReversalLines = async () => {
+    if (!window.confirm('This scans all posted entries and fixes reversal lines that were left as draft. Safe to run — only flips line-status to posted. Continue?')) return;
+    try {
+      const r = await api.post('/accounting/entries/repair-reversal-lines');
+      toast.success(`Repaired ${r.data.fixed_entries} entr(ies). Refresh the reports to see corrected totals.`, { duration: 6000 });
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Repair failed'); }
   };
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -487,9 +514,13 @@ export default function AccountingPage() {
               {selectedEntryIds.size > 0 && (
                 <>
                   <Badge className="text-xs" data-testid="acc-bulk-count">{selectedEntryIds.size} selected</Badge>
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={bulkReverseEntries} data-testid="acc-bulk-reverse-btn"><RotateCcw size={12} /> Reverse</Button>
                   <Button size="sm" variant="destructive" className="h-7 text-xs gap-1" onClick={bulkDeleteEntries} data-testid="acc-bulk-delete-btn"><Trash2 size={12} /> Delete</Button>
                   <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedEntryIds(new Set())}><X size={12} /></Button>
                 </>
+              )}
+              {isFinanceAdmin && selectedEntryIds.size === 0 && (
+                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairReversalLines} data-testid="acc-repair-reversals-btn" title="One-time fix for legacy reversals whose lines were left as draft"><RefreshCw size={12} className="mr-1" /> Repair Reversals</Button>
               )}
               <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
             </div>

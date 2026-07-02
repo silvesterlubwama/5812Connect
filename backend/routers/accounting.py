@@ -619,14 +619,23 @@ async def reverse_entry(entry_id: str, data: dict = None, current_user: dict = D
     }, current_user)
     # Post the reversal immediately (matches the intent — a reversal in draft
     # state is useless, it needs to affect the ledger to cancel the original).
+    now = datetime.now(timezone.utc).isoformat()
     await db.accounting_entries.update_one(
         {"id": new["id"]},
         {"$set": {
             "status": "posted",
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": now,
             "posted_by": current_user["id"],
             "reverses": entry_id,  # link back to the original
         }},
+    )
+    # CRITICAL: also flip the LINES to posted so trial_balance / P&L include
+    # them (they filter `status == "posted"` at the line level). Missing this
+    # step was the root cause of "reversed transactions still showing as
+    # income" in the Trial Balance / Net Profit reports.
+    await db.accounting_entry_lines.update_many(
+        {"entry_id": new["id"]},
+        {"$set": {"status": "posted"}},
     )
     # Mark the ORIGINAL as reversed so the UI can hide it (this was the
     # missing step — user reported "original sale still shows as active").
@@ -658,7 +667,61 @@ async def delete_entry(entry_id: str, current_user: dict = Depends(require_admin
     return {"deleted": True}
 
 
-@router.post("/entries/bulk-delete")
+@router.post("/entries/repair-reversal-lines")
+async def repair_reversal_lines(current_user: dict = Depends(require_admin)):
+    """One-time repair: reversals created before iter 206 left their
+    accounting_entry_lines at status='draft' while the entry itself was
+    posted. That caused Trial Balance / P&L / Net Profit to include the
+    original but NOT the reversal — so already-reversed transactions kept
+    showing up as income.
+
+    This endpoint finds all posted entries whose lines are still draft and
+    flips those lines to posted so reports finally net correctly."""
+    fixed_ids = []
+    async for entry in db.accounting_entries.find({"status": "posted"}, {"_id": 0, "id": 1}):
+        eid = entry["id"]
+        # Are any of this entry's lines still draft?
+        drafted = await db.accounting_entry_lines.count_documents({"entry_id": eid, "status": {"$ne": "posted"}})
+        if drafted:
+            await db.accounting_entry_lines.update_many({"entry_id": eid}, {"$set": {"status": "posted"}})
+            fixed_ids.append(eid)
+    await _audit(current_user["id"], "repair", "accounting_entry_lines", None, {"count": len(fixed_ids)})
+    return {"fixed_entries": len(fixed_ids), "entry_ids": fixed_ids[:100]}
+
+
+@router.post("/entries/bulk-reverse")
+async def bulk_reverse_entries(data: dict, current_user: dict = Depends(require_admin)):
+    """Bulk-reverse posted journal entries. Skips already-reversed or non-posted ones."""
+    ids = data.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    reversed_count = 0
+    skipped_already = 0
+    skipped_status = 0
+    errors = []
+    for eid in ids:
+        entry = await db.accounting_entries.find_one({"id": eid}, {"_id": 0, "status": 1, "is_reversed": 1})
+        if not entry:
+            errors.append({"id": eid, "reason": "not_found"})
+            continue
+        if entry.get("status") != "posted":
+            skipped_status += 1
+            continue
+        if entry.get("is_reversed"):
+            skipped_already += 1
+            continue
+        try:
+            await reverse_entry(eid, {}, current_user)
+            reversed_count += 1
+        except Exception as ex:
+            errors.append({"id": eid, "reason": str(ex)[:120]})
+    await _audit(current_user["id"], "bulk_reverse", "accounting_entries", None, {"count": reversed_count})
+    return {
+        "reversed": reversed_count,
+        "skipped_already_reversed": skipped_already,
+        "skipped_not_posted": skipped_status,
+        "errors": errors,
+    }
 async def bulk_delete_entries(data: dict, current_user: dict = Depends(require_admin)):
     """Bulk-delete draft/cancelled journal entries. Posted entries are skipped (must be reversed)."""
     ids = data.get("ids") or []

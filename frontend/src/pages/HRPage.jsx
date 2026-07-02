@@ -232,6 +232,7 @@ export default function HRPage() {
           <TabsTrigger value="leave" data-testid="hr-tab-leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
           <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
           <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
+          <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -387,6 +388,9 @@ export default function HRPage() {
         {/* ATTENDANCE TAB */}
         <TabsContent value="attendance" className="mt-4">
           <AttendancePanel currentUser={user} staff={staff} />
+        </TabsContent>
+        <TabsContent value="timesheets" className="mt-4">
+          <TimesheetsPanel />
         </TabsContent>
       </Tabs>
 
@@ -1279,4 +1283,105 @@ function AttendancePanel({ currentUser, staff }) {
     </div>
   );
 }
+
+
+// ========== TIMESHEETS PANEL (HR/manager view for approvals) ==========
+function TimesheetsPanel() {
+  const [timesheets, setTimesheets] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [statusFilter, setStatusFilter] = React.useState('submitted');
+  const [periodFilter, setPeriodFilter] = React.useState('');
+  const [rejecting, setRejecting] = React.useState(null);
+  const [rejectReason, setRejectReason] = React.useState('');
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (statusFilter && statusFilter !== 'all') params.status = statusFilter;
+      if (periodFilter) params.period = periodFilter;
+      const r = await api.get('/hr/timesheets', { params });
+      setTimesheets(r.data || []);
+    } catch { setTimesheets([]); }
+    finally { setLoading(false); }
+  }, [statusFilter, periodFilter]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const approve = async (t) => {
+    try {
+      await api.put(`/hr/timesheets/${t.id}/approve`, { notes: '' });
+      toast.success('Approved — will roll into next payslip run');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Approve failed'); }
+  };
+  const submitReject = async () => {
+    if (!rejecting) return;
+    try {
+      await api.put(`/hr/timesheets/${rejecting.id}/reject`, { reason: rejectReason });
+      toast.success('Rejected — staff can revise');
+      setRejecting(null); setRejectReason('');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Reject failed'); }
+  };
+
+  return (
+    <Card className="rounded-xl">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-muted-foreground flex-1">Staff-submitted timesheets. Approved rows auto-feed the next payslip generation.</p>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 w-36 text-xs" data-testid="ts-status-filter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="submitted">Awaiting approval</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+          <Input type="month" value={periodFilter} onChange={e => setPeriodFilter(e.target.value)} className="h-8 w-36 text-xs" data-testid="ts-period-filter" />
+        </div>
+        {loading ? <p className="text-xs text-muted-foreground text-center py-6">Loading…</p> : timesheets.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No timesheets found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left border-b text-xs text-muted-foreground"><th className="pb-2">Staff</th><th>Period</th><th>Days</th><th>PTO</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead>
+              <tbody className="divide-y">
+                {timesheets.map(t => (
+                  <tr key={t.id} className="hover:bg-accent/30" data-testid={`ts-row-${t.id}`}>
+                    <td className="py-2 font-medium">{t.staff_name || t.staff_id}</td>
+                    <td>{t.period}</td>
+                    <td>{t.days_worked}</td>
+                    <td>{t.pto_days || 0}</td>
+                    <td><Badge variant={t.status === 'approved' ? 'default' : t.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px]">{t.status}</Badge></td>
+                    <td className="max-w-[240px] truncate text-xs text-muted-foreground">{t.notes || t.review_notes || '—'}</td>
+                    <td className="text-right">
+                      {t.status === 'submitted' && <>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-green-700" onClick={() => approve(t)} data-testid={`ts-approve-${t.id}`}>Approve</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => setRejecting(t)} data-testid={`ts-reject-${t.id}`}>Reject</Button>
+                      </>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={!!rejecting} onOpenChange={(o) => { if (!o) { setRejecting(null); setRejectReason(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reject timesheet</DialogTitle></DialogHeader>
+          <Textarea rows={3} placeholder="Reason (staff will see this)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} data-testid="ts-reject-reason" />
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setRejecting(null)}>Cancel</Button>
+            <Button variant="destructive" className="flex-1" onClick={submitReject} data-testid="ts-reject-confirm">Reject</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
 

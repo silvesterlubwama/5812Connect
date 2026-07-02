@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { User, Phone, Mail, MapPin, AlertTriangle, Save } from 'lucide-react';
+import { User, Phone, Mail, MapPin, AlertTriangle, Save, Receipt, Clock, Send, Download } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Textarea } from '../components/ui/textarea';
 import { portalApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -19,6 +21,22 @@ export default function PortalProfile() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', address: '', emergency_contact: '', notes: '' });
   const [checkins, setCheckins] = useState({ checkins: [], access_logs: [] });
+  const [payslips, setPayslips] = useState([]);
+  const [timesheets, setTimesheets] = useState([]);
+  const [showTimesheet, setShowTimesheet] = useState(false);
+  const [tsForm, setTsForm] = useState({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
+  const [viewingPayslip, setViewingPayslip] = useState(null);
+
+  const loadHR = async () => {
+    try {
+      const [ps, ts] = await Promise.all([
+        api.get('/hr/payslips/mine'),
+        api.get('/hr/timesheets'),
+      ]);
+      setPayslips(ps.data || []);
+      setTimesheets(ts.data || []);
+    } catch { /* not an employee */ }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -43,7 +61,34 @@ export default function PortalProfile() {
       finally { setLoading(false); }
     };
     load();
+    loadHR();
   }, []);
+
+  const submitTimesheet = async () => {
+    if (!tsForm.period || !tsForm.days_worked) return toast.error('Period and days_worked required');
+    try {
+      await api.post('/hr/timesheets', {
+        period: tsForm.period,
+        days_worked: parseFloat(tsForm.days_worked),
+        pto_days: parseFloat(tsForm.pto_days) || 0,
+        notes: tsForm.notes,
+      });
+      toast.success('Timesheet submitted for approval');
+      setShowTimesheet(false);
+      setTsForm({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
+      loadHR();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Submission failed'); }
+  };
+
+  const withdrawTimesheet = async (t) => {
+    if (t.status === 'approved') return toast.error('Approved timesheets cannot be withdrawn');
+    if (!window.confirm('Withdraw this timesheet?')) return;
+    try {
+      await api.delete(`/hr/timesheets/${t.id}`);
+      toast.success('Withdrawn');
+      loadHR();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -209,6 +254,135 @@ export default function PortalProfile() {
           </div>
         </CardContent>
       </Card>
+      {/* MY PAYSLIPS — visible only for staff */}
+      {payslips.length > 0 && (
+        <Card data-testid="my-payslips-card">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Receipt size={16} /> My Payslips</CardTitle>
+            <CardDescription className="text-xs">Payslips issued to you — click to review or download.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y">
+              {payslips.map(p => (
+                <div key={p.id} className="py-2 flex items-center justify-between gap-2" data-testid={`payslip-row-${p.id}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">{p.period} · {p.currency} {(p.net_salary || 0).toLocaleString()}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      <Badge variant={p.status === 'paid' ? 'default' : 'secondary'} className="text-[10px] mr-1">{p.status}</Badge>
+                      Gross {(p.gross_salary || 0).toLocaleString()} · Allowances {(p.allowances || 0).toLocaleString()} · Deductions {(p.deductions || 0).toLocaleString()}
+                      {p.days_worked != null && ` · ${p.days_worked} day(s)`}
+                    </p>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setViewingPayslip(p)} data-testid={`payslip-view-${p.id}`}>Review</Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print" onClick={() => { setViewingPayslip(p); setTimeout(() => window.print(), 400); }}><Download size={12} /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* MY TIMESHEETS */}
+      <Card data-testid="my-timesheets-card">
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2"><Clock size={16} /> My Timesheets</CardTitle>
+            <CardDescription className="text-xs">Log days worked so your manager can approve and roll them into your next payslip.</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => setShowTimesheet(true)} data-testid="submit-timesheet-btn"><Send size={12} className="mr-1" /> Submit</Button>
+        </CardHeader>
+        <CardContent>
+          {timesheets.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-3">No timesheets yet.</p>
+          ) : (
+            <div className="divide-y">
+              {timesheets.map(t => (
+                <div key={t.id} className="py-2 flex items-center justify-between gap-2" data-testid={`timesheet-row-${t.id}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{t.period} · {t.days_worked} day(s){t.pto_days ? ` + ${t.pto_days} PTO` : ''}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      <Badge variant={t.status === 'approved' ? 'default' : t.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px] mr-1">{t.status}</Badge>
+                      {t.review_notes || t.notes || 'Awaiting review'}
+                    </p>
+                  </div>
+                  {(t.status !== 'approved') && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => withdrawTimesheet(t)}>Withdraw</Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SUBMIT TIMESHEET DIALOG */}
+      <Dialog open={showTimesheet} onOpenChange={setShowTimesheet}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Submit Timesheet</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label className="text-xs">Pay Period</Label>
+              <Input type="month" value={tsForm.period} onChange={e => setTsForm({...tsForm, period: e.target.value})} data-testid="ts-period" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5"><Label className="text-xs">Days Worked *</Label>
+                <Input type="number" step="0.5" min="0" value={tsForm.days_worked} onChange={e => setTsForm({...tsForm, days_worked: e.target.value})} placeholder="e.g. 20" data-testid="ts-days" />
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">PTO Days</Label>
+                <Input type="number" step="0.5" min="0" value={tsForm.pto_days} onChange={e => setTsForm({...tsForm, pto_days: e.target.value})} placeholder="e.g. 2" data-testid="ts-pto" />
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes / activity summary</Label>
+              <Textarea rows={3} value={tsForm.notes} onChange={e => setTsForm({...tsForm, notes: e.target.value})} placeholder="What did you get done this period?" data-testid="ts-notes" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowTimesheet(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={submitTimesheet} data-testid="ts-submit-btn">Submit for approval</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* PAYSLIP REVIEW DIALOG */}
+      <Dialog open={!!viewingPayslip} onOpenChange={(o) => { if (!o) setViewingPayslip(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Payslip · {viewingPayslip?.period}</DialogTitle></DialogHeader>
+          {viewingPayslip && (
+            <div className="space-y-3 text-sm" id="payslip-print-area">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div><span className="text-muted-foreground">Staff:</span> {viewingPayslip.staff_name}</div>
+                <div><span className="text-muted-foreground">Department:</span> {viewingPayslip.department || '—'}</div>
+                <div><span className="text-muted-foreground">Period:</span> {viewingPayslip.period}</div>
+                <div><span className="text-muted-foreground">Status:</span> <Badge className="text-[10px]">{viewingPayslip.status}</Badge></div>
+                <div><span className="text-muted-foreground">Working days:</span> {viewingPayslip.working_days || '—'}</div>
+                <div><span className="text-muted-foreground">Days worked:</span> {viewingPayslip.days_worked ?? '—'}</div>
+                <div><span className="text-muted-foreground">Unpaid leave days:</span> {viewingPayslip.unpaid_leave_days || 0}</div>
+                <div><span className="text-muted-foreground">PTO days:</span> {viewingPayslip.pto_days || 0}</div>
+              </div>
+              <div className="border rounded p-3 space-y-1">
+                <div className="flex justify-between text-sm"><span>Gross salary</span><span className="font-mono">{viewingPayslip.currency} {(viewingPayslip.gross_salary || 0).toLocaleString()}</span></div>
+                <div className="flex justify-between text-sm text-green-700"><span>+ Allowances</span><span className="font-mono">{(viewingPayslip.allowances || 0).toLocaleString()}</span></div>
+                <div className="flex justify-between text-sm text-red-700"><span>− Deductions</span><span className="font-mono">{(viewingPayslip.deductions || 0).toLocaleString()}</span></div>
+                {(viewingPayslip.line_items || []).length > 0 && (
+                  <div className="text-[11px] text-muted-foreground pl-3 space-y-0.5 pt-1 border-t">
+                    {viewingPayslip.line_items.map((li, i) => (
+                      <div key={i} className="flex justify-between"><span>· {li.name}{li.details ? ` (${li.details})` : ''}</span><span className="font-mono">{li.type === 'deduction' ? '−' : '+'}{(li.calculated_amount || li.amount || 0).toLocaleString()}</span></div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2"><span>Net Pay</span><span className="font-mono">{viewingPayslip.currency} {(viewingPayslip.net_salary || 0).toLocaleString()}</span></div>
+              </div>
+              {viewingPayslip.paid_at && <p className="text-xs text-muted-foreground">Paid on {viewingPayslip.paid_at.slice(0, 10)}</p>}
+              <div className="flex gap-2 pt-2 print:hidden">
+                <Button variant="outline" className="flex-1" onClick={() => setViewingPayslip(null)}>Close</Button>
+                <Button className="flex-1" onClick={() => window.print()} data-testid="payslip-print-btn"><Download size={12} className="mr-1" /> Print / Save PDF</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
