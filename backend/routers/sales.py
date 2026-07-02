@@ -115,12 +115,22 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
             if loc:
                 doc["store_name"] = loc.get("name") or loc.get("code") or ""
         if not doc.get("deposit_to_account_id"):
+            # Map payment_method → which default account gets the deposit.
+            # Falls back to default_cash_account_id when the specific default isn't set.
             default_key = {
                 "cash": "default_cash_account_id",
                 "card": "default_bank_account_id",
                 "bank": "default_bank_account_id",
+                "bank_transfer": "default_bank_account_id",
+                "cheque": "default_bank_account_id",
+                "check": "default_bank_account_id",  # US spelling
+                "wire": "default_bank_account_id",
                 "mobile_money": "default_momo_account_id",
                 "momo": "default_momo_account_id",
+                "airtel": "default_momo_account_id",
+                "airtel_money": "default_momo_account_id",
+                "mtn": "default_momo_account_id",
+                "mtn_momo": "default_momo_account_id",
             }.get(pm, "default_cash_account_id")
             default_acct_id = store_setting.get(default_key) or store_setting.get("default_cash_account_id")
             if default_acct_id:

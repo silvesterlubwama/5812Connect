@@ -1,5 +1,14 @@
 # 58:12 Connect — Changelog
 
+## Iteration 205 (Feb 2026) — Extended POS Payment-Method → Account Mapping
+- `sales.create_sale` now routes 12 payment-method variants to the correct default account:
+  - `cash` → `default_cash_account_id`
+  - `card` / `bank` / `bank_transfer` / `cheque` / `check` / `wire` → `default_bank_account_id`
+  - `mobile_money` / `momo` / `airtel` / `airtel_money` / `mtn` / `mtn_momo` → `default_momo_account_id`
+  - Any unrecognised method falls back to `default_cash_account_id` (unchanged safety default).
+- All 12 mappings verified end-to-end via curl against the preview URL.
+
+
 ## Iteration 204 (Feb 2026) — Finance Edit/Delete Restoration + POS Auto-tag + Balance Perf
 - **P0 Bug fix — Edit/Delete UI restored everywhere:** Chart of Accounts (CoA), Journals, and Taxes tabs in `AccountingPage.jsx` gained inline Edit + Delete icons for admins. Dialogs now handle both create and edit modes (title + button label switch on `form.id`). Backend endpoints (already existed at `PUT/DELETE /api/accounting/accounts|journals|taxes/{id}`) are now wired.
 - **P1 — POS auto-tag to real cash accounts:** `store_settings` gained `default_cash_account_id`, `default_bank_account_id`, `default_momo_account_id`. `create_sale` auto-populates `deposit_to_account_id` based on the sale's `payment_method` (cash → default_cash; card/bank → default_bank; mobile_money → default_momo; with cash as fallback). Explicit `deposit_to_account_id` on the sale still wins. Sale gets `deposit_auto_tagged: true` for transparency. Products page store-settings dialog gained three new pickers so admins can wire the defaults.
