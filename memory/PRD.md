@@ -3,6 +3,24 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 203 (Feb 2026)
+**Chart cash accounts with per-user assignments (cash / bank / mobile money accountability).**
+
+### User Request
+> "In finances, allow admin to assign certain accounts (balances) to a user, such that when that user is entering an expense or donation, they can choose between the balances they are assigned to whether cash, mobile money or another, then a deduction is made according to that balance. […] users can see balances/funds they are assigned to under accounting so they can stay accountable. Keeps accounts restricted except for that purpose or explicit permission as before."
+
+### Delivered
+- **NEW router** `chart_accounts.py` at `/api/financial/chart-accounts/*` — CRUD, list (auto-scoped), `mine`, transactions/ledger, transfers, assignees.
+- Account fields: name, kind (`cash|bank|mobile_money|credit|petty_cash|other`), currency, starting_balance, location_id, campus_id, assigned_user_ids, notes, active.
+- Live balance = starting_balance + inflows (donations, sales, transfers-in) − outflows (approved expenses, transfers-out). Pending expenses do NOT affect balance.
+- Access rule: **non-admin can only reference an account if their user id is in `assigned_user_ids`.** Admins bypass. `create_donation` / `create_expense` enforce this at 403.
+- `SaleCreate.deposit_to_account_id` + `DonationCreate.deposit_to_account_id` added (mirror of `ExpenseCreate.paid_from_account_id`).
+- Frontend Accounting page: new "Cash Accounts" tab with admin CRUD, assign-users, transfer, ledger view. Non-admins see only their assigned accounts.
+- Frontend Financial page: expense + donation forms picker fed by `chartAccountsApi.mine`.
+
+### Testing
+- `test_iter203_chart_accounts.py` → **22/22 pass** via testing_agent_v3_fork iter 203.
+
 ## Recently Resolved — Iteration 202 (Feb 2026)
 **Finance bulk delete + expense "Paid From" account picker.**
 

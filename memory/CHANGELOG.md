@@ -1,5 +1,17 @@
 # 58:12 Connect — Changelog
 
+## Iteration 203 (Feb 2026) — Chart Cash Accounts with User Assignments
+- **NEW backend router:** `/api/financial/chart-accounts/*` (`chart_accounts.py`) — real-world cash / bank / mobile-money / credit / petty-cash accounts. Each account has assignable `assigned_user_ids`. Only admins bypass; regular users can only spend from or deposit to accounts they're assigned to.
+- **Live balance:** `starting_balance + Σ donations(deposit_to_account_id) + Σ approved expenses(paid_from_account_id) [negative] + Σ non-voided sales(deposit_to_account_id) + Σ transfers(in/out)`. Pending expenses do not affect balance until approved.
+- **New model fields:** `DonationCreate.deposit_to_account_id`, `SaleCreate.deposit_to_account_id`. `ExpenseCreate.paid_from_account_id` already existed.
+- **Access enforcement:** `create_donation` and `create_expense` in `financial.py` now call `user_can_use_account` before persisting — non-admin without assignment returns 403 with `not assigned` message.
+- **Transfers:** `POST /api/financial/chart-accounts/transfer` — validates from/to distinct, amount > 0, sufficient balance; recorded in `chart_account_transfers` collection.
+- **Frontend Accounting:** New "Cash Accounts" tab (`data-testid='acc-tab-cash-accounts'`) with cards showing live balance, assignee count, ledger drilldown, admin CRUD + assign-users dialog + transfer dialog.
+- **Frontend Financial:** Expense form + Donation form now use `chartAccountsApi.mine` to populate their pickers with the user's assigned accounts (with live balance display).
+- **Soft-delete:** deleting an account with any referenced expense / donation / sale sets `active=false` (returns `archived: true, referenced_txns: N`). Accounts with no txns hard-delete.
+- **Tests:** `test_iter203_chart_accounts.py` → **22/22 pytest pass** via testing_agent_v3_fork iter 203.
+
+
 ## Iteration 202 (Feb 2026) — Finance Bulk Delete + Expense "Paid From" Picker
 - **Backend:** `ExpenseCreate.paid_from_account_id` field added (`financial.py`). Stored on the expense so future reconciliation can attribute the spend to a specific cash/bank account.
 - **Backend:** Bulk-delete endpoints added — `POST /api/financial/donations/bulk-delete`, `/expenses/bulk-delete`, `/assets/bulk-delete`, `/budgets/bulk-delete`, and `/api/accounting/entries/bulk-delete` (skips posted entries — they must be reversed instead).
