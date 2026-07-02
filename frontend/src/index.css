@@ -139,16 +139,26 @@ body {
 }
 
 /* ============================================================
- * MOBILE RESPONSIVENESS HELPERS (iter156)
+ * MOBILE RESPONSIVENESS HELPERS (iter156, hardened iter208)
  * Catch-all rules so tables/long-content don't break narrow screens.
  * Pages can opt into stricter mobile behaviour by adding `.responsive-table`
  * to their table parent OR just trust the default below.
  * ============================================================ */
 @media (max-width: 640px) {
-  /* Any direct-child table inside a Card / CardContent gets horizontal scroll */
-  .responsive-table,
-  [class*="CardContent"] > table,
-  [class*="card-content"] > table {
+  /* Every table below phone width gets horizontal scroll — no matter how deep
+     it lives inside cards, dialogs, or divs.  Using `display:block` on the
+     <table> itself lets the browser scroll the tabular data without touching
+     the surrounding layout.  Individual pages can opt-out with `.table-fixed`
+     on the table root if they've handcrafted a mobile layout. */
+  table:not(.table-fixed) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+  /* Legacy hooks kept for backward-compat */
+  .responsive-table {
     display: block;
     max-width: 100%;
     overflow-x: auto;
@@ -160,9 +170,58 @@ body {
     max-height: 92vh !important;
   }
 
+  /* Dialog padding tighter on phone so form fields have room */
+  [role="dialog"] > div[class*="p-6"] {
+    padding: 1rem !important;
+  }
+
   /* Stop super-wide grids from forcing horizontal scroll on phones */
   .grid {
     min-width: 0;
+  }
+
+  /* Collapse 3-column stat/form grids to single column on phone.
+     Any page that wants to keep 3 across on mobile can add `sm:grid-cols-3`
+     explicitly (which is already responsive). */
+  .grid.grid-cols-3:not(.sm\:grid-cols-3):not(.md\:grid-cols-3):not(.lg\:grid-cols-3) {
+    grid-template-columns: 1fr;
+  }
+
+  /* 12-col dense forms (accounting entry lines, bill items) — allow horizontal
+     scroll instead of squashing to unreadable widths. */
+  .grid.grid-cols-12 {
+    min-width: 640px;
+  }
+  /* Wrap 12-col grids in an overflow container by targeting the parent — but
+     we can't select parent in CSS. Instead, allow the grid itself to scroll
+     when it's inside a container that provides overflow-x-auto. Dialogs
+     get a scrollable body automatically. */
+
+  /* Long CardHeader titles wrap instead of clipping */
+  [class*="card-header"] {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* Buttons in header bars stack when width is tight */
+  .flex.items-center.gap-2 > .flex.items-center.gap-2,
+  .flex.items-center.justify-between > div.flex {
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  /* Tabs list — horizontal scroll instead of squashing */
+  [role="tablist"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+  }
+  [role="tablist"]::-webkit-scrollbar { height: 3px; }
+
+  /* Page container — respect safe areas and reduce padding */
+  main {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
   }
 }
 

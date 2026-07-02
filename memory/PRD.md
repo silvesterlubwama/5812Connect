@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 208c (Feb 2026)
+**Mobile responsiveness audit across admin pages.**
+
+- Hardened global mobile CSS in `index.css`: every `<table>` now scrolls horizontally below 640px (no more clipped columns); `grid-cols-3` collapses to single column unless a `sm:/md:/lg:` variant is explicitly set; `grid-cols-12` allows horizontal scroll; dialog padding tightened; `role=tablist` scrolls horizontally; card headers wrap.
+- **Tasks/Kanban page** was completely unusable on phones (224px sidebar ate over half the viewport). Refactored to a slide-in drawer: hidden by default on `<sm`, opened via new `mobile-boards-toggle` button in the board header, closes automatically when a board is selected. Backdrop click dismisses.
+- Verified fix visually on `/financial`, `/hr`, `/accounting`, `/tasks`, `/admin`, `/dashboard` at iPhone-13 viewport (390×844). All pages usable with no horizontal page-level overflow.
+
 ## Recently Resolved — Iteration 208 (Feb 2026)
 **Finance ↔ Accounting Trial Balance drift fixed + Chart-account balance cache + hot-path indexes.**
 

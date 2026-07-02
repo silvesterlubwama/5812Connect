@@ -42,6 +42,7 @@ export default function TasksPage() {
   // Dialogs
   const [openCard, setOpenCard] = useState(null);
   const [showNewBoard, setShowNewBoard] = useState(false);
+  const [mobileBoardsOpen, setMobileBoardsOpen] = useState(false);
   const [newBoardForm, setNewBoardForm] = useState({ name: '', location_id: '', background: '#3b82f6', is_restricted: false, is_private: false });
   const [showBoardEdit, setShowBoardEdit] = useState(false);
   const [showTrelloImport, setShowTrelloImport] = useState(false);
@@ -402,9 +403,17 @@ export default function TasksPage() {
   const accentColor = currentBoard?.background || '#3b82f6';
 
   return (
-    <div className="flex h-full" style={{ minHeight: 'calc(100vh - 64px)', background: '#0f172a' }}>
-      {/* Sidebar */}
-      <div className="w-56 flex-shrink-0 bg-[#1e293b] flex flex-col border-r border-white/10">
+    <div className="flex h-full relative" style={{ minHeight: 'calc(100vh - 64px)', background: '#0f172a' }}>
+      {/* Mobile backdrop when sidebar is open */}
+      {mobileBoardsOpen && (
+        <button
+          aria-label="Close boards"
+          className="fixed inset-0 z-30 bg-black/50 sm:hidden"
+          onClick={() => setMobileBoardsOpen(false)}
+        />
+      )}
+      {/* Sidebar — slide-in drawer on mobile, static column on ≥sm */}
+      <div className={`w-56 flex-shrink-0 bg-[#1e293b] flex flex-col border-r border-white/10 fixed sm:static inset-y-0 left-0 z-40 transform transition-transform duration-200 sm:transform-none ${mobileBoardsOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0'}`}>
         <div className="p-3 border-b border-white/10">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Boards</p>
           {canEdit && (
@@ -426,7 +435,7 @@ export default function TasksPage() {
             />
           )}
           {boards.map(b => (
-            <button key={b.id} onClick={() => setActiveBoardId(b.id)} data-testid={`board-tab-${b.id}`}
+            <button key={b.id} onClick={() => { setActiveBoardId(b.id); setMobileBoardsOpen(false); }} data-testid={`board-tab-${b.id}`}
               className={`flex items-center gap-2 w-full px-2 py-2 rounded-md text-sm transition-all text-left group ${b.id === activeBoardId ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/8 hover:text-slate-200'}`}>
               <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: b.background || '#3b82f6' }} />
               <span className="flex-1 truncate text-xs">{b.name}</span>
@@ -468,13 +477,21 @@ export default function TasksPage() {
         ) : (
         <>
         {currentBoard && (
-          <div className="flex items-center justify-between px-5 py-3 flex-shrink-0 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
-            <div className="flex items-center gap-3">
-              <span className="w-4 h-4 rounded" style={{ background: accentColor }} />
-              <h2 className="text-base font-semibold text-white">{currentBoard.name}</h2>
-              {currentBoard.location_name && <span className="flex items-center gap-1 text-xs text-slate-400"><MapPin size={11} /> {currentBoard.location_name}</span>}
-              {boardViewers.length > 1 && <span className="flex items-center gap-1 text-xs text-emerald-400"><Wifi size={11} /> {boardViewers.length} viewing</span>}
-              {currentBoard.is_shared && <span className="text-xs text-blue-400 px-2 py-0.5 bg-blue-500/10 rounded">Shared</span>}
+          <div className="flex items-center justify-between px-3 sm:px-5 py-3 flex-shrink-0 border-b border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                aria-label="Open boards"
+                data-testid="mobile-boards-toggle"
+                className="sm:hidden p-1.5 rounded text-slate-300 hover:bg-white/10"
+                onClick={() => setMobileBoardsOpen(true)}
+              >
+                <LayoutGrid size={16} />
+              </button>
+              <span className="w-4 h-4 rounded flex-shrink-0" style={{ background: accentColor }} />
+              <h2 className="text-base font-semibold text-white truncate">{currentBoard.name}</h2>
+              {currentBoard.location_name && <span className="hidden sm:flex items-center gap-1 text-xs text-slate-400"><MapPin size={11} /> {currentBoard.location_name}</span>}
+              {boardViewers.length > 1 && <span className="hidden sm:flex items-center gap-1 text-xs text-emerald-400"><Wifi size={11} /> {boardViewers.length} viewing</span>}
+              {currentBoard.is_shared && <span className="hidden sm:inline text-xs text-blue-400 px-2 py-0.5 bg-blue-500/10 rounded">Shared</span>}
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" className="text-slate-400 hover:text-white hover:bg-white/10 gap-1.5 h-8 text-xs"
