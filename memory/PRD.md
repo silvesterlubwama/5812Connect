@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 208 (Feb 2026)
+**Finance ↔ Accounting Trial Balance drift fixed (orphaned journal entries).**
+
+- Root cause: deleting a donation/expense in Finance did not cascade to the auto-posted journal entry in Accounting, causing Trial Balance to diverge from Finance totals.
+- Delete handlers (`delete_donation`, `delete_expense`, bulk variants) in `financial.py` now call `_reverse_auto_posted_je` to create a reversing entry — audit trail preserved, net ledger effect = 0.
+- NEW endpoint `POST /api/financial/repair-orphaned-journals` (admin-only, idempotent) scans every auto-posted JE (`auto_generated_from ∈ {donation, expense}`) and reverses the ones whose source record was deleted. Production run reversed 186 pre-existing orphans on dev DB.
+- New `acc-repair-orphans-btn` in `AccountingPage.jsx` (next to `acc-repair-reversals-btn`) — admin-facing one-click repair.
+- Iter 207 tester: **9/9 backend pass** + frontend button + toast verified. No regressions.
+
 ## Recently Resolved — Iteration 207 (Feb 2026)
 **Payslip PDF export + HR Onboarding Checklist.**
 
