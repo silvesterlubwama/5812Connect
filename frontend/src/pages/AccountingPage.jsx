@@ -47,14 +47,14 @@ export default function AccountingPage() {
   const [bs, setBs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAccountForm, setShowAccountForm] = useState(false);
-  const [accountForm, setAccountForm] = useState({ code: '', name: '', type: 'asset_current', currency: 'UGX' });
+  const [accountForm, setAccountForm] = useState({ id: '', code: '', name: '', type: 'asset_current', currency: 'UGX' });
   const [showJournalForm, setShowJournalForm] = useState(false);
-  const [journalForm, setJournalForm] = useState({ code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
+  const [journalForm, setJournalForm] = useState({ id: '', code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryForm, setEntryForm] = useState({ journal_id: '', date: new Date().toISOString().slice(0, 10), ref: '', narration: '', lines: [{ account_id: '', debit: '', credit: '', description: '' }, { account_id: '', debit: '', credit: '', description: '' }] });
   const [viewEntry, setViewEntry] = useState(null);
   const [showTaxForm, setShowTaxForm] = useState(false);
-  const [taxForm, setTaxForm] = useState({ name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' });
+  const [taxForm, setTaxForm] = useState({ id: '', name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' });
   const [showFiscalForm, setShowFiscalForm] = useState(false);
   const [fiscalForm, setFiscalForm] = useState({ name: '', start_date: '', end_date: '' });
   const [viewLedger, setViewLedger] = useState(null);
@@ -223,39 +223,101 @@ export default function AccountingPage() {
   };
 
   const openNewAccountForm = () => {
-    setAccountForm({ code: '', name: '', type: 'asset_current', currency: currentCurrency });
+    setAccountForm({ id: '', code: '', name: '', type: 'asset_current', currency: currentCurrency });
     setShowAccountForm(true);
   };
 
-  const createAccount = async () => {
+  const openEditAccount = (a) => {
+    setAccountForm({ id: a.id, code: a.code, name: a.name, type: a.type, currency: a.currency || currentCurrency });
+    setShowAccountForm(true);
+  };
+
+  const saveAccount = async () => {
     try {
-      await api.post('/accounting/accounts', { ...accountForm, location_id: locationFilter });
-      toast.success('Account created');
+      if (accountForm.id) {
+        await api.put(`/accounting/accounts/${accountForm.id}`, { code: accountForm.code, name: accountForm.name, type: accountForm.type, currency: accountForm.currency });
+        toast.success('Account updated');
+      } else {
+        await api.post('/accounting/accounts', { ...accountForm, location_id: locationFilter });
+        toast.success('Account created');
+      }
       setShowAccountForm(false);
-      setAccountForm({ code: '', name: '', type: 'asset_current', currency: 'UGX' });
+      setAccountForm({ id: '', code: '', name: '', type: 'asset_current', currency: 'UGX' });
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
-  const createJournal = async () => {
+  const deleteAccount = async (a) => {
+    if (!window.confirm(`Delete account "${a.code} ${a.name}"? Accounts with journal lines will be deactivated instead.`)) return;
     try {
-      await api.post('/accounting/journals', { ...journalForm, location_id: locationFilter });
-      toast.success('Journal created');
+      const r = await api.delete(`/accounting/accounts/${a.id}`);
+      toast.success(r.data.deactivated ? 'Deactivated (had journal lines)' : 'Deleted');
+      fetchAll();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const openEditJournal = (j) => {
+    setJournalForm({ id: j.id, code: j.code, name: j.name, kind: j.kind, default_debit_account_id: j.default_debit_account_id || '', default_credit_account_id: j.default_credit_account_id || '' });
+    setShowJournalForm(true);
+  };
+
+  const saveJournal = async () => {
+    try {
+      if (journalForm.id) {
+        await api.put(`/accounting/journals/${journalForm.id}`, { code: journalForm.code, name: journalForm.name, kind: journalForm.kind, default_debit_account_id: journalForm.default_debit_account_id, default_credit_account_id: journalForm.default_credit_account_id });
+        toast.success('Journal updated');
+      } else {
+        await api.post('/accounting/journals', { ...journalForm, location_id: locationFilter });
+        toast.success('Journal created');
+      }
       setShowJournalForm(false);
-      setJournalForm({ code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
+      setJournalForm({ id: '', code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
-  const createTax = async () => {
+  const deleteJournal = async (j) => {
+    if (!window.confirm(`Delete journal "${j.code} ${j.name}"?`)) return;
     try {
-      await api.post('/accounting/taxes', { ...taxForm, rate: parseFloat(taxForm.rate), location_id: locationFilter });
-      toast.success('Tax created');
-      setShowTaxForm(false);
-      setTaxForm({ name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' });
+      await api.delete(`/accounting/journals/${j.id}`);
+      toast.success('Deleted');
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
+
+  const openEditTax = (t) => {
+    setTaxForm({ id: t.id, name: t.name, rate: t.rate, kind: t.kind, inclusive: !!t.inclusive, account_id: t.account_id || '' });
+    setShowTaxForm(true);
+  };
+
+  const saveTax = async () => {
+    try {
+      const payload = { ...taxForm, rate: parseFloat(taxForm.rate) };
+      if (taxForm.id) {
+        await api.put(`/accounting/taxes/${taxForm.id}`, payload);
+        toast.success('Tax updated');
+      } else {
+        await api.post('/accounting/taxes', { ...payload, location_id: locationFilter });
+        toast.success('Tax created');
+      }
+      setShowTaxForm(false);
+      setTaxForm({ id: '', name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' });
+      fetchAll();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const deleteTax = async (t) => {
+    if (!window.confirm(`Delete tax "${t.name}"?`)) return;
+    try {
+      await api.delete(`/accounting/taxes/${t.id}`);
+      toast.success('Deleted');
+      fetchAll();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const createAccount = saveAccount; // legacy alias
+  const createJournal = saveJournal; // legacy alias
+  const createTax = saveTax; // legacy alias
 
   const createFiscal = async () => {
     try {
@@ -543,15 +605,21 @@ export default function AccountingPage() {
           ) : (
             <div className="space-y-1.5">
               {accounts.map(a => (
-                <Card key={a.id} className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => openLedger(a)} data-testid={`acc-account-${a.id}`}>
+                <Card key={a.id} className={`rounded-xl hover:border-primary/40 ${a.active === false ? 'opacity-50' : ''}`} data-testid={`acc-account-${a.id}`}>
                   <CardContent className="p-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onClick={() => openLedger(a)}>
                       <span className="font-mono text-sm font-semibold text-muted-foreground w-12">{a.code}</span>
-                      <span className="text-sm font-medium">{a.name}</span>
+                      <span className="text-sm font-medium truncate">{a.name}{a.active === false && ' (inactive)'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={`text-[10px] ${CATEGORY_COLORS[a.category] || ''} capitalize`}>{a.category}</Badge>
                       <Badge variant="secondary" className="text-[10px]">{a.type_label}</Badge>
+                      {isFinanceAdmin && (
+                        <>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); openEditAccount(a); }} data-testid={`acc-edit-account-${a.id}`} title="Edit"><FileText size={12} /></Button>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); deleteAccount(a); }} data-testid={`acc-delete-account-${a.id}`} title="Delete"><Trash2 size={12} /></Button>
+                        </>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -563,7 +631,7 @@ export default function AccountingPage() {
         {/* JOURNALS */}
         <TabsContent value="journals" className="space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" disabled={accounts.length === 0} onClick={() => setShowJournalForm(true)} data-testid="acc-new-journal-btn"><Plus size={14} className="mr-1" /> New Journal</Button>
+            <Button size="sm" disabled={accounts.length === 0} onClick={() => { setJournalForm({ id: '', code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' }); setShowJournalForm(true); }} data-testid="acc-new-journal-btn"><Plus size={14} className="mr-1" /> New Journal</Button>
           </div>
           {journals.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No journals. Create one to start posting entries.</p> : (
             <div className="space-y-1.5">
@@ -574,6 +642,12 @@ export default function AccountingPage() {
                       <p className="text-sm font-medium"><span className="font-mono text-muted-foreground mr-2">{j.code}</span>{j.name}</p>
                       <p className="text-xs text-muted-foreground">{j.kind}</p>
                     </div>
+                    {isFinanceAdmin && (
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openEditJournal(j)} data-testid={`acc-edit-journal-${j.id}`} title="Edit"><FileText size={12} /></Button>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => deleteJournal(j)} data-testid={`acc-delete-journal-${j.id}`} title="Delete"><Trash2 size={12} /></Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -584,7 +658,7 @@ export default function AccountingPage() {
         {/* TAXES */}
         <TabsContent value="taxes" className="space-y-3">
           <div className="flex justify-end">
-            <Button size="sm" onClick={() => setShowTaxForm(true)} data-testid="acc-new-tax-btn"><Plus size={14} className="mr-1" /> New Tax</Button>
+            <Button size="sm" onClick={() => { setTaxForm({ id: '', name: '', rate: '', kind: 'sales', inclusive: false, account_id: '' }); setShowTaxForm(true); }} data-testid="acc-new-tax-btn"><Plus size={14} className="mr-1" /> New Tax</Button>
           </div>
           {taxes.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No tax codes defined.</p> : (
             <div className="space-y-1.5">
@@ -595,7 +669,15 @@ export default function AccountingPage() {
                       <p className="text-sm font-medium">{t.name}</p>
                       <p className="text-xs text-muted-foreground">{t.kind} · {t.inclusive ? 'inclusive' : 'exclusive'}</p>
                     </div>
-                    <p className="text-lg font-bold">{t.rate}%</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-lg font-bold">{t.rate}%</p>
+                      {isFinanceAdmin && (
+                        <>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openEditTax(t)} data-testid={`acc-edit-tax-${t.id}`} title="Edit"><FileText size={12} /></Button>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => deleteTax(t)} data-testid={`acc-delete-tax-${t.id}`} title="Delete"><Trash2 size={12} /></Button>
+                        </>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -667,7 +749,7 @@ export default function AccountingPage() {
       {/* New Account Dialog */}
       <Dialog open={showAccountForm} onOpenChange={setShowAccountForm}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>New Account</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{accountForm.id ? 'Edit' : 'New'} Account</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label className="text-xs">Code *</Label><Input value={accountForm.code} onChange={e => setAccountForm({...accountForm, code: e.target.value})} placeholder="e.g. 1200" data-testid="acc-form-code" /></div>
@@ -687,7 +769,7 @@ export default function AccountingPage() {
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowAccountForm(false)}>Cancel</Button>
-              <Button className="flex-1" data-testid="acc-form-submit" disabled={!accountForm.code || !accountForm.name} onClick={createAccount}>Create</Button>
+              <Button className="flex-1" data-testid="acc-form-submit" disabled={!accountForm.code || !accountForm.name} onClick={createAccount}>{accountForm.id ? 'Save' : 'Create'}</Button>
             </div>
           </div>
         </DialogContent>
@@ -696,7 +778,7 @@ export default function AccountingPage() {
       {/* New Journal Dialog */}
       <Dialog open={showJournalForm} onOpenChange={setShowJournalForm}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>New Journal</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{journalForm.id ? 'Edit' : 'New'} Journal</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label className="text-xs">Code *</Label><Input value={journalForm.code} onChange={e => setJournalForm({...journalForm, code: e.target.value.toUpperCase()})} placeholder="SAL" data-testid="jrn-form-code" /></div>
@@ -722,7 +804,7 @@ export default function AccountingPage() {
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowJournalForm(false)}>Cancel</Button>
-              <Button className="flex-1" disabled={!journalForm.code || !journalForm.name} onClick={createJournal} data-testid="jrn-form-submit">Create</Button>
+              <Button className="flex-1" disabled={!journalForm.code || !journalForm.name} onClick={createJournal} data-testid="jrn-form-submit">{journalForm.id ? 'Save' : 'Create'}</Button>
             </div>
           </div>
         </DialogContent>
@@ -813,7 +895,7 @@ export default function AccountingPage() {
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowTaxForm(false)}>Cancel</Button>
-              <Button className="flex-1" disabled={!taxForm.name || !taxForm.rate} onClick={createTax}>Create</Button>
+              <Button className="flex-1" disabled={!taxForm.name || !taxForm.rate} onClick={createTax}>{taxForm.id ? 'Save' : 'Create'}</Button>
             </div>
           </div>
         </DialogContent>

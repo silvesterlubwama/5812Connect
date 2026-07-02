@@ -54,37 +54,50 @@ def _user_can_admin_accounts(user: dict) -> bool:
 async def _compute_balance(account_id: str, starting_balance: float = 0) -> float:
     """Compute live balance for an account:
     starting + Σ inflows − Σ outflows (donations, expenses, sales, transfers)."""
-    balance = float(starting_balance or 0)
-    # Donation deposits into this account
-    inflow_don = await db.donations.aggregate([
-        {"$match": {"deposit_to_account_id": account_id}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-    ]).to_list(1)
-    balance += (inflow_don[0]["total"] if inflow_don else 0)
-    # Sales cash-in
-    inflow_sale = await db.sales.aggregate([
-        {"$match": {"deposit_to_account_id": account_id, "voided": {"$ne": True}}},
-        {"$group": {"_id": None, "total": {"$sum": "$total"}}},
-    ]).to_list(1)
-    balance += (inflow_sale[0]["total"] if inflow_sale else 0)
-    # Expenses paid from this account (only approved / legacy unstatused)
-    outflow_exp = await db.expenses.aggregate([
-        {"$match": {"paid_from_account_id": account_id, "status": {"$in": ["approved", None]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-    ]).to_list(1)
-    balance -= (outflow_exp[0]["total"] if outflow_exp else 0)
-    # Chart-account transfers
-    tin = await db.chart_account_transfers.aggregate([
-        {"$match": {"to_account_id": account_id}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-    ]).to_list(1)
-    balance += (tin[0]["total"] if tin else 0)
-    tout = await db.chart_account_transfers.aggregate([
-        {"$match": {"from_account_id": account_id}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-    ]).to_list(1)
-    balance -= (tout[0]["total"] if tout else 0)
-    return round(balance, 2)
+    balances = await _batch_compute_balances([account_id])
+    starting = float(starting_balance or 0)
+    return round(starting + balances.get(account_id, 0), 2)
+
+
+async def _batch_compute_balances(account_ids: list) -> dict:
+    """Batch-compute the DELTA (excluding starting_balance) for a list of account IDs
+    in a small, fixed number of aggregation round-trips (5 total, regardless of N).
+    Returns {account_id: delta}. Callers add starting_balance themselves."""
+    if not account_ids:
+        return {}
+    ids = list(account_ids)
+    delta = {aid: 0.0 for aid in ids}
+    # Donation inflows
+    async for r in db.donations.aggregate([
+        {"$match": {"deposit_to_account_id": {"$in": ids}}},
+        {"$group": {"_id": "$deposit_to_account_id", "total": {"$sum": "$amount"}}},
+    ]):
+        delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
+    # Sales inflows (non-voided)
+    async for r in db.sales.aggregate([
+        {"$match": {"deposit_to_account_id": {"$in": ids}, "voided": {"$ne": True}}},
+        {"$group": {"_id": "$deposit_to_account_id", "total": {"$sum": "$total"}}},
+    ]):
+        delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
+    # Expense outflows (approved/legacy only)
+    async for r in db.expenses.aggregate([
+        {"$match": {"paid_from_account_id": {"$in": ids}, "status": {"$in": ["approved", None]}}},
+        {"$group": {"_id": "$paid_from_account_id", "total": {"$sum": "$amount"}}},
+    ]):
+        delta[r["_id"]] = delta.get(r["_id"], 0) - (r.get("total") or 0)
+    # Transfer in
+    async for r in db.chart_account_transfers.aggregate([
+        {"$match": {"to_account_id": {"$in": ids}}},
+        {"$group": {"_id": "$to_account_id", "total": {"$sum": "$amount"}}},
+    ]):
+        delta[r["_id"]] = delta.get(r["_id"], 0) + (r.get("total") or 0)
+    # Transfer out
+    async for r in db.chart_account_transfers.aggregate([
+        {"$match": {"from_account_id": {"$in": ids}}},
+        {"$group": {"_id": "$from_account_id", "total": {"$sum": "$amount"}}},
+    ]):
+        delta[r["_id"]] = delta.get(r["_id"], 0) - (r.get("total") or 0)
+    return delta
 
 
 async def _load_account_or_404(account_id: str) -> dict:
@@ -119,9 +132,11 @@ async def list_chart_accounts(
     if not _user_can_admin_accounts(current_user):
         q["assigned_user_ids"] = current_user["id"]
     accounts = await db.chart_accounts.find(q, {"_id": 0}).sort("name", 1).to_list(200)
-    if include_balance:
+    if include_balance and accounts:
+        ids = [a["id"] for a in accounts]
+        deltas = await _batch_compute_balances(ids)
         for a in accounts:
-            a["balance"] = await _compute_balance(a["id"], a.get("starting_balance", 0))
+            a["balance"] = round(float(a.get("starting_balance", 0) or 0) + deltas.get(a["id"], 0), 2)
     return accounts
 
 
@@ -132,8 +147,11 @@ async def my_chart_accounts(current_user: dict = Depends(get_current_user)):
     if not _user_can_admin_accounts(current_user):
         q["assigned_user_ids"] = current_user["id"]
     accounts = await db.chart_accounts.find(q, {"_id": 0}).sort("name", 1).to_list(200)
-    for a in accounts:
-        a["balance"] = await _compute_balance(a["id"], a.get("starting_balance", 0))
+    if accounts:
+        ids = [a["id"] for a in accounts]
+        deltas = await _batch_compute_balances(ids)
+        for a in accounts:
+            a["balance"] = round(float(a.get("starting_balance", 0) or 0) + deltas.get(a["id"], 0), 2)
     return accounts
 
 

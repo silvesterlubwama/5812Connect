@@ -1,0 +1,36 @@
+{
+  "summary": "Backend-only pytest run for iteration 204 (finance edit/delete + POS auto-tag + batch balance perf). 16/16 tests passed against the public preview URL, covering CoA/Journal/Tax edit+delete, chart_accounts edit + soft-vs-hard delete, POS auto-tag for cash/card/momo with fallback, explicit deposit_to_account_id override, batch-vs-single balance parity, store_settings default keys, and regression (expenses/donations without paid_from/deposit_to).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter204_finance_edit_delete_and_pos_autotag.py",
+    "/app/test_reports/pytest/iter204_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "sales.py auto-tag block only sets deposit_auto_tagged when a default is actually resolved — good. But it always overwrites doc['store_name'] from either store_settings.store_name or location.name/code even when the client passed one. Consider preserving a caller-supplied store_name.",
+    "sales.py: payment_method mapping is hardcoded (`cash`|`card`|`bank`|`mobile_money`|`momo`). Any other pm (e.g. 'cheque', 'bank_transfer', 'airtel') silently falls back to default_cash_account_id. Either extend the map or explicitly document the fallback behaviour so ops don't misroute funds.",
+    "financial.get_store_settings returns the defaults only when NO doc exists. If an existing store_settings doc was created before the new keys were added, the response WILL NOT include default_cash/bank/momo keys — the FE must tolerate missing keys OR the endpoint should merge defaults over the stored doc. Consider `{**defaults, **doc}` pattern.",
+    "chart_accounts._batch_compute_balances excludes voided sales (correct) but does NOT exclude reversed/refunded sales explicitly — verify voided is the only 'do-not-count' flag used across the codebase, otherwise reversed sales will double-count inflow.",
+    "accounting.delete_journal is admin-only, but accounting.delete_account is also admin-only while update_journal / update_account are director-level. This asymmetry means directors can rename or deactivate but cannot delete — probably intentional, but worth documenting so FE hides the delete icon for directors.",
+    "accounting.update_tax preserves inclusive boolean coercion via `bool(...)` only on create, not on update — passing 'inclusive': 'true' (string) on PUT would set it truthy but not normalise. Minor; front-end sends bool.",
+    "chart_accounts.delete_chart_account does not check for expenses or donations tagged to it via paid_from_account_id / deposit_to_account_id in soft-deleted (archived) state — that's fine; archived accounts still count referenced txns."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter204_finance_edit_delete_and_pos_autotag.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not_tested"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (identifier field).",
+  "seed_data_creation": "Each test creates its own TEST_Iter204_* chart_accounts / accounting_accounts / journals / taxes / sales / expenses / donations. Sales referencing a deleted-then-archived account are voided in cleanup. store_settings LOC defaults are snapshotted at session start and restored at teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 16 flows verified E2E against the public URL: (1) PUT /api/accounting/accounts/{id} updates name/type/currency and GET reflects it; DELETE returns deleted:true when no journal lines and deactivated:true when lines exist (posted through /api/accounting/entries with a balanced 1000/1000 pair). (2) Journals PUT + DELETE (empty → deleted:true) work; kind whitelist enforced. (3) Taxes PUT (name/rate/kind/inclusive) + DELETE work. (4) chart_accounts PUT reflects starting_balance change immediately in the returned balance field; DELETE hard-deletes when no txns, archives + returns referenced_txns count when a sale references it. (5) POS auto-tag: setting store_settings.default_cash_account_id auto-tags cash sales with deposit_auto_tagged:true and increases the target account balance by sale.total; card→default_bank_account_id; mobile_money→default_momo_account_id; bank/momo fallback to default_cash_account_id when unset; explicit deposit_to_account_id overrides and deposit_auto_tagged is falsy. (6) Batch balance perf: list /api/financial/chart-accounts returns per-account balances matching individual /{id} GETs to the cent (verified with 3 accounts having varied starting_balances + sale + donation). (7) GET /api/store-settings/{new_location} returns default_cash/bank/momo_account_id as empty strings on first read. (8) Regressions: /api/financial/expenses (requires 'title') and /api/financial/donations without account IDs both succeed. NOTE for future: accounting account 'type' values must be in ACCOUNT_TYPES (asset_cash, asset_non_current, income, expense, equity, liability_current, liability_tax etc.) — plain 'cash'/'bank'/'revenue' will be rejected with 400 'Invalid account type'. Expenses body REQUIRES 'title' (Pydantic 422 otherwise).",
+  "rca of the issue": "N/A — no failures observed."
+}

@@ -498,6 +498,9 @@ async def get_store_settings(location_id: str, current_user: dict = Depends(get_
         "receipt_show_qr": True,
         "api_integrations": [],
         "currency": "UGX",
+        "default_cash_account_id": "",  # auto-tag POS cash sales to this chart account
+        "default_bank_account_id": "",  # auto-tag POS card/bank sales
+        "default_momo_account_id": "",  # auto-tag POS mobile-money sales
     }
 
 

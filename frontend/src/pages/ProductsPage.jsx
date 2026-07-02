@@ -12,7 +12,7 @@ import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { productsApi, salesApi, locationsApi, storeSettingsApi } from '../services/api';
+import { productsApi, salesApi, locationsApi, storeSettingsApi, chartAccountsApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -82,6 +82,7 @@ export default function ProductsPage() {
   const [showStoreSettings, setShowStoreSettings] = useState(false);
   const [storeSettingsLoc, setStoreSettingsLoc] = useState('');
   const [storeSettings, setStoreSettings] = useState({});
+  const [storeChartAccounts, setStoreChartAccounts] = useState([]);
   const [savingStore, setSavingStore] = useState(false);
   // Import/Export
   const [showImportExport, setShowImportExport] = useState(false);
@@ -617,6 +618,8 @@ export default function ProductsPage() {
       const res = await storeSettingsApi.get(locId);
       setStoreSettings(res.data || {});
     } catch { setStoreSettings({}); }
+    // Load chart accounts so the default-account pickers populate
+    chartAccountsApi.list().then(r => setStoreChartAccounts(r.data || [])).catch(() => setStoreChartAccounts([]));
     setShowStoreSettings(true);
   };
 
@@ -1429,6 +1432,43 @@ export default function ProductsPage() {
             </div>
             <div className="space-y-2"><Label>Receipt Footer</Label>
               <Input placeholder="Thank you for shopping!" value={storeSettings.receipt_footer || ''} onChange={e => setStoreSettings({...storeSettings, receipt_footer: e.target.value})} />
+            </div>
+
+            {/* DEFAULT CASH ACCOUNTS — auto-tag POS sales to real chart accounts */}
+            <div className="p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/40 dark:bg-emerald-950/20 space-y-2" data-testid="default-cash-accounts-block">
+              <p className="text-xs font-semibold flex items-center gap-2">💰 Default Cash Accounts (auto-tag POS deposits)</p>
+              <p className="text-[11px] text-muted-foreground">Sales completed at this store are auto-tagged to the matching chart account so the balance updates without cashiers having to pick manually.</p>
+              {(() => {
+                if (!storeChartAccounts || storeChartAccounts.length === 0) {
+                  return <p className="text-[11px] text-amber-700">No chart accounts yet. Create one under Accounting → Cash Accounts first.</p>;
+                }
+                const opts = storeChartAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.currency}</SelectItem>);
+                return (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Cash sales</Label>
+                      <Select value={storeSettings.default_cash_account_id || '_none'} onValueChange={v => setStoreSettings({...storeSettings, default_cash_account_id: v === '_none' ? '' : v})}>
+                        <SelectTrigger className="h-8 text-xs" data-testid="default-cash-account-select"><SelectValue placeholder="—" /></SelectTrigger>
+                        <SelectContent><SelectItem value="_none">— None —</SelectItem>{opts}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Card / Bank sales</Label>
+                      <Select value={storeSettings.default_bank_account_id || '_none'} onValueChange={v => setStoreSettings({...storeSettings, default_bank_account_id: v === '_none' ? '' : v})}>
+                        <SelectTrigger className="h-8 text-xs" data-testid="default-bank-account-select"><SelectValue placeholder="—" /></SelectTrigger>
+                        <SelectContent><SelectItem value="_none">— None —</SelectItem>{opts}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Mobile-money sales</Label>
+                      <Select value={storeSettings.default_momo_account_id || '_none'} onValueChange={v => setStoreSettings({...storeSettings, default_momo_account_id: v === '_none' ? '' : v})}>
+                        <SelectTrigger className="h-8 text-xs" data-testid="default-momo-account-select"><SelectValue placeholder="—" /></SelectTrigger>
+                        <SelectContent><SelectItem value="_none">— None —</SelectItem>{opts}</SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-3 p-3 bg-muted/30 rounded-lg">
               <div className="space-y-2"><Label className="text-xs">Receipt Paper Size</Label>

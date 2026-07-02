@@ -104,14 +104,28 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         pass
     # Capture store name on the sale for the receipt header.
     # Priority: store_settings.store_name (custom branded name) → location.name → blank.
+    # ALSO auto-tag the sale to the default cash/bank/momo chart account for this store
+    # if the caller didn't explicitly set deposit_to_account_id.
     if doc.get("location_id"):
-        store_setting = await db.store_settings.find_one({"location_id": doc["location_id"]}, {"_id": 0, "store_name": 1})
-        if store_setting and store_setting.get("store_name"):
+        store_setting = await db.store_settings.find_one({"location_id": doc["location_id"]}, {"_id": 0}) or {}
+        if store_setting.get("store_name"):
             doc["store_name"] = store_setting["store_name"]
         else:
             loc = await db.locations.find_one({"id": doc["location_id"]}, {"_id": 0, "name": 1, "code": 1})
             if loc:
                 doc["store_name"] = loc.get("name") or loc.get("code") or ""
+        if not doc.get("deposit_to_account_id"):
+            default_key = {
+                "cash": "default_cash_account_id",
+                "card": "default_bank_account_id",
+                "bank": "default_bank_account_id",
+                "mobile_money": "default_momo_account_id",
+                "momo": "default_momo_account_id",
+            }.get(pm, "default_cash_account_id")
+            default_acct_id = store_setting.get(default_key) or store_setting.get("default_cash_account_id")
+            if default_acct_id:
+                doc["deposit_to_account_id"] = default_acct_id
+                doc["deposit_auto_tagged"] = True
     await db.sales.insert_one(doc)
     # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
     for item in data.items:
