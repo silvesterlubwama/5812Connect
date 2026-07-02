@@ -1669,12 +1669,22 @@ function ReconciliationPanel({ locationFilter, subLocations, isFinanceAdmin, onD
                 </div>
               )}
 
-              {(data.untagged_donations.length + data.untagged_expenses_list.length > 0) && (
+              {(data.untagged_donations.length + data.untagged_expenses_list.length + (data.untagged_transfers || []).length > 0) && (
                 <details className="text-xs">
-                  <summary className="cursor-pointer text-muted-foreground py-1">Show {data.untagged_donations.length + data.untagged_expenses_list.length} untagged row(s)</summary>
+                  <summary className="cursor-pointer text-muted-foreground py-1">Show {data.untagged_donations.length + data.untagged_expenses_list.length + (data.untagged_transfers || []).length} untagged row(s)</summary>
                   <div className="mt-2 space-y-1">
-                    {data.untagged_donations.map(d => <div key={d.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-don-${d.id}`}><span>{d.date} · {d.donor_name}</span><span className="font-mono text-green-700">+{(d.amount || 0).toLocaleString()}</span></div>)}
-                    {data.untagged_expenses_list.map(e => <div key={e.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-exp-${e.id}`}><span>{e.date} · {e.title || e.vendor}</span><span className="font-mono text-red-700">-{(e.amount || 0).toLocaleString()}</span></div>)}
+                    {data.untagged_donations.map(d => <div key={d.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-don-${d.id}`}><span>{d.date} · donation · {d.donor_name}</span><span className="font-mono text-green-700">+{(d.amount || 0).toLocaleString()}</span></div>)}
+                    {data.untagged_expenses_list.map(e => <div key={e.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-exp-${e.id}`}><span>{e.date} · expense · {e.title || e.vendor}</span><span className="font-mono text-red-700">-{(e.amount || 0).toLocaleString()}</span></div>)}
+                    {(data.untagged_transfers || []).map(t => <div key={t.id} className="flex justify-between p-1 border-b border-dashed" data-testid={`untagged-tx-${t.id}`}><span>{t.date} · sublocation transfer · {t.from_location_id}→{t.to_location_id}</span><span className="font-mono text-muted-foreground">{(t.amount || 0).toLocaleString()}</span></div>)}
+                  </div>
+                </details>
+              )}
+
+              {(data.recent_transfers || []).length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground py-1">Recent chart-account transfers touching this location ({data.recent_transfers.length})</summary>
+                  <div className="mt-2 space-y-1">
+                    {data.recent_transfers.map(t => <div key={t.id} className="flex justify-between p-1 border-b border-dashed"><span>{t.date} · {t.from_name} → {t.to_name}</span><span className="font-mono">{(t.amount || 0).toLocaleString()} {t.currency}</span></div>)}
                   </div>
                 </details>
               )}

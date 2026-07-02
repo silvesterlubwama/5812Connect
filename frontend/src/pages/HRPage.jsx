@@ -19,6 +19,7 @@ export default function HRPage() {
   const { user } = useAuth();
   const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
   const [salaries, setSalaries] = useState([]);
+  const [activeTab, setActiveTab] = useState('salaries');
   const [payslips, setPayslips] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [contracts, setContracts] = useState([]);
@@ -223,7 +224,7 @@ export default function HRPage() {
         <Card className="rounded-xl"><CardContent className="p-4 text-center"><p className="text-2xl font-bold">{docRequests.filter(d => d.status === 'pending').length}</p><p className="text-xs text-muted-foreground">Pending Doc Requests</p></CardContent></Card>
       </div>
 
-      <Tabs defaultValue="salaries">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex-wrap">
           <TabsTrigger value="salaries" data-testid="hr-tab-salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
           <TabsTrigger value="payslips" data-testid="hr-tab-payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
@@ -394,7 +395,24 @@ export default function HRPage() {
           <TimesheetsPanel />
         </TabsContent>
         <TabsContent value="onboarding" className="mt-4">
-          <OnboardingPanel />
+          <OnboardingPanel onFix={(check, row) => {
+            if (check === 'has_salary') {
+              setSalaryForm({ staff_id: row.staff_id, base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
+              setEditingSalaryId(null);
+              setShowSalary(true);
+              setActiveTab('salaries');
+            } else if (check === 'has_contract') {
+              setActiveTab('contracts');
+              setShowIssueContract(true);
+              // Contract form itself lets user pick staff; store hint via a shared "preselected" state
+              try { localStorage.setItem('5812_onboarding_preselect_staff', row.staff_id); } catch { /* localStorage unavailable */ }
+              toast(`Add contract for ${row.staff_name}`);
+            } else if (check === 'has_chart_account') {
+              toast('Go to Accounting → Cash Accounts → pick the location default and click "Assign Users"', { duration: 6000 });
+            } else if (check === 'has_department' || check === 'has_location') {
+              toast('Edit this user under People → Staff Directory to set their department/location.', { duration: 6000 });
+            }
+          }} />
         </TabsContent>
       </Tabs>
 
@@ -1392,7 +1410,7 @@ function TimesheetsPanel() {
 
 
 // ========== ONBOARDING CHECKLIST PANEL ==========
-function OnboardingPanel() {
+function OnboardingPanel({ onFix }) {
   const [data, setData] = React.useState({ total: 0, fully_onboarded: 0, needs_attention: 0, rows: [] });
   const [loading, setLoading] = React.useState(true);
 
@@ -1407,7 +1425,22 @@ function OnboardingPanel() {
 
   React.useEffect(() => { load(); }, [load]);
 
-  const check = (ok) => ok ? <CheckCircle2 size={14} className="inline text-green-600" /> : <XCircle size={14} className="inline text-red-500" />;
+  const cell = (ok, staff, key, label) => {
+    if (ok) return <td className="text-center"><CheckCircle2 size={14} className="inline text-green-600" /></td>;
+    return (
+      <td className="text-center">
+        <button
+          className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 hover:underline cursor-pointer group"
+          onClick={() => onFix && onFix(key, staff)}
+          data-testid={`onb-fix-${staff.staff_id}-${key}`}
+          title={`Fix: ${label}`}
+        >
+          <XCircle size={14} />
+          <span className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">Fix</span>
+        </button>
+      </td>
+    );
+  };
 
   return (
     <Card className="rounded-xl">
@@ -1446,11 +1479,11 @@ function OnboardingPanel() {
                   <tr key={r.staff_id} className={`hover:bg-accent/30 ${r.completion_pct === 100 ? '' : 'bg-amber-50/40 dark:bg-amber-950/10'}`} data-testid={`onboarding-row-${r.staff_id}`}>
                     <td className="py-2 font-medium">{r.staff_name || '(unnamed)'}<div className="text-[10px] text-muted-foreground">{r.email}</div></td>
                     <td className="text-xs text-muted-foreground">{r.role || '—'}{r.department ? ` · ${r.department}` : ''}</td>
-                    <td className="text-center" data-testid={`onb-${r.staff_id}-dept`}>{check(r.checks.has_department)}</td>
-                    <td className="text-center" data-testid={`onb-${r.staff_id}-loc`}>{check(r.checks.has_location)}</td>
-                    <td className="text-center" data-testid={`onb-${r.staff_id}-contract`}>{check(r.checks.has_contract)}</td>
-                    <td className="text-center" data-testid={`onb-${r.staff_id}-salary`}>{check(r.checks.has_salary)}</td>
-                    <td className="text-center" data-testid={`onb-${r.staff_id}-acct`}>{check(r.checks.has_chart_account)}</td>
+                    {cell(r.checks.has_department, r, 'has_department', 'Set department')}
+                    {cell(r.checks.has_location, r, 'has_location', 'Set location')}
+                    {cell(r.checks.has_contract, r, 'has_contract', 'Issue contract')}
+                    {cell(r.checks.has_salary, r, 'has_salary', 'Add salary')}
+                    {cell(r.checks.has_chart_account, r, 'has_chart_account', 'Assign cash account')}
                     <td className="text-[11px] text-muted-foreground">{r.salary_summary || '—'}</td>
                     <td className="text-right">
                       <Badge className={`text-[10px] ${r.completion_pct === 100 ? '' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40'}`} data-testid={`onb-pct-${r.staff_id}`}>{r.completion_pct}%</Badge>

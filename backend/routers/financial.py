@@ -1275,9 +1275,29 @@ async def financial_reconciliation(location_id: str, current_user: dict = Depend
     # Untagged rows at this location
     untagged_don = await db.donations.find({"location_id": location_id, "$or": [{"deposit_to_account_id": {"$exists": False}}, {"deposit_to_account_id": ""}, {"deposit_to_account_id": None}]}, {"_id": 0, "id": 1, "date": 1, "donor_name": 1, "amount": 1, "notes": 1}).to_list(500)
     untagged_exp = await db.expenses.find({"location_id": location_id, "status": {"$in": ["approved", None]}, "$or": [{"paid_from_account_id": {"$exists": False}}, {"paid_from_account_id": ""}, {"paid_from_account_id": None}]}, {"_id": 0, "id": 1, "date": 1, "title": 1, "amount": 1, "vendor": 1}).to_list(500)
+    # Sub-location transfers (legacy inter-sublocation moves) — treat as "untagged"
+    # when neither the from nor to side references a chart cash account, since those
+    # moves shift cash but never touch our chart-account balances.
+    untagged_transfers = await db.sublocation_transfers.find({
+        "$or": [{"from_location_id": location_id}, {"to_location_id": location_id}],
+        "$and": [
+            {"$or": [{"from_account_id": {"$exists": False}}, {"from_account_id": ""}, {"from_account_id": None}]},
+            {"$or": [{"to_account_id": {"$exists": False}}, {"to_account_id": ""}, {"to_account_id": None}]},
+        ],
+    }, {"_id": 0, "id": 1, "date": 1, "amount": 1, "from_location_id": 1, "to_location_id": 1, "notes": 1}).to_list(500)
     untagged_income = round(sum((d.get("amount") or 0) for d in untagged_don), 2)
     untagged_expenses = round(sum((e.get("amount") or 0) for e in untagged_exp), 2)
     untagged_net = round(untagged_income - untagged_expenses, 2)
+
+    # Recent chart-account transfers touching this location (context, not "untagged" — transfers
+    # are fully-linked by definition, but users like to see them alongside for a full audit).
+    loc_account_ids = [a["id"] for a in accts]
+    recent_transfers = []
+    if loc_account_ids:
+        async for t in db.chart_account_transfers.find({
+            "$or": [{"from_account_id": {"$in": loc_account_ids}}, {"to_account_id": {"$in": loc_account_ids}}]
+        }, {"_id": 0}).sort("date", -1).limit(50):
+            recent_transfers.append(t)
 
     # Matches when: sub-location net == chart_delta_sum. Untagged transactions explain any drift.
     matches = abs(sublocation_net - chart_delta_sum) < 0.01
@@ -1295,6 +1315,8 @@ async def financial_reconciliation(location_id: str, current_user: dict = Depend
         "chart_accounts": accts,
         "untagged_donations": untagged_don,
         "untagged_expenses_list": untagged_exp,
+        "untagged_transfers": untagged_transfers,
+        "recent_transfers": recent_transfers,
     }
 
 

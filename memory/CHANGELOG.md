@@ -1,5 +1,22 @@
 # 58:12 Connect — Changelog
 
+## Iteration 210 (Feb 2026) — Reconcile: transfers included · Onboarding: inline Fix links
+### 🟡 P2 — Reconcile now covers transfers
+- `GET /api/financial/reconciliation` returns two new arrays:
+  - `untagged_transfers` — `sublocation_transfers` at this location where neither `from_account_id` nor `to_account_id` is set (they shift cash but never touch chart-account balances).
+  - `recent_transfers` — last 50 `chart_account_transfers` touching any cash account at this location (context / audit, not "untagged" since transfers require both endpoints).
+- Reconcile panel adds a second collapsible "Recent chart-account transfers touching this location" and folds `untagged_transfers` into the "Show untagged rows" details view with a "sublocation transfer · from→to" line format.
+
+### 🟠 P1 — Onboarding: inline Fix links
+- Every red X in the Onboarding matrix is now a **clickable "Fix" button** that jumps to the right dialog:
+  - `has_salary` → switches to Salaries tab + opens the Add Salary dialog pre-filled with the staff.
+  - `has_contract` → switches to Contracts tab + opens Issue Contract dialog; staff-id hint saved to localStorage for the contract form to pick up.
+  - `has_chart_account` → toast pointing to Accounting → Cash Accounts (cross-page).
+  - `has_department` / `has_location` → toast pointing to People → Staff Directory (cross-page).
+- `HRPage` tabs converted from `defaultValue` to controlled `value` so the callback can programmatically switch tabs. Preserves existing behavior for direct tab clicks.
+- Hover reveals a small "Fix" label; keyboard-focus and screen-reader accessible via native `<button>` element.
+
+
 ## Iteration 209 (Feb 2026) — Finance ↔ Cash Accounts Reconciliation
 - **Auto-tag on entry:** `create_donation` and `create_expense` now silently auto-tag `deposit_to_account_id` / `paid_from_account_id` to the location's `store_settings.default_cash_account_id` when caller leaves it blank. Sales already did this; now donations and expenses do too, so **Finance sub-location totals equal Chart cash-account activity by construction**.
 - **Backend endpoint** `GET /api/financial/reconciliation?location_id=<loc>` — returns `{sublocation_net, chart_delta_sum, untagged_income, untagged_expenses, untagged_net, matches, drift, chart_accounts[], untagged_donations[], untagged_expenses_list[]}`. Uses `_batch_compute_balances` for perf.
