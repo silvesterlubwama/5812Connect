@@ -11,7 +11,7 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { financialApi, financialExtrasApi, exportApi, locationsApi } from '../services/api';
+import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -92,6 +92,8 @@ export default function FinancialPage() {
   const [newCatName, setNewCatName] = useState('');
   const [newCatType, setNewCatType] = useState('both');
   const [subLocations, setSubLocations] = useState([]);
+  // Chart accounts (cash/bank/mobile money) — my-scoped list with live balances
+  const [myChartAccounts, setMyChartAccounts] = useState([]);
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
@@ -137,7 +139,7 @@ export default function FinancialPage() {
     : null
   ) || orgDefaultCurrency;
   const fmt = (n) => `${currentCurrency} ${(n || 0).toLocaleString()}`;
-  const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '' }));
+  const [donationForm, setDonationForm] = useState(() => ({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '', deposit_to_account_id: '' }));
   const [expenseForm, setExpenseForm] = useState(() => ({
     title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '',
     vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '',
@@ -188,6 +190,7 @@ export default function FinancialPage() {
     financialApi.transfers().then(r => setTransfers(r.data || [])).catch(() => {});
     financialApi.budgets().then(r => setBudgets(r.data || [])).catch(() => {});
     financialApi.categories().then(r => setCategories(r.data || [])).catch(() => {});
+    chartAccountsApi.mine().then(r => setMyChartAccounts(r.data || [])).catch(() => {});
   }, []);
   useEffect(() => { fetchAll(); }, [dateFrom, dateTo, cashflowMonths, locationFilter]);
 
@@ -235,9 +238,10 @@ export default function FinancialPage() {
       const res = await financialApi.createDonation({ ...donationForm, amount: parseFloat(donationForm.amount) });
       setDonations(prev => [res.data, ...prev]);
       setShowDonation(false);
-      setDonationForm({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: today, notes: '' });
+      setDonationForm({ donor_name: '', amount: '', currency: 'UGX', type: 'tithe', date: today, notes: '', sublocation_id: '', deposit_to_account_id: '' });
       toast.success('Donation recorded!');
       fetchAll();
+      chartAccountsApi.mine().then(r => setMyChartAccounts(r.data || [])).catch(() => {});
     } catch (err) {
       let msg = err.response?.data?.detail;
       if (Array.isArray(msg)) msg = msg.map(e => `${(e.loc || []).join('.')}: ${e.msg}`).join('; ');
@@ -258,6 +262,7 @@ export default function FinancialPage() {
       setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '', sublocation_id: '', vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '', paid_from_account_id: '' });
       toast.success('Expense recorded!');
       fetchAll();
+      chartAccountsApi.mine().then(r => setMyChartAccounts(r.data || [])).catch(() => {});
     } catch (err) {
       let msg = err.response?.data?.detail;
       if (Array.isArray(msg)) msg = msg.map(e => `${(e.loc || []).join('.')}: ${e.msg}`).join('; ');
@@ -942,6 +947,22 @@ export default function FinancialPage() {
               <Label>Notes *</Label>
               <Input placeholder="Notes (required)" value={donationForm.notes} onChange={e => setDonationForm({...donationForm, notes: e.target.value})} required />
             </div>
+            {myChartAccounts.length > 0 && (
+              <div className="space-y-2">
+                <Label>Deposit To (Cash / Bank / Momo Account)</Label>
+                <Select value={donationForm.deposit_to_account_id || '_none'} onValueChange={v => setDonationForm({...donationForm, deposit_to_account_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger className="h-9" data-testid="donation-deposit-to-select"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {myChartAccounts.map(a => (
+                      <SelectItem key={a.id} value={a.id} data-testid={`deposit-to-opt-${a.id}`}>
+                        {a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowDonation(false)}>Cancel</Button>
               <Button type="submit" className="flex-1" disabled={saving} data-testid="save-donation-btn">{saving ? 'Saving...' : 'Save Donation'}</Button>
@@ -990,19 +1011,19 @@ export default function FinancialPage() {
                 <SelectContent><SelectItem value="_none">Campus default</SelectItem>{subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            {(subAccounts?.accounts?.length || 0) > 0 && (
+            {myChartAccounts.length > 0 && (
               <div className="space-y-2">
-                <Label>Paid From (Account) *</Label>
+                <Label>Paid From (Cash / Bank / Momo Account) *</Label>
                 <Select value={expenseForm.paid_from_account_id || '_none'} onValueChange={v => setExpenseForm({...expenseForm, paid_from_account_id: v === '_none' ? '' : v})}>
                   <SelectTrigger className="h-9" data-testid="expense-paid-from-select"><SelectValue placeholder="Which account funded this?" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="_none">— None —</SelectItem>
-                    {(subAccounts?.accounts || []).map(a => {
+                    {myChartAccounts.map(a => {
                       const insufficient = (a.balance || 0) < (parseFloat(expenseForm.amount) || 0);
                       return (
                         <SelectItem key={a.id} value={a.id} data-testid={`paid-from-opt-${a.id}`}>
                           <span className={insufficient && expenseForm.amount ? 'text-amber-700' : ''}>
-                            {a.location_name || 'Savings'} — {a.currency} {(a.balance || 0).toLocaleString()}{insufficient && expenseForm.amount ? ' ⚠︎ low' : ''}
+                            {a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}{insufficient && expenseForm.amount ? ' ⚠︎ low' : ''}
                           </span>
                         </SelectItem>
                       );
@@ -1010,7 +1031,7 @@ export default function FinancialPage() {
                   </SelectContent>
                 </Select>
                 {expenseForm.paid_from_account_id && (() => {
-                  const acct = subAccounts.accounts.find(a => a.id === expenseForm.paid_from_account_id);
+                  const acct = myChartAccounts.find(a => a.id === expenseForm.paid_from_account_id);
                   const amt = parseFloat(expenseForm.amount) || 0;
                   if (!acct) return null;
                   const remaining = (acct.balance || 0) - amt;
@@ -1021,6 +1042,9 @@ export default function FinancialPage() {
                   );
                 })()}
               </div>
+            )}
+            {myChartAccounts.length === 0 && (
+              <p className="text-xs text-muted-foreground italic" data-testid="no-chart-accounts-hint">No cash accounts assigned to you yet. Ask an admin to assign one under Accounting → Cash Accounts.</p>
             )}
             <div className="space-y-2">
               <Label>Notes *</Label>

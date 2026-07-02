@@ -515,6 +515,7 @@ try:
     from routers.events import router as events_router
     from routers.tasks import router as tasks_router
     from routers.financial import router as financial_router
+    from routers.chart_accounts import router as chart_accounts_router
     from routers.chat import router as chat_router
     from routers.admin import router as admin_router
     from routers.programmes import router as programmes_router
@@ -545,6 +546,7 @@ try:
     app.include_router(events_router)
     app.include_router(tasks_router)
     app.include_router(financial_router)
+    app.include_router(chart_accounts_router)
     app.include_router(chat_router)
     app.include_router(admin_router)
     app.include_router(programmes_router)

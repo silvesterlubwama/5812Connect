@@ -246,6 +246,24 @@ export const financialApi = {
   bulkDeleteExpenses: (ids) => api.post('/financial/expenses/bulk-delete', { ids }),
   bulkDeleteAssets: (ids) => api.post('/financial/assets/bulk-delete', { ids }),
   bulkDeleteBudgets: (ids) => api.post('/financial/budgets/bulk-delete', { ids }),
+};
+
+// ---- CHART ACCOUNTS (cash / bank / mobile money — assigned to users) ----
+export const chartAccountsApi = {
+  list: (params) => api.get('/financial/chart-accounts', { params }),
+  mine: () => api.get('/financial/chart-accounts/mine'),
+  get: (id) => api.get(`/financial/chart-accounts/${id}`),
+  create: (data) => api.post('/financial/chart-accounts', data),
+  update: (id, data) => api.put(`/financial/chart-accounts/${id}`, data),
+  setAssignees: (id, userIds) => api.put(`/financial/chart-accounts/${id}/assignees`, { user_ids: userIds }),
+  remove: (id) => api.delete(`/financial/chart-accounts/${id}`),
+  transactions: (id, limit) => api.get(`/financial/chart-accounts/${id}/transactions`, { params: { limit } }),
+  transfer: (data) => api.post('/financial/chart-accounts/transfer', data),
+  transfers: (limit) => api.get('/financial/chart-accounts/transfers/list', { params: { limit } }),
+};
+
+// ---- LEGACY FINANCIAL ASSETS + SPONSORSHIP (still under financialApi) ----
+Object.assign(financialApi, {
   // Assets
   listAssets: (params) => api.get('/financial/assets', { params }),
   createAsset: (data) => api.post('/financial/assets', data),
@@ -258,7 +276,7 @@ export const financialApi = {
   getSponsor: (id) => api.get(`/financial/sponsors/${id}`),
   updateSponsor: (id, data) => api.put(`/financial/sponsors/${id}`, data),
   deleteSponsor: (id) => api.delete(`/financial/sponsors/${id}`),
-};
+});
 
 // ---- PRODUCTS & SALES ----
 export const productsApi = {

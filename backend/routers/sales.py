@@ -32,6 +32,7 @@ class SaleCreate(BaseModel):
     items: List[dict]; customer_name: Optional[str] = "Walk-in Customer"; customer_phone: Optional[str] = None
     customer_id: Optional[str] = None
     total: float; payment_method: str = "cash"; notes: Optional[str] = None; location_id: Optional[str] = None
+    deposit_to_account_id: Optional[str] = None  # FK → chart_accounts.id (cash/bank account receiving this sale)
     # Optional extras (offline sync, cash details, tier discount breakdown)
     subtotal: Optional[float] = None; packaging_total: Optional[float] = None; discount: Optional[float] = None
     amount_given: Optional[float] = None; change_due: Optional[float] = None

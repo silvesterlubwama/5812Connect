@@ -1,0 +1,34 @@
+{
+  "summary": "Backend-only pytest run for chart accounts feature (iteration 203). 22/22 tests passed against the public preview URL covering CRUD, scoping, live balance computation, access control on expenses/donations, GET account+transactions gating, transfers with all validation branches, sales.deposit_to_account_id integration, and regressions.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter203_chart_accounts.py",
+    "/app/test_reports/pytest/iter203_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "In routers/chart_accounts.py update_chart_account (~L170) the update dict is built with `if v is not None or k == 'notes'` — but `active: False` is valid intent yet it's caught (False is not None so passes). Note: `assigned_user_ids: []` (empty list) is not None so it's kept — good. However, setting `notes` explicitly to empty string works via the `or k=='notes'` special-case; consider using `model_dump(exclude_unset=True)` without the None filter, so admins can explicitly clear other string fields too.",
+    "chart_accounts.transfer endpoint uses `require_manager` but the docstring/spec says 'Only admins/managers can initiate'. Access-check on line 300 then calls `_user_can_admin_accounts` which excludes managers, and then blocks non-admin managers unless they are assigned to source. Behaviour is fine but the docstring is misleading — a plain manager still needs an assignment on the source account.",
+    "list_chart_accounts + /mine + /{id}/transactions each call `_compute_balance` per account, which itself fires 6 aggregations. For a list of N accounts this is 6·N round-trips. For an org with 20+ accounts this will slow the UI's tab load. Consider a single facet aggregation or caching balances in the account doc + delta-updating on write.",
+    "chart_accounts.py: soft-delete flips `active: False` but list endpoint defaults to `active_only=True`, meaning archived accounts vanish from all lists — GOOD. But there's no `?include_archived=true` list surface, so admins can't easily un-archive. Add a re-activate endpoint or include-archived query.",
+    "In balance computation, transfers are counted separately from sales/donations/expenses. When an expense is DELETED but was already approved, the balance auto-recovers because the aggregation excludes it. That's the correct 'live' behaviour but means audit trail of the original approved expense is lost. Confirm this matches the product intent (probably yes for a live cash ledger)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter203_chart_accounts.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not_tested"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 via identifier field; non-admin created per-run as staff with finance_access granted (needed so require_finance_view lets the request through to the account-assignment check).",
+  "seed_data_creation": "Each test creates its own TEST_Iter203_* chart accounts + a fresh staff user, then cleans up (accounts hard-deleted when possible, staff user deleted post-module). Test donations/expenses/sales are also cleaned up after each assertion.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 9 scoped flows verified E2E: (1) chart account CRUD incl. kind whitelist enforcement, assignees PUT, soft vs hard delete based on referenced txns; (2) list scoping — admin sees all, non-admin only assigned, /mine works for both, admin bypasses on /mine; (3) balance math — starting 50k, pending expense 8k keeps balance 50k, approve moves it to 42k, +20k donation → 62k, ledger returns donation-in + expense-out; (4) unassigned non-admin 403 on POST expense AND donation w/ detail containing 'not assigned'; (5) assigned non-admin 200 on same POST; (6) GET /{id} and /transactions 403 for unassigned non-admin, 200 for assigned or admin; (7) transfers success + all 4 error branches (amount<=0, same src/dst, missing to, insufficient); (8) sales.deposit_to_account_id echoes back in response AND is reflected in the account balance (+1500); (9) regressions — expense w/o account, donation w/o account, and GET expenses/donations/balance-sheet all 200. IMPORTANT prerequisite: a non-admin staff user must be granted finance_access before the /api/financial/expenses|donations access-control check is reachable — otherwise they hit the require_finance_view 403 first. The test fixture does this via PUT /api/admin/finance-access/users/{id}.",
+  "rca of the issue": "N/A — no failures observed."
+}

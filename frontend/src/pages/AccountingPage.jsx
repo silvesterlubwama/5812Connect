@@ -8,8 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
-import { BookOpen, Plus, RefreshCw, Trash2, Check, X, RotateCcw, FileText, TrendingUp, TrendingDown, Scale } from 'lucide-react';
-import api from '../services/api';
+import { BookOpen, Plus, RefreshCw, Trash2, Check, X, RotateCcw, FileText, TrendingUp, TrendingDown, Scale, Wallet, Users } from 'lucide-react';
+import api, { chartAccountsApi, adminApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -58,6 +58,108 @@ export default function AccountingPage() {
   const [showFiscalForm, setShowFiscalForm] = useState(false);
   const [fiscalForm, setFiscalForm] = useState({ name: '', start_date: '', end_date: '' });
   const [viewLedger, setViewLedger] = useState(null);
+
+  // ===== CHART CASH ACCOUNTS (cash/bank/momo — user-assignable) =====
+  const [chartAccounts, setChartAccounts] = useState([]);
+  const [chartAccountsLoading, setChartAccountsLoading] = useState(false);
+  const [showChartAccountForm, setShowChartAccountForm] = useState(false);
+  const [chartAccountForm, setChartAccountForm] = useState({ id: '', name: '', kind: 'cash', currency: 'UGX', starting_balance: '', location_id: '', assigned_user_ids: [], notes: '' });
+  const [showAssignees, setShowAssignees] = useState(null); // account being edited
+  const [assigneePicks, setAssigneePicks] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  const [viewAccountTxns, setViewAccountTxns] = useState(null); // { account, transactions }
+  const [showTransferForm, setShowTransferForm] = useState(false);
+  const [transferForm, setTransferForm] = useState({ from_account_id: '', to_account_id: '', amount: '', notes: '' });
+
+  const loadChartAccounts = useCallback(async () => {
+    setChartAccountsLoading(true);
+    try {
+      const r = await chartAccountsApi.list();
+      setChartAccounts(r.data || []);
+    } catch { setChartAccounts([]); }
+    finally { setChartAccountsLoading(false); }
+  }, []);
+
+  useEffect(() => { loadChartAccounts(); }, [loadChartAccounts]);
+
+  useEffect(() => {
+    if (isFinanceAdmin) {
+      adminApi.userDirectory().then(r => setAllUsers(r.data || [])).catch(() => {});
+    }
+  }, [isFinanceAdmin]);
+
+  const openNewChartAccount = () => {
+    setChartAccountForm({ id: '', name: '', kind: 'cash', currency: currentCurrency || 'UGX', starting_balance: '', location_id: locationFilter, assigned_user_ids: [], notes: '' });
+    setShowChartAccountForm(true);
+  };
+
+  const saveChartAccount = async () => {
+    if (!chartAccountForm.name.trim()) return toast.error('Name required');
+    try {
+      const payload = {
+        name: chartAccountForm.name.trim(),
+        kind: chartAccountForm.kind,
+        currency: chartAccountForm.currency,
+        starting_balance: parseFloat(chartAccountForm.starting_balance) || 0,
+        location_id: chartAccountForm.location_id || '',
+        assigned_user_ids: chartAccountForm.assigned_user_ids || [],
+        notes: chartAccountForm.notes || '',
+      };
+      if (chartAccountForm.id) {
+        await chartAccountsApi.update(chartAccountForm.id, payload);
+        toast.success('Account updated');
+      } else {
+        await chartAccountsApi.create(payload);
+        toast.success('Account created');
+      }
+      setShowChartAccountForm(false);
+      loadChartAccounts();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+  };
+
+  const openAssignees = (acct) => {
+    setShowAssignees(acct);
+    setAssigneePicks(acct.assigned_user_ids || []);
+  };
+  const saveAssignees = async () => {
+    try {
+      await chartAccountsApi.setAssignees(showAssignees.id, assigneePicks);
+      toast.success('Assignees updated');
+      setShowAssignees(null);
+      loadChartAccounts();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+  };
+
+  const openTxns = async (acct) => {
+    try {
+      const r = await chartAccountsApi.transactions(acct.id, 200);
+      setViewAccountTxns({ account: acct, ...r.data });
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to load'); }
+  };
+
+  const removeChartAccount = async (acct) => {
+    if (!window.confirm(`Delete "${acct.name}"? If transactions exist, it will be archived instead.`)) return;
+    try {
+      const r = await chartAccountsApi.remove(acct.id);
+      toast.success(r.data.archived ? `Archived (${r.data.referenced_txns} txns keep history)` : 'Deleted');
+      loadChartAccounts();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+  };
+
+  const submitTransfer = async () => {
+    try {
+      await chartAccountsApi.transfer({
+        from_account_id: transferForm.from_account_id,
+        to_account_id: transferForm.to_account_id,
+        amount: parseFloat(transferForm.amount),
+        notes: transferForm.notes,
+      });
+      toast.success('Transfer recorded');
+      setShowTransferForm(false);
+      setTransferForm({ from_account_id: '', to_account_id: '', amount: '', notes: '' });
+      loadChartAccounts();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Transfer failed'); }
+  };
 
   // Load all locations once (for the switcher) — admins see all; non-admins are
   // restricted by the backend to their own campuses anyway.
@@ -299,6 +401,7 @@ export default function AccountingPage() {
       <Tabs defaultValue="entries" className="space-y-3">
         <TabsList className="flex-wrap">
           <TabsTrigger value="entries" data-testid="acc-tab-entries"><FileText size={13} className="mr-1" /> Journal Entries</TabsTrigger>
+          <TabsTrigger value="cash-accounts" data-testid="acc-tab-cash-accounts"><Wallet size={13} className="mr-1" /> Cash Accounts</TabsTrigger>
           <TabsTrigger value="accounts" data-testid="acc-tab-accounts">Chart of Accounts</TabsTrigger>
           <TabsTrigger value="journals" data-testid="acc-tab-journals">Journals</TabsTrigger>
           <TabsTrigger value="taxes" data-testid="acc-tab-taxes">Taxes</TabsTrigger>
@@ -367,6 +470,55 @@ export default function AccountingPage() {
                       {e.status === 'posted' && !e.is_reversed && !e.reverses && (
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reverseEntry(e.id)} data-testid={`acc-reverse-${e.id}`}><RotateCcw size={12} className="mr-1" />Reverse</Button>
                       )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* CASH ACCOUNTS — real-world wallets/tills, assignable to users */}
+        <TabsContent value="cash-accounts" className="space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <p className="text-xs text-muted-foreground">Actual cash / bank / mobile-money balances. Admin assigns users so they can only spend from accounts they&apos;re accountable for.</p>
+            </div>
+            {isFinanceAdmin && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setShowTransferForm(true)} data-testid="cha-new-transfer-btn"><RotateCcw size={12} className="mr-1" /> Transfer</Button>
+                <Button size="sm" onClick={openNewChartAccount} data-testid="cha-new-account-btn"><Plus size={14} className="mr-1" /> New Cash Account</Button>
+              </div>
+            )}
+          </div>
+          {chartAccountsLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{[1,2,3].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
+          ) : chartAccounts.length === 0 ? (
+            <EmptyState icon={Wallet} title="No cash accounts yet" description={isFinanceAdmin ? "Create your first cash / bank / mobile-money account. Then assign it to the users who should spend from it." : "You haven't been assigned to any cash accounts yet. Ask an admin to assign one."} />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {chartAccounts.map(a => (
+                <Card key={a.id} className={`rounded-xl ${a.active === false ? 'opacity-50' : ''}`} data-testid={`cha-card-${a.id}`}>
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate" data-testid={`cha-name-${a.id}`}>{a.name}</p>
+                        <p className="text-[11px] text-muted-foreground uppercase">{a.kind} {a.active === false && '· archived'}</p>
+                      </div>
+                      <Wallet size={16} className="text-muted-foreground" />
+                    </div>
+                    <p className="text-2xl font-bold" data-testid={`cha-balance-${a.id}`}>{a.currency} {(a.balance ?? a.starting_balance ?? 0).toLocaleString()}</p>
+                    <p className="text-[11px] text-muted-foreground">Starting: {a.currency} {(a.starting_balance || 0).toLocaleString()}</p>
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Users size={11} /> {(a.assigned_user_ids || []).length} assigned
+                    </div>
+                    <div className="flex gap-1 flex-wrap pt-1">
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openTxns(a)} data-testid={`cha-txns-${a.id}`}>Ledger</Button>
+                      {isFinanceAdmin && <>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setChartAccountForm({ id: a.id, name: a.name, kind: a.kind, currency: a.currency, starting_balance: a.starting_balance, location_id: a.location_id || '', assigned_user_ids: a.assigned_user_ids || [], notes: a.notes || '' }); setShowChartAccountForm(true); }} data-testid={`cha-edit-${a.id}`}>Edit</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openAssignees(a)} data-testid={`cha-assign-${a.id}`}>Assign Users</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => removeChartAccount(a)} data-testid={`cha-delete-${a.id}`}><Trash2 size={12} /></Button>
+                      </>}
                     </div>
                   </CardContent>
                 </Card>
@@ -736,6 +888,143 @@ export default function AccountingPage() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* CHART ACCOUNT CREATE/EDIT DIALOG */}
+      <Dialog open={showChartAccountForm} onOpenChange={setShowChartAccountForm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{chartAccountForm.id ? 'Edit' : 'New'} Cash Account</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label className="text-xs">Name *</Label>
+              <Input value={chartAccountForm.name} onChange={e => setChartAccountForm({...chartAccountForm, name: e.target.value})} placeholder="e.g. Uganda Cash Drawer" data-testid="cha-form-name" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5"><Label className="text-xs">Kind</Label>
+                <Select value={chartAccountForm.kind} onValueChange={v => setChartAccountForm({...chartAccountForm, kind: v})}>
+                  <SelectTrigger data-testid="cha-form-kind"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="petty_cash">Petty Cash</SelectItem>
+                    <SelectItem value="bank">Bank</SelectItem>
+                    <SelectItem value="mobile_money">Mobile Money</SelectItem>
+                    <SelectItem value="credit">Credit</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Currency</Label>
+                <Input value={chartAccountForm.currency} onChange={e => setChartAccountForm({...chartAccountForm, currency: e.target.value.toUpperCase()})} placeholder="UGX" />
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Starting Balance</Label>
+              <Input type="number" step="0.01" value={chartAccountForm.starting_balance} onChange={e => setChartAccountForm({...chartAccountForm, starting_balance: e.target.value})} placeholder="0" data-testid="cha-form-starting" />
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Location</Label>
+              <Select value={chartAccountForm.location_id || '_none'} onValueChange={v => setChartAccountForm({...chartAccountForm, location_id: v === '_none' ? '' : v})}>
+                <SelectTrigger className="h-9"><SelectValue placeholder="Org-wide" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">Org-wide</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={chartAccountForm.notes} onChange={e => setChartAccountForm({...chartAccountForm, notes: e.target.value})} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowChartAccountForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveChartAccount} data-testid="cha-form-save">Save</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ASSIGNEES DIALOG */}
+      <Dialog open={!!showAssignees} onOpenChange={(o) => { if (!o) setShowAssignees(null); }}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Assign users · {showAssignees?.name}</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground">Only assigned users (plus admins) can spend from this account when entering expenses or donations.</p>
+          <div className="space-y-1 max-h-96 overflow-y-auto">
+            {allUsers.length === 0 && <p className="text-xs text-muted-foreground py-4">Loading users…</p>}
+            {allUsers.map(u => {
+              const on = assigneePicks.includes(u.id);
+              return (
+                <label key={u.id} className={`flex items-center gap-2 p-2 rounded cursor-pointer border ${on ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-accent/40'}`} data-testid={`cha-assign-row-${u.id}`}>
+                  <input type="checkbox" className="accent-primary" checked={on} onChange={() => setAssigneePicks(prev => on ? prev.filter(x => x !== u.id) : [...prev, u.id])} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{u.name || u.email}</p>
+                    <p className="text-[11px] text-muted-foreground truncate">{u.role} · {u.email}</p>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setShowAssignees(null)}>Cancel</Button>
+            <Button className="flex-1" onClick={saveAssignees} data-testid="cha-assign-save">Save ({assigneePicks.length})</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ACCOUNT TRANSACTIONS / LEDGER */}
+      <Dialog open={!!viewAccountTxns} onOpenChange={(o) => { if (!o) setViewAccountTxns(null); }}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Ledger · {viewAccountTxns?.account?.name}</DialogTitle></DialogHeader>
+          {viewAccountTxns && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                <div className="p-2 border rounded"><p className="text-muted-foreground">Balance</p><p className="text-xl font-bold" data-testid="cha-ledger-balance">{viewAccountTxns.account.currency} {(viewAccountTxns.balance || 0).toLocaleString()}</p></div>
+                <div className="p-2 border rounded"><p className="text-muted-foreground">Starting</p><p className="text-lg">{viewAccountTxns.account.currency} {(viewAccountTxns.starting_balance || 0).toLocaleString()}</p></div>
+                <div className="p-2 border rounded"><p className="text-muted-foreground">Txns</p><p className="text-lg">{viewAccountTxns.transactions?.length || 0}</p></div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b text-left text-muted-foreground"><th className="py-2">Date</th><th>Type</th><th>Party</th><th className="text-right">Amount</th><th>Notes</th></tr></thead>
+                  <tbody className="divide-y">
+                    {(viewAccountTxns.transactions || []).map(t => (
+                      <tr key={t.id} className="hover:bg-accent/20">
+                        <td className="py-1.5">{t.date}</td>
+                        <td><Badge className="text-[10px] capitalize">{t.type}</Badge></td>
+                        <td className="max-w-[140px] truncate">{t.party}</td>
+                        <td className={`text-right font-mono ${t.direction === 'in' ? 'text-green-700' : 'text-red-700'}`}>{t.direction === 'in' ? '+' : '-'}{t.currency} {(t.amount || 0).toLocaleString()}</td>
+                        <td className="max-w-[160px] truncate text-muted-foreground">{t.notes || t.ref}</td>
+                      </tr>
+                    ))}
+                    {(viewAccountTxns.transactions || []).length === 0 && <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">No transactions yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* CHART TRANSFER DIALOG */}
+      <Dialog open={showTransferForm} onOpenChange={setShowTransferForm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Transfer between Cash Accounts</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label className="text-xs">From *</Label>
+              <Select value={transferForm.from_account_id || '_none'} onValueChange={v => setTransferForm({...transferForm, from_account_id: v === '_none' ? '' : v})}>
+                <SelectTrigger data-testid="cha-transfer-from"><SelectValue placeholder="Source account" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">—</SelectItem>{chartAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">To *</Label>
+              <Select value={transferForm.to_account_id || '_none'} onValueChange={v => setTransferForm({...transferForm, to_account_id: v === '_none' ? '' : v})}>
+                <SelectTrigger data-testid="cha-transfer-to"><SelectValue placeholder="Destination account" /></SelectTrigger>
+                <SelectContent><SelectItem value="_none">—</SelectItem>{chartAccounts.filter(a => a.id !== transferForm.from_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Amount *</Label>
+              <Input type="number" step="0.01" value={transferForm.amount} onChange={e => setTransferForm({...transferForm, amount: e.target.value})} placeholder="0" data-testid="cha-transfer-amount" />
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={transferForm.notes} onChange={e => setTransferForm({...transferForm, notes: e.target.value})} />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowTransferForm(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={submitTransfer} disabled={!transferForm.from_account_id || !transferForm.to_account_id || !transferForm.amount} data-testid="cha-transfer-save">Transfer</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

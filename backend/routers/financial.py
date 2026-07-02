@@ -38,6 +38,7 @@ class DonationCreate(BaseModel):
     donor_name: str; amount: float; currency: str = "UGX"; type: str = "tithe"
     date: Optional[str] = None; notes: str = ""; member_id: Optional[str] = None
     location_id: Optional[str] = None; sublocation_id: Optional[str] = None
+    deposit_to_account_id: Optional[str] = None  # FK → chart_accounts.id (which cash/bank account received this)
 
     @field_validator("amount", mode="before")
     @classmethod
@@ -153,6 +154,11 @@ async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[
 
 @router.post("/financial/donations")
 async def create_donation(data: DonationCreate, current_user: dict = Depends(require_finance_view)):
+    # Enforce account assignment: non-admins can only deposit into accounts they're assigned to
+    if data.deposit_to_account_id:
+        from routers.chart_accounts import user_can_use_account
+        if not await user_can_use_account(current_user, data.deposit_to_account_id):
+            raise HTTPException(status_code=403, detail="You are not assigned to that account. Ask an admin to assign it to you.")
     doc = {"id": f"don_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
@@ -300,6 +306,11 @@ async def list_expenses(skip: int = 0, limit: int = 100, location_id: Optional[s
 
 @router.post("/financial/expenses")
 async def create_expense(data: ExpenseCreate, current_user: dict = Depends(require_finance_view)):
+    # Enforce account assignment: non-admins can only pull from accounts they're assigned to
+    if data.paid_from_account_id:
+        from routers.chart_accounts import user_can_use_account
+        if not await user_can_use_account(current_user, data.paid_from_account_id):
+            raise HTTPException(status_code=403, detail="You are not assigned to that account. Ask an admin to assign it to you.")
     doc = {"id": f"exp_{str(uuid.uuid4())[:8]}", **data.model_dump(), "date": data.date or datetime.now(timezone.utc).isoformat()[:10], "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"], "entered_by": current_user.get("name", "")}
     if not doc.get("location_id"):
         doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
