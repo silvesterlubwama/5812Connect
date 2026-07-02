@@ -248,6 +248,14 @@ export default function AccountingPage() {
       fetchAll();
     } catch (err) { toast.error(err.response?.data?.detail || 'Repair failed'); }
   };
+  const repairOrphanedJournals = async () => {
+    if (!window.confirm('This scans every auto-posted journal entry from Finance (donations/expenses) and reverses the ones whose source record was deleted. Safe & idempotent — makes the Trial Balance match Finance totals. Continue?')) return;
+    try {
+      const r = await api.post('/financial/repair-orphaned-journals');
+      toast.success(r.data.message || `Scanned ${r.data.scanned} · reversed ${r.data.reversed}`, { duration: 8000 });
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Repair failed'); }
+  };
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -554,7 +562,10 @@ export default function AccountingPage() {
                 </>
               )}
               {isFinanceAdmin && selectedEntryIds.size === 0 && (
-                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairReversalLines} data-testid="acc-repair-reversals-btn" title="One-time fix for legacy reversals whose lines were left as draft"><RefreshCw size={12} className="mr-1" /> Repair Reversals</Button>
+                <>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairReversalLines} data-testid="acc-repair-reversals-btn" title="One-time fix for legacy reversals whose lines were left as draft"><RefreshCw size={12} className="mr-1" /> Repair Reversals</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairOrphanedJournals} data-testid="acc-repair-orphans-btn" title="Reverse auto-posted JEs whose source donation/expense was deleted — realigns Trial Balance with Finance totals"><RefreshCw size={12} className="mr-1" /> Repair Orphans</Button>
+                </>
               )}
               <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
             </div>

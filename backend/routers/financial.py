@@ -217,6 +217,24 @@ async def _find_account(location_id: str, *, account_type: str = None, name_hint
     return candidates[0]
 
 
+async def _reverse_auto_posted_je(source_kind: str, source_id: str, current_user: dict) -> int:
+    """When a donation or expense is deleted, its auto-posted journal entry stays in
+    the ledger causing Finance and Accounting to drift. This finds the linked JE
+    (matched by auto_generated_from + source_id) and reverses it if still posted."""
+    entry = await db.accounting_entries.find_one({"auto_generated_from": source_kind, "source_id": source_id}, {"_id": 0})
+    if not entry or entry.get("status") != "posted":
+        return 0
+    if entry.get("is_reversed"):
+        return 0  # already reversed
+    try:
+        from routers.accounting import reverse_entry
+        await reverse_entry(entry["id"], {"reason": f"Source {source_kind} deleted"}, current_user)
+        return 1
+    except Exception as ex:
+        logger.error(f"Auto-reverse failed for {source_kind} {source_id}: {ex}")
+        return 0
+
+
 async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
     """Create + post a balanced JE for a financial-module record.
     `kind` ∈ {'donation', 'expense_approved'}.
@@ -337,7 +355,8 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
 
 @router.delete("/financial/donations/{donation_id}")
 async def delete_donation(donation_id: str, current_user: dict = Depends(require_admin)):
-    """Admin delete a donation entry"""
+    """Admin delete a donation entry — also reverses any auto-posted JE so ledger stays consistent."""
+    await _reverse_auto_posted_je("donation", donation_id, current_user)
     await db.donations.delete_one({"id": donation_id})
     await _audit(current_user["id"], "delete", "donation", donation_id)
     return {"message": "Donation deleted"}
@@ -345,7 +364,8 @@ async def delete_donation(donation_id: str, current_user: dict = Depends(require
 
 @router.delete("/financial/expenses/{expense_id}")
 async def delete_expense(expense_id: str, current_user: dict = Depends(require_admin)):
-    """Admin delete an expense entry"""
+    """Admin delete an expense entry — also reverses any auto-posted JE so ledger stays consistent."""
+    await _reverse_auto_posted_je("expense", expense_id, current_user)
     await db.expenses.delete_one({"id": expense_id})
     await _audit(current_user["id"], "delete", "expense", expense_id)
     return {"message": "Expense deleted"}
@@ -358,9 +378,12 @@ async def bulk_delete_donations(data: dict, current_user: dict = Depends(require
     ids = data.get("ids") or []
     if not ids:
         raise HTTPException(status_code=400, detail="No ids provided")
+    reversed_count = 0
+    for did in ids:
+        reversed_count += await _reverse_auto_posted_je("donation", did, current_user)
     result = await db.donations.delete_many({"id": {"$in": ids}})
-    await _audit(current_user["id"], "bulk_delete", "donations", None, {"count": result.deleted_count})
-    return {"deleted": result.deleted_count}
+    await _audit(current_user["id"], "bulk_delete", "donations", None, {"count": result.deleted_count, "je_reversed": reversed_count})
+    return {"deleted": result.deleted_count, "je_reversed": reversed_count}
 
 
 @router.post("/financial/expenses/bulk-delete")
@@ -368,9 +391,12 @@ async def bulk_delete_expenses(data: dict, current_user: dict = Depends(require_
     ids = data.get("ids") or []
     if not ids:
         raise HTTPException(status_code=400, detail="No ids provided")
+    reversed_count = 0
+    for eid in ids:
+        reversed_count += await _reverse_auto_posted_je("expense", eid, current_user)
     result = await db.expenses.delete_many({"id": {"$in": ids}})
-    await _audit(current_user["id"], "bulk_delete", "expenses", None, {"count": result.deleted_count})
-    return {"deleted": result.deleted_count}
+    await _audit(current_user["id"], "bulk_delete", "expenses", None, {"count": result.deleted_count, "je_reversed": reversed_count})
+    return {"deleted": result.deleted_count, "je_reversed": reversed_count}
 
 
 @router.post("/financial/assets/bulk-delete")
@@ -1366,6 +1392,69 @@ async def update_asset_valuation(asset_id: str, data: dict, current_user: dict =
 
 
 
+
+
+# ========== RETROACTIVE REPAIR: Orphaned Journal Entries ==========
+# When donations/expenses were deleted BEFORE the cascade-reverse fix landed,
+# their auto-posted journal entries were left behind — causing the Trial
+# Balance to drift from the Finance module totals. This endpoint scans all
+# auto-generated journal entries and reverses the ones whose source record
+# no longer exists.  It is idempotent (skips already-reversed entries) and
+# safe to re-run.
+
+@router.post("/financial/repair-orphaned-journals")
+async def repair_orphaned_journals(current_user: dict = Depends(require_admin)):
+    """Scan every auto-posted JE and reverse the ones whose source record was deleted.
+
+    Returns per-kind counts of what was reversed / already-clean / skipped.
+    Idempotent — safe to run multiple times.
+    """
+    from routers.accounting import reverse_entry
+    reversed_count = 0
+    already_reversed = 0
+    orphan_ids: list = []
+    scanned = 0
+    # Only touch entries auto-generated from finance sources (donation, expense).
+    # Never touch manually-created journal entries.
+    cursor = db.accounting_entries.find(
+        {"auto_generated_from": {"$in": ["donation", "expense"]}, "status": "posted"},
+        {"_id": 0, "id": 1, "auto_generated_from": 1, "source_id": 1, "is_reversed": 1},
+    )
+    async for je in cursor:
+        scanned += 1
+        source_kind = je.get("auto_generated_from")
+        source_id = je.get("source_id")
+        if not source_id or not source_kind:
+            continue
+        # Check if the source still exists
+        coll = db.donations if source_kind == "donation" else db.expenses
+        exists = await coll.find_one({"id": source_id}, {"_id": 0, "id": 1})
+        if exists:
+            continue  # not orphaned — leave as-is
+        orphan_ids.append(je["id"])
+        if je.get("is_reversed"):
+            already_reversed += 1
+            continue
+        try:
+            await reverse_entry(je["id"], {"reason": f"Retroactive repair — orphaned {source_kind}"}, current_user)
+            reversed_count += 1
+        except Exception as ex:
+            logger.error(f"Retroactive repair failed for JE {je['id']}: {ex}")
+    await _audit(current_user["id"], "repair", "orphaned_journals", None, {
+        "scanned": scanned, "orphans_found": len(orphan_ids), "reversed": reversed_count, "already_reversed": already_reversed,
+    })
+    logger.warning(f"REPAIR ORPHANED JOURNALS by {current_user.get('email','?')} — scanned={scanned} orphans={len(orphan_ids)} reversed={reversed_count}")
+    return {
+        "scanned": scanned,
+        "orphans_found": len(orphan_ids),
+        "reversed": reversed_count,
+        "already_reversed": already_reversed,
+        "message": (
+            f"Scanned {scanned} auto-posted journal entries. Found {len(orphan_ids)} orphans "
+            f"(source donation/expense deleted). Reversed {reversed_count}; "
+            f"{already_reversed} were already reversed."
+        ),
+    }
 
 
 # ========== FINANCIAL RESET (nuclear — clears test transactions) ==========
