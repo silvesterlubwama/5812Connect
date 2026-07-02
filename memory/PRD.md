@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 208d (Feb 2026)
+**Finance vs Accounting Starting Balance duplication — collapsed to single source of truth.**
+
+- Root cause: two independent "starting balance" fields — `financial_accounts.starting_balance` (per sub-location, edited from Finance) and `chart_accounts.starting_balance` (per cash account, edited from Accounting). No synchronization → confusing mismatches.
+- **Fix (Option A)**: `list_sublocation_accounts` in `financial.py` now DERIVES each location's starting balance from the sum of chart cash accounts at that location. Balance column = starting + income − expenses (true cash-on-hand). New payload fields: `starting_balance_source` ('chart_accounts'|'legacy'), `legacy_starting_balance`, `campus_starting_balance`, `campus_net_change`.
+- **Migration**: `POST /api/financial/repair-starting-balances` (admin-only, idempotent) copies any legacy value into an existing/new chart cash account and zeroes the legacy field. UI button: `acc-repair-starting-balances-btn` on Accounting page.
+- **UI polish**: Finance → Accounts tab now shows Starting/Income/Expenses/Current-Balance cards; the per-row Edit button navigates to Accounting (single edit surface).
+- **Tested**: iter209 → **9/9 backend pass** + trial-balance regression + repair-orphaned-journals still idempotent. Full test file at `/app/backend/tests/test_iter209_starting_balance.py`.
+
 ## Recently Resolved — Iteration 208c (Feb 2026)
 **Mobile responsiveness audit across admin pages.**
 
