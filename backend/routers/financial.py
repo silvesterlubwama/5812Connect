@@ -1245,3 +1245,115 @@ async def update_asset_valuation(asset_id: str, data: dict, current_user: dict =
     return await db.assets.find_one({"id": asset_id}, {"_id": 0})
 
 
+
+
+
+# ========== FINANCIAL RESET (nuclear — clears test transactions) ==========
+# Admin-only. Requires the caller to POST `confirm: "RESET"` in the body,
+# plus an explicit scope + list of collections to wipe. This exists because
+# testing mistakes leave stale balances that are painful to clean row-by-row.
+# Filters honour location + date range so a director can wipe only a single
+# campus's test data without touching another campus's real records.
+
+ALLOWED_RESET_COLLECTIONS = {
+    "donations": "donations",
+    "expenses": "expenses",
+    "sales": "sales",
+    "accounting_entries": "accounting_entries",
+    "accounting_entry_lines": "accounting_entry_lines",
+    "budgets": "financial_budgets",
+    "chart_account_transfers": "chart_account_transfers",
+    "assets": "assets",
+    "sublocation_transfers": "sublocation_transfers",
+    "hr_payslips": "hr_payslips",  # optional — nuke test payslips too
+}
+
+
+@router.post("/financial/reset")
+async def reset_financial_data(data: dict, current_user: dict = Depends(require_admin)):
+    """Wipe financial transactional data. STRICT admin-only. Body:
+    {
+      "confirm": "RESET",                          # must equal this exactly
+      "scope": "all" | "location" | "period",       # controls the filter
+      "location_id": "loc_001",                    # required if scope=location
+      "date_from": "2026-01-01",                    # optional YYYY-MM-DD
+      "date_to":   "2026-02-28",
+      "include": ["donations","expenses","sales",...],  # subset of ALLOWED_RESET_COLLECTIONS keys
+      "reset_chart_account_starting_balances": false,   # optional — zero starting_balance too
+    }
+    Returns per-collection deleted counts.
+    Chart accounts themselves are NEVER deleted — only their transactions are wiped, so
+    balances recompute correctly (starting_balance + zero transactions = starting_balance).
+    """
+    if data.get("confirm") != "RESET":
+        raise HTTPException(status_code=400, detail="confirm must equal 'RESET' (case-sensitive) to proceed")
+    scope = data.get("scope") or "all"
+    location_id = data.get("location_id") or ""
+    date_from = data.get("date_from") or ""
+    date_to = data.get("date_to") or ""
+    include = data.get("include") or list(ALLOWED_RESET_COLLECTIONS.keys())
+    if scope == "location" and not location_id:
+        raise HTTPException(status_code=400, detail="location_id required when scope='location'")
+    if scope == "period" and not (date_from or date_to):
+        raise HTTPException(status_code=400, detail="date_from and/or date_to required when scope='period'")
+
+    # Build the base filter shared across collections
+    def base_filter(date_field: str = "date") -> dict:
+        f: dict = {}
+        if scope == "location" or location_id:
+            f["location_id"] = location_id
+        if date_from and date_to:
+            f[date_field] = {"$gte": date_from, "$lte": date_to}
+        elif date_from:
+            f[date_field] = {"$gte": date_from}
+        elif date_to:
+            f[date_field] = {"$lte": date_to}
+        return f
+
+    results = {}
+    entry_ids_to_wipe = []
+
+    for key in include:
+        if key not in ALLOWED_RESET_COLLECTIONS:
+            continue
+        coll_name = ALLOWED_RESET_COLLECTIONS[key]
+        # Sales use "created_at" for date field but also have location_id; use dedicated logic
+        if key == "sales":
+            f = base_filter("created_at")
+        elif key == "accounting_entries":
+            f = base_filter("date")
+            # Pre-fetch entry ids so we can also wipe their lines
+            async for e in db.accounting_entries.find(f, {"_id": 0, "id": 1}):
+                entry_ids_to_wipe.append(e["id"])
+        elif key == "accounting_entry_lines":
+            # Wipe orphaned lines matching the pre-collected entry ids
+            if entry_ids_to_wipe:
+                f = {"entry_id": {"$in": entry_ids_to_wipe}}
+            else:
+                # Standalone use — apply base filter directly (uses 'date')
+                f = base_filter("date")
+        elif key == "hr_payslips":
+            f = {}
+            if location_id:
+                f["location_id"] = location_id
+            if date_from and date_to:
+                f["period"] = {"$gte": date_from[:7], "$lte": date_to[:7]}
+        else:
+            f = base_filter("date")
+        res = await db[coll_name].delete_many(f)
+        results[key] = res.deleted_count
+
+    # Optional: also zero the starting_balance on chart accounts (rare, per-request opt-in)
+    if data.get("reset_chart_account_starting_balances"):
+        q = {}
+        if location_id:
+            q["location_id"] = location_id
+        chart_res = await db.chart_accounts.update_many(q, {"$set": {"starting_balance": 0}})
+        results["chart_account_starting_balances_zeroed"] = chart_res.modified_count
+
+    await _audit(current_user["id"], "reset", "financial_module", None, {
+        "scope": scope, "location_id": location_id, "date_from": date_from, "date_to": date_to,
+        "results": results,
+    })
+    logger.warning(f"FINANCIAL RESET by {current_user.get('email','?')} — scope={scope} loc={location_id or 'ALL'} results={results}")
+    return {"reset": True, "scope": scope, "location_id": location_id, "date_from": date_from, "date_to": date_to, "deleted": results}

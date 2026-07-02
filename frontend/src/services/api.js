@@ -246,6 +246,8 @@ export const financialApi = {
   bulkDeleteExpenses: (ids) => api.post('/financial/expenses/bulk-delete', { ids }),
   bulkDeleteAssets: (ids) => api.post('/financial/assets/bulk-delete', { ids }),
   bulkDeleteBudgets: (ids) => api.post('/financial/budgets/bulk-delete', { ids }),
+  // NUCLEAR — admin only. Wipes test transactions across finance collections.
+  resetModule: (payload) => api.post('/financial/reset', payload),
 };
 
 // ---- CHART ACCOUNTS (cash / bank / mobile money — assigned to users) ----

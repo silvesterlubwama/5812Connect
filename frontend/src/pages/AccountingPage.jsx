@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
 import { BookOpen, Plus, RefreshCw, Trash2, Check, X, RotateCcw, FileText, TrendingUp, TrendingDown, Scale, Wallet, Users } from 'lucide-react';
-import api, { chartAccountsApi, adminApi } from '../services/api';
+import api, { chartAccountsApi, adminApi, financialApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -70,6 +70,40 @@ export default function AccountingPage() {
   const [viewAccountTxns, setViewAccountTxns] = useState(null); // { account, transactions }
   const [showTransferForm, setShowTransferForm] = useState(false);
   const [transferForm, setTransferForm] = useState({ from_account_id: '', to_account_id: '', amount: '', notes: '' });
+
+  // Financial reset (nuclear) — admin only
+  const [showReset, setShowReset] = useState(false);
+  const [resetForm, setResetForm] = useState({
+    confirm: '', scope: 'location', location_id: '', date_from: '', date_to: '',
+    include: { donations: true, expenses: true, sales: true, accounting_entries: true, accounting_entry_lines: true, budgets: true, chart_account_transfers: true, hr_payslips: false, assets: false },
+    reset_chart_account_starting_balances: false,
+  });
+  const [resetting, setResetting] = useState(false);
+
+  const submitReset = async () => {
+    if (resetForm.confirm !== 'RESET') return toast.error('Type RESET (case-sensitive) to confirm');
+    if (!window.confirm(`REALLY delete financial data for ${resetForm.scope === 'all' ? 'ALL locations' : resetForm.location_id || 'the selected scope'}? This cannot be undone.`)) return;
+    setResetting(true);
+    try {
+      const include = Object.keys(resetForm.include).filter(k => resetForm.include[k]);
+      const r = await financialApi.resetModule({
+        confirm: 'RESET',
+        scope: resetForm.scope,
+        location_id: resetForm.location_id,
+        date_from: resetForm.date_from,
+        date_to: resetForm.date_to,
+        include,
+        reset_chart_account_starting_balances: resetForm.reset_chart_account_starting_balances,
+      });
+      const total = Object.values(r.data.deleted || {}).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0);
+      toast.success(`Reset complete — ${total} row(s) deleted across ${Object.keys(r.data.deleted || {}).length} collections`, { duration: 8000 });
+      setShowReset(false);
+      setResetForm({ ...resetForm, confirm: '' });
+      loadChartAccounts();
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Reset failed'); }
+    finally { setResetting(false); }
+  };
 
   const loadChartAccounts = useCallback(async () => {
     setChartAccountsLoading(true);
@@ -579,6 +613,7 @@ export default function AccountingPage() {
             </div>
             {isFinanceAdmin && (
               <div className="flex gap-2">
+                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setShowReset(true)} data-testid="cha-reset-btn" title="Wipe test data — admin only"><Trash2 size={12} className="mr-1" /> Reset Finance</Button>
                 <Button size="sm" variant="outline" onClick={() => setShowTransferForm(true)} data-testid="cha-new-transfer-btn"><RotateCcw size={12} className="mr-1" /> Transfer</Button>
                 <Button size="sm" onClick={openNewChartAccount} data-testid="cha-new-account-btn"><Plus size={14} className="mr-1" /> New Cash Account</Button>
               </div>
@@ -1136,6 +1171,73 @@ export default function AccountingPage() {
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowTransferForm(false)}>Cancel</Button>
               <Button className="flex-1" onClick={submitTransfer} disabled={!transferForm.from_account_id || !transferForm.to_account_id || !transferForm.amount} data-testid="cha-transfer-save">Transfer</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* FINANCIAL RESET DIALOG (nuclear — admin only) */}
+      <Dialog open={showReset} onOpenChange={setShowReset}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="text-destructive">⚠︎ Reset Financial Data</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 rounded border border-destructive/40 bg-destructive/5 text-xs">
+              <strong className="block mb-1">This wipes test transactions permanently.</strong>
+              Chart account definitions are preserved, but donations, expenses, sales, journal entries, budgets and transfers matching the scope will be deleted. Balances will recompute automatically from the surviving data.
+            </div>
+
+            <div className="space-y-1.5"><Label className="text-xs">Scope *</Label>
+              <Select value={resetForm.scope} onValueChange={v => setResetForm({...resetForm, scope: v})}>
+                <SelectTrigger data-testid="reset-scope-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="location">One location</SelectItem>
+                  <SelectItem value="period">Date range (all locations)</SelectItem>
+                  <SelectItem value="all">Everything — every location, all time</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {resetForm.scope !== 'all' && (
+              <div className="space-y-1.5"><Label className="text-xs">Location {resetForm.scope === 'location' ? '*' : '(optional filter)'}</Label>
+                <Select value={resetForm.location_id || '_none'} onValueChange={v => setResetForm({...resetForm, location_id: v === '_none' ? '' : v})}>
+                  <SelectTrigger className="h-9" data-testid="reset-location-select"><SelectValue placeholder="Pick a location" /></SelectTrigger>
+                  <SelectContent><SelectItem value="_none">— None —</SelectItem>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5"><Label className="text-xs">From (optional)</Label>
+                <Input type="date" value={resetForm.date_from} onChange={e => setResetForm({...resetForm, date_from: e.target.value})} data-testid="reset-from" />
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">To (optional)</Label>
+                <Input type="date" value={resetForm.date_to} onChange={e => setResetForm({...resetForm, date_to: e.target.value})} data-testid="reset-to" />
+              </div>
+            </div>
+
+            <div className="space-y-1.5"><Label className="text-xs">What to wipe</Label>
+              <div className="grid grid-cols-2 gap-1 text-xs">
+                {Object.keys(resetForm.include).map(k => (
+                  <label key={k} className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" className="accent-primary" checked={resetForm.include[k]} onChange={() => setResetForm({...resetForm, include: {...resetForm.include, [k]: !resetForm.include[k]}})} data-testid={`reset-include-${k}`} />
+                    <span className="capitalize">{k.replace(/_/g, ' ')}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" className="accent-primary" checked={resetForm.reset_chart_account_starting_balances} onChange={e => setResetForm({...resetForm, reset_chart_account_starting_balances: e.target.checked})} data-testid="reset-zero-starting" />
+              Also zero chart-account starting balances (rare)
+            </label>
+
+            <div className="space-y-1.5"><Label className="text-xs text-destructive">Type <code className="px-1 bg-muted">RESET</code> to confirm *</Label>
+              <Input value={resetForm.confirm} onChange={e => setResetForm({...resetForm, confirm: e.target.value})} placeholder="RESET" data-testid="reset-confirm-input" />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowReset(false)}>Cancel</Button>
+              <Button variant="destructive" className="flex-1" onClick={submitReset} disabled={resetting || resetForm.confirm !== 'RESET'} data-testid="reset-confirm-btn">{resetting ? 'Resetting…' : 'Delete permanently'}</Button>
             </div>
           </div>
         </DialogContent>

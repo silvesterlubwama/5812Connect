@@ -1,5 +1,14 @@
 # 58:12 Connect — Changelog
 
+## Iteration 208 (Feb 2026) — Admin Reset Financial Module (testing safety net)
+- **New endpoint** `POST /api/financial/reset` — strict admin-only. Requires `confirm: "RESET"` body. Wipes any subset of {donations, expenses, sales, accounting_entries, accounting_entry_lines, budgets, chart_account_transfers, assets, sublocation_transfers, hr_payslips} scoped by `location_id` + optional `date_from` / `date_to`.
+- **Balances self-heal:** Chart account definitions and `starting_balance` are preserved by default. Since chart-account balances are computed live from the referencing transactions, deleting them causes balance to snap back to the starting value. Optional `reset_chart_account_starting_balances: true` also zeros the seed.
+- **Journal entry lines cascade:** deleting accounting_entries collects their IDs first, then removes matching lines so no orphans linger.
+- **Audit + warning log:** every reset is `_audit`ed and logged at WARNING level with scope, location, results.
+- **Frontend:** Accounting → Cash Accounts tab gains an admin-only "Reset Finance" button that opens a guarded dialog: scope (one location / date range / everything), collections checklist, optional starting-balance zeroing, and a "type RESET" confirmation field. Balances refresh automatically after success.
+- **Verified end-to-end:** created a chart account with starting_balance=50000 UGX, spent 5000 (balance→45000), reset scope=location → 1 expense deleted → balance snapped back to 50000. Also verified 400 responses on missing `confirm` and missing `location_id`.
+
+
 ## Iteration 207 (Feb 2026) — Payslip PDF Export + HR Onboarding Checklist
 - **Server-side payslip PDF:** `GET /api/hr/payslips/{id}/pdf` renders a WeasyPrint-styled A4 PDF (58:12 branded header, staff meta grid, line-items table, summary + status). Access restricted to admins/HR + the payslip owner. Filename: `payslip-<Staff_Name>-<period>.pdf`.
 - **Frontend PortalProfile:** payslip Download button and Review dialog now call the PDF endpoint via authenticated `api.get(..., {responseType:'blob'})` and trigger a browser download — no more browser-print workaround.
