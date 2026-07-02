@@ -996,23 +996,28 @@ async def get_sponsor(sponsor_id: str, current_user: dict = Depends(require_staf
 
 @router.get("/financial/accounts")
 async def list_sublocation_accounts(campus_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
-    """Get financial accounts per sub-location within a campus, unified at campus level."""
-    # NOTE: campus filter not used here; we explicitly resolve the target campus from the caller
+    """Get financial accounts per sub-location within a campus, unified at campus level.
+
+    (iter208d) The `starting_balance` for each sub-location is now DERIVED from
+    the sum of `chart_accounts.starting_balance` at that location — chart
+    accounts are the single source of truth for opening cash.  The legacy
+    `financial_accounts.starting_balance` field is retained only as a fallback
+    for locations that have not yet been migrated (see /repair-starting-balances).
+    """
     target_campus = campus_id or current_user.get("active_campus_id") or ""
     if not target_campus:
         raise HTTPException(status_code=400, detail="Campus ID required")
-    # Get all sub-locations under this campus
     subs = await db.locations.find(
         {"$or": [{"parent_id": target_campus}, {"id": target_campus}]},
         {"_id": 0, "id": 1, "name": 1, "type": 1}
     ).to_list(50)
-    # Ensure a financial_account record exists for each sub (auto-create on demand)
     accounts = []
     campus_total_in = 0
     campus_total_out = 0
+    campus_starting = 0
     for sub in subs:
         sid = sub["id"]
-        # Get/create the financial_account record for this sub-location
+        # Get/create the legacy financial_account record (kept for backward-compat only)
         acct = await db.financial_accounts.find_one({"campus_id": target_campus, "location_id": sid}, {"_id": 0})
         if not acct:
             acct = {
@@ -1027,31 +1032,44 @@ async def list_sublocation_accounts(campus_id: Optional[str] = None, current_use
             }
             await db.financial_accounts.insert_one(acct)
             acct.pop("_id", None)
+        # NEW canonical starting balance = sum of chart cash accounts at this location
+        chart_start_result = await db.chart_accounts.aggregate([
+            {"$match": {"location_id": sid, "active": {"$ne": False}}},
+            {"$group": {"_id": None, "total": {"$sum": "$starting_balance"}}}
+        ]).to_list(1)
+        chart_start = float((chart_start_result[0]["total"] if chart_start_result else 0) or 0)
+        # Fallback to legacy value only when no chart accounts exist for this location yet
+        legacy_start = float(acct.get("starting_balance", 0) or 0)
+        starting_balance = chart_start if chart_start > 0 else legacy_start
         donations = await db.donations.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-        # Only count approved expenses in the totals
         expenses = await db.expenses.aggregate([{"$match": {"location_id": sid, "status": {"$in": ["approved", None]}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
         sales = await db.sales.aggregate([{"$match": {"location_id": sid}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
         total_in = (donations[0]["total"] if donations else 0) + (sales[0]["total"] if sales else 0)
         total_out = expenses[0]["total"] if expenses else 0
         campus_total_in += total_in
         campus_total_out += total_out
+        campus_starting += starting_balance
         accounts.append({
             "id": acct["id"],
             "location_id": sid,
             "location_name": sub.get("name", ""),
             "location_type": sub.get("type", ""),
-            "starting_balance": acct.get("starting_balance", 0),
+            "starting_balance": starting_balance,          # now derived from chart accounts
+            "starting_balance_source": "chart_accounts" if chart_start > 0 else "legacy",
+            "legacy_starting_balance": legacy_start,        # so admins can spot unmigrated data
             "currency": acct.get("currency", "UGX"),
             "total_income": total_in,
             "total_expenses": total_out,
-            "balance": total_in - total_out,
+            "balance": round(starting_balance + total_in - total_out, 2),  # true current cash
         })
     return {
         "campus_id": target_campus,
         "accounts": accounts,
         "campus_total_income": campus_total_in,
         "campus_total_expenses": campus_total_out,
-        "campus_balance": campus_total_in - campus_total_out,
+        "campus_starting_balance": round(campus_starting, 2),
+        "campus_balance": round(campus_starting + campus_total_in - campus_total_out, 2),
+        "campus_net_change": round(campus_total_in - campus_total_out, 2),
     }
 
 
@@ -1416,6 +1434,85 @@ async def update_asset_valuation(asset_id: str, data: dict, current_user: dict =
 
 
 
+
+
+@router.post("/financial/repair-starting-balances")
+async def repair_starting_balances(current_user: dict = Depends(require_admin)):
+    """One-time migration (iter208d): copy any legacy per-sub-location
+    `financial_accounts.starting_balance` into a chart cash account for that
+    location so the two views agree.  Idempotent — skips locations that already
+    have chart accounts carrying a starting balance.
+
+    Behaviour per legacy record with `starting_balance > 0`:
+      - If the location already has ≥1 active chart account with any
+        `starting_balance > 0`: skip (assume already migrated).
+      - Otherwise: find the location's first active chart account and stamp
+        the legacy value onto its `starting_balance`. If no active chart
+        account exists, create one named "Opening Cash".
+    """
+    migrated = []
+    skipped_already_migrated = []
+    created_accounts = []
+    async for legacy in db.financial_accounts.find({"starting_balance": {"$gt": 0}}, {"_id": 0}):
+        loc_id = legacy.get("location_id")
+        amount = float(legacy.get("starting_balance") or 0)
+        if not loc_id or amount <= 0:
+            continue
+        # Any active chart account at this location already carrying opening cash?
+        existing = await db.chart_accounts.find_one(
+            {"location_id": loc_id, "active": {"$ne": False}, "starting_balance": {"$gt": 0}},
+            {"_id": 0, "id": 1, "starting_balance": 1},
+        )
+        if existing:
+            skipped_already_migrated.append({"location_id": loc_id, "chart_account_id": existing["id"]})
+            continue
+        # Find first active chart account at this location
+        target = await db.chart_accounts.find_one(
+            {"location_id": loc_id, "active": {"$ne": False}},
+            {"_id": 0, "id": 1, "name": 1},
+        )
+        if target:
+            await db.chart_accounts.update_one(
+                {"id": target["id"]},
+                {"$set": {"starting_balance": amount, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            migrated.append({"location_id": loc_id, "chart_account_id": target["id"], "name": target.get("name"), "amount": amount})
+        else:
+            new_acct = {
+                "id": f"cha_{uuid.uuid4().hex[:10]}",
+                "name": "Opening Cash",
+                "location_id": loc_id,
+                "campus_id": legacy.get("campus_id"),
+                "starting_balance": amount,
+                "currency": legacy.get("currency", "UGX"),
+                "active": True,
+                "assigned_user_ids": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.chart_accounts.insert_one(new_acct)
+            new_acct.pop("_id", None)
+            created_accounts.append({"location_id": loc_id, "chart_account_id": new_acct["id"], "amount": amount})
+        # Zero the legacy field so it no longer competes
+        await db.financial_accounts.update_one(
+            {"id": legacy["id"]},
+            {"$set": {"starting_balance": 0, "migrated_to_chart_accounts_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    # Bust balance cache so users see the new numbers immediately
+    from routers.chart_accounts import invalidate_balance_cache
+    invalidate_balance_cache()
+    await _audit(current_user["id"], "repair", "starting_balances", None, {
+        "migrated": len(migrated), "created": len(created_accounts), "skipped": len(skipped_already_migrated),
+    })
+    return {
+        "migrated": migrated,
+        "created_accounts": created_accounts,
+        "skipped_already_migrated": skipped_already_migrated,
+        "message": (
+            f"Migrated {len(migrated)} legacy starting balances into existing chart accounts, "
+            f"created {len(created_accounts)} new chart accounts, "
+            f"skipped {len(skipped_already_migrated)} already-migrated locations."
+        ),
+    }
 
 
 # ========== RETROACTIVE REPAIR: Orphaned Journal Entries ==========

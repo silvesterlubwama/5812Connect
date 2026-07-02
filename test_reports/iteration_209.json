@@ -1,0 +1,21 @@
+{
+  "summary": "Iter209 backend validation of Option A (chart_accounts as single source of truth for opening cash). Seeded a chart cash account with starting_balance=12345 on an active sub-location, then validated /api/financial/accounts new schema, formula, legacy fallback, admin-only migration endpoint (idempotent), plus trial-balance and repair-orphaned-journals regressions. All 9 pytest cases passed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter209_starting_balance.py",
+    "/app/test_reports/pytest/iter209.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "financial.py list_sublocation_accounts uses chart_start > 0 to decide source; a location whose chart accounts intentionally have starting_balance=0 will silently fall back to the legacy field. Acceptable per current design, but worth surfacing in the UI as 'no opening cash configured' vs 'legacy'.",
+    "repair_starting_balances: on second run of the endpoint, legacy financial_accounts.starting_balance rows are already zeroed so the aggregate cursor returns nothing → migrated=[], created=[], skipped=[]. That matches idempotency but means the 'skipped_already_migrated' count is only populated when there's a race window; the docstring implies it will reflect prior migrations too. Cosmetic."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter209_starting_balance.py"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created 1 chart cash account 'TEST_iter209_opening' (starting_balance=12345 UGX) on the first sub-location of the first campus. Kept active=True; teardown deactivates + zeroes starting_balance so subsequent test runs are clean.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Migration endpoint has already been executed by these tests, so legacy financial_accounts.starting_balance is now 0 across all rows. The seeded chart account may still exist (deactivated) unless the fixture teardown succeeded — safe to leave alone."
+}

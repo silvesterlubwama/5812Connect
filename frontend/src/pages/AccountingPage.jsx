@@ -256,6 +256,14 @@ export default function AccountingPage() {
       fetchAll();
     } catch (err) { toast.error(err.response?.data?.detail || 'Repair failed'); }
   };
+  const repairStartingBalances = async () => {
+    if (!window.confirm('One-time migration: copies any legacy per-location Starting Balance from Finance into a chart cash account for that location. Idempotent — skips locations already migrated. Continue?')) return;
+    try {
+      const r = await api.post('/financial/repair-starting-balances');
+      toast.success(r.data.message || 'Starting balances migrated', { duration: 8000 });
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Migration failed'); }
+  };
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -565,6 +573,7 @@ export default function AccountingPage() {
                 <>
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairReversalLines} data-testid="acc-repair-reversals-btn" title="One-time fix for legacy reversals whose lines were left as draft"><RefreshCw size={12} className="mr-1" /> Repair Reversals</Button>
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairOrphanedJournals} data-testid="acc-repair-orphans-btn" title="Reverse auto-posted JEs whose source donation/expense was deleted — realigns Trial Balance with Finance totals"><RefreshCw size={12} className="mr-1" /> Repair Orphans</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairStartingBalances} data-testid="acc-repair-starting-balances-btn" title="One-time migration: copy legacy Finance starting balances into chart cash accounts"><RefreshCw size={12} className="mr-1" /> Migrate Starting Balances</Button>
                 </>
               )}
               <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>
