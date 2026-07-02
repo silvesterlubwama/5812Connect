@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 206 (Feb 2026)
+**Reversal line-status bug fix + HR Payslip self-service workflow.**
+
+- Fixed the "reversed transactions still counted as income" bug (`reverse_entry` was leaving `accounting_entry_lines.status='draft'`).
+- Added `/api/accounting/entries/repair-reversal-lines` (one-time backfill for existing data — production needs this) + `/entries/bulk-reverse` alongside bulk-delete.
+- HR: `days_worked_override` + `pto_days_override` on payslip generate; approved timesheets auto-feed generation; staff-submitted timesheets with manager approval; `/hr/payslips/mine` self-service.
+- Payroll expense on mark-paid auto-tags `paid_from_account_id` from `store_settings.default_cash_account_id` so cash account balances update automatically.
+- PortalProfile: "My Payslips" (Review + Print/PDF) + "My Timesheets" (submit + track status).
+- HRPage: "Timesheets" tab for manager approve/reject with status + period filters.
+- **14/14** iter 206 pytest pass (regression from missing decorator flagged by tester → fixed).
+
 ## Recently Resolved — Iteration 204 (Feb 2026)
 **Finance edit/delete UI restored + POS auto-tag + batch balance perf.**
 

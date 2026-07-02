@@ -722,6 +722,9 @@ async def bulk_reverse_entries(data: dict, current_user: dict = Depends(require_
         "skipped_not_posted": skipped_status,
         "errors": errors,
     }
+
+
+@router.post("/entries/bulk-delete")
 async def bulk_delete_entries(data: dict, current_user: dict = Depends(require_admin)):
     """Bulk-delete draft/cancelled journal entries. Posted entries are skipped (must be reversed)."""
     ids = data.get("ids") or []

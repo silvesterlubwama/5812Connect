@@ -1,5 +1,29 @@
 # 58:12 Connect — Changelog
 
+## Iteration 206 (Feb 2026) — Reversal Line-Status Fix + HR Payslip Workflow
+### 🔴 P0 Bug fix — reversed transactions still counted in Income / P&L / Trial Balance
+- **Root cause:** `reverse_entry` marked the reversal ENTRY as `posted` but forgot to update its `accounting_entry_lines` from `draft` to `posted`. Line-level report queries filter by `status='posted'`, so the reversal was invisible while the original still counted — user saw already-reversed amounts as income.
+- **Fix:** `reverse_entry` now `update_many` flips reversal lines to `posted`.
+- **Backfill:** `POST /api/accounting/entries/repair-reversal-lines` (admin) scans all posted entries with any draft-status lines and fixes them. Auto-audited. UI exposes a "Repair Reversals" button on the entries toolbar.
+
+### 🟠 Delete UX — bulk-reverse alongside bulk-delete
+- `POST /api/accounting/entries/bulk-reverse` — accepts `{ids:[...]}`, reverses each posted entry (idempotent — skips already-reversed and non-posted). Returns `{reversed, skipped_already_reversed, skipped_not_posted, errors[]}`.
+- Toast copy improved: delete now says "…N posted skipped — click Bulk Reverse to reverse them instead."
+
+### 🟢 HR Payslip module — self-service + timesheets + auto-expense
+- **Payslip enhancements:** `_generate_payslips_for` accepts `days_worked_override` and `pto_days_override`. Approved timesheets auto-merge on generate (opt-out via `use_timesheets:false`). Payslip doc gains `days_worked` and `pto_days` fields plus a transparent `Days-worked adjustment` line-item when short.
+- **Timesheets:** `POST/GET/PUT/DELETE /api/hr/timesheets` — staff submits, manager approves/rejects, staff can withdraw non-approved. Same-period resubmissions update the existing row (no duplicates). Non-HR users only see their own list.
+- **Self-service payslips:** `GET /api/hr/payslips/mine` + `GET /api/hr/payslips/{id}/mine`. Cross-user access blocked at 404.
+- **Auto-expense on paid:** `_aggregate_payroll_expense` now sets `paid_from_account_id` on the payroll expense from `store_settings.default_cash_account_id` for that location — draws the store's real cash account balance automatically. Preserves the field on subsequent same-day aggregations.
+- **Frontend:**
+  - `PortalProfile.jsx` — "My Payslips" card (Review + Print/PDF), "My Timesheets" card, submit-timesheet dialog with period/days_worked/PTO/notes.
+  - `HRPage.jsx` — new "Timesheets" tab with status + period filter, approve/reject actions per row.
+
+### Testing
+- `testing_agent_v3_fork` iter 206 → **14/14 pytest pass** (`test_iter206_reversal_fix_and_hr_payslips.py`).
+- Regression flagged by the tester (missing `@router.post` decorator on the pre-existing `bulk_delete_entries` after inserting new endpoints above it) — restored, re-verified (HTTP 400 with correct body).
+
+
 ## Iteration 205 (Feb 2026) — Extended POS Payment-Method → Account Mapping
 - `sales.create_sale` now routes 12 payment-method variants to the correct default account:
   - `cash` → `default_cash_account_id`
