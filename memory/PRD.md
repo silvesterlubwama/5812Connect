@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 214 (Feb 2026)
+**HR RBAC scoping · Time-off (PTO) flow · On-behalf timesheet submission.**
+
+- **RBAC scoping** (`_hr_scope` helper in `hr.py`): regular staff see only own HR data; HR/director/manager see only data at their `user.location_ids` (falls back to `active_campus_id`); admin sees all (campus filter dropped for admin on `list_payslips`).
+- **Time-off requests** (`hr_time_off` collection):
+  - `POST /api/hr/time-off` — start_date/end_date + reason. ±7-day window check (must be within 7 days of today, either direction). `admin_override=true` bypass — admin/system_admin only.
+  - `GET /api/hr/time-off` (scope-filtered), `PUT /{id}/approve` (director+), `PUT /{id}/reject` (director+), `DELETE /{id}` (owner or HR).
+- **On-behalf timesheet & PTO submission**: director+/HR/admin can pass `staff_id` in body to create on behalf of a target user; director-role callers can only target users at their location_ids. Prevents non-app-using staff from being blocked from HR tracking.
+- **Timesheet enhancement**: optional `entries: [{date, hours?, day_worked?}]` daily breakdown.
+- **Tested**: iter214 → **22/22 backend tests pass** + iter211-213 regression still green (15/15). Zero critical bugs.
+
 ## Recently Resolved — Iteration 211-213 (Feb 2026)
 **Production bug fix: Payroll → Accounting posting + wrong SALES journal + per-payslip cash/location override.**
 

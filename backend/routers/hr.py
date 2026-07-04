@@ -252,8 +252,10 @@ async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = 
     # Apply role scope
     scope = _hr_scope(current_user, user_field="staff_id", loc_field="location_id")
     query.update(scope)
-    # Retain campus filter for admins jumping between campuses
-    if _is_hr_or_above(current_user):
+    # Retain campus filter for HR/director/manager only — admins see truly all
+    # (fixes iter214 minor note: admin was previously scoped to active_campus).
+    role = (current_user.get("role") or "").lower()
+    if role in {"hr", "director", "executive director", "regional director", "manager"}:
         campus = await get_campus_filter(current_user)
         if campus:
             query.update(campus)
