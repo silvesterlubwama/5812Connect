@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 211-213 (Feb 2026)
+**Production bug fix: Payroll → Accounting posting + wrong SALES journal + per-payslip cash/location override.**
+
+- **Payroll auto-posts to Accounting as "Salary"** (`_aggregate_payroll_expense` now calls `_post_to_accounting('payroll', ...)`; new `payroll` branch in `_post_to_accounting` finds a Wages/Salaries expense account, credits Cash, narrates `Salary — {notes}`).
+- **No more SALES-journal mis-attribution** — `_post_to_accounting` restricts journal fallback to `kind ∈ {miscellaneous, general, purchases}` and AUTO-CREATES a `GL / General Ledger` (kind=miscellaneous) journal at the location if none exists.
+- **Per-payslip cash-account + location override** — `PUT /api/hr/payslips/{id}` accepts `paid_from_account_id` and `payroll_location_id`. UI: two selectors in HR → Payslips → Edit dialog.
+- **Retroactive repair** — `POST /api/financial/repair-wrong-journal` re-tags historical auto-posted JEs from any sales journal to their location's GL (idempotent). UI button `acc-repair-wrong-journal-btn` on Accounting.
+- **Re-aggregation robustness** — Iter212 caught symmetric idempotency bugs: `_post_to_accounting` idempotency guard AND `_reverse_auto_posted_je` finder both now filter `is_reversed:{$ne:True}` — reverse+repost cycles are correct across ARBITRARY number of same-day payslip payments. Iter213 verified with 3-payslip test on fresh location: 100k → reversed, 300k → reversed, 650k = sum-of-all-3 = active. Aggregate matches ledger exactly.
+- **Already-paid payslip edits** — Editing paid_from_account_id / payroll_location_id / any numeric field on an already-paid payslip now re-aggregates (previously only the draft→paid transition triggered aggregation).
+- **Tested**: iter213 → **3/3 targeted + 17-test suite green**. Zero critical bugs remaining.
+
 ## Recently Resolved — Iteration 210 (Feb 2026)
 **HR Payslip full edit + audit trail; Donor/Vendor auto-profiles + drilldown; Bulk payslip export.**
 
