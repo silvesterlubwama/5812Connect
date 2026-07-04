@@ -639,6 +639,10 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
         update["paid_at"] = datetime.now(timezone.utc).isoformat()
         # Aggregate into a daily payroll expense for the location (no staff names)
         await _aggregate_payroll_expense({**existing, **update}, current_user)
+    elif existing.get("status") == "paid" and any(k in update for k in ("paid_from_account_id", "payroll_location_id", "net_salary", "gross_salary", "allowances", "deductions")):
+        # Already-paid payslip is being edited — re-aggregate so the ledger
+        # reflects the new totals or the new account/location tagging.
+        await _aggregate_payroll_expense({**existing, **update}, current_user)
     # Build diff-based audit entry
     diff = {k: {"old": existing.get(k), "new": v} for k, v in update.items() if existing.get(k) != v and k not in ("updated_at", "updated_by", "updated_by_name")}
     audit_entry = {

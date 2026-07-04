@@ -391,3 +391,120 @@ class TestRegressionRepairs:
         r = requests.get(f"{BASE}/api/vendors", headers=admin_h, timeout=20)
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+# ============ 7. iter212 REGRESSIONS — no double-posting after idempotency fix ============
+
+class TestNoDoublePosting:
+    def test_donation_creates_exactly_one_je(self, admin_h, default_location_id):
+        # Use TODAY's date so the entry sorts to the top of /accounting/entries
+        today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%d")
+        dbody = {
+            "donor_name": f"TEST_Iter212_D_{uuid.uuid4().hex[:5]}",
+            "amount": 12345,
+            "currency": "UGX",
+            "date": today,
+            "location_id": default_location_id,
+        }
+        rd = requests.post(f"{BASE}/api/financial/donations", json=dbody, headers=admin_h, timeout=20)
+        assert rd.status_code in (200, 201), rd.text[:400]
+        did = rd.json()["id"]
+        # Filter by date to guarantee inclusion regardless of prior data volume
+        r3 = requests.get(f"{BASE}/api/accounting/entries", params={"location_id": default_location_id, "date_from": today, "include_reversed": "true", "limit": 500}, headers=admin_h, timeout=20)
+        entries = r3.json() if isinstance(r3.json(), list) else r3.json().get("items", [])
+        related = [e for e in entries if e.get("auto_generated_from") == "donation" and e.get("source_id") == did]
+        active = [e for e in related if not e.get("is_reversed")]
+        assert len(active) == 1, f"Expected exactly one active donation JE, got {len(active)}: {[e['id'] for e in active]}"
+
+    def test_expense_approve_creates_exactly_one_je(self, admin_h, default_location_id):
+        # Create + approve a non-payroll expense
+        ebody = {
+            "vendor_name": f"TEST_Iter212_V_{uuid.uuid4().hex[:5]}",
+            "category": "supplies",
+            "amount": 9999,
+            "currency": "UGX",
+            "date": "2025-02-16",
+            "location_id": default_location_id,
+            "description": "iter212 regression",
+        }
+        rc = requests.post(f"{BASE}/api/financial/expenses", json=ebody, headers=admin_h, timeout=20)
+        if rc.status_code not in (200, 201):
+            pytest.skip(f"expense creation failed: {rc.status_code} {rc.text[:200]}")
+        eid = rc.json()["id"]
+        ra = requests.put(f"{BASE}/api/financial/expenses/{eid}", json={"status": "approved", "reason": "iter212 approve"}, headers=admin_h, timeout=20)
+        if ra.status_code not in (200, 201):
+            # Some deployments use POST /approve
+            ra = requests.post(f"{BASE}/api/financial/expenses/{eid}/approve", headers=admin_h, timeout=20)
+        if ra.status_code not in (200, 201):
+            pytest.skip(f"expense approval endpoint unavailable: {ra.status_code}")
+        r3 = requests.get(f"{BASE}/api/accounting/entries", params={"include_reversed": "true", "limit": 500}, headers=admin_h, timeout=20)
+        entries = r3.json() if isinstance(r3.json(), list) else r3.json().get("items", [])
+        related = [e for e in entries if e.get("auto_generated_from") == "expense" and e.get("source_id") == eid]
+        active = [e for e in related if not e.get("is_reversed")]
+        # If expense-approve doesn't post JEs in this codebase, at least ensure no duplicates
+        assert len(active) <= 1, f"Expected 0 or 1 active expense JE, got {len(active)}"
+
+    def test_single_payslip_paid_posts_exactly_one_active_je(self, admin_h, default_location_id):
+        u, _ = _create_staff_user(admin_h, "single")
+        ps = _make_manual_payslip(admin_h, u["id"], u["name"], 111111, "2025-06", default_location_id)
+        pid = ps["id"]
+        requests.put(f"{BASE}/api/hr/payslips/{pid}", json={"status": "approved", "reason": "single approve"}, headers=admin_h, timeout=20)
+        r = requests.put(f"{BASE}/api/hr/payslips/{pid}", json={"status": "paid", "payroll_location_id": default_location_id, "reason": "single pay"}, headers=admin_h, timeout=20)
+        assert r.status_code == 200, r.text[:400]
+        today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%d")
+        expense_id = f"payroll_{default_location_id}_{today}"
+        r3 = requests.get(f"{BASE}/api/accounting/entries", params={"include_reversed": "true", "limit": 500}, headers=admin_h, timeout=20)
+        entries = r3.json() if isinstance(r3.json(), list) else r3.json().get("items", [])
+        related = [e for e in entries if e.get("auto_generated_from") == "payroll" and e.get("source_id") == expense_id]
+        active = [e for e in related if not e.get("is_reversed")]
+        assert len(active) == 1, f"Expected exactly one active payroll JE for the aggregate, got {len(active)}"
+
+    def test_edit_already_paid_payslip_updates_ledger(self, admin_h, cash_account_id, default_location_id):
+        # Create staff, pay, then edit paid_from_account_id — expect fresh active JE
+        if not cash_account_id:
+            pytest.skip("No cash account available")
+        u, _ = _create_staff_user(admin_h, "editpaid")
+        ps = _make_manual_payslip(admin_h, u["id"], u["name"], 77777, "2025-06", default_location_id)
+        pid = ps["id"]
+        requests.put(f"{BASE}/api/hr/payslips/{pid}", json={"status": "approved", "reason": "ep approve"}, headers=admin_h, timeout=20)
+        r = requests.put(f"{BASE}/api/hr/payslips/{pid}", json={"status": "paid", "payroll_location_id": default_location_id, "reason": "ep pay"}, headers=admin_h, timeout=20)
+        assert r.status_code == 200
+        today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%d")
+        expense_id = f"payroll_{default_location_id}_{today}"
+
+        # Snapshot active JE id
+        def _fetch_related():
+            r3 = requests.get(f"{BASE}/api/accounting/entries", params={"include_reversed": "true", "limit": 500}, headers=admin_h, timeout=20)
+            ee = r3.json() if isinstance(r3.json(), list) else r3.json().get("items", [])
+            return [e for e in ee if e.get("auto_generated_from") == "payroll" and e.get("source_id") == expense_id]
+
+        before = _fetch_related()
+        before_active = [e for e in before if not e.get("is_reversed")]
+        assert before_active, "no active JE after paying — precondition failed"
+        prior_ids = {e["id"] for e in before_active}
+
+        # Now edit paid_from_account_id on the already-paid payslip
+        r2 = requests.put(
+            f"{BASE}/api/hr/payslips/{pid}",
+            json={"paid_from_account_id": cash_account_id, "reason": "iter212 change account"},
+            headers=admin_h,
+            timeout=20,
+        )
+        assert r2.status_code == 200, r2.text[:400]
+
+        after = _fetch_related()
+        after_active = [e for e in after if not e.get("is_reversed")]
+        # There must still be exactly one active JE, and prior active JEs should be reversed
+        assert len(after_active) == 1, f"Expected exactly one active JE after edit, got {len(after_active)}"
+        # And the aggregate expense amount should match latest active JE
+        rexp = requests.get(f"{BASE}/api/financial/expenses", params={"location_id": default_location_id, "date_from": today, "date_to": today}, headers=admin_h, timeout=20)
+        agg = [e for e in rexp.json() if e.get("id") == expense_id]
+        assert agg, "aggregate expense missing"
+        assert abs(float(after_active[0].get("total_debit") or 0) - float(agg[0]["amount"])) < 0.05, (
+            f"Active JE total_debit={after_active[0].get('total_debit')} != aggregate={agg[0]['amount']}"
+        )
+        # And at least one of the prior active JE ids must now be reversed
+        after_reversed_ids = {e["id"] for e in after if e.get("is_reversed")}
+        assert prior_ids & after_reversed_ids, (
+            f"Prior active JE not reversed after edit. prior={prior_ids} reversed_now={after_reversed_ids}"
+        )

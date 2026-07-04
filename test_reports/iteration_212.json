@@ -1,0 +1,42 @@
+{
+  "summary": "Iter212 re-test after main-agent fix to `_post_to_accounting` idempotency guard + `update_payslip` re-aggregation on already-paid edits. Both fixes verified in code. Ran 16 pytest cases (added 4 iter212 regressions: donation single-JE, expense approve single-JE, single-payslip single-JE, edit-already-paid re-post). Result: 12 passed, 2 failed, 2 skipped. The two failures pinpoint a SECOND, related critical bug that the iter211 fix did NOT fully close: `_reverse_auto_posted_je` in financial.py line 236 also lacks the `is_reversed:{$ne:True}` filter — after the first reversal, its `find_one` keeps picking up the OLD reversed entry, returns 0, and then `_post_to_accounting` (which now DOES filter is_reversed) still short-circuits on the STILL-active most-recent JE. Net effect: after the SECOND aggregation update, the ledger's active payroll JE is frozen and every further re-aggregation is a no-op. Confirmed via DB: source_id='payroll_loc_001_2026-07-04' has only 2 entries (je_45fdbc2571 total=470000 is_reversed=true; je_f8f1522fab total=3,970,000 active) while the aggregate expense doc = 6,003,330 across 20 staff.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "internal: routers/financial.py _reverse_auto_posted_je (line 236)",
+        "issue": "find_one({auto_generated_from, source_id}) has no `is_reversed:{$ne:True}` filter. After the FIRST reversal+repost cycle, Mongo returns the OLDER (already-reversed) entry — the function's early `if entry.get('is_reversed'): return 0` bails out, so the currently-active latest JE is NEVER reversed. Then _post_to_accounting sees that still-active entry and short-circuits. Result: from the THIRD payslip onward (same location, same day), the ledger's active payroll JE is frozen at the amount posted after payslip #2 — every subsequent salary paid is silently dropped from the ledger. Same-shape bug as iter211 but on the reversal side. RCA verified via direct DB query. FIX: change line 236 to `find_one({'auto_generated_from':source_kind,'source_id':source_id,'is_reversed':{'$ne':True}})`. This is a 1-line change; symmetric to the iter211 idempotency-guard fix.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/accounting/entries",
+        "issue": "Sorted by date desc (not created_at desc), so entries with old `date` values (e.g. tests using 2025-02-16) are pushed past limit=500 even when just created. Tests should always pass `date_from=today` or the API should offer sort=created_at."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py",
+    "/app/test_reports/pytest/iter212_results.xml"
+  ],
+  "action_items": [
+    "FIX CRITICAL (financial.py line 236 in _reverse_auto_posted_je): add `'is_reversed':{'$ne':True}` to the find_one filter so the reversal targets the CURRENTLY-active JE, not the oldest already-reversed one. Without this, iter211's _post_to_accounting fix is only half a fix — the reversal step still misses so subsequent re-aggregations no-op.",
+    "OPTIONAL hardening: in _aggregate_payroll_expense, verify the reverse step by counting active JEs before/after (should be 0 immediately after reverse, then 1 after re-post). Log a warning if not."
+  ],
+  "critical_code_review_comments": [
+    "financial.py::_reverse_auto_posted_je is a mirror-image of the same bug just fixed in _post_to_accounting — it selects an entry by (auto_generated_from, source_id) but doesn't disambiguate active-vs-reversed. Every reverse+repost aggregate flow (payroll, and any future donation/expense edit that reverses) is broken past the 2nd cycle.",
+    "test_single_payslip_paid_posts_exactly_one_active_je passes because it only asserts len(active)==1 — but doesn't verify total_debit matches aggregate amount. Recommend strengthening this assertion (or keeping it as a distinct 'no duplicate JE' test and adding a separate 'amount matches' one).",
+    "iter211 fix was verified in place (financial.py line 321 correctly filters is_reversed). hr.py update_payslip re-aggregation on already-paid edit is also verified in place (line 642)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py (added 4 iter212 tests: donation, expense-approve, single-payslip, edit-already-paid; fixed donation-JE test to use today's date so /accounting/entries pagination surfaces it)"
+  ],
+  "success_rate": {"backend": "75% (12/16 pass; 2 skipped for env scope; 2 fail — SAME critical root cause: _reverse_auto_posted_je missing is_reversed filter)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Added ~6 TEST_Iter211_/TEST_Iter212_ staff users, several TEST_Iter212_D_ donors, further extended the payroll_loc_001_2026-07-04 aggregate to ~20 staff / 6,003,330 UGX. All TEST_-prefixed. Left iter211 data untouched as requested.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "One-line fix expected in _reverse_auto_posted_je (add is_reversed:{$ne:true} to its find_one, exactly like the iter211 fix in _post_to_accounting). After the fix, re-run only the two failing tests: `pytest /app/backend/tests/test_iter211_payroll_je_and_repair.py::TestPayrollAggregation::test_two_payslips_same_day_aggregate_and_reverse_prior_je /app/backend/tests/test_iter211_payroll_je_and_repair.py::TestNoDoublePosting::test_edit_already_paid_payslip_updates_ledger -v`. Note the aggregate expense payroll_loc_001_YYYY-MM-DD is deterministic per day — tests already assert amount>=net1+net2 and 'active JE == aggregate' so they're resilient across sessions. Existing broken state: payroll_loc_001_2026-07-04 aggregate=6,003,330 but active JE=3,970,000 (stale since 12:20:31 UTC) — will remain broken until the fix is applied and a new payslip is paid to trigger a fresh reverse+repost cycle.",
+  "rca of the issue": "SEQUENCE (verified via DB): (A) 1st payslip paid — expense doc created, JE1 posted (source_id=payroll_loc_001_YYYY-MM-DD). (B) 2nd payslip paid — _aggregate_payroll_expense updates expense.amount, calls _reverse_auto_posted_je which find_one's JE1 (active), reverses it (JE1.is_reversed=true), then _post_to_accounting posts JE2 (active). ✅ Works. (C) 3rd (and every later) payslip paid — _aggregate_payroll_expense updates expense.amount, calls _reverse_auto_posted_je which now find_one's *JE1* FIRST (returned before JE2 because Mongo natural order = insertion order), sees is_reversed=true, returns 0 (no reversal). Then _post_to_accounting runs its idempotency guard `find_one({...,'is_reversed':{'$ne':True}})` — matches JE2 (still active) → returns early. No new JE posted. ❌ Broken. Fix: `_reverse_auto_posted_je` must also filter `is_reversed:{$ne:True}` so it targets JE2 for reversal, allowing _post_to_accounting to post JE3."
+}

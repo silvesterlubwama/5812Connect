@@ -312,9 +312,14 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
     if not debit_acc or not credit_acc:
         logger.warning(f"Skipping JE for {kind} {doc.get('id')} — missing debit/credit account at location {loc_id}")
         return
-    # Idempotency — never post twice for the same source
+    # Idempotency — never post twice for the same (still-active) source.
+    # We must EXCLUDE reversed entries so that aggregate flows (like payroll)
+    # which reverse+repost on every update actually get a fresh JE for the
+    # new total.  Without the `is_reversed` filter, the re-post is a no-op
+    # and the ledger only carries the (now-cancelled) original pair.
     existing = await db.accounting_entries.find_one(
-        {"auto_generated_from": source_kind, "source_id": doc["id"]}, {"_id": 0, "id": 1}
+        {"auto_generated_from": source_kind, "source_id": doc["id"], "is_reversed": {"$ne": True}},
+        {"_id": 0, "id": 1},
     )
     if existing:
         return
