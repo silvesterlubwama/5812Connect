@@ -1,0 +1,30 @@
+{
+  "summary": "Iter213 verification of the _reverse_auto_posted_je fix (financial.py line 240 now filters is_reversed:{$ne:True}). Re-ran the two previously-failing iter212 tests + added a fresh 3-payslip same-day aggregate test on a brand-new location. All 3 tests PASS. DB verification confirms the fix works past the 2nd cycle: 3 payslips paid at fresh loc created 3 JEs — 2 reversed (100k, 300k intermediate totals) + 1 active (650k = sum of all 3 nets), matching the aggregate expense exactly. The stale-JE-selection bug in _reverse_auto_posted_je is FULLY closed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/accounting/entries", "issue": "Filters results by admin's campus scope; entries at brand-new sub-locations created during tests are not returned via API. Test falls back to direct DB verification. Not a functional bug in the payroll flow itself."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py",
+    "/app/test_reports/pytest/iter213_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix in /app/backend/routers/financial.py::_reverse_auto_posted_je (line 240) verified in place: `find_one({'auto_generated_from':source_kind,'source_id':source_id,'is_reversed':{'$ne':True}})` — targets the currently-active JE. Symmetric to iter211 idempotency fix in _post_to_accounting. Both halves of the reverse+repost cycle now robust across arbitrary cycles.",
+    "DB check for TEST_Iter213 loc confirms textbook behavior: pay1→JE(100k active); pay2→reverse JE(100k)+post JE(300k active); pay3→reverse JE(300k)+post JE(650k active). Result: 1 active JE of 650k matching aggregate.",
+    "The pre-existing broken state at payroll_loc_001_2026-07-04 (aggregate=6,003,330 but stale active JE=3,970,000) will self-repair on the next payslip paid at that loc, per the natural reverse+repost cycle. No manual data cleanup needed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py (added TestPayrollAggregationThreePayslips::test_three_payslips_same_day_single_active_je_matches_aggregate with API + DB-fallback verification for fresh-loc scope limitation)"
+  ],
+  "success_rate": {"backend": "100% (3/3 targeted tests pass)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created 1 fresh TEST_Iter213_Loc_* sub-location + 3 staff users + 3 payslips (all paid, aggregated to expense id payroll_{loc}_2026-07-04, amount=650000). Also 2 staff/payslips for the two-payslip aggregation retest and 1 staff for the edit-already-paid retest. All prefixed TEST_.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter211+iter212+iter213 payroll aggregation fixes fully verified. Both _post_to_accounting (line 321) AND _reverse_auto_posted_je (line 240) now filter is_reversed:{$ne:True}. Full test file: /app/backend/tests/test_iter211_payroll_je_and_repair.py (16+1=17 tests total; run all with `pytest -v` to regress).",
+  "rca of the issue": "Original iter212 RCA held true: _reverse_auto_posted_je's find_one lacked is_reversed filter, so after the 1st reverse+repost cycle it kept selecting the older reversed JE and returned 0 (no-op), causing _post_to_accounting to short-circuit on the still-active latest JE. Fix (add is_reversed:{$ne:True}) makes reverse target the currently-active JE, allowing the subsequent repost to proceed. Verified via 3-payslip DB inspection: JE1(100k)→reversed, JE2(300k=100k+200k)→reversed, JE3(650k=all three)→active. All amounts match aggregate at each step. Fix is complete."
+}

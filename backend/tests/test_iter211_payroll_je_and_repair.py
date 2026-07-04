@@ -236,6 +236,127 @@ class TestPayrollAggregation:
         )
 
 
+# ============ 2b. iter213 3-PAYSLIP SAME-DAY AGGREGATE (fresh location) ============
+
+class TestPayrollAggregationThreePayslips:
+    def test_three_payslips_same_day_single_active_je_matches_aggregate(self, admin_h):
+        """Verify _reverse_auto_posted_je fix: 3 payslips at fresh loc same day → 1 active JE matching aggregate."""
+        import datetime as _dt
+        # Create a FRESH location for isolation
+        loc_body = {"name": f"TEST_Iter213_Loc_{uuid.uuid4().hex[:6]}", "type": "sublocation"}
+        rl = requests.post(f"{BASE}/api/locations", json=loc_body, headers=admin_h, timeout=20)
+        if rl.status_code not in (200, 201):
+            pytest.skip(f"cannot create fresh loc: {rl.status_code} {rl.text[:200]}")
+        loc_id = rl.json()["id"]
+
+        # Seed chart of accounts: cash + salaries expense (needed for JE posting)
+        for body in [
+            {"code": "1001", "name": "Cash", "type": "asset_cash", "location_id": loc_id, "active": True},
+            {"code": "6100", "name": "Salaries & Wages", "type": "expense", "location_id": loc_id, "active": True},
+        ]:
+            ra = requests.post(f"{BASE}/api/accounting/accounts", json=body, headers=admin_h, timeout=20)
+            if ra.status_code not in (200, 201):
+                pytest.skip(f"cannot seed accounts at fresh loc (scope): {ra.status_code} {ra.text[:200]}")
+
+        # Create 3 staff users + 3 payslips + approve each
+        nets = [100000, 200000, 350000]
+        payslip_ids = []
+        for i, net in enumerate(nets):
+            u, _ = _create_staff_user(admin_h, f"iter213_{i}")
+            ps = _make_manual_payslip(admin_h, u["id"], u["name"], net, "2025-07", loc_id)
+            requests.put(f"{BASE}/api/hr/payslips/{ps['id']}", json={"status": "approved", "reason": "iter213 approve"}, headers=admin_h, timeout=20)
+            payslip_ids.append(ps["id"])
+
+        # Pay all 3 sequentially — this is the critical cycle exercising _reverse_auto_posted_je
+        for pid in payslip_ids:
+            rp = requests.put(
+                f"{BASE}/api/hr/payslips/{pid}",
+                json={"status": "paid", "payroll_location_id": loc_id, "reason": "iter213 pay"},
+                headers=admin_h,
+                timeout=20,
+            )
+            assert rp.status_code == 200, f"pay failed for {pid}: {rp.status_code} {rp.text[:300]}"
+
+        today = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        expense_id = f"payroll_{loc_id}_{today}"
+
+        # Verify aggregate expense = sum(nets)
+        rexp = requests.get(
+            f"{BASE}/api/financial/expenses",
+            params={"location_id": loc_id, "date_from": today, "date_to": today},
+            headers=admin_h,
+            timeout=20,
+        )
+        assert rexp.status_code == 200, rexp.text[:300]
+        agg = [e for e in rexp.json() if e.get("id") == expense_id]
+        assert agg, f"aggregate expense missing: {expense_id} ; got {[e.get('id') for e in rexp.json()]}"
+        expected_total = sum(nets)
+        assert abs(float(agg[0]["amount"]) - expected_total) < 0.05, (
+            f"Aggregate amount={agg[0]['amount']} != expected {expected_total}"
+        )
+
+        # Verify: exactly ONE active JE with source_id=expense_id, matching aggregate amount
+        r3 = requests.get(
+            f"{BASE}/api/accounting/entries",
+            params={"location_id": loc_id, "date_from": today, "include_reversed": "true", "limit": 500},
+            headers=admin_h,
+            timeout=20,
+        )
+        entries = r3.json() if isinstance(r3.json(), list) else r3.json().get("items", [])
+        related = [e for e in entries if e.get("auto_generated_from") == "payroll" and e.get("source_id") == expense_id]
+        active = [e for e in related if not e.get("is_reversed")]
+        reversed_ones = [e for e in related if e.get("is_reversed")]
+
+        if not related:
+            # /accounting/entries filters by admin campus scope; a brand-new
+            # location may not be visible via the API. Verify via DB directly.
+            from dotenv import load_dotenv as _ld
+            _ld('/app/backend/.env')
+            import asyncio as _asyncio
+            from motor.motor_asyncio import AsyncIOMotorClient as _MC
+
+            async def _dbcheck():
+                c = _MC(os.environ['MONGO_URL'])
+                d = c[os.environ['DB_NAME']]
+                ents = await d.accounting_entries.find(
+                    {"auto_generated_from": "payroll", "source_id": expense_id},
+                    {"_id": 0},
+                ).to_list(50)
+                return ents
+
+            db_ents = _asyncio.get_event_loop().run_until_complete(_dbcheck()) if False else _asyncio.new_event_loop().run_until_complete(_dbcheck())
+            db_active = [e for e in db_ents if not e.get("is_reversed")]
+            db_reversed = [e for e in db_ents if e.get("is_reversed")]
+            assert len(db_active) == 1, (
+                f"[DB check] Expected exactly ONE active payroll JE after 3 payslips, got {len(db_active)}. "
+                f"active={[(e['id'], e.get('total_debit')) for e in db_active]} "
+                f"reversed={[(e['id'], e.get('total_debit')) for e in db_reversed]}"
+            )
+            assert len(db_reversed) >= 2, (
+                f"[DB check] Expected >=2 reversed JEs after 3-cycle aggregation, got {len(db_reversed)}. "
+                f"reversed={[(e['id'], e.get('total_debit')) for e in db_reversed]}"
+            )
+            assert abs(float(db_active[0].get("total_debit") or 0) - expected_total) < 0.05, (
+                f"[DB check] Active JE total_debit={db_active[0].get('total_debit')} != expected {expected_total}"
+            )
+            return
+
+        assert len(active) == 1, (
+            f"Expected exactly ONE active payroll JE after 3 payslips, got {len(active)}. "
+            f"active={[(e['id'], e.get('total_debit')) for e in active]} "
+            f"reversed={[(e['id'], e.get('total_debit')) for e in reversed_ones]}"
+        )
+        # After 3 pay cycles, should have 2 reversed JEs (from the 2 re-aggregations)
+        assert len(reversed_ones) >= 2, (
+            f"Expected at least 2 reversed JEs after 3-cycle aggregation, got {len(reversed_ones)}. "
+            f"This is the exact iter212 symptom — _reverse_auto_posted_je is stale. "
+            f"reversed={[(e['id'], e.get('total_debit')) for e in reversed_ones]}"
+        )
+        assert abs(float(active[0].get("total_debit") or 0) - expected_total) < 0.05, (
+            f"Active JE total_debit={active[0].get('total_debit')} != aggregate expected {expected_total}"
+        )
+
+
 # ============ 3. PAYSLIP OVERRIDES ============
 
 class TestPayslipOverrides:

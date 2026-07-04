@@ -233,11 +233,15 @@ async def _reverse_auto_posted_je(source_kind: str, source_id: str, current_user
     """When a donation or expense is deleted, its auto-posted journal entry stays in
     the ledger causing Finance and Accounting to drift. This finds the linked JE
     (matched by auto_generated_from + source_id) and reverses it if still posted."""
-    entry = await db.accounting_entries.find_one({"auto_generated_from": source_kind, "source_id": source_id}, {"_id": 0})
+    # Target the currently-active JE, NOT an older already-reversed one
+    # (fixes iter212 bug where 3rd+ payroll re-aggregations were no-ops
+    # because Mongo's natural insertion order returned the oldest match).
+    entry = await db.accounting_entries.find_one(
+        {"auto_generated_from": source_kind, "source_id": source_id, "is_reversed": {"$ne": True}},
+        {"_id": 0},
+    )
     if not entry or entry.get("status") != "posted":
         return 0
-    if entry.get("is_reversed"):
-        return 0  # already reversed
     try:
         from routers.accounting import reverse_entry
         await reverse_entry(entry["id"], {"reason": f"Source {source_kind} deleted"}, current_user)
