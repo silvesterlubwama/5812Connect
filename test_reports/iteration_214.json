@@ -1,0 +1,34 @@
+{
+  "summary": "iter214 backend tests for HR RBAC scoping, PTO time-off flow, and on-behalf timesheet submission — all 22 new tests pass. iter211 payroll JE regression suite still green (15 passed, 2 unchanged skipped).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/hr/payslips (admin)", "issue": "Admin still gets get_campus_filter applied (restricts to active_campus + sub-locations). Task spec says 'admin sees all'. Currently admin only sees payslips within their current active_campus scope, not truly global. If cross-campus visibility for admin is required, remove the get_campus_filter call for admins OR gate it on an explicit switcher. Test is written defensively (asserts admin sees at least one of the two test payslips) so it passes today, but behavior may not match the PRD wording."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter214_hr_rbac_pto_timesheets.py",
+    "/app/test_reports/pytest/iter214.xml",
+    "/app/test_reports/pytest/iter211_regression.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Clarify admin scope on GET /api/hr/payslips — either drop get_campus_filter for admins (true 'see all') OR update PRD wording to reflect campus-switcher-scoped admin view.",
+    "Consider surfacing 'you cannot request >7 days out' error more clearly in frontend UX (backend already returns a clear message)."
+  ],
+  "critical_code_review_comments": [
+    "hr.py _hr_scope: correctly falls back to active_campus_id when location_ids is empty, and fails closed with '__NO_LOCATION__' — good.",
+    "hr.py submit_timesheet on-behalf: location intersection check uses union of location_ids + active_campus_id; matches location_ids + location_id on target user — safe.",
+    "hr.py request_time_off: window check computes abs(delta) for both endpoints — good; admin_override strictly gated to admin/system_admin roles.",
+    "hr.py delete_time_off: HR/director can delete any status; owner blocked on approved — matches spec.",
+    "MINOR: list_payslips still applies get_campus_filter for hr_or_above (including admin). For admin this narrows scope to active campus only. Consider skipping campus filter when role is admin/system_admin for a true global list."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (iter214: 22/22, iter211 regression: 15/15 non-skipped)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812; test users created with prefix TEST_iter214_<hex> and password Test@5812!",
+  "seed_data_creation": "Created ephemeral TEST_iter214_* users (staffA, staffB, directorA) at two existing campuses + 2 manual payslips + several timesheets/PTO docs. Not cleaned up (out of scope for the sub-agent).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter214 test file is at /app/backend/tests/test_iter214_hr_rbac_pto_timesheets.py. It seeds users tagged with TEST_iter214_<random>. Rerun anytime; each run creates fresh users so no cross-run collisions. If frontend UI for PTO/Timesheet on-behalf is later built, cover: (1) director dropdown shows only staff at their location_ids, (2) window-rule error surfaces near the date picker, (3) admin_override toggle visible only for admins.",
+  "rca of the issue": "N/A — no issues found in scoped changes. Only observation: admin campus filter is still applied in list_payslips (documented under minor)."
+}

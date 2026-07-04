@@ -21,6 +21,33 @@ def _require_hr_access(user: dict):
 require_hr = require_hr_view
 
 
+# ============================================================
+#  HR SCOPE HELPER (iter214)
+#  Admin/system_admin: full access.
+#  Director/HR/manager: filter by `location_id in current_user.location_ids`.
+#  Regular staff: filter to own `staff_id` only.
+#  Returns a Mongo query dict to be merged into base query.
+# ============================================================
+def _hr_scope(current_user: dict, user_field: str = "staff_id", loc_field: str = "location_id") -> dict:
+    role = (current_user.get("role") or "").lower()
+    if role in {"admin", "system_admin"}:
+        return {}
+    if role in {"hr", "director", "executive director", "regional director", "manager"}:
+        loc_ids = current_user.get("location_ids") or []
+        if not loc_ids and current_user.get("active_campus_id"):
+            loc_ids = [current_user["active_campus_id"]]
+        if loc_ids:
+            return {loc_field: {"$in": loc_ids}}
+        return {loc_field: "__NO_LOCATION__"}
+    return {user_field: current_user["id"]}
+
+
+def _is_hr_or_above(current_user: dict) -> bool:
+    return (current_user.get("role") or "").lower() in {
+        "admin", "system_admin", "hr", "director", "executive director", "regional director", "manager"
+    }
+
+
 # ========== HR SETTINGS PER CAMPUS ==========
 
 @router.get("/settings/{location_id}")
@@ -212,15 +239,24 @@ async def delete_salary(salary_id: str, current_user: dict = Depends(require_dir
 # ========== PAYSLIPS ==========
 
 @router.get("/payslips")
-async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = None, current_user: dict = Depends(require_hr)):
+async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List payslips scoped by role (iter214):
+    - Regular staff → only their own payslips
+    - Director/HR/Manager → payslips at their assigned location_ids
+    - Admin → all"""
     query = {}
     if staff_id:
         query["staff_id"] = staff_id
     if period:
         query["period"] = period
-    campus = await get_campus_filter(current_user)
-    if campus:
-        query.update(campus)
+    # Apply role scope
+    scope = _hr_scope(current_user, user_field="staff_id", loc_field="location_id")
+    query.update(scope)
+    # Retain campus filter for admins jumping between campuses
+    if _is_hr_or_above(current_user):
+        campus = await get_campus_filter(current_user)
+        if campus:
+            query.update(campus)
     return await db.hr_payslips.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
@@ -1736,7 +1772,10 @@ async def compensation_summary(staff_id: str, year: Optional[int] = None, format
 
 @router.get("/timesheets")
 async def list_timesheets(period: Optional[str] = None, staff_id: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    """List timesheets. Non-HR users see only their own."""
+    """List timesheets scoped by role (iter214):
+    - Staff → own only
+    - Director/HR → limited to their location_ids
+    - Admin → all"""
     q = {}
     if period:
         q["period"] = period
@@ -1744,34 +1783,66 @@ async def list_timesheets(period: Optional[str] = None, staff_id: Optional[str] 
         q["staff_id"] = staff_id
     if status:
         q["status"] = status
-    if (current_user.get("role") or "").lower() not in {"admin", "system_admin", "hr", "director", "executive director"}:
-        q["staff_id"] = current_user["id"]
+    q.update(_hr_scope(current_user))
     return await db.hr_timesheets.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(500)
 
 
 @router.post("/timesheets")
 async def submit_timesheet(data: dict, current_user: dict = Depends(get_current_user)):
-    """Staff submits a timesheet for a pay period. Body:
-    { period: 'YYYY-MM' | 'YYYY-Www', days_worked: int, pto_days?: int, notes?, location_id? }"""
+    """Submit a timesheet for a pay period. Body:
+    { period: 'YYYY-MM' | 'YYYY-Www', days_worked: int, pto_days?: int, notes?,
+      location_id?, staff_id? (director+/admin only — submit on behalf of another user),
+      entries?: [{date, hours?, day_worked?}] (optional daily breakdown) }"""
     period = (data.get("period") or "").strip()
     if not period:
         raise HTTPException(status_code=400, detail="period required")
     days_worked = float(data.get("days_worked") or 0)
     if days_worked < 0 or days_worked > 100:
         raise HTTPException(status_code=400, detail="days_worked out of range")
-    # Prevent duplicate submissions (staff × period) — replace instead
-    existing = await db.hr_timesheets.find_one({"staff_id": current_user["id"], "period": period, "status": {"$in": ["draft", "submitted", "rejected"]}})
+    # On-behalf submission — director+ can create timesheets for staff who
+    # don't use the app (iter214). Regular staff always submit for themselves.
+    on_behalf_of = (data.get("staff_id") or "").strip()
+    if on_behalf_of and on_behalf_of != current_user["id"]:
+        if not _is_hr_or_above(current_user):
+            raise HTTPException(status_code=403, detail="Only director+/HR/admin can create timesheets on behalf of others")
+        target = await db.users.find_one({"id": on_behalf_of}, {"_id": 0, "id": 1, "name": 1, "department": 1, "location_id": 1, "location_ids": 1, "active_campus_id": 1})
+        if not target:
+            raise HTTPException(status_code=404, detail="Target staff not found")
+        # Directors can only target their own location(s)
+        role = (current_user.get("role") or "").lower()
+        if role not in {"admin", "system_admin"}:
+            allowed_locs = set(current_user.get("location_ids") or [])
+            if current_user.get("active_campus_id"):
+                allowed_locs.add(current_user["active_campus_id"])
+            tgt_locs = set(target.get("location_ids") or [])
+            if target.get("location_id"):
+                tgt_locs.add(target["location_id"])
+            if not allowed_locs.intersection(tgt_locs):
+                raise HTTPException(status_code=403, detail="Target staff is outside your assigned locations")
+        staff_id = on_behalf_of
+        staff_name = target.get("name", "")
+        department = target.get("department", "")
+        default_loc = target.get("location_id") or (target.get("location_ids") or [""])[0]
+    else:
+        staff_id = current_user["id"]
+        staff_name = current_user.get("name", "")
+        department = current_user.get("department", "")
+        default_loc = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    existing = await db.hr_timesheets.find_one({"staff_id": staff_id, "period": period, "status": {"$in": ["draft", "submitted", "rejected"]}})
     doc = {
         "id": existing["id"] if existing else f"ts_{uuid.uuid4().hex[:10]}",
-        "staff_id": current_user["id"],
-        "staff_name": current_user.get("name", ""),
-        "department": current_user.get("department", ""),
-        "location_id": data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or "",
+        "staff_id": staff_id,
+        "staff_name": staff_name,
+        "department": department,
+        "location_id": data.get("location_id") or default_loc,
         "period": period,
         "days_worked": days_worked,
         "pto_days": float(data.get("pto_days") or 0),
+        "entries": data.get("entries") or [],  # optional daily breakdown (iter214)
         "notes": (data.get("notes") or "")[:1000],
         "status": "submitted",
+        "submitted_by": current_user["id"],
+        "submitted_by_name": current_user.get("name", ""),
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
     if existing:
@@ -1829,6 +1900,154 @@ async def delete_timesheet(ts_id: str, current_user: dict = Depends(get_current_
         if ts.get("status") == "approved":
             raise HTTPException(status_code=400, detail="Approved timesheets cannot be deleted — contact HR")
     await db.hr_timesheets.delete_one({"id": ts_id})
+    return {"deleted": True}
+
+
+# ========== TIME-OFF REQUESTS (iter214) ==========
+# Users request PTO; director+ approves.  Window rule: request date must be
+# within ±7 days of the requested PTO date (either advance notice OR
+# retroactive grace).  Admins can override with `admin_override=True`.
+
+@router.get("/time-off")
+async def list_time_off(status: Optional[str] = None, staff_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List PTO requests, scoped by role (same as timesheets)."""
+    q = {}
+    if status:
+        q["status"] = status
+    if staff_id:
+        q["staff_id"] = staff_id
+    q.update(_hr_scope(current_user))
+    return await db.hr_time_off.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(500)
+
+
+@router.post("/time-off")
+async def request_time_off(data: dict, current_user: dict = Depends(get_current_user)):
+    """Request paid time-off. Body:
+    { start_date: 'YYYY-MM-DD', end_date: 'YYYY-MM-DD', reason?, admin_override?, staff_id? }
+
+    Window rule: without admin_override, the requested date must be within
+    ±7 days of today (advance notice OR retroactive grace).  Admin can
+    override in emergencies."""
+    from datetime import date, timedelta
+    start_date = (data.get("start_date") or "").strip()
+    end_date = (data.get("end_date") or start_date).strip()
+    if not start_date:
+        raise HTTPException(status_code=400, detail="start_date required (YYYY-MM-DD)")
+    try:
+        sd = date.fromisoformat(start_date)
+        ed = date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format — use YYYY-MM-DD")
+    if ed < sd:
+        raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
+    admin_override = bool(data.get("admin_override"))
+    is_admin = (current_user.get("role") or "").lower() in {"admin", "system_admin"}
+    if admin_override and not is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can use admin_override")
+    # ±7-day window check unless overridden
+    if not admin_override:
+        today = date.today()
+        # Fail if EITHER endpoint is more than 7 days away in either direction
+        for check_date in (sd, ed):
+            delta_days = abs((check_date - today).days)
+            if delta_days > 7:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Time-off request for {check_date.isoformat()} is {delta_days} days from today. "
+                        f"Must be within 7 days (advance notice or retroactive grace). "
+                        f"Contact an admin for an override in emergencies."
+                    ),
+                )
+    # On-behalf submission — director+ can request PTO for their location staff
+    on_behalf_of = (data.get("staff_id") or "").strip()
+    if on_behalf_of and on_behalf_of != current_user["id"]:
+        if not _is_hr_or_above(current_user):
+            raise HTTPException(status_code=403, detail="Only director+/HR/admin can request PTO on behalf of others")
+        target = await db.users.find_one({"id": on_behalf_of}, {"_id": 0, "id": 1, "name": 1, "location_id": 1, "location_ids": 1})
+        if not target:
+            raise HTTPException(status_code=404, detail="Target staff not found")
+        if not is_admin:
+            allowed_locs = set(current_user.get("location_ids") or [])
+            if current_user.get("active_campus_id"):
+                allowed_locs.add(current_user["active_campus_id"])
+            tgt_locs = set(target.get("location_ids") or [])
+            if target.get("location_id"):
+                tgt_locs.add(target["location_id"])
+            if not allowed_locs.intersection(tgt_locs):
+                raise HTTPException(status_code=403, detail="Target staff is outside your assigned locations")
+        staff_id = on_behalf_of
+        staff_name = target.get("name", "")
+        default_loc = target.get("location_id") or (target.get("location_ids") or [""])[0]
+    else:
+        staff_id = current_user["id"]
+        staff_name = current_user.get("name", "")
+        default_loc = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    days = (ed - sd).days + 1
+    doc = {
+        "id": f"pto_{uuid.uuid4().hex[:10]}",
+        "staff_id": staff_id,
+        "staff_name": staff_name,
+        "location_id": default_loc,
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days,
+        "reason": (data.get("reason") or "")[:500],
+        "admin_override": admin_override,
+        "status": "pending",
+        "submitted_by": current_user["id"],
+        "submitted_by_name": current_user.get("name", ""),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.hr_time_off.insert_one(doc)
+    doc.pop("_id", None)
+    await _audit(current_user["id"], "request", "time_off", doc["id"], {"staff_id": staff_id, "days": days})
+    return doc
+
+
+@router.put("/time-off/{pto_id}/approve")
+async def approve_time_off(pto_id: str, data: dict = None, current_user: dict = Depends(require_director)):
+    pto = await db.hr_time_off.find_one({"id": pto_id}, {"_id": 0})
+    if not pto:
+        raise HTTPException(status_code=404, detail="Time-off request not found")
+    if pto.get("status") == "approved":
+        return pto
+    await db.hr_time_off.update_one({"id": pto_id}, {"$set": {
+        "status": "approved",
+        "approved_by": current_user["id"],
+        "approved_by_name": current_user.get("name", ""),
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "review_notes": ((data or {}).get("notes") or "")[:500],
+    }})
+    await _audit(current_user["id"], "approve", "time_off", pto_id, {"staff_id": pto["staff_id"], "days": pto.get("days")})
+    return await db.hr_time_off.find_one({"id": pto_id}, {"_id": 0})
+
+
+@router.put("/time-off/{pto_id}/reject")
+async def reject_time_off(pto_id: str, data: dict = None, current_user: dict = Depends(require_director)):
+    pto = await db.hr_time_off.find_one({"id": pto_id}, {"_id": 0})
+    if not pto:
+        raise HTTPException(status_code=404, detail="Time-off request not found")
+    await db.hr_time_off.update_one({"id": pto_id}, {"$set": {
+        "status": "rejected",
+        "rejected_by": current_user["id"],
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "review_notes": ((data or {}).get("reason") or "")[:500],
+    }})
+    await _audit(current_user["id"], "reject", "time_off", pto_id, {"staff_id": pto["staff_id"]})
+    return await db.hr_time_off.find_one({"id": pto_id}, {"_id": 0})
+
+
+@router.delete("/time-off/{pto_id}")
+async def delete_time_off(pto_id: str, current_user: dict = Depends(get_current_user)):
+    pto = await db.hr_time_off.find_one({"id": pto_id}, {"_id": 0})
+    if not pto:
+        raise HTTPException(status_code=404, detail="Time-off request not found")
+    if not _is_hr_or_above(current_user) and pto["staff_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your request")
+    if pto.get("status") == "approved" and not _is_hr_or_above(current_user):
+        raise HTTPException(status_code=400, detail="Approved PTO cannot be deleted — contact HR")
+    await db.hr_time_off.delete_one({"id": pto_id})
     return {"deleted": True}
 
 
