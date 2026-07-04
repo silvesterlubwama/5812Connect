@@ -3,7 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 208d (Feb 2026)
+## Recently Resolved — Iteration 210 (Feb 2026)
+**HR Payslip full edit + audit trail; Donor/Vendor auto-profiles + drilldown; Bulk payslip export.**
+
+- **Payslip edit (1b)**: `PUT /api/hr/payslips/{id}` now accepts all fields (gross, allowances, deductions, notes, status, line_items) — net auto-recomputed. Every write appends to `edit_history` with `{at, by, by_name, changes, reason}`. New `GET /api/hr/payslips/{id}/history` endpoint. Director+ only.
+- **Payslip export (2c)**: `_generate_payslip_pdf_bytes` helper reused by both per-payslip `/pdf` endpoint (staff can export OWN; Director+ any) and new bulk endpoints: `GET /api/hr/payslips/export.csv?period=YYYY-MM` and `GET /api/hr/payslips/export.zip?period=YYYY-MM` (Director+ only).
+- **Donor/Vendor auto-profiles (3c)**: New `/app/backend/routers/donors_vendors.py`. Donation create → upsert donor profile; expense create → upsert vendor profile. New pages `/donors` and `/vendors` with drilldown modal (contact info, category picker, preferred contact method, transaction history). Autosuggest via HTML `<datalist>` on donor_name and vendor form fields. Category validation: donors ∈ {individual, corporation, church, government, foundation, anonymous}; vendors ∈ {individual, corporation, government, utility, supplier, contractor}. New `/donors-vendors/backfill` admin endpoint (idempotent — uses regex-escaped name + effective_campus resolution).
+- **Frontend**: New `DonorsPage.jsx` + `VendorsPage.jsx`; HR Payslips tab enriched with Export period picker, CSV/ZIP buttons, per-row Download PDF / Edit / History buttons; Edit dialog + History dialog with visual diff.
+- **Tested**: iter210 → 22/23 pass on first submit; identified backfill idempotency bug (`(paren)` chars in donor names broke regex) → fixed with `re.escape()` + consistent `effective_campus` resolution; verified 3 consecutive backfill runs all return 0/0.
+
+## Recently Resolved — Iteration 209 (Feb 2026)
 **Finance vs Accounting Starting Balance duplication — collapsed to single source of truth.**
 
 - Root cause: two independent "starting balance" fields — `financial_accounts.starting_balance` (per sub-location, edited from Finance) and `chart_accounts.starting_balance` (per cash account, edited from Accounting). No synchronization → confusing mismatches.

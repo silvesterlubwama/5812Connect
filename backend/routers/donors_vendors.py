@@ -13,6 +13,7 @@ A new `donors` collection is introduced for the donation side.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional, List
 from datetime import datetime, timezone
+import re
 import uuid
 
 from deps import (
@@ -38,13 +39,19 @@ async def upsert_donor_from_donation(donation: dict, current_user: dict) -> Opti
     name = (donation.get("donor_name") or "").strip()
     if not name:
         return None
-    campus = donation.get("campus_id") or current_user.get("active_campus_id") or ""
+    # Resolve the effective campus ONCE and use it consistently for BOTH the
+    # lookup and the new-row campus_id.  This is what fixes the backfill
+    # idempotency bug that surfaced in iter210 tests — previously the dedup
+    # lookup used donation.campus_id (empty for legacy rows) while the insert
+    # fell back to current_user.active_campus_id, so a second run always
+    # missed the previously-inserted donor and created a duplicate.
+    effective_campus = (donation.get("campus_id") or current_user.get("active_campus_id") or "").strip()
+    # Match case-insensitively by name AND effective campus so re-runs are safe
     existing = await db.donors.find_one(
-        {"name": {"$regex": f"^{name}$", "$options": "i"}, "campus_id": campus},
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, "campus_id": effective_campus},
         {"_id": 0, "id": 1},
     )
     if existing:
-        # Bump activity metadata (running counters recomputed live on read)
         await db.donors.update_one(
             {"id": existing["id"]},
             {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
@@ -53,11 +60,11 @@ async def upsert_donor_from_donation(donation: dict, current_user: dict) -> Opti
     doc = {
         "id": f"dnr_{uuid.uuid4().hex[:10]}",
         "name": name,
-        "category": "individual",  # default; user can refine in Donor profile UI
+        "category": "individual",
         "email": (donation.get("donor_email") or "").strip(),
         "phone": (donation.get("donor_phone") or "").strip(),
         "preferred_contact": "email",
-        "campus_id": campus,
+        "campus_id": effective_campus,
         "location_id": donation.get("location_id") or "",
         "notes": "",
         "active": True,
@@ -67,7 +74,7 @@ async def upsert_donor_from_donation(donation: dict, current_user: dict) -> Opti
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.donors.insert_one(doc)
-    logger.info(f"Auto-created donor '{name}' (id={doc['id']}) from donation")
+    logger.info(f"Auto-created donor '{name}' (id={doc['id']}, campus={effective_campus}) from donation")
     return doc["id"]
 
 
@@ -77,13 +84,11 @@ async def upsert_vendor_from_expense(expense: dict, current_user: dict) -> Optio
     name = (expense.get("vendor") or expense.get("vendor_name") or "").strip()
     if not name:
         return None
-    campus = expense.get("campus_id") or current_user.get("active_campus_id") or ""
+    effective_campus = (expense.get("campus_id") or current_user.get("active_campus_id") or "").strip()
     location_id = expense.get("location_id") or ""
-    # Match case-insensitive within campus (vendors are campus-scoped)
+    # Match by name + effective campus (consistent with donor logic)
     existing = await db.vendors.find_one(
-        {"name": {"$regex": f"^{name}$", "$options": "i"}, "$or": [
-            {"campus_id": campus}, {"location_id": location_id},
-        ]},
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, "campus_id": effective_campus},
         {"_id": 0, "id": 1},
     )
     if existing:
@@ -102,7 +107,7 @@ async def upsert_vendor_from_expense(expense: dict, current_user: dict) -> Optio
         "address": "",
         "contact_name": "",
         "country": "UG",
-        "campus_id": campus,
+        "campus_id": effective_campus,
         "location_id": location_id,
         "notes": "",
         "payment_terms_days": 30,
@@ -116,16 +121,18 @@ async def upsert_vendor_from_expense(expense: dict, current_user: dict) -> Optio
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.vendors.insert_one(doc)
-    logger.info(f"Auto-created vendor '{name}' (id={doc['id']}) from expense")
+    logger.info(f"Auto-created vendor '{name}' (id={doc['id']}, campus={effective_campus}) from expense")
     return doc["id"]
 
 
 async def _donor_stats(donor_id: str, donor_name: str, campus_id: str) -> dict:
-    """Aggregate donation totals + count for a donor."""
-    q = {"$or": [{"donor_id": donor_id}, {"donor_name": donor_name}]}
-    campus = await get_campus_filter_for_donor(campus_id)
-    if campus:
-        q.update(campus)
+    """Aggregate donation totals + count for a donor.  We match by donor_id OR
+    donor_name (case-insensitive) — no campus filter, because donation.campus_id
+    is often absent on legacy rows and would silently drop matches."""
+    q = {"$or": [
+        {"donor_id": donor_id},
+        {"donor_name": {"$regex": f"^{re.escape(donor_name)}$", "$options": "i"}},
+    ]}
     r = await db.donations.aggregate([
         {"$match": q},
         {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}, "last_date": {"$max": "$date"}}},
@@ -225,9 +232,12 @@ async def donor_transactions(
     donor = await db.donors.find_one({"id": donor_id}, {"_id": 0, "name": 1, "campus_id": 1})
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
-    q = {"$or": [{"donor_id": donor_id}, {"donor_name": donor["name"]}]}
-    if donor.get("campus_id"):
-        q["campus_id"] = donor["campus_id"]
+    # Match by id OR by name (case-insensitive) — no campus filter here so
+    # legacy donations that lack campus_id still surface in the drilldown.
+    q = {"$or": [
+        {"donor_id": donor_id},
+        {"donor_name": {"$regex": f"^{re.escape(donor['name'])}$", "$options": "i"}},
+    ]}
     return await db.donations.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
 
 
@@ -349,20 +359,24 @@ async def update_vendor(vendor_id: str, data: dict, current_user: dict = Depends
 
 @router.post("/donors-vendors/backfill")
 async def backfill_donors_vendors(current_user: dict = Depends(require_admin)):
-    """Scan every historical donation and expense; auto-create donor/vendor
-    profiles for names that don't already have one.  Idempotent — safe to run
-    multiple times.  Returns counts."""
+    """One-time backfill (idempotent): scan every historical donation and
+    expense and auto-create any missing donor/vendor profile.  Safe to re-run —
+    uses the SAME effective-campus resolution as the auto-upsert helpers so
+    dedup lookups match on subsequent runs."""
     donors_created = 0
     vendors_created = 0
+    admin_campus = (current_user.get("active_campus_id") or "").strip()
     # Donors
     seen_donors: set = set()
     async for d in db.donations.find({"donor_name": {"$exists": True, "$ne": ""}}, {"_id": 0, "donor_name": 1, "campus_id": 1, "location_id": 1}):
-        key = (d.get("donor_name", "").strip().lower(), d.get("campus_id", ""))
-        if not key[0] or key in seen_donors:
+        name = (d.get("donor_name") or "").strip()
+        eff_campus = (d.get("campus_id") or admin_campus).strip()
+        key = (name.lower(), eff_campus)
+        if not name or key in seen_donors:
             continue
         seen_donors.add(key)
         existing = await db.donors.find_one(
-            {"name": {"$regex": f"^{d['donor_name'].strip()}$", "$options": "i"}, "campus_id": d.get("campus_id", "")},
+            {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, "campus_id": eff_campus},
             {"_id": 0, "id": 1},
         )
         if existing:
@@ -373,12 +387,14 @@ async def backfill_donors_vendors(current_user: dict = Depends(require_admin)):
     # Vendors
     seen_vendors: set = set()
     async for e in db.expenses.find({"vendor": {"$exists": True, "$nin": [None, ""]}}, {"_id": 0, "vendor": 1, "campus_id": 1, "location_id": 1, "currency": 1}):
-        key = ((e.get("vendor") or "").strip().lower(), e.get("campus_id", ""))
-        if not key[0] or key in seen_vendors:
+        name = (e.get("vendor") or "").strip()
+        eff_campus = (e.get("campus_id") or admin_campus).strip()
+        key = (name.lower(), eff_campus)
+        if not name or key in seen_vendors:
             continue
         seen_vendors.add(key)
         existing = await db.vendors.find_one(
-            {"name": {"$regex": f"^{e['vendor'].strip()}$", "$options": "i"}, "$or": [{"campus_id": e.get("campus_id", "")}, {"location_id": e.get("location_id", "")}]},
+            {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, "campus_id": eff_campus},
             {"_id": 0, "id": 1},
         )
         if existing:
