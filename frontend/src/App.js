@@ -20,6 +20,8 @@ const UnifiedPeoplePage = lazy(() => import('./pages/UnifiedPeoplePage'));
 const ProductsPage = lazy(() => import('./pages/ProductsPage'));
 const FinancialPage = lazy(() => import('./pages/FinancialPage'));
 const AccountingPage = lazy(() => import('./pages/AccountingPage'));
+const DonorsPage = lazy(() => import('./pages/DonorsPage'));
+const VendorsPage = lazy(() => import('./pages/VendorsPage'));
 const SocialWorkPage = lazy(() => import('./pages/SocialWorkPage'));
 import EventsPage from './pages/EventsPage';
 import TasksPage from './pages/TasksPage';
@@ -144,6 +146,8 @@ function AppRoutes() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="financial" element={<FinancialPage />} />
         <Route path="accounting" element={<AccountingPage />} />
+        <Route path="donors" element={<DonorsPage />} />
+        <Route path="vendors" element={<VendorsPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="funds" element={<FundsPage />} />
         <Route path="shipments" element={<ShipmentsAdminPage />} />

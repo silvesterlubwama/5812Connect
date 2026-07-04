@@ -1,0 +1,36 @@
+{
+  "summary": "Iter210 backend validation of feature bundle 1b+2c+3c (HR payslip full-edit + owner-scoped PDF + director bulk CSV/ZIP exports; donor/vendor auto-create with suggest+drilldown+category validation; backfill idempotency). Wrote 23 pytest cases against production preview URL; 22 passed. One real bug found: POST /api/donors-vendors/backfill is NOT idempotent — re-running creates duplicate donor profiles (24 duplicates on 2nd run in this test env).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/donors-vendors/backfill", "issue": "Not idempotent: second call created 24 duplicate donor rows. Root cause: dedup lookup in backfill loop uses donation.campus_id (often empty for legacy rows) while upsert_donor_from_donation fills donor.campus_id with current_user.active_campus_id fallback. On subsequent runs the empty-campus lookup no longer matches the previously-created donor and a fresh row is inserted."},
+      {"endpoint": "GET /api/donors/{id}/transactions & _donor_stats", "issue": "Same campus mismatch: donor.campus_id (auto-filled from admin.active_campus_id) is compared against donation.campus_id which is typically absent on POST /financial/donations (only location_id is set). Freshly-created donors returned transactions correctly in this test because both donation and donor derive from the same admin, but for legacy/mixed data the join will silently return empty. Recommend either (a) also setting donation.campus_id on create, or (b) matching donor↔donation via location_id / dropping the campus filter."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter210_donors_vendors_hr_payslips.py",
+    "/app/test_reports/pytest/iter210_results.xml"
+  ],
+  "action_items": [
+    "Fix donors-vendors backfill idempotency: in donors_vendors.backfill_donors_vendors(), use the same effective campus (donation.campus_id or admin.active_campus_id) when checking `existing = db.donors.find_one({...})` — mirror the resolution used inside upsert_donor_from_donation. Same for vendors.",
+    "Either populate `campus_id` on donation/expense create, OR change donor/vendor transactions & stats queries to match by `location_id` / drop the campus filter so drilldown works consistently across historical rows."
+  ],
+  "critical_code_review_comments": [
+    "donors_vendors.py upsert_donor_from_donation and backfill dedup use inconsistent campus keys → duplicate donors on re-run.",
+    "financial.py create_donation writes location_id but not campus_id; donors_vendors._donor_stats / donor_transactions gate on campus_id → potential empty drilldown for pre-existing data.",
+    "hr.py PUT /payslips/{id} — audit_entry.by_name pulls from current_user['name'] which may be empty for OAuth users; consider falling back to email.",
+    "hr.py /payslips/export.zip generates PDFs sequentially via WeasyPrint; for large batches this will exceed request timeout. Consider background job + downloadable link.",
+    "hr.py /payslips/{id}/pdf allows owning staff — good; ensure the same policy is applied to /payslips/{id}/mine and any list endpoint so staff can find their payslip id first."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter210_donors_vendors_hr_payslips.py (new file, 23 pytest cases)"
+  ],
+  "success_rate": {"backend": "95.6% (22/23)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (director+); test staff users created inline via POST /api/admin/users",
+  "seed_data_creation": "Created 2 TEST_ staff users, 1 manual payslip (period 2025-01), 2 TEST_ donor rows (via donation POST), 2 TEST_ vendor rows (via expense POST), 2 regression donations/expenses. All prefixed TEST_Iter210_.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backfill has been executed 2 more times during this run, so donors collection now contains ~24 duplicate rows for the same historical donation names — please dedupe via `db.donors.aggregate([{$group:{_id:{name:'$name',campus_id:'$campus_id'},dupes:{$push:'$id'},n:{$sum:1}}},{$match:{n:{$gt:1}}}])` before UI drilldown testing. The manual payslip endpoint expects `allowances` and `deductions` as LISTS of {name,amount} objects, not numeric totals.",
+  "rca of the issue": "backfill_donors_vendors loops over donations with `key = (name.lower(), donation.campus_id or '')` and searches `db.donors.find_one({name..., campus_id: donation.campus_id or ''})`. However upsert_donor_from_donation stores donor.campus_id = donation.campus_id OR current_user.active_campus_id OR '' — so a legacy donation with empty campus_id yields donor.campus_id=<admin's campus>. On the next backfill run, dedup search with campus_id='' fails to find that donor, and a duplicate is inserted. Fix: resolve `effective_campus = donation.campus_id or current_user.active_campus_id or ''` once, use it for BOTH the dedup key and the existing-lookup, mirroring upsert. Same class of bug applies to vendors backfill and to _donor_stats/donor_transactions campus filter."
+}

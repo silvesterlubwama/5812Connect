@@ -568,6 +568,8 @@ try:
     app.include_router(pbx_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
+    from routers.donors_vendors import router as donors_vendors_router
+    app.include_router(donors_vendors_router)
     from routers.seed import router as seed_router
     from routers.dashboard import router as dashboard_router
     from routers.i18n import router as i18n_router

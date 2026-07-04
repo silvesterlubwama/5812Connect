@@ -594,24 +594,64 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
 
 @router.put("/payslips/{payslip_id}")
 async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depends(require_director)):
-    """Update a payslip status / notes / mark-paid. When status becomes 'paid', the system
-    aggregates this payment into a SINGLE daily expense line for the location (NO individual
-    staff names exposed in the financial expense — only the total + count of staff)."""
-    payslip = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
-    if not payslip:
+    """Update a payslip. Director+ can edit any field (gross, allowances, deductions,
+    line_items, notes, status). Every change is recorded to `edit_history` (audit trail).
+
+    When status transitions to 'paid', the system aggregates the payment into a SINGLE
+    daily payroll expense line for the location (no individual staff names exposed)."""
+    existing = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="Payslip not found")
-    allowed = {"status", "notes", "approved_by", "paid_at", "paid_by"}
+    allowed = {"status", "notes", "approved_by", "paid_at", "paid_by",
+               "gross_salary", "allowances", "deductions", "net_salary",
+               "line_items", "currency", "period"}
     update = {k: v for k, v in data.items() if k in allowed}
+    # If line_items provided, recompute allowances/deductions/net from them
+    if "line_items" in update and isinstance(update["line_items"], list):
+        total_allw = 0.0
+        total_ded = 0.0
+        for li in update["line_items"]:
+            amt = float(li.get("calculated_amount", li.get("amount", 0)) or 0)
+            t = (li.get("type") or "").lower()
+            if t == "deduction":
+                total_ded += amt
+            elif t in ("allowance", "addition", "bonus", "reimbursement"):
+                total_allw += amt
+        update["allowances"] = round(total_allw, 2)
+        update["deductions"] = round(total_ded, 2)
+        gross = float(update.get("gross_salary", existing.get("gross_salary", 0)) or 0)
+        update["net_salary"] = round(gross + total_allw - total_ded, 2)
+    elif any(k in update for k in ("gross_salary", "allowances", "deductions")):
+        gross = float(update.get("gross_salary", existing.get("gross_salary", 0)) or 0)
+        allw = float(update.get("allowances", existing.get("allowances", 0)) or 0)
+        ded = float(update.get("deductions", existing.get("deductions", 0)) or 0)
+        update["net_salary"] = round(gross + allw - ded, 2)
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
-    if data.get("status") == "approved":
+    update["updated_by"] = current_user["id"]
+    update["updated_by_name"] = current_user.get("name", "")
+    if data.get("status") == "approved" and existing.get("status") != "approved":
         update["approved_by"] = current_user["id"]
         update["approved_at"] = datetime.now(timezone.utc).isoformat()
-    if data.get("status") == "paid":
+    if data.get("status") == "paid" and existing.get("status") != "paid":
         update["paid_by"] = current_user["id"]
+        update["paid_by_name"] = current_user.get("name", "")
         update["paid_at"] = datetime.now(timezone.utc).isoformat()
         # Aggregate into a daily payroll expense for the location (no staff names)
-        await _aggregate_payroll_expense(payslip, current_user)
-    await db.hr_payslips.update_one({"id": payslip_id}, {"$set": update})
+        await _aggregate_payroll_expense({**existing, **update}, current_user)
+    # Build diff-based audit entry
+    diff = {k: {"old": existing.get(k), "new": v} for k, v in update.items() if existing.get(k) != v and k not in ("updated_at", "updated_by", "updated_by_name")}
+    audit_entry = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "by": current_user["id"],
+        "by_name": current_user.get("name", ""),
+        "changes": diff,
+        "reason": (data.get("reason") or "")[:200],
+    }
+    await db.hr_payslips.update_one(
+        {"id": payslip_id},
+        {"$set": update, "$push": {"edit_history": audit_entry}},
+    )
+    await _audit(current_user["id"], "update", "payslip", payslip_id, {"changes": list(diff.keys())})
     return await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
 
 
@@ -1760,6 +1800,98 @@ async def my_payslips(limit: int = 50, current_user: dict = Depends(get_current_
     return await db.hr_payslips.find({"staff_id": current_user["id"]}, {"_id": 0}).sort("period", -1).limit(limit).to_list(limit)
 
 
+# ========== PAYSLIP EDIT + AUDIT TRAIL (iter209b) ==========
+
+@router.get("/payslips/{payslip_id}/history")
+async def get_payslip_history(payslip_id: str, current_user: dict = Depends(require_hr)):
+    """Fetch the edit history (audit trail) for a payslip."""
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "edit_history": 1, "created_at": 1, "created_by_name": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    return {
+        "created_at": p.get("created_at"),
+        "created_by_name": p.get("created_by_name"),
+        "history": p.get("edit_history") or [],
+    }
+
+
+# ========== PAYSLIP BULK EXPORT (ZIP of PDFs + CSV) ==========
+
+@router.get("/payslips/export.csv")
+async def export_payslips_csv(
+    period: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(require_director),
+):
+    """Director+ can export all payslips for a given period (YYYY-MM) as CSV."""
+    from fastapi.responses import Response
+    import csv
+    import io
+    q: dict = {}
+    if period:
+        q["period"] = period
+    if location_id:
+        q["location_id"] = location_id
+    docs = await db.hr_payslips.find(q, {"_id": 0}).sort([("period", -1), ("staff_name", 1)]).to_list(2000)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Period", "Staff Name", "Department", "Location", "Currency",
+        "Gross", "Allowances", "Deductions", "Net", "Status", "Paid At", "Notes", "Payslip ID",
+    ])
+    for p in docs:
+        writer.writerow([
+            p.get("period", ""), p.get("staff_name", ""), p.get("department", ""), p.get("location_id", ""),
+            p.get("currency", ""),
+            p.get("gross_salary", 0), p.get("allowances", 0), p.get("deductions", 0), p.get("net_salary", 0),
+            p.get("status", ""), p.get("paid_at", ""), (p.get("notes") or "")[:200], p.get("id", ""),
+        ])
+    csv_data = buf.getvalue()
+    fname = f"payslips_{period or 'all'}.csv"
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@router.get("/payslips/export.zip")
+async def export_payslips_zip(
+    period: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(require_director),
+):
+    """Director+ can bundle every payslip PDF for a period into a single ZIP."""
+    from fastapi.responses import Response
+    import io
+    import zipfile
+    q: dict = {}
+    if period:
+        q["period"] = period
+    if location_id:
+        q["location_id"] = location_id
+    docs = await db.hr_payslips.find(q, {"_id": 0, "id": 1, "staff_name": 1, "period": 1}).to_list(2000)
+    if not docs:
+        raise HTTPException(status_code=404, detail="No payslips found for the given filters")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in docs:
+            try:
+                pdf_bytes = await _generate_payslip_pdf_bytes(p["id"])
+                safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (p.get("staff_name") or "unknown"))
+                fname = f"{p.get('period','')}_{safe_name}_{p['id']}.pdf"
+                z.writestr(fname, pdf_bytes)
+            except Exception as e:
+                logger.warning(f"Skipping payslip {p.get('id')} in ZIP export: {e}")
+    zip_bytes = buf.getvalue()
+    zip_name = f"payslips_{period or 'all'}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={zip_name}"},
+    )
+
+
 @router.get("/payslips/{payslip_id}/mine")
 async def get_my_payslip(payslip_id: str, current_user: dict = Depends(get_current_user)):
     """Staff can fetch only their own payslip."""
@@ -1772,23 +1904,17 @@ async def get_my_payslip(payslip_id: str, current_user: dict = Depends(get_curre
 
 # ========== PAYSLIP PDF EXPORT ==========
 
-@router.get("/payslips/{payslip_id}/pdf")
-async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_user)):
-    """Server-rendered payslip PDF. Access: admins + the owning staff member only."""
+async def _generate_payslip_pdf_bytes(payslip_id: str) -> bytes:
+    """Render a payslip to PDF bytes.  Used by both the per-payslip endpoint
+    and the director+ bulk-ZIP export.  Raises HTTPException if not found."""
     p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Payslip not found")
-    role = (current_user.get("role") or "").lower()
-    is_hr = role in {"admin", "system_admin", "hr", "director", "executive director"}
-    if not is_hr and p.get("staff_id") != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Not your payslip")
-
     loc_name = ""
     if p.get("location_id"):
         loc = await db.locations.find_one({"id": p["location_id"]}, {"_id": 0, "name": 1})
         if loc:
             loc_name = loc.get("name") or ""
-
     cur = p.get("currency") or "UGX"
     def fmt(x): return f"{cur} {(x or 0):,.2f}"
     line_rows = ""
@@ -1800,11 +1926,9 @@ async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_
         line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{amt:,.2f}</td></tr>"
     if not line_rows:
         line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
-
     paid_note = ""
     if p.get("status") == "paid" and p.get("paid_at"):
         paid_note = f"<p class='meta' style='text-align:center;margin-top:14mm'>Paid on {p['paid_at'][:10]}</p>"
-
     html = f"""<html><head><meta charset='utf-8' /><style>
 @page {{ size: A4; margin: 16mm; }}
 body {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color:#0f172a; }}
@@ -1836,7 +1960,6 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
       <p style='margin:6px 0 0 0'><span class='status {p.get("status","")}'>{p.get('status','draft')}</span></p>
     </div>
   </div>
-
   <div class='grid'>
     <div><span class='k'>Staff:</span> <strong>{p.get('staff_name','')}</strong></div>
     <div><span class='k'>Payslip ID:</span> {p.get('id','')}</div>
@@ -1849,34 +1972,44 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
     <div><span class='k'>Unpaid leave days:</span> {p.get('unpaid_leave_days',0)}</div>
     <div><span class='k'>PTO days:</span> {p.get('pto_days',0)}</div>
   </div>
-
   <h2>Line Items</h2>
   <table>
     <thead><tr><th>Description</th><th style='text-align:right'>Amount</th></tr></thead>
     <tbody>{line_rows}</tbody>
   </table>
-
   <div class='summary'>
     <div class='row'><span>Gross salary</span><span>{fmt(p.get('gross_salary'))}</span></div>
     <div class='row' style='color:#047857'><span>+ Allowances</span><span>{fmt(p.get('allowances'))}</span></div>
     <div class='row' style='color:#b45309'><span>&minus; Deductions</span><span>{fmt(p.get('deductions'))}</span></div>
     <div class='total'><span>Net Pay</span><span>{fmt(p.get('net_salary'))}</span></div>
   </div>
-
   {paid_note}
   <p class='meta' style='margin-top:18mm; text-align:center'>This payslip is automatically generated. For corrections contact HR.</p>
 </body></html>"""
-
     from weasyprint import HTML
-    from starlette.responses import StreamingResponse
-    import io
     try:
-        pdf = HTML(string=html).write_pdf()
+        return HTML(string=html).write_pdf()
     except Exception as e:
         logger.error(f"Payslip PDF failed: {e}")
         raise HTTPException(status_code=500, detail="PDF generation failed")
-    safe_name = (p.get("staff_name") or "staff").replace(" ", "_")[:30]
-    filename = f"payslip-{safe_name}-{p.get('period','')}.pdf"
+
+
+@router.get("/payslips/{payslip_id}/pdf")
+async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_user)):
+    """Server-rendered payslip PDF. Access: HR/Director+/Admin + the owning staff member."""
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_id": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    role = (current_user.get("role") or "").lower()
+    is_hr = role in {"admin", "system_admin", "hr", "director", "executive director"}
+    if not is_hr and p.get("staff_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your payslip")
+    pdf = await _generate_payslip_pdf_bytes(payslip_id)
+    p_full = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_name": 1, "period": 1})
+    from starlette.responses import StreamingResponse
+    import io
+    safe_name = ((p_full or {}).get("staff_name") or "staff").replace(" ", "_")[:30]
+    filename = f"payslip-{safe_name}-{(p_full or {}).get('period','')}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",

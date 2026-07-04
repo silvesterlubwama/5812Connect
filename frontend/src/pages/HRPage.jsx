@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Switch } from '../components/ui/switch';
 import api from '../services/api';
 import { adminApi, locationsApi } from '../services/api';
@@ -53,6 +53,12 @@ export default function HRPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [templateForm, setTemplateForm] = useState({ name: '', content: '' });
   const [payPeriod, setPayPeriod] = useState(new Date().toISOString().slice(0, 7));
+  // Payslip edit + history dialogs (iter209b)
+  const [editingPayslip, setEditingPayslip] = useState(null);
+  const [editPayslipForm, setEditPayslipForm] = useState({});
+  const [editPayslipReason, setEditPayslipReason] = useState('');
+  const [payslipHistory, setPayslipHistory] = useState(null);
+  const [bulkExportPeriod, setBulkExportPeriod] = useState(new Date().toISOString().slice(0, 7));
   const [docReqForm, setDocReqForm] = useState({ staff_id: '', doc_types: ['resume', 'id_document'], message: '' });
   const [issueForm, setIssueForm] = useState({ template_id: '', staff_id: '', start_date: '', salary: '' });
   const [settingsForm, setSettingsForm] = useState({ hr_enabled: false, pay_frequency: 'monthly', currency: 'UGX', pay_day: 28 });
@@ -281,36 +287,99 @@ export default function HRPage() {
 
         {/* PAYSLIPS TAB */}
         <TabsContent value="payslips" className="mt-4">
-          <div className="flex justify-end gap-2 mb-3">
-            <Button size="sm" variant="outline" className="gap-1.5" data-testid="generate-payday-btn" onClick={async () => {
-              try {
-                const res = await api.post('/hr/payslips/generate-payday');
-                if (res.data.generated > 0) {
-                  toast.success(`Generated ${res.data.generated} payslips for ${res.data.period} (payday today!)`);
-                  setPayslips(prev => [...(res.data.payslips || []), ...prev]);
-                } else {
-                  toast.info(res.data.message || `No campuses have payday today (${res.data.day_of_month})`);
-                }
-              } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
-            }}><CheckCircle size={14} /> Run Payday Now</Button>
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
-            <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
+          <div className="flex justify-between items-center gap-2 mb-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Label className="text-xs text-muted-foreground">Export period:</Label>
+              <Input type="month" value={bulkExportPeriod} onChange={e => setBulkExportPeriod(e.target.value)} className="h-8 text-xs w-36" data-testid="bulk-export-period-input" />
+              <Button size="sm" variant="outline" className="gap-1.5 h-8" data-testid="export-payslips-csv-btn" onClick={async () => {
+                try {
+                  const url = `${process.env.REACT_APP_BACKEND_URL}/api/hr/payslips/export.csv?period=${encodeURIComponent(bulkExportPeriod)}`;
+                  const r = await fetch(url, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+                  if (!r.ok) { toast.error('Export failed'); return; }
+                  const blob = await r.blob();
+                  const link = document.createElement('a');
+                  link.href = URL.createObjectURL(blob);
+                  link.download = `payslips_${bulkExportPeriod}.csv`;
+                  link.click();
+                  toast.success('CSV downloaded');
+                } catch (e) { toast.error('Export failed'); }
+              }}><Download size={14} /> CSV</Button>
+              <Button size="sm" variant="outline" className="gap-1.5 h-8" data-testid="export-payslips-zip-btn" onClick={async () => {
+                try {
+                  const url = `${process.env.REACT_APP_BACKEND_URL}/api/hr/payslips/export.zip?period=${encodeURIComponent(bulkExportPeriod)}`;
+                  const r = await fetch(url, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+                  if (!r.ok) { toast.error(r.status === 404 ? 'No payslips for that period' : 'Export failed'); return; }
+                  const blob = await r.blob();
+                  const link = document.createElement('a');
+                  link.href = URL.createObjectURL(blob);
+                  link.download = `payslips_${bulkExportPeriod}.zip`;
+                  link.click();
+                  toast.success('ZIP downloaded');
+                } catch (e) { toast.error('Export failed'); }
+              }}><Download size={14} /> ZIP</Button>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="outline" className="gap-1.5" data-testid="generate-payday-btn" onClick={async () => {
+                try {
+                  const res = await api.post('/hr/payslips/generate-payday');
+                  if (res.data.generated > 0) {
+                    toast.success(`Generated ${res.data.generated} payslips for ${res.data.period} (payday today!)`);
+                    setPayslips(prev => [...(res.data.payslips || []), ...prev]);
+                  } else {
+                    toast.info(res.data.message || `No campuses have payday today (${res.data.day_of_month})`);
+                  }
+                } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+              }}><CheckCircle size={14} /> Run Payday Now</Button>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
+              <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
+            </div>
           </div>
           {payslips.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No payslips generated yet.</p> : (
             <div className="space-y-2">
               {payslips.map(p => (
                 <Card key={p.id} className="rounded-xl">
-                  <CardContent className="p-4 flex items-center justify-between">
+                  <CardContent className="p-4 flex items-center justify-between flex-wrap gap-3">
                     <div>
                       <p className="text-sm font-medium">{p.staff_name}</p>
                       <p className="text-xs text-muted-foreground">Period: {p.period} · {p.department}</p>
+                      {(p.edit_history?.length || 0) > 0 && <p className="text-[10px] text-amber-600">✎ Edited {p.edit_history.length}x</p>}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-right">
                         <p className="text-sm font-bold text-green-600">{p.currency} {(p.net_salary || 0).toLocaleString()}</p>
                         <p className="text-[10px] text-muted-foreground">Gross: {(p.gross_salary || 0).toLocaleString()}</p>
                       </div>
-                      <Badge variant={p.status === 'approved' ? 'outline' : 'secondary'} className={`text-xs ${p.status === 'approved' ? 'border-green-400 text-green-600' : ''}`}>{p.status}</Badge>
+                      <Badge variant={p.status === 'approved' ? 'outline' : (p.status === 'paid' ? 'default' : 'secondary')} className={`text-xs ${p.status === 'approved' ? 'border-green-400 text-green-600' : ''}`}>{p.status}</Badge>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" data-testid={`payslip-pdf-${p.id}`} title="Download PDF" onClick={async () => {
+                        try {
+                          const url = `${process.env.REACT_APP_BACKEND_URL}/api/hr/payslips/${p.id}/pdf`;
+                          const r = await fetch(url, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+                          if (!r.ok) { toast.error('PDF failed'); return; }
+                          const blob = await r.blob();
+                          const link = document.createElement('a');
+                          link.href = URL.createObjectURL(blob);
+                          link.download = `payslip_${p.staff_name?.replace(/\s+/g,'_')}_${p.period}.pdf`;
+                          link.click();
+                        } catch { toast.error('PDF failed'); }
+                      }}><Download size={12} /></Button>
+                      <Button size="sm" variant="outline" className="h-7 text-xs gap-1" data-testid={`payslip-edit-${p.id}`} onClick={() => {
+                        setEditingPayslip(p);
+                        setEditPayslipForm({
+                          gross_salary: p.gross_salary || 0,
+                          allowances: p.allowances || 0,
+                          deductions: p.deductions || 0,
+                          net_salary: p.net_salary || 0,
+                          notes: p.notes || '',
+                          status: p.status,
+                        });
+                        setEditPayslipReason('');
+                      }}><Pencil size={12} /> Edit</Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" data-testid={`payslip-history-${p.id}`} title="View edit history" onClick={async () => {
+                        try {
+                          const r = await api.get(`/hr/payslips/${p.id}/history`);
+                          setPayslipHistory({ payslip: p, ...r.data });
+                        } catch { toast.error('Failed to load history'); }
+                      }}><History size={12} /></Button>
                       {p.status === 'draft' && <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={async () => { await api.put(`/hr/payslips/${p.id}`, { status: 'approved' }); setPayslips(prev => prev.map(x => x.id === p.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); }}><CheckCircle size={12} /> Approve</Button>}
                     </div>
                   </CardContent>
@@ -474,6 +543,89 @@ export default function HRPage() {
               <Button className="flex-1" onClick={handleCreateSalary} disabled={saving || !salaryForm.staff_id || !salaryForm.base_salary} data-testid="salary-save-btn">{saving ? 'Saving...' : (editingSalaryId ? 'Save' : 'Create')}</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Payslip Dialog (iter209b) */}
+      <Dialog open={!!editingPayslip} onOpenChange={o => !o && setEditingPayslip(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Payslip — {editingPayslip?.staff_name}</DialogTitle></DialogHeader>
+          {editingPayslip && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">Period {editingPayslip.period} · {editingPayslip.currency} · ID {editingPayslip.id}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Gross Salary</Label><Input type="number" value={editPayslipForm.gross_salary} onChange={e => setEditPayslipForm({...editPayslipForm, gross_salary: e.target.value})} data-testid="edit-payslip-gross" /></div>
+                <div><Label>Status</Label>
+                  <Select value={editPayslipForm.status} onValueChange={v => setEditPayslipForm({...editPayslipForm, status: v})}>
+                    <SelectTrigger data-testid="edit-payslip-status"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="paid">Paid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div><Label>Allowances</Label><Input type="number" value={editPayslipForm.allowances} onChange={e => setEditPayslipForm({...editPayslipForm, allowances: e.target.value})} data-testid="edit-payslip-allowances" /></div>
+                <div><Label>Deductions</Label><Input type="number" value={editPayslipForm.deductions} onChange={e => setEditPayslipForm({...editPayslipForm, deductions: e.target.value})} data-testid="edit-payslip-deductions" /></div>
+              </div>
+              <div className="p-2 bg-muted rounded text-sm"><strong>Net (auto):</strong> {editingPayslip.currency} {(parseFloat(editPayslipForm.gross_salary || 0) + parseFloat(editPayslipForm.allowances || 0) - parseFloat(editPayslipForm.deductions || 0)).toLocaleString()}</div>
+              <div><Label>Notes</Label><Textarea rows={2} value={editPayslipForm.notes} onChange={e => setEditPayslipForm({...editPayslipForm, notes: e.target.value})} data-testid="edit-payslip-notes" /></div>
+              <div><Label>Reason for edit (audit) *</Label><Input placeholder="e.g. Corrected overtime calculation" value={editPayslipReason} onChange={e => setEditPayslipReason(e.target.value)} data-testid="edit-payslip-reason" /></div>
+              <p className="text-[10px] text-muted-foreground">All changes are logged to the audit trail with your name + timestamp.</p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingPayslip(null)}>Cancel</Button>
+            <Button data-testid="save-payslip-edit-btn" onClick={async () => {
+              if (!editPayslipReason.trim()) { toast.error('Please provide a reason for the edit'); return; }
+              try {
+                const payload = {
+                  gross_salary: parseFloat(editPayslipForm.gross_salary) || 0,
+                  allowances: parseFloat(editPayslipForm.allowances) || 0,
+                  deductions: parseFloat(editPayslipForm.deductions) || 0,
+                  notes: editPayslipForm.notes,
+                  status: editPayslipForm.status,
+                  reason: editPayslipReason,
+                };
+                const r = await api.put(`/hr/payslips/${editingPayslip.id}`, payload);
+                setPayslips(prev => prev.map(x => x.id === editingPayslip.id ? r.data : x));
+                setEditingPayslip(null);
+                toast.success('Payslip updated');
+              } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+            }}>Save changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payslip History Dialog (audit trail) */}
+      <Dialog open={!!payslipHistory} onOpenChange={o => !o && setPayslipHistory(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit History — {payslipHistory?.payslip?.staff_name}</DialogTitle></DialogHeader>
+          {payslipHistory && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">Created {payslipHistory.created_at?.slice(0,10)} by {payslipHistory.created_by_name}</p>
+              {payslipHistory.history.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">No edits recorded yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {payslipHistory.history.slice().reverse().map((h, i) => (
+                    <Card key={i} className="border-l-4 border-l-amber-400">
+                      <CardContent className="p-3 text-xs space-y-1">
+                        <p className="font-medium">{h.by_name || 'Unknown'} · {h.at?.slice(0, 16).replace('T', ' ')}</p>
+                        {h.reason && <p className="italic text-muted-foreground">&ldquo;{h.reason}&rdquo;</p>}
+                        <div className="space-y-1 mt-2">
+                          {Object.entries(h.changes || {}).map(([k, v]) => (
+                            <div key={k} className="flex justify-between border-b py-1"><span className="capitalize font-medium">{k}:</span><span className="text-muted-foreground">{JSON.stringify(v.old)} → <span className="text-emerald-600 font-mono">{JSON.stringify(v.new)}</span></span></div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter><Button variant="ghost" onClick={() => setPayslipHistory(null)}>Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

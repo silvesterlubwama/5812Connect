@@ -10,7 +10,7 @@ import {
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
   PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server,
-  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark, Banknote, Container
+  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark, Banknote, Container, Truck, HandHeart
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -80,6 +80,8 @@ const NAV_SECTIONS = [
       { to: '/financial', icon: DollarSign, label: 'Financial', module: 'finance' },
       { to: '/accounting', icon: BookOpen, label: 'Accounting', module: 'accounting' },
       { to: '/banking', icon: Landmark, label: 'Banking', module: 'banking' },
+      { to: '/donors', icon: HandHeart, label: 'Donors', module: 'finance' },
+      { to: '/vendors', icon: Truck, label: 'Vendors', module: 'finance' },
       { to: '/hr', icon: Users, label: 'HR & Payroll', module: 'hr' },
       { to: '/approvals', icon: Workflow, label: 'Approvals', module: 'finance' },
       { to: '/sales', icon: ShoppingCart, label: 'Marketplace', module: 'sales' },

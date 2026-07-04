@@ -95,6 +95,13 @@ export default function FinancialPage() {
   const [subLocations, setSubLocations] = useState([]);
   // Chart accounts (cash/bank/mobile money) — my-scoped list with live balances
   const [myChartAccounts, setMyChartAccounts] = useState([]);
+  // Autosuggest sources (iter209b) — donor & vendor typeahead in entry forms
+  const [donorSuggestions, setDonorSuggestions] = useState([]);
+  const [vendorSuggestions, setVendorSuggestions] = useState([]);
+  useEffect(() => {
+    api.get('/donors', { params: { limit: 200 } }).then(r => setDonorSuggestions((r.data || []).map(d => d.name))).catch(() => {});
+    api.get('/vendors', { params: { limit: 200 } }).then(r => setVendorSuggestions((r.data || []).map(v => v.name))).catch(() => {});
+  }, []);
   const [showImportExport, setShowImportExport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importingData, setImportingData] = useState(false);
@@ -926,7 +933,10 @@ export default function FinancialPage() {
           <form onSubmit={handleAddDonation} className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Donor Name *</Label>
-              <Input placeholder="Donor name" value={donationForm.donor_name} onChange={e => setDonationForm({...donationForm, donor_name: e.target.value})} required data-testid="donor-name-input" />
+              <Input placeholder="Donor name" value={donationForm.donor_name} onChange={e => setDonationForm({...donationForm, donor_name: e.target.value})} required data-testid="donor-name-input" list="donor-suggestions-list" />
+              <datalist id="donor-suggestions-list">
+                {donorSuggestions.map(n => <option key={n} value={n} />)}
+              </datalist>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -1070,7 +1080,10 @@ export default function FinancialPage() {
               <div className="space-y-3 mt-3">
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1"><Label className="text-xs">Vendor/Payee</Label>
-                    <Input className="h-8 text-xs" placeholder="e.g. Bulunzi Farm Supply" value={expenseForm.vendor} onChange={e => setExpenseForm({...expenseForm, vendor: e.target.value})} data-testid="expense-vendor-input" />
+                    <Input className="h-8 text-xs" placeholder="e.g. Bulunzi Farm Supply" value={expenseForm.vendor} onChange={e => setExpenseForm({...expenseForm, vendor: e.target.value})} data-testid="expense-vendor-input" list="vendor-suggestions-list" />
+                    <datalist id="vendor-suggestions-list">
+                      {vendorSuggestions.map(n => <option key={n} value={n} />)}
+                    </datalist>
                   </div>
                   <div className="space-y-1"><Label className="text-xs">Receipt #</Label>
                     <Input className="h-8 text-xs" placeholder="e.g. 1946" value={expenseForm.receipt_number} onChange={e => setExpenseForm({...expenseForm, receipt_number: e.target.value})} />

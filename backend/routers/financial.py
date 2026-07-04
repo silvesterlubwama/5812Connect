@@ -175,6 +175,15 @@ async def create_donation(data: DonationCreate, current_user: dict = Depends(req
     if doc.get("deposit_to_account_id"):
         from routers.chart_accounts import invalidate_balance_cache
         invalidate_balance_cache([doc["deposit_to_account_id"]])
+    # Auto-create/update donor profile (iter209b) — enables typeahead + drilldown
+    try:
+        from routers.donors_vendors import upsert_donor_from_donation
+        donor_id = await upsert_donor_from_donation(doc, current_user)
+        if donor_id:
+            await db.donations.update_one({"id": doc["id"]}, {"$set": {"donor_id": donor_id}})
+            doc["donor_id"] = donor_id
+    except Exception as e:
+        logger.warning(f"Donor auto-upsert skipped: {e}")
     await _audit(current_user["id"], "create", "donation", doc["id"])
     # Auto-post to accounting ledger (silent no-op if CoA not configured)
     try:
@@ -355,6 +364,15 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
     if doc.get("paid_from_account_id"):
         from routers.chart_accounts import invalidate_balance_cache
         invalidate_balance_cache([doc["paid_from_account_id"]])
+    # Auto-create/update vendor profile (iter209b)
+    try:
+        from routers.donors_vendors import upsert_vendor_from_expense
+        vendor_id = await upsert_vendor_from_expense(doc, current_user)
+        if vendor_id:
+            await db.expenses.update_one({"id": doc["id"]}, {"$set": {"vendor_id": vendor_id}})
+            doc["vendor_id"] = vendor_id
+    except Exception as e:
+        logger.warning(f"Vendor auto-upsert skipped: {e}")
     await _audit(current_user["id"], "create", "expense", doc["id"])
     return doc
 
