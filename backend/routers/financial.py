@@ -249,7 +249,7 @@ async def _reverse_auto_posted_je(source_kind: str, source_id: str, current_user
 
 async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
     """Create + post a balanced JE for a financial-module record.
-    `kind` ∈ {'donation', 'expense_approved'}.
+    `kind` ∈ {'donation', 'expense_approved', 'payroll'}.
     Silently no-ops if the location has no Chart of Accounts yet."""
     loc_id = doc.get("location_id")
     if not loc_id:
@@ -260,14 +260,32 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
         return
     if amount <= 0:
         return
-    # Find a miscellaneous journal (general ledger journal)
+    # Find a general-purpose journal — MUST NOT fall back to a sales journal
+    # (fixes production bug where donations/expenses/payroll were all prefixed
+    # SALES/... because the loose "any active" fallback picked the sales journal).
     journal = await db.accounting_journals.find_one(
         {"location_id": loc_id, "kind": "miscellaneous", "active": True}, {"_id": 0}
     ) or await db.accounting_journals.find_one(
-        {"location_id": loc_id, "active": True}, {"_id": 0}
+        {"location_id": loc_id, "kind": {"$in": ["general", "purchases"]}, "active": True}, {"_id": 0}
     )
     if not journal:
-        return
+        # Auto-create a miscellaneous journal so future entries have a home.
+        # This avoids the silent-skip that leaves half a location's activity
+        # missing from the ledger.
+        journal = {
+            "id": f"jrn_{uuid.uuid4().hex[:10]}",
+            "code": "GL",
+            "name": "General Ledger",
+            "kind": "miscellaneous",
+            "location_id": loc_id,
+            "active": True,
+            "auto_created": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.accounting_journals.insert_one(journal)
+        journal.pop("_id", None)
+        logger.info(f"Auto-created General Ledger journal for location {loc_id}")
     if kind == "donation":
         debit_acc = await _find_account(loc_id, account_type="asset_cash")
         credit_acc = await _find_account(loc_id, account_type="income", name_hints=["donation", "contribut"])
@@ -282,9 +300,17 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
         narration = f"Expense: {doc.get('title', '')} [{category or 'general'}]"
         ref = doc["id"]
         source_kind = "expense"
+    elif kind == "payroll":
+        # Payroll: Dr Wages & Salaries expense / Cr Cash
+        debit_acc = await _find_account(loc_id, account_type="expense", name_hints=["wage", "salar", "payroll"])
+        credit_acc = await _find_account(loc_id, account_type="asset_cash")
+        narration = f"Salary — {doc.get('notes', 'Payroll')}"
+        ref = doc["id"]
+        source_kind = "payroll"
     else:
         return
     if not debit_acc or not credit_acc:
+        logger.warning(f"Skipping JE for {kind} {doc.get('id')} — missing debit/credit account at location {loc_id}")
         return
     # Idempotency — never post twice for the same source
     existing = await db.accounting_entries.find_one(
@@ -1452,6 +1478,73 @@ async def update_asset_valuation(asset_id: str, data: dict, current_user: dict =
 
 
 
+
+
+@router.post("/financial/repair-wrong-journal")
+async def repair_wrong_journal(current_user: dict = Depends(require_admin)):
+    """One-time migration (iter210b): re-tag auto-posted journal entries that
+    were routed to a SALES journal by the old '$or any active' fallback.
+    Moves them to the location's miscellaneous journal (creating one if needed).
+    Idempotent — skips entries already on a non-sales journal.
+
+    Fixes production ledgers where every donation/expense was numbered
+    SALES/... because no miscellaneous journal existed at the location.
+    """
+    entries_fixed = 0
+    journals_created = 0
+    scanned = 0
+    # Find all JEs whose current journal is a SALES-kind journal but that
+    # were auto-posted from donation/expense/payroll (which should never be
+    # in a sales journal).
+    sales_journals = await db.accounting_journals.find({"kind": "sales"}, {"_id": 0, "id": 1, "location_id": 1}).to_list(200)
+    sales_journal_ids = {j["id"] for j in sales_journals}
+    if not sales_journal_ids:
+        return {"scanned": 0, "entries_fixed": 0, "journals_created": 0, "message": "No sales journals found — nothing to repair."}
+    async for je in db.accounting_entries.find(
+        {"journal_id": {"$in": list(sales_journal_ids)}, "auto_generated_from": {"$in": ["donation", "expense", "payroll"]}},
+        {"_id": 0, "id": 1, "location_id": 1, "auto_generated_from": 1},
+    ):
+        scanned += 1
+        loc_id = je.get("location_id")
+        if not loc_id:
+            continue
+        # Find or create a miscellaneous journal at this location
+        misc = await db.accounting_journals.find_one(
+            {"location_id": loc_id, "kind": "miscellaneous", "active": True},
+            {"_id": 0, "id": 1, "code": 1},
+        )
+        if not misc:
+            misc = {
+                "id": f"jrn_{uuid.uuid4().hex[:10]}",
+                "code": "GL",
+                "name": "General Ledger",
+                "kind": "miscellaneous",
+                "location_id": loc_id,
+                "active": True,
+                "auto_created": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": current_user["id"],
+            }
+            await db.accounting_journals.insert_one(misc)
+            misc.pop("_id", None)
+            journals_created += 1
+        # Re-tag the JE header + its lines
+        await db.accounting_entries.update_one(
+            {"id": je["id"]},
+            {"$set": {"journal_id": misc["id"], "journal_code": misc.get("code")}},
+        )
+        await db.accounting_entry_lines.update_many(
+            {"entry_id": je["id"]},
+            {"$set": {"journal_id": misc["id"]}},
+        )
+        entries_fixed += 1
+    await _audit(current_user["id"], "repair", "wrong_journal", None, {"scanned": scanned, "fixed": entries_fixed, "journals_created": journals_created})
+    return {
+        "scanned": scanned,
+        "entries_fixed": entries_fixed,
+        "journals_created": journals_created,
+        "message": f"Scanned {scanned} auto-posted entries mis-attributed to a sales journal. Re-tagged {entries_fixed} entries; auto-created {journals_created} General Ledger journals.",
+    }
 
 
 @router.post("/financial/repair-starting-balances")

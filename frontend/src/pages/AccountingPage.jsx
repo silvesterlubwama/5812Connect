@@ -264,6 +264,14 @@ export default function AccountingPage() {
       fetchAll();
     } catch (err) { toast.error(err.response?.data?.detail || 'Migration failed'); }
   };
+  const repairWrongJournal = async () => {
+    if (!window.confirm('One-time migration: finds journal entries auto-created from donations/expenses/payroll that were mis-attributed to a SALES journal and re-tags them to the General Ledger. Idempotent. Continue?')) return;
+    try {
+      const r = await api.post('/financial/repair-wrong-journal');
+      toast.success(r.data.message || 'Journals repaired', { duration: 8000 });
+      fetchAll();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Repair failed'); }
+  };
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -574,6 +582,7 @@ export default function AccountingPage() {
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairReversalLines} data-testid="acc-repair-reversals-btn" title="One-time fix for legacy reversals whose lines were left as draft"><RefreshCw size={12} className="mr-1" /> Repair Reversals</Button>
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairOrphanedJournals} data-testid="acc-repair-orphans-btn" title="Reverse auto-posted JEs whose source donation/expense was deleted — realigns Trial Balance with Finance totals"><RefreshCw size={12} className="mr-1" /> Repair Orphans</Button>
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairStartingBalances} data-testid="acc-repair-starting-balances-btn" title="One-time migration: copy legacy Finance starting balances into chart cash accounts"><RefreshCw size={12} className="mr-1" /> Migrate Starting Balances</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={repairWrongJournal} data-testid="acc-repair-wrong-journal-btn" title="Re-tag auto-posted entries mis-attributed to a SALES journal back to General Ledger"><RefreshCw size={12} className="mr-1" /> Fix Journal Codes</Button>
                 </>
               )}
               <Button size="sm" disabled={journals.length === 0} onClick={() => setShowEntryForm(true)} data-testid="acc-new-entry-btn"><Plus size={14} className="mr-1" /> New Entry</Button>

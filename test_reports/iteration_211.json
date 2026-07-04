@@ -1,0 +1,45 @@
+{
+  "summary": "Iter211 backend validation of payroll auto-JE + wrong-journal repair + payslip overrides. Wrote 12 pytest cases; 9 passed, 2 failed (same root cause), 1 skipped (test-env scope limitation, feature verified via DB). CRITICAL bug found: after aggregation reverses the prior payroll JE and re-posts, `_post_to_accounting` short-circuits on its idempotency check — so any location paying MORE than one payslip on the same day ends up with ZERO active payroll JE in the ledger. Trial Balance will still show Expense=0 despite salaries paid — exactly the production regression the fix was supposed to solve.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/hr/payslips/{id} (status='paid') → _post_to_accounting('payroll', ...)",
+        "issue": "Aggregation reversal + re-post is BROKEN. On the 2nd (and every subsequent) mark-paid for the same (location, day), `_aggregate_payroll_expense` correctly calls `_reverse_auto_posted_je('payroll', expense_id, ...)` which marks the prior JE `is_reversed=true` and posts a reversal entry. But then `_post_to_accounting('payroll', expense_doc, ...)` runs its idempotency guard `db.accounting_entries.find_one({auto_generated_from:'payroll', source_id: doc['id']})` — this find_one STILL matches the just-reversed original (is_reversed=true is NOT filtered out), so the function returns without posting a fresh JE for the new aggregated total. Net effect: after any re-aggregation the location has only the (reversed) original + its reversal — active payroll JE = 0. Trial Balance keeps showing Expense=0 for payroll.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/accounting/journals",
+        "issue": "Does not accept a `location_id` query param (only campus-scoped filter). Admins looking at a location outside their `active_campus_id` can't list its journals via this endpoint. Same for GET /api/accounting/entries — no `location_id` param either. Not new to iter211 but blocks the auto-create GL journal test from verifying via API."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py",
+    "/app/test_reports/pytest/iter211_results.xml"
+  ],
+  "action_items": [
+    "FIX CRITICAL: In /app/backend/routers/financial.py `_post_to_accounting()` (around line 316), change the idempotency guard to exclude reversed entries: `existing = await db.accounting_entries.find_one({'auto_generated_from': source_kind, 'source_id': doc['id'], 'is_reversed': {'$ne': True}}, {'_id': 0, 'id': 1})`. Without this, the aggregation reversal+repost dance in hr._aggregate_payroll_expense is a no-op after the first payslip.",
+    "OPTIONAL: Add `location_id: Optional[str] = None` query param to GET /api/accounting/journals and GET /api/accounting/entries so admins can inspect newly-created locations before switching active_campus_id."
+  ],
+  "critical_code_review_comments": [
+    "_post_to_accounting idempotency check does NOT filter is_reversed — root cause of the re-post no-op after aggregation reversal. Also affects any future flow that reverses+reposts (e.g. edited donations, edited expenses).",
+    "hr.py _aggregate_payroll_expense: after `_reverse_auto_posted_je` succeeds it calls `_post_to_accounting('payroll', expense_doc, ...)` — but expense_doc's `id` is still `payroll_{loc}_{today}`, so the idempotency guard matches the just-reversed prior entry. Either the guard must skip reversed entries, or the aggregate expense should use a versioned id (e.g. `payroll_{loc}_{today}_v{n}`).",
+    "financial.py _post_to_accounting auto-creates a 'GL' journal but does not check for existing code collision (unlike POST /api/accounting/journals which enforces unique (loc, code)). Two concurrent first-donation POSTs at the same brand-new location could each try to create a GL journal — race condition not guarded by unique index.",
+    "hr.py update_payslip: when payroll_location_id or paid_from_account_id is changed AFTER status was already 'paid', the code doesn't re-run _aggregate_payroll_expense (the `if data.get('status') == 'paid' and existing.get('status') != 'paid'` gate only fires on the transition). So an admin correcting a mistagged payslip won't move the ledger.",
+    "repair_wrong_journal: idempotent as claimed. However it does not undo the audit trail or reverse any prior expense-side balances — safe because it only re-tags journal_id/journal_code (not the debits/credits). Just worth documenting.",
+    "get /api/accounting/entries lacks a location_id query param — makes external verification of cross-location activity awkward."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter211_payroll_je_and_repair.py (new file, 12 pytest cases)"
+  ],
+  "success_rate": {"backend": "75% (9/12; 1 skipped due to campus-scope test-env limitation; 2 failed pinpointing 1 real critical bug)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812; staff created inline via POST /api/admin/users",
+  "seed_data_creation": "Created 3+ TEST_Iter211_ staff users; 4+ manual payslips (periods 2025-02/03/04/05); 2 TEST_Iter211_Loc_ sub-locations (each with Cash + Donations chart accounts + 1 auto-created GL journal + 1 donation entry). All TEST_-prefixed for cleanup. Also: repaired-wrong-journal was invoked (idempotent, only ran non-zero on first call this session).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The critical bug fix is a 1-line change in _post_to_accounting. After main agent adds `'is_reversed': {'$ne': True}` to the idempotency find_one, re-run pytest backend/tests/test_iter211_payroll_je_and_repair.py — the two failing tests will pass. Note: because the aggregate expense_id is `payroll_{loc}_{today}` (deterministic per day), when re-testing on the SAME UTC day pytest will accumulate onto the prior aggregate; the tests are written to tolerate this (they only assert amount >= net1+net2 and that latest active JE total_debit matches aggregate expense amount). loc_001 has journal 'GLBCE' (miscellaneous, name 'CI GL') — that's the expected non-SALES journal_code for payroll JEs there. Iter211 test file uses helpers borrowed from iter210 (login flow, _create_staff_user). Locations created: TEST_Iter211_Loc_* — safe to leave; auto-cleanup not implemented.",
+  "rca of the issue": "Sequence: (1) Payslip A marked paid → _aggregate_payroll_expense creates expense doc `payroll_loc001_YYYY-MM-DD` (net=A) → _post_to_accounting('payroll', doc) posts JE1 with source_id=payroll_loc001_YYYY-MM-DD. (2) Payslip B marked paid same day → _aggregate_payroll_expense updates SAME expense (amount=A+B), then calls _reverse_auto_posted_je which flags JE1.is_reversed=true and posts a reversal entry JE1R (JE1R has no auto_generated_from, only `reverses`=JE1.id). Then calls _post_to_accounting again. Its idempotency guard: `find_one({auto_generated_from:'payroll', source_id:payroll_loc001_...})` — matches JE1 (still there, is_reversed=true) → returns early → NO fresh JE2 posted. Result: at loc, all payroll JEs are reversed pairs (JE1 + JE1R = net zero effect on ledger), no active JE reflects the new aggregate total. Mitigation: filter `is_reversed:{$ne:true}` in the idempotency guard so a reversed prior entry doesn't block reposting. Verified in DB after test run: source_id='payroll_loc_001_2026-07-04' → 2 entries (je_45fdbc2571 is_reversed=True total_debit=470000, je_dfadfe5af2 reverses=je_45fdbc2571 total_debit=470000) yet aggregated expense amount = 1,470,000 across 4 staff — a 1M UGX gap in the Trial Balance's Expense side."
+}

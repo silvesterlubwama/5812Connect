@@ -604,7 +604,8 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
         raise HTTPException(status_code=404, detail="Payslip not found")
     allowed = {"status", "notes", "approved_by", "paid_at", "paid_by",
                "gross_salary", "allowances", "deductions", "net_salary",
-               "line_items", "currency", "period"}
+               "line_items", "currency", "period",
+               "paid_from_account_id", "payroll_location_id"}
     update = {k: v for k, v in data.items() if k in allowed}
     # If line_items provided, recompute allowances/deductions/net from them
     if "line_items" in update and isinstance(update["line_items"], list):
@@ -658,18 +659,28 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
 async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
     """Upsert ONE expense line per (location, date) that totals all paid payslips that day.
     Notes show "Payroll for N staff, period YYYY-MM" — no individual staff names.
-    Auto-tags paid_from_account_id from store_settings.default_cash_account_id so the
-    payment draws down the store's real cash account balance."""
-    loc_id = payslip.get("location_id") or current_user.get("active_campus_id") or ""
+    Auto-tags paid_from_account_id from either the payslip itself (override),
+    or falls back to store_settings.default_cash_account_id.
+
+    Also auto-posts a balanced Journal Entry to Accounting so the Trial Balance
+    reflects paid salaries. When the aggregate amount changes, the previous JE
+    is reversed and a fresh one is posted (idempotent recompute)."""
+    # Location can be overridden per payslip (iter210b) — director+ can retarget
+    # which location's books absorb the payroll.
+    loc_id = payslip.get("payroll_location_id") or payslip.get("location_id") or current_user.get("active_campus_id") or ""
     if not loc_id:
         return
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     period = payslip.get("period", "")
     expense_id = f"payroll_{loc_id}_{today}"
     net = float(payslip.get("net_salary") or 0)
-    # Look up the location's default cash account (from store_settings)
-    store_setting = await db.store_settings.find_one({"location_id": loc_id}, {"_id": 0, "default_cash_account_id": 1}) or {}
-    paid_from = store_setting.get("default_cash_account_id") or ""
+    # Cash account can also be overridden per payslip (iter210b)
+    override_acct = payslip.get("paid_from_account_id")
+    if override_acct:
+        paid_from = override_acct
+    else:
+        store_setting = await db.store_settings.find_one({"location_id": loc_id}, {"_id": 0, "default_cash_account_id": 1}) or {}
+        paid_from = store_setting.get("default_cash_account_id") or ""
     existing = await db.expenses.find_one({"id": expense_id})
     if existing:
         new_total = float(existing.get("amount", 0)) + net
@@ -684,8 +695,15 @@ async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
         if paid_from and not existing.get("paid_from_account_id"):
             update["paid_from_account_id"] = paid_from
         await db.expenses.update_one({"id": expense_id}, {"$set": update})
+        # Reverse the prior JE so the ledger reflects the new aggregate amount
+        try:
+            from routers.financial import _reverse_auto_posted_je
+            await _reverse_auto_posted_je("payroll", expense_id, current_user)
+        except Exception as ex:
+            logger.warning(f"Failed to reverse prior payroll JE for {expense_id}: {ex}")
+        expense_doc = {**existing, **update, "id": expense_id}
     else:
-        await db.expenses.insert_one({
+        expense_doc = {
             "id": expense_id,
             "title": "Payroll (Wages & Salaries)",
             "amount": net,
@@ -703,7 +721,25 @@ async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
             "payroll_period": period,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "created_by": current_user["id"],
-        })
+        }
+        await db.expenses.insert_one(expense_doc)
+    # Bust chart-account balance cache since paid_from balance just changed
+    if paid_from:
+        try:
+            from routers.chart_accounts import invalidate_balance_cache
+            invalidate_balance_cache([paid_from])
+        except Exception:
+            pass
+    # AUTO-POST TO ACCOUNTING as "Salary" (iter210b — fixes production bug where
+    # payroll never hit the ledger, causing Trial Balance to show Expense=0
+    # despite salaries being paid).
+    try:
+        from routers.financial import _post_to_accounting
+        # Force a fresh post by ensuring no idempotency block — we always
+        # reversed the prior JE above when re-aggregating
+        await _post_to_accounting("payroll", expense_doc, current_user)
+    except Exception as ex:
+        logger.error(f"Failed to post payroll JE for {expense_id}: {ex}")
 
 
 # ========== CONTRACT TEMPLATES ==========

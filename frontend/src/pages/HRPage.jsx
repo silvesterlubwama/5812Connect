@@ -59,6 +59,14 @@ export default function HRPage() {
   const [editPayslipReason, setEditPayslipReason] = useState('');
   const [payslipHistory, setPayslipHistory] = useState(null);
   const [bulkExportPeriod, setBulkExportPeriod] = useState(new Date().toISOString().slice(0, 7));
+  // Cash accounts + locations for the payslip edit dialog (iter210b)
+  const [cashAccountOptions, setCashAccountOptions] = useState([]);
+  const [locationOptions, setLocationOptions] = useState([]);
+  useEffect(() => {
+    api.get('/financial/chart-accounts', { params: { active_only: false, limit: 200 } })
+      .then(r => setCashAccountOptions(r.data || [])).catch(() => {});
+    api.get('/locations').then(r => setLocationOptions(r.data || [])).catch(() => {});
+  }, []);
   const [docReqForm, setDocReqForm] = useState({ staff_id: '', doc_types: ['resume', 'id_document'], message: '' });
   const [issueForm, setIssueForm] = useState({ template_id: '', staff_id: '', start_date: '', salary: '' });
   const [settingsForm, setSettingsForm] = useState({ hr_enabled: false, pay_frequency: 'monthly', currency: 'UGX', pay_day: 28 });
@@ -371,6 +379,8 @@ export default function HRPage() {
                           net_salary: p.net_salary || 0,
                           notes: p.notes || '',
                           status: p.status,
+                          paid_from_account_id: p.paid_from_account_id || '',
+                          payroll_location_id: p.payroll_location_id || '',
                         });
                         setEditPayslipReason('');
                       }}><Pencil size={12} /> Edit</Button>
@@ -567,6 +577,26 @@ export default function HRPage() {
                 </div>
                 <div><Label>Allowances</Label><Input type="number" value={editPayslipForm.allowances} onChange={e => setEditPayslipForm({...editPayslipForm, allowances: e.target.value})} data-testid="edit-payslip-allowances" /></div>
                 <div><Label>Deductions</Label><Input type="number" value={editPayslipForm.deductions} onChange={e => setEditPayslipForm({...editPayslipForm, deductions: e.target.value})} data-testid="edit-payslip-deductions" /></div>
+                <div className="col-span-2">
+                  <Label className="flex items-center gap-1">Cash account to pay from <span className="text-[10px] text-muted-foreground">(overrides location default)</span></Label>
+                  <Select value={editPayslipForm.paid_from_account_id || 'default'} onValueChange={v => setEditPayslipForm({...editPayslipForm, paid_from_account_id: v === 'default' ? '' : v})}>
+                    <SelectTrigger data-testid="edit-payslip-paid-from"><SelectValue placeholder="Location default" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Location default</SelectItem>
+                      {cashAccountOptions.map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2">
+                  <Label className="flex items-center gap-1">Location to charge <span className="text-[10px] text-muted-foreground">(overrides staff&apos;s location)</span></Label>
+                  <Select value={editPayslipForm.payroll_location_id || 'default'} onValueChange={v => setEditPayslipForm({...editPayslipForm, payroll_location_id: v === 'default' ? '' : v})}>
+                    <SelectTrigger data-testid="edit-payslip-location"><SelectValue placeholder="Staff&apos;s assigned location" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Staff's assigned location</SelectItem>
+                      {locationOptions.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="p-2 bg-muted rounded text-sm"><strong>Net (auto):</strong> {editingPayslip.currency} {(parseFloat(editPayslipForm.gross_salary || 0) + parseFloat(editPayslipForm.allowances || 0) - parseFloat(editPayslipForm.deductions || 0)).toLocaleString()}</div>
               <div><Label>Notes</Label><Textarea rows={2} value={editPayslipForm.notes} onChange={e => setEditPayslipForm({...editPayslipForm, notes: e.target.value})} data-testid="edit-payslip-notes" /></div>
@@ -585,6 +615,8 @@ export default function HRPage() {
                   deductions: parseFloat(editPayslipForm.deductions) || 0,
                   notes: editPayslipForm.notes,
                   status: editPayslipForm.status,
+                  paid_from_account_id: editPayslipForm.paid_from_account_id || '',
+                  payroll_location_id: editPayslipForm.payroll_location_id || '',
                   reason: editPayslipReason,
                 };
                 const r = await api.put(`/hr/payslips/${editingPayslip.id}`, payload);
