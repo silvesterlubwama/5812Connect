@@ -248,6 +248,7 @@ export default function HRPage() {
           <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
           <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
           <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
+          <TabsTrigger value="time-off" data-testid="hr-tab-time-off"><Clock size={13} className="mr-1" /> Time Off</TabsTrigger>
           <TabsTrigger value="onboarding" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
         </TabsList>
 
@@ -473,6 +474,9 @@ export default function HRPage() {
         <TabsContent value="timesheets" className="mt-4">
           <TimesheetsPanel />
         </TabsContent>
+        <TabsContent value="time-off" className="mt-4">
+          <TimeOffPanel />
+        </TabsContent>
         <TabsContent value="onboarding" className="mt-4">
           <OnboardingPanel onFix={(check, row) => {
             if (check === 'has_salary') {
@@ -592,7 +596,7 @@ export default function HRPage() {
                   <Select value={editPayslipForm.payroll_location_id || 'default'} onValueChange={v => setEditPayslipForm({...editPayslipForm, payroll_location_id: v === 'default' ? '' : v})}>
                     <SelectTrigger data-testid="edit-payslip-location"><SelectValue placeholder="Staff&apos;s assigned location" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="default">Staff's assigned location</SelectItem>
+                      <SelectItem value="default">Staff&apos;s assigned location</SelectItem>
                       {locationOptions.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -1499,6 +1503,23 @@ function TimesheetsPanel() {
   const [periodFilter, setPeriodFilter] = React.useState('');
   const [rejecting, setRejecting] = React.useState(null);
   const [rejectReason, setRejectReason] = React.useState('');
+  // On-behalf submission (iter214) — director+/admin can log a timesheet
+  // for a staff member who doesn't use the app.
+  const [showLogFor, setShowLogFor] = React.useState(false);
+  const [staffOptions, setStaffOptions] = React.useState([]);
+  const [logForm, setLogForm] = React.useState({
+    staff_id: '',
+    period: new Date().toISOString().slice(0, 7),
+    days_worked: '',
+    pto_days: '',
+    notes: '',
+  });
+
+  React.useEffect(() => {
+    api.get('/admin/users/directory', { params: { limit: 500 } })
+      .then(r => setStaffOptions(r.data || []))
+      .catch(() => setStaffOptions([]));
+  }, []);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -1530,12 +1551,30 @@ function TimesheetsPanel() {
       load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Reject failed'); }
   };
+  const submitLogFor = async () => {
+    if (!logForm.staff_id) return toast.error('Pick a staff member');
+    if (!logForm.days_worked) return toast.error('Days worked required');
+    try {
+      await api.post('/hr/timesheets', {
+        staff_id: logForm.staff_id,
+        period: logForm.period,
+        days_worked: parseFloat(logForm.days_worked) || 0,
+        pto_days: parseFloat(logForm.pto_days) || 0,
+        notes: logForm.notes,
+      });
+      toast.success('Timesheet logged on staff\u2019s behalf — status: submitted, awaits your approval');
+      setShowLogFor(false);
+      setLogForm({ staff_id: '', period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Log failed'); }
+  };
 
   return (
     <Card className="rounded-xl">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-xs text-muted-foreground flex-1">Staff-submitted timesheets. Approved rows auto-feed the next payslip generation.</p>
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => setShowLogFor(true)} data-testid="log-for-staff-btn"><Plus size={12} /> Log for staff</Button>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="h-8 w-36 text-xs" data-testid="ts-status-filter"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -1586,11 +1625,143 @@ function TimesheetsPanel() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* LOG-FOR-STAFF DIALOG (iter214) */}
+      <Dialog open={showLogFor} onOpenChange={setShowLogFor}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Log timesheet on staff&apos;s behalf</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Use this for staff members who don&apos;t use the app. You can only log for users within your assigned locations.</p>
+            <div className="space-y-1.5"><Label className="text-xs">Staff member</Label>
+              <Select value={logForm.staff_id} onValueChange={v => setLogForm({...logForm, staff_id: v})}>
+                <SelectTrigger data-testid="log-for-staff-select"><SelectValue placeholder="Pick a staff member" /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {staffOptions.map(s => (<SelectItem key={s.id} value={s.id}>{s.name} — {s.role || 'staff'}</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Pay Period</Label>
+              <Input type="month" value={logForm.period} onChange={e => setLogForm({...logForm, period: e.target.value})} data-testid="log-for-period" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5"><Label className="text-xs">Days worked</Label>
+                <Input type="number" value={logForm.days_worked} onChange={e => setLogForm({...logForm, days_worked: e.target.value})} data-testid="log-for-days" />
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">PTO days</Label>
+                <Input type="number" value={logForm.pto_days} onChange={e => setLogForm({...logForm, pto_days: e.target.value})} data-testid="log-for-pto" />
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={logForm.notes} onChange={e => setLogForm({...logForm, notes: e.target.value})} placeholder="e.g. Full month, worked from field" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowLogFor(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={submitLogFor} data-testid="log-for-submit-btn">Log &amp; submit</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
 
 
+
+
+// ========== TIME OFF (PTO) PANEL ==========
+function TimeOffPanel() {
+  const [requests, setRequests] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [statusFilter, setStatusFilter] = React.useState('pending');
+  const [rejecting, setRejecting] = React.useState(null);
+  const [rejectReason, setRejectReason] = React.useState('');
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (statusFilter && statusFilter !== 'all') params.status = statusFilter;
+      const r = await api.get('/hr/time-off', { params });
+      setRequests(r.data || []);
+    } catch { setRequests([]); }
+    finally { setLoading(false); }
+  }, [statusFilter]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const approve = async (p) => {
+    try {
+      await api.put(`/hr/time-off/${p.id}/approve`, { notes: '' });
+      toast.success('Approved');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Approve failed'); }
+  };
+  const submitReject = async () => {
+    if (!rejecting) return;
+    try {
+      await api.put(`/hr/time-off/${rejecting.id}/reject`, { reason: rejectReason });
+      toast.success('Rejected');
+      setRejecting(null); setRejectReason('');
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Reject failed'); }
+  };
+
+  return (
+    <Card className="rounded-xl">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-muted-foreground flex-1">Staff time-off (PTO) requests. Requests must be within ±7 days of the requested date, except when marked as admin override.</p>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 w-36 text-xs" data-testid="pto-status-filter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="pending">Pending approval</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {loading ? <p className="text-xs text-muted-foreground text-center py-6">Loading…</p> : requests.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No time-off requests found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left border-b text-xs text-muted-foreground"><th className="pb-2">Staff</th><th>Dates</th><th>Days</th><th>Reason</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+              <tbody className="divide-y">
+                {requests.map(p => (
+                  <tr key={p.id} className="hover:bg-accent/30" data-testid={`pto-row-${p.id}`}>
+                    <td className="py-2 font-medium">{p.staff_name || p.staff_id}</td>
+                    <td className="text-xs">{p.start_date}{p.end_date && p.end_date !== p.start_date ? ` → ${p.end_date}` : ''}{p.admin_override && <Badge variant="outline" className="ml-1 text-[9px] border-amber-400 text-amber-600">override</Badge>}</td>
+                    <td>{p.days || 1}</td>
+                    <td className="max-w-[240px] truncate text-xs text-muted-foreground">{p.reason || '—'}</td>
+                    <td><Badge variant={p.status === 'approved' ? 'default' : p.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px]">{p.status}</Badge></td>
+                    <td className="max-w-[200px] truncate text-xs text-muted-foreground">{p.review_notes || '—'}</td>
+                    <td className="text-right">
+                      {p.status === 'pending' && <>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-green-700" onClick={() => approve(p)} data-testid={`pto-approve-${p.id}`}>Approve</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => setRejecting(p)} data-testid={`pto-reject-${p.id}`}>Reject</Button>
+                      </>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+      <Dialog open={!!rejecting} onOpenChange={o => { if (!o) { setRejecting(null); setRejectReason(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reject time-off request</DialogTitle></DialogHeader>
+          <Textarea rows={3} placeholder="Reason (staff will see this)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} data-testid="pto-reject-reason" />
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setRejecting(null)}>Cancel</Button>
+            <Button variant="destructive" className="flex-1" onClick={submitReject} data-testid="pto-reject-confirm">Reject</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
 
 
 // ========== ONBOARDING CHECKLIST PANEL ==========

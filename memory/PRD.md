@@ -4,15 +4,19 @@
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
 ## Recently Resolved — Iteration 214 (Feb 2026)
-**HR RBAC scoping · Time-off (PTO) flow · On-behalf timesheet submission.**
+**HR RBAC scoping · Time-off (PTO) flow · On-behalf timesheet submission · Frontend UI.**
 
 - **RBAC scoping** (`_hr_scope` helper in `hr.py`): regular staff see only own HR data; HR/director/manager see only data at their `user.location_ids` (falls back to `active_campus_id`); admin sees all (campus filter dropped for admin on `list_payslips`).
 - **Time-off requests** (`hr_time_off` collection):
   - `POST /api/hr/time-off` — start_date/end_date + reason. ±7-day window check (must be within 7 days of today, either direction). `admin_override=true` bypass — admin/system_admin only.
   - `GET /api/hr/time-off` (scope-filtered), `PUT /{id}/approve` (director+), `PUT /{id}/reject` (director+), `DELETE /{id}` (owner or HR).
-- **On-behalf timesheet & PTO submission**: director+/HR/admin can pass `staff_id` in body to create on behalf of a target user; director-role callers can only target users at their location_ids. Prevents non-app-using staff from being blocked from HR tracking.
+- **On-behalf timesheet & PTO submission**: director+/HR/admin can pass `staff_id` in body to create on behalf of a target user; director-role callers can only target users at their location_ids.
 - **Timesheet enhancement**: optional `entries: [{date, hours?, day_worked?}]` daily breakdown.
-- **Tested**: iter214 → **22/22 backend tests pass** + iter211-213 regression still green (15/15). Zero critical bugs.
+- **Frontend UI (iter214b)**:
+  - HR Page → new **Time Off** tab with approve/reject list, status filter, override badges.
+  - HR Page → Timesheets tab has **"Log for staff"** button opening a picker + entry form (director+ can create for staff who don't use the app).
+  - Portal → new **Time Off** card with request dialog and 7-day-window hint.
+- **Tested**: iter214 → **22/22 backend tests pass** + iter211-213 regression still green (15/15).
 
 ## Recently Resolved — Iteration 211-213 (Feb 2026)
 **Production bug fix: Payroll → Accounting posting + wrong SALES journal + per-payslip cash/location override.**

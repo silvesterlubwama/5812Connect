@@ -23,19 +23,49 @@ export default function PortalProfile() {
   const [checkins, setCheckins] = useState({ checkins: [], access_logs: [] });
   const [payslips, setPayslips] = useState([]);
   const [timesheets, setTimesheets] = useState([]);
+  const [ptoRequests, setPtoRequests] = useState([]);
   const [showTimesheet, setShowTimesheet] = useState(false);
+  const [showPto, setShowPto] = useState(false);
+  const [ptoForm, setPtoForm] = useState({ start_date: new Date().toISOString().slice(0, 10), end_date: new Date().toISOString().slice(0, 10), reason: '' });
   const [tsForm, setTsForm] = useState({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
   const [viewingPayslip, setViewingPayslip] = useState(null);
 
   const loadHR = async () => {
     try {
-      const [ps, ts] = await Promise.all([
+      const [ps, ts, pto] = await Promise.all([
         api.get('/hr/payslips/mine'),
         api.get('/hr/timesheets'),
+        api.get('/hr/time-off'),
       ]);
       setPayslips(ps.data || []);
       setTimesheets(ts.data || []);
+      setPtoRequests(pto.data || []);
     } catch { /* not an employee */ }
+  };
+
+  const submitPto = async () => {
+    if (!ptoForm.start_date) return toast.error('Start date required');
+    try {
+      await api.post('/hr/time-off', {
+        start_date: ptoForm.start_date,
+        end_date: ptoForm.end_date || ptoForm.start_date,
+        reason: ptoForm.reason,
+      });
+      toast.success('Time-off request submitted');
+      setShowPto(false);
+      setPtoForm({ start_date: new Date().toISOString().slice(0, 10), end_date: new Date().toISOString().slice(0, 10), reason: '' });
+      loadHR();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Request failed'); }
+  };
+
+  const withdrawPto = async (p) => {
+    if (p.status === 'approved') return toast.error('Approved requests cannot be withdrawn — contact HR');
+    if (!window.confirm('Withdraw this time-off request?')) return;
+    try {
+      await api.delete(`/hr/time-off/${p.id}`);
+      toast.success('Withdrawn');
+      loadHR();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Withdraw failed'); }
   };
 
   useEffect(() => {
@@ -328,6 +358,64 @@ export default function PortalProfile() {
           )}
         </CardContent>
       </Card>
+
+      {/* MY TIME-OFF (PTO) REQUESTS */}
+      <Card data-testid="my-timeoff-card">
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2"><Clock size={16} /> Time Off</CardTitle>
+            <CardDescription className="text-xs">Request PTO within &plusmn;7 days of the date. Contact an admin for emergency overrides.</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => setShowPto(true)} data-testid="request-pto-btn"><Send size={12} className="mr-1" /> Request</Button>
+        </CardHeader>
+        <CardContent>
+          {ptoRequests.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-3">No time-off requests yet.</p>
+          ) : (
+            <div className="divide-y">
+              {ptoRequests.map(p => (
+                <div key={p.id} className="py-2 flex items-center justify-between gap-2" data-testid={`pto-row-${p.id}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{p.start_date}{p.end_date && p.end_date !== p.start_date ? ` → ${p.end_date}` : ''} · {p.days || 1} day{(p.days || 1) > 1 ? 's' : ''}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      <Badge variant={p.status === 'approved' ? 'default' : p.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px] mr-1">{p.status}</Badge>
+                      {p.review_notes || p.reason || 'Awaiting review'}
+                    </p>
+                  </div>
+                  {p.status === 'pending' && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => withdrawPto(p)}>Withdraw</Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* REQUEST TIME OFF DIALOG */}
+      <Dialog open={showPto} onOpenChange={setShowPto}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Request Time Off</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5"><Label className="text-xs">Start Date</Label>
+                <Input type="date" value={ptoForm.start_date} onChange={e => setPtoForm({...ptoForm, start_date: e.target.value})} data-testid="pto-start-date" />
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">End Date</Label>
+                <Input type="date" value={ptoForm.end_date} onChange={e => setPtoForm({...ptoForm, end_date: e.target.value})} data-testid="pto-end-date" />
+              </div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Reason (optional)</Label>
+              <Textarea rows={2} value={ptoForm.reason} onChange={e => setPtoForm({...ptoForm, reason: e.target.value})} placeholder="Personal / medical / bereavement…" data-testid="pto-reason" />
+            </div>
+            <p className="text-[11px] text-muted-foreground">Note: dates must be within &plusmn;7 days of today. For anything further out, contact an admin.</p>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowPto(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={submitPto} data-testid="pto-submit-btn"><Send size={12} className="mr-1" /> Submit</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* SUBMIT TIMESHEET DIALOG */}
       <Dialog open={showTimesheet} onOpenChange={setShowTimesheet}>
