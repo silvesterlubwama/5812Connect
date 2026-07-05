@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 215 (Feb 2026)
+**Backlog cleanup: payroll pro-ration verified, friendly payday picker, onboarding contract auto-select.**
+
+- **Payroll pro-ration from timesheets** — verified already-wired: `POST /api/hr/payslips/generate` has `use_timesheets: true` default; merges approved timesheets' `days_worked` and `pto_days` into the salary pro-ration engine. Explicit `days_worked_override` / `pto_days_override` in body take precedence.
+- **Per-campus payday picker** — replaced plain 1-31 number input with a shadcn `<Select>` dropdown showing "1st..31st of the month" + "Last day of month" option + explainer text. Data-testid: `pay-day-picker`.
+- **Onboarding contract Fix** — the has_contract red-X `Fix` button on the Onboarding tab now auto-pre-selects the target staff in the Issue Contract dialog (via localStorage handoff on `showIssueContract` open).
+
 ## Recently Resolved — Iteration 214 (Feb 2026)
 **HR RBAC scoping · Time-off (PTO) flow · On-behalf timesheet submission · Frontend UI.**
 
