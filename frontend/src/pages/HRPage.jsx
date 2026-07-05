@@ -67,6 +67,19 @@ export default function HRPage() {
       .then(r => setCashAccountOptions(r.data || [])).catch(() => {});
     api.get('/locations').then(r => setLocationOptions(r.data || [])).catch(() => {});
   }, []);
+  // Auto-select the staff member on the contract dialog when the user hit "Fix"
+  // from the onboarding checklist (iter215). Cleared after read so the next
+  // free-form "Issue Contract" click starts empty.
+  useEffect(() => {
+    if (!showIssueContract) return;
+    try {
+      const preselect = localStorage.getItem('5812_onboarding_preselect_staff');
+      if (preselect) {
+        setIssueForm(f => ({ ...f, staff_id: preselect }));
+        localStorage.removeItem('5812_onboarding_preselect_staff');
+      }
+    } catch { /* localStorage unavailable */ }
+  }, [showIssueContract]);
   const [docReqForm, setDocReqForm] = useState({ staff_id: '', doc_types: ['resume', 'id_document'], message: '' });
   const [issueForm, setIssueForm] = useState({ template_id: '', staff_id: '', start_date: '', salary: '' });
   const [settingsForm, setSettingsForm] = useState({ hr_enabled: false, pay_frequency: 'monthly', currency: 'UGX', pay_day: 28 });
@@ -898,7 +911,19 @@ export default function HRPage() {
                   <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5"><Label>Pay Day (1-31)</Label><Input type="number" min={1} max={31} value={settingsForm.pay_day} onChange={e => setSettingsForm({...settingsForm, pay_day: parseInt(e.target.value) || 28})} /></div>
+              <div className="space-y-1.5">
+                <Label>Payday (day of month)</Label>
+                <Select value={String(settingsForm.pay_day || 28)} onValueChange={v => setSettingsForm({...settingsForm, pay_day: parseInt(v) || 28})}>
+                  <SelectTrigger data-testid="pay-day-picker"><SelectValue /></SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    {Array.from({length: 31}, (_, i) => i + 1).map(d => (
+                      <SelectItem key={d} value={String(d)}>{d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : d === 21 ? 'st' : d === 22 ? 'nd' : d === 23 ? 'rd' : d === 31 ? 'st' : 'th'} of the month</SelectItem>
+                    ))}
+                    <SelectItem value="99">Last day of month</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">Payslips are drafted automatically each month on this day. If it&apos;s a weekend or holiday, payslips still draft — payment can be issued on the next working day.</p>
+              </div>
               <div className="space-y-1.5"><Label>Next Pay Date</Label><Input type="date" value={settingsForm.next_pay_date || ''} onChange={e => setSettingsForm({...settingsForm, next_pay_date: e.target.value})} data-testid="next-pay-date" /></div>
             </div>
 
