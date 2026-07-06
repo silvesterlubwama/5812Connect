@@ -173,21 +173,29 @@ async def get_online_users(db=Depends(get_db)):
                 **get_presence_display(status),
             })
     
-    # Enrich with user info
+    # Enrich with user info (drop presence entries for users who no longer exist
+    # or have been deactivated — this prevents "ghost" users from appearing online).
     if online_users:
         user_ids = [u["user_id"] for u in online_users]
         users = await db.users.find(
-            {"id": {"$in": user_ids}},
+            {"id": {"$in": user_ids}, "status": "active"},
             {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1}
         ).to_list(500)
-        
+
         user_map = {u["id"]: u for u in users}
+        enriched = []
         for ou in online_users:
-            user_info = user_map.get(ou["user_id"], {})
+            user_info = user_map.get(ou["user_id"])
+            if not user_info:
+                # Drop stale presence entries for deleted/inactive users
+                user_presence.pop(ou["user_id"], None)
+                continue
             ou["name"] = user_info.get("name", "Unknown")
             ou["email"] = user_info.get("email", "")
             ou["role"] = user_info.get("role", "")
-    
+            enriched.append(ou)
+        online_users = enriched
+
     return online_users
 
 # Helper functions for WebSocket integration

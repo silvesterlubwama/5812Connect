@@ -239,6 +239,10 @@ def _normalise_item(data: dict, units: str = "metric") -> dict:
         "photo_url": (data.get("photo_url") or "")[:500],
         # Multiple photos from the AI scanner — cover, back, spine, etc.
         "image_urls": [(u or "")[:500] for u in (data.get("image_urls") or []) if u],
+        # Customs manifest fields (iter216) — HS code + new/used condition
+        "hs_code": (data.get("hs_code") or "")[:20],
+        "hs_code_reason": (data.get("hs_code_reason") or "")[:200],
+        "condition": (data.get("condition") or "used").lower() if (data.get("condition") or "used").lower() in ("new", "used", "refurbished") else "used",
         "value_usd": max(0, float(data.get("value_usd") or 0)),
         "notes": (data.get("notes") or "")[:500],
         "priority": priority,
@@ -360,7 +364,8 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
                "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
                "pallet_id", "parent_id", "container_type", "isbn", "upc",
                "author", "publisher", "ai_identified",
-               "x_cm", "y_cm", "z_cm"}
+               "x_cm", "y_cm", "z_cm",
+               "hs_code", "hs_code_reason", "condition"}
     set_ops = {}
     for k, v in data.items():
         if k not in allowed:
@@ -599,6 +604,212 @@ async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict 
         }},
     )
     return {"url": url, "retailer": retailer, "query": query, "reason": parsed.get("reason") or ""}
+
+
+# ========== HS CODE CLASSIFICATION + PRINTABLE MANIFEST (iter216) ==========
+
+async def _classify_hs_with_ai(name: str, category: str, condition: str = "used") -> dict:
+    """Call Gemini-3-flash to pick a 6-digit HS code for a single item.
+    Returns {hs_code, reason}. Raises HTTPException if AI unavailable.
+
+    We ask for 6-digit (HS-6) which is the international harmonised level
+    (identical across all WCO countries — 200+). Country-specific 8/10-digit
+    suffixes vary by destination and are out of scope for a general classifier.
+    """
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key configured)")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+    sys_msg = (
+        "You are a customs classification assistant. Given a donation item, "
+        "return the most accurate 6-digit HS (Harmonized System) code used "
+        "in international shipping manifests.  Output STRICT JSON:\n"
+        '  {"hs_code": "XXXX.XX", "reason": "<=100 chars explaining the '
+        'classification"}\n'
+        "Rules:\n"
+        "- ALWAYS 6 digits formatted as XXXX.XX (e.g. 4901.99 for printed books).\n"
+        "- Prefer specific over generic — 6109.10 (cotton T-shirts) over 6109.90.\n"
+        "- Used clothing / worn textiles are consistently 6309.00.\n"
+        "- Books & printed matter → 4901.xx.\n"
+        "- Toys → 9503.00.\n"
+        "- Medical supplies (bandages, first-aid) → 3005.90.\n"
+        "- Consumer electronics with radio/wifi → 8517.62.\n"
+        "- No commentary, no markdown fences — JSON only."
+    )
+    user_text = f"Item: {name}\nCategory: {category or '(unspecified)'}\nCondition: {condition}\n"
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"shipment_hs_{uuid.uuid4().hex[:8]}",
+        system_message=sys_msg,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    raw = await chat.send_message(UserMessage(text=user_text))
+    text = (raw or "").strip()
+    # Strip markdown fences if the model added any
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # Second-chance: extract the first {...} block
+        m = re.search(r"\{[^{}]*\}", text, re.S)
+        if not m:
+            raise HTTPException(status_code=502, detail=f"AI returned invalid JSON: {text[:120]}")
+        parsed = json.loads(m.group(0))
+    hs_code = (parsed.get("hs_code") or "").strip()
+    if not re.match(r"^\d{4}\.\d{2}$", hs_code):
+        raise HTTPException(status_code=502, detail=f"AI returned malformed HS code: {hs_code!r}")
+    return {"hs_code": hs_code, "reason": (parsed.get("reason") or "")[:200]}
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/classify-hs")
+async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
+    """Ask AI to classify one item's HS code + store it on the item."""
+    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+    result = await _classify_hs_with_ai(item.get("name", ""), item.get("category", ""), item.get("condition", "used"))
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {
+            "items.$.hs_code": result["hs_code"],
+            "items.$.hs_code_reason": result["reason"],
+            "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return result
+
+
+@router.post("/shipments/{shipment_id}/classify-hs-bulk")
+async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: dict = Depends(require_admin)):
+    """Classify HS codes for every item in the shipment that doesn't have one
+    (or all items when `force=true`).  Returns per-item results + counters."""
+    force = bool((data or {}).get("force"))
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items = s.get("items") or []
+    targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
+    results = []
+    skipped = len(items) - len(targets)
+    for it in targets:
+        try:
+            r = await _classify_hs_with_ai(it.get("name", ""), it.get("category", ""), it.get("condition", "used"))
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.id": it["id"]},
+                {"$set": {
+                    "items.$.hs_code": r["hs_code"],
+                    "items.$.hs_code_reason": r["reason"],
+                    "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            results.append({"item_id": it["id"], "name": it["name"], "hs_code": r["hs_code"], "reason": r["reason"], "ok": True})
+        except HTTPException as ex:
+            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": ex.detail})
+        except Exception as ex:  # pragma: no cover
+            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": str(ex)[:120]})
+    return {
+        "shipment_id": shipment_id,
+        "classified": sum(1 for r in results if r.get("ok")),
+        "failed": sum(1 for r in results if not r.get("ok")),
+        "skipped_existing": skipped,
+        "results": results,
+    }
+
+
+@router.get("/shipments/{shipment_id}/manifest.pdf")
+async def shipment_manifest_pdf(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Server-rendered printable customs manifest PDF.  Columns:
+    Item · HS Code · Location (pallet / x-y-z) · Condition (new/used) · Qty."""
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items = s.get("items") or []
+    def loc_str(it: dict) -> str:
+        parts = []
+        if it.get("pallet_id"):
+            parts.append(f"Pallet {it['pallet_id'][-4:]}")
+        for k, label in (("x_cm", "X"), ("y_cm", "Y"), ("z_cm", "Z")):
+            if it.get(k):
+                parts.append(f"{label}={it[k]:.0f}cm")
+        return " · ".join(parts) or "—"
+    rows_html = ""
+    for i, it in enumerate(items, 1):
+        rows_html += (
+            f"<tr>"
+            f"<td class='n'>{i}</td>"
+            f"<td>{(it.get('name') or '')[:80]}</td>"
+            f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
+            f"<td class='loc'>{loc_str(it)}</td>"
+            f"<td class='c'><span class='cond {it.get('condition','used')}'>{(it.get('condition') or 'used').upper()}</span></td>"
+            f"<td class='n'>{it.get('qty_acquired', 0)}</td>"
+            f"</tr>"
+        )
+    if not rows_html:
+        rows_html = "<tr><td colspan='6' style='text-align:center;color:#94a3b8;padding:24px'>No items yet</td></tr>"
+    total_items = sum(int(it.get("qty_acquired") or 0) for it in items)
+    total_weight = sum(float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0) for it in items)
+    total_value = sum(float(it.get("value_usd") or 0) * int(it.get("qty_acquired") or 0) for it in items)
+    html = f"""<html><head><meta charset='utf-8' /><style>
+@page {{ size: A4 landscape; margin: 14mm; }}
+body {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color: #0f172a; }}
+h1 {{ font-size: 20px; margin: 0 0 4px 0; }}
+.meta {{ font-size: 10px; color: #64748b; }}
+.head {{ display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #0f172a; margin-bottom: 12px; }}
+.totals {{ display: flex; gap: 24px; font-size: 11px; margin-top: 6px; }}
+.totals span {{ color: #64748b; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 10.5px; }}
+th, td {{ padding: 5px 7px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }}
+th {{ font-size: 10px; color: #64748b; background: #f8fafc; text-transform: uppercase; }}
+td.n {{ text-align: right; font-variant-numeric: tabular-nums; }}
+td.hs {{ font-family: 'Menlo', monospace; font-size: 10.5px; }}
+td.loc {{ font-size: 10px; color: #475569; }}
+td.c {{ text-align: center; }}
+.cond {{ display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 9px; font-weight: 600; }}
+.cond.new {{ background: #dcfce7; color: #166534; }}
+.cond.used {{ background: #fef3c7; color: #92400e; }}
+.cond.refurbished {{ background: #dbeafe; color: #1e3a8a; }}
+</style></head><body>
+  <div class='head'>
+    <div>
+      <h1>Container Manifest — {s.get('name', '')}</h1>
+      <p class='meta'>Shipment ID: {s.get('id', '')} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
+      <div class='totals'>
+        <div><span>Line items:</span> <strong>{len(items)}</strong></div>
+        <div><span>Units:</span> <strong>{total_items:,}</strong></div>
+        <div><span>Total weight:</span> <strong>{total_weight:,.1f} kg</strong></div>
+        <div><span>Declared value:</span> <strong>USD {total_value:,.2f}</strong></div>
+      </div>
+    </div>
+    <div style='text-align:right'>
+      <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p class='meta'>Customs manifest · HS-6 classification</p>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th class='n' style='width:32px'>#</th><th>Item</th><th style='width:80px'>HS Code</th><th style='width:180px'>Location</th><th class='c' style='width:70px'>Condition</th><th class='n' style='width:60px'>Qty</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+  <p class='meta' style='margin-top:18mm; text-align:center'>HS codes are 6-digit WCO Harmonized System classifications. Country-specific 8/10-digit suffixes must be applied at destination customs.</p>
+</body></html>"""
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Manifest PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", s.get("name") or "manifest")[:40]
+    filename = f"manifest_{safe_name}_{shipment_id[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/shipments/{shipment_id}/items/{item_id}/estimate-from-link")

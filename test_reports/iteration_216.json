@@ -1,0 +1,26 @@
+{
+  "summary": "iter216 backend-only verification of the four P0 routing/filtering bug fixes (task assignee scope, multi-campus switcher, chat/presence ghost users, restricted-location leakage). All 13 targeted tests pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter216_p0_routing_bugs.py",
+    "/app/test_reports/pytest/iter216_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "deps.get_campus_filter (lines 321-324): the switcher gate correctly honours active_campus_id for any non-admin user who has that campus in their own location set — this is what makes the multi-campus switcher actually filter, verified.",
+    "admin.user_directory (lines 14-42): STAFF_ROLES + status=active are always applied via a {$and} composition; the search regex is layered on top without dropping either constraint. Non-staff (Member/Parent/etc.) and deleted users cannot leak.",
+    "presence.get_online_users (lines 178-197): enrichment step queries users by {id:$in, status:'active'} and pops the in-memory presence entry for anyone missing → both fake user_ids and deleted-status real users are dropped from /online-users.",
+    "chat.list_chat_users (lines 28-45): correctly filters by status='active' AND role in STAFF_ROLES + Security Contractor.",
+    "server.set_active_campus (lines 216-256): non-admin gets 403 when campus_id is outside their expanded location set; admin/EDs/Advisers can switch to anything.",
+    "NOTE: 'GET /api/financial/entries' referenced in the request does not exist as a single endpoint — /financial/expenses and /financial/donations are the actual routes; the restricted-location leakage test used /financial/expenses which uses the same get_campus_filter path."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter216_p0_routing_bugs.py"],
+  "success_rate": {"backend": "100% (13/13)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ; test users prefixed TEST_iter216_<hex> / Test@5812!",
+  "seed_data_creation": "Created ~8 TEST_iter216 users (Member, Staff, Manager, Director variants), 1 restricted sub-location under the first campus, 2 financial expenses (one restricted, one in campus 2). Not cleaned up (out of scope; TAG prefix keeps runs isolated).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter216 test file: /app/backend/tests/test_iter216_p0_routing_bugs.py — self-contained pytest, uses REACT_APP_BACKEND_URL from /app/frontend/.env directly. Verified all four P0 fixes: (a) /api/admin/users/directory now supports ?search= AND filters by STAFF_ROLES+status=active, (b) /api/user/active-campus 200/403 works correctly for multi-campus non-admin users and deps.get_campus_filter honours active_campus_id when campus is in user's location_ids, (c) /api/chat/users and /api/presence/online-users both drop non-active/non-staff users, (d) restricted sub-location expenses are hidden from directors NOT explicitly assigned to that sub-loc but visible to those who are. Frontend UI (CardDetailDialog external assignee search, CommsPage cross-campus director loading) was NOT tested this round per main agent's 'backend only' scope.",
+  "rca of the issue": "N/A — all four P0 fixes verified working as documented in deps.py:299-359, admin.py:14-42, presence.py:162-199, chat.py:28-45, server.py:216-256."
+}

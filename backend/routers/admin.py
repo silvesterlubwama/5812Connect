@@ -12,18 +12,29 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ========== USER MANAGEMENT ==========
 
 @router.get("/users/directory")
-async def user_directory(include_all: bool = False, current_user: dict = Depends(get_current_user)) -> list:
+async def user_directory(include_all: bool = False, search: Optional[str] = None, current_user: dict = Depends(get_current_user)) -> list:
     """Lightweight user list for cross-referencing in boards, tasks, etc.
     Scoped to current user's campus; returns active staff-capable users only.
-    Admins can pass include_all=true to bypass filters."""
+    Admins can pass include_all=true to bypass campus filter and search across all campuses."""
     STAFF_ROLES = ["admin", "system_admin", "Executive Director", "Adviser", "Director",
                    "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"]
+    base = {"status": "active", "role": {"$in": STAFF_ROLES}}
     if include_all and is_system_admin(current_user):
-        query = {"status": {"$ne": "deleted"}}
+        query = dict(base)
     else:
         campus = await get_campus_filter(current_user)
-        base = {"status": "active", "role": {"$in": STAFF_ROLES}}
         query = {"$and": [base, campus]} if campus else base
+    if search:
+        s = search.strip()
+        if s:
+            search_clause = {"$or": [
+                {"name": {"$regex": s, "$options": "i"}},
+                {"email": {"$regex": s, "$options": "i"}},
+            ]}
+            if "$and" in query:
+                query["$and"].append(search_clause)
+            else:
+                query = {"$and": [query, search_clause]}
     users = await db.users.find(
         query,
         {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1, "location_id": 1, "location_ids": 1, "email": 1}

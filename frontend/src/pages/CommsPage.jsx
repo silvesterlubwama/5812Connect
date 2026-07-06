@@ -106,13 +106,13 @@ export default function CommsPage() {
         if (['admin', 'system_admin', 'executive director', 'adviser', 'director'].includes((user?.role || '').toLowerCase())) {
           try {
             const [dirRes, edRes] = await Promise.all([
-              api.get('/admin/users', { params: { role: 'Director', limit: 50 } }),
-              api.get('/admin/users', { params: { role: 'Executive Director', limit: 20 } }),
+              api.get('/admin/users', { params: { role: 'Director', status: 'active' } }),
+              api.get('/admin/users', { params: { role: 'Executive Director', status: 'active' } }),
             ]);
             const allDirs = [...(dirRes.data || []), ...(edRes.data || [])];
             const existingIds = new Set(staff.map(s => s.id));
             for (const d of allDirs) {
-              if (!existingIds.has(d.id) && d.id !== user?.id && d.status !== 'deleted') {
+              if (!existingIds.has(d.id) && d.id !== user?.id && d.status === 'active') {
                 staff.push({ ...d, is_cross_campus: true });
               }
             }

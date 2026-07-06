@@ -315,26 +315,31 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
             if p.get("parent_id"):
                 user_loc_ids.add(p["parent_id"])
     _is_admin = is_system_admin(user)
-    if _is_admin or has_campus_switcher(user):
-        active = user.get("active_campus_id")
-        if active:
-            # Only include sub-locations (type=sub-location), not sibling campuses
-            sub_locs = await db.locations.find(
-                {"parent_id": active, "type": "sub-location"},
-                {"_id": 0, "id": 1, "is_restricted": 1}
-            ).to_list(200)
-            # For non-system-admins, exclude restricted sub-locs unless explicitly assigned
-            if _is_admin:
-                allowed_subs = [s["id"] for s in sub_locs]
-            else:
-                allowed_subs = [s["id"] for s in sub_locs
-                                if not s.get("is_restricted") or s["id"] in user_loc_ids]
-            all_locs = [active] + allowed_subs
-            if len(all_locs) == 1:
-                return {"$or": [{field: active}, {"location_ids": active}]}
-            return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
+    # active_campus_id is honoured for:
+    #  - system admins / EDs / Advisers (can pin to any campus via switcher)
+    #  - Any user with multiple assigned campuses (they can narrow via the multi-campus switcher)
+    active = user.get("active_campus_id")
+    can_use_switcher = _is_admin or has_campus_switcher(user) or (
+        active and active in user_loc_ids
+    )
+    if can_use_switcher and active:
+        # Only include sub-locations (type=sub-location), not sibling campuses
+        sub_locs = await db.locations.find(
+            {"parent_id": active, "type": "sub-location"},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(200)
+        # For non-system-admins, exclude restricted sub-locs unless explicitly assigned
         if _is_admin:
-            return {}
+            allowed_subs = [s["id"] for s in sub_locs]
+        else:
+            allowed_subs = [s["id"] for s in sub_locs
+                            if not s.get("is_restricted") or s["id"] in user_loc_ids]
+        all_locs = [active] + allowed_subs
+        if len(all_locs) == 1:
+            return {"$or": [{field: active}, {"location_ids": active}]}
+        return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
+    if _is_admin:
+        return {}
     locs = list(user_loc_ids)
     if not locs:
         return {}

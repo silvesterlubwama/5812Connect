@@ -377,8 +377,10 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                     setExtQuery(q);
                     if (q.trim().length < 2) { setExtResults([]); return; }
                     try {
-                      const res = await adminApi.users({ search: q.trim(), limit: 10 });
-                      setExtResults((res.data || []).filter(u => !boardStaff.find(s => s.id === u.id)));
+                      // Use staff-scoped, campus-scoped directory search.
+                      // include_all only takes effect for system admins on the backend.
+                      const res = await adminApi.userDirectory({ search: q.trim(), include_all: true });
+                      setExtResults((res.data || []).filter(u => !boardStaff.find(s => s.id === u.id)).slice(0, 10));
                     } catch (err) {
                       console.error('External user search failed:', err);
                       setExtResults([]);
