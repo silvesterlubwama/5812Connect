@@ -193,6 +193,8 @@ export default function ShipmentsAdminPage() {
           weight_kg: parseFloat(r.weight_kg || r.weight || 0) || 0,
           value_usd: parseFloat(r.value_usd || r.value || r.price || 0) || 0,
           priority: ((r.priority || 'normal').toString().trim().toLowerCase()),
+          condition: ((r.condition || 'used').toString().trim().toLowerCase()),
+          hs_code: (r.hs_code || '').toString().trim(),
           dims_cm: {
             length: parseFloat(r.length_cm || r.length || 0) || 0,
             width: parseFloat(r.width_cm || r.width || 0) || 0,
@@ -333,11 +335,44 @@ export default function ShipmentsAdminPage() {
         y_cm: Number(editingItem.y_cm) || 0,
         z_cm: Number(editingItem.z_cm) || 0,
         notes: editingItem.notes || '',
+        condition: editingItem.condition || 'used',
+        hs_code: (editingItem.hs_code || '').trim(),
       });
       toast.success('Item updated');
       setEditingItem(null);
       await refreshDetail();
     } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+  };
+
+  // ─── AI bulk-classify HS codes (customs manifest) ─────────────
+  const [hsBusy, setHsBusy] = useState(false);
+  const bulkClassifyHs = async () => {
+    const missing = (selected?.items || []).filter(i => !(i.hs_code || '').trim());
+    if (missing.length === 0 && !window.confirm('All items already have HS codes. Re-classify everything anyway?')) return;
+    const force = missing.length === 0;
+    setHsBusy(true);
+    try {
+      const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk`, { force });
+      const { classified, failed, skipped_existing } = r.data || {};
+      toast.success(`AI classified ${classified} item${classified === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}${skipped_existing ? ` · ${skipped_existing} already had HS code` : ''}`);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'HS classification failed'); }
+    finally { setHsBusy(false); }
+  };
+
+  // ─── Download printable customs manifest PDF ──────────────────
+  const downloadManifest = async () => {
+    try {
+      const r = await api.get(`/shipments/${selectedId}/manifest.pdf`, { responseType: 'blob' });
+      const blob = new Blob([r.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `manifest-${(selected?.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.pdf`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('Manifest downloaded');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Manifest generation failed'); }
   };
 
   const runAiPacking = async () => {
@@ -615,6 +650,17 @@ export default function ShipmentsAdminPage() {
           <p className="text-xs font-semibold">Items ({(selected.items || []).length})</p>
           <div className="flex gap-1.5 flex-wrap">
             {(() => {
+              const missingHs = (selected.items || []).filter(i => !(i.hs_code || '').trim()).length;
+              return (
+                <Button size="sm" variant="outline" className="text-teal-700 border-teal-300 hover:bg-teal-50" onClick={bulkClassifyHs} disabled={hsBusy || (selected.items || []).length === 0} data-testid="ship-bulk-hs-btn" title="Ask AI to assign customs HS-6 codes to every item without one">
+                  {hsBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Classifying…</> : <>🏷️ AI HS Codes{missingHs > 0 ? ` (${missingHs})` : ' · Re-classify'}</>}
+                </Button>
+              );
+            })()}
+            <Button size="sm" variant="outline" className="text-slate-700 border-slate-300 hover:bg-slate-50" onClick={downloadManifest} disabled={(selected.items || []).length === 0} data-testid="ship-manifest-btn" title="Download printable customs manifest PDF (item · HS code · location · condition · qty)">
+              <Download size={11} className="mr-1" /> Print Manifest
+            </Button>
+            {(() => {
               const unlinked = (selected.items || []).filter(i => !i.source_url && (i.qty_acquired || 0) < (i.qty_needed || 0)).length;
               if (unlinked === 0) return null;
               return (
@@ -661,6 +707,16 @@ export default function ShipmentsAdminPage() {
                         {it.category && <Badge variant="outline" className="text-[10px]">{it.category}</Badge>}
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
+                        {it.hs_code && (
+                          <Badge variant="outline" className="text-[10px] font-mono bg-teal-50 text-teal-700 border-teal-200" title={it.hs_code_reason || 'AI-assigned HS-6 customs code'} data-testid={`ship-item-hs-${it.id}`}>
+                            HS {it.hs_code}
+                          </Badge>
+                        )}
+                        {it.condition && (
+                          <Badge variant="outline" className={`text-[10px] ${it.condition === 'new' ? 'bg-green-50 text-green-700 border-green-200' : it.condition === 'refurbished' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} data-testid={`ship-item-cond-${it.id}`}>
+                            {it.condition}
+                          </Badge>
+                        )}
                         {it.ai_estimate && <Badge variant="outline" className="text-[10px]" title={it.ai_estimate.reasoning}>AI · {it.ai_estimate.confidence}</Badge>}
                         {(it.auto_placed || it.auto_stacked) && (() => {
                           const palletLabel = palletsById[it.pallet_id]?.label || it.pallet_id || '—';
@@ -876,6 +932,21 @@ export default function ShipmentsAdminPage() {
                   </div>
                 </div>
               )}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1"><Label className="text-xs">Condition</Label>
+                  <Select value={editingItem.condition || 'used'} onValueChange={v => setEditingItem({ ...editingItem, condition: v })}>
+                    <SelectTrigger data-testid="ship-edit-item-condition"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new">New</SelectItem>
+                      <SelectItem value="used">Used</SelectItem>
+                      <SelectItem value="refurbished">Refurbished</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1"><Label className="text-xs">HS Code (customs, XXXX.XX)</Label>
+                  <Input value={editingItem.hs_code || ''} onChange={e => setEditingItem({ ...editingItem, hs_code: e.target.value })} placeholder="e.g. 6309.00" className="font-mono" data-testid="ship-edit-item-hs" />
+                </div>
+              </div>
               <div className="space-y-1"><Label className="text-xs">Notes</Label>
                 <Textarea rows={2} value={editingItem.notes || ''} onChange={e => setEditingItem({ ...editingItem, notes: e.target.value })} />
               </div>
@@ -1025,6 +1096,16 @@ export default function ShipmentsAdminPage() {
               <div className="space-y-1"><Label className="text-xs">Value per unit (USD)</Label>
                 <Input type="number" step="0.01" value={itemForm.value_usd} onChange={e => setItemForm({ ...itemForm, value_usd: parseFloat(e.target.value) || 0 })} placeholder="25" />
               </div>
+            </div>
+            <div className="space-y-1"><Label className="text-xs">Condition</Label>
+              <Select value={itemForm.condition || 'used'} onValueChange={v => setItemForm({ ...itemForm, condition: v })}>
+                <SelectTrigger data-testid="ship-item-condition"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="new">New</SelectItem>
+                  <SelectItem value="used">Used (donated / gently worn)</SelectItem>
+                  <SelectItem value="refurbished">Refurbished</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Dimensions per unit — L × W × H (cm)</Label>
@@ -1199,6 +1280,6 @@ function emptyItem() {
     name: '', category: '', qty_needed: 1, qty_acquired: 0,
     weight_kg: 0, value_usd: 0, priority: 'normal',
     dims_cm: { length: 0, width: 0, height: 0 },
-    notes: '', photo_url: '',
+    notes: '', photo_url: '', condition: 'used',
   };
 }
