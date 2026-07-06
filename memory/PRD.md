@@ -3,6 +3,22 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 216-217 (Feb 2026)
+**P0 routing/filtering bugs + Shipping AI HS Code Classifier & Manifest PDF.**
+
+### Iter216 — P0 routing/filtering (backend 13/13 green)
+- **Task assignee external search leakage** — `/api/admin/users/directory` now accepts `search` query param and always applies STAFF_ROLES + `get_campus_filter`. `CardDetailDialog.jsx` external search switched from `adminApi.users()` (returned all roles) to `adminApi.userDirectory({search, include_all:true})` — no more Members/Parents/Customers appearing in task assignees.
+- **Multi-campus switcher for non-admin users** — `deps.get_campus_filter` now honours `active_campus_id` for ANY user whose `active_campus_id` is in their `location_ids` (previously only CAMPUS_SWITCHER_ROLES or system_admin narrowed the filter, so Managers/Staff with multiple campuses saw ALL their campuses regardless of the switcher). Also fixes the "Restricted Locations bleed through the switcher" edge-case.
+- **Chat ghost users** — CommsPage cross-campus director load now passes `status=active` (was letting `status='inactive'/'suspended'` slip through the `d.status !== 'deleted'` client-side filter). `/api/presence/online-users` now drops presence entries for users whose DB `status !== 'active'` (also proactively cleans in-memory presence map for deleted users).
+
+### Iter217 — Shipping AI HS Code Classifier + Printable Customs Manifest (backend 13/13, frontend 100%)
+- **AI HS Code classification** — `POST /api/shipments/{id}/classify-hs-bulk` (Gemini 3 Flash via emergentintegrations) assigns 6-digit HS codes (regex `\d{4}\.\d{2}`) per item; single-item variant at `POST /items/{iid}/classify-hs`. `force=true` re-classifies; otherwise only items without `hs_code` are processed. Verified: "Used cotton t-shirts" → 6309.00; "Children books" → 49xx.xx.
+- **Printable customs manifest PDF** — `GET /api/shipments/{id}/manifest.pdf` (WeasyPrint) renders columns: # · Item · HS Code · Location (pallet/x-y-z) · Condition · Qty · Value. Handles empty shipments ("No items yet") and unknown IDs (404).
+- **Item schema additions** — `condition ∈ {new, used, refurbished}` (defaults to `used`, invalid coerces to `used`), `hs_code`, `hs_code_reason`. `PUT /items/{iid}` whitelist enforces these.
+- **Frontend wiring** — Bulk-Classify + Print-Manifest buttons in items header (badges show "AI HS Codes (N)" when N items missing codes, "· Re-classify" when all set); each item card shows `HS XXXX.XX` teal badge + condition badge; Add/Edit item dialogs have Condition dropdown + HS Code input; CSV import accepts `condition` and `hs_code` columns.
+- **Bug fix during implementation**: `re` and `json` module imports were only in local function scopes; added to module-level imports in `shipments.py` (broke manifest PDF + AI classify without them).
+
+
 ## Recently Resolved — Iteration 215 (Feb 2026)
 **Backlog cleanup: payroll pro-ration verified, friendly payday picker, onboarding contract auto-select.**
 
