@@ -245,6 +245,15 @@ def _normalise_item(data: dict, units: str = "metric") -> dict:
         "hs_code": (data.get("hs_code") or "")[:20],
         "hs_code_reason": (data.get("hs_code_reason") or "")[:200],
         "condition": (data.get("condition") or "used").lower() if (data.get("condition") or "used").lower() in ("new", "used", "refurbished") else "used",
+        # PVoC (Pre-Export Verification of Conformity) — required by EAC customs
+        # for regulated goods (new electricals, cosmetics, food, chemicals, etc.).
+        # Can be set manually by the operator or auto-inferred by the AI classifier.
+        "requires_pvoc": bool(data.get("requires_pvoc", False)),
+        "pvoc_reason": (data.get("pvoc_reason") or "")[:200],
+        # Sub-manifest grouping — an item belongs to at most one manifest group
+        # (e.g. "58:12 Global Shipment" vs "Lubwama Household Relocation").
+        # null / absent = "unassigned" (still appears on the full-container manifest).
+        "manifest_group_id": data.get("manifest_group_id") or None,
         "value_usd": max(0, float(data.get("value_usd") or 0)),
         "notes": (data.get("notes") or "")[:500],
         "priority": priority,
@@ -367,7 +376,8 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
                "pallet_id", "parent_id", "container_type", "isbn", "upc",
                "author", "publisher", "ai_identified",
                "x_cm", "y_cm", "z_cm",
-               "hs_code", "hs_code_reason", "condition"}
+               "hs_code", "hs_code_reason", "condition",
+               "manifest_group_id", "requires_pvoc", "pvoc_reason"}
     set_ops = {}
     for k, v in data.items():
         if k not in allowed:
@@ -382,6 +392,11 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
         elif k == "priority":
             p = (v or "normal").lower()
             set_ops[f"items.$.{k}"] = p if p in VALID_PRIORITIES else "normal"
+        elif k == "requires_pvoc":
+            set_ops[f"items.$.{k}"] = bool(v)
+        elif k == "manifest_group_id":
+            # Empty string / null → clear the group
+            set_ops[f"items.$.{k}"] = v if v else None
         else:
             set_ops[f"items.$.{k}"] = v
     set_ops["items.$.updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -608,15 +623,84 @@ async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict 
     return {"url": url, "retailer": retailer, "query": query, "reason": parsed.get("reason") or ""}
 
 
+# ========== MANIFEST GROUPS (iter218 — multi-consignee shipments) ==========
+# One physical container can carry multiple manifests (e.g. "58:12 Global
+# Donation" + "Lubwama Household Relocation" in the same box).  Each group
+# is a lightweight consignment: a name + optional consignee address + notes.
+# Items are assigned to a group via `manifest_group_id`.  Manifests + invoices
+# can be printed per-group OR for the whole container.
+
+@router.post("/shipments/{shipment_id}/manifest-groups")
+async def add_manifest_group(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Create a new manifest group (sub-consignment) inside a shipment."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name is required")
+    group = {
+        "id": f"mg_{uuid.uuid4().hex[:8]}",
+        "name": name[:120],
+        "consignee_name": (data.get("consignee_name") or "")[:120],
+        "consignee_address": (data.get("consignee_address") or "")[:500],
+        "notes": (data.get("notes") or "")[:500],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$push": {"manifest_groups": group}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return group
+
+
+@router.put("/shipments/{shipment_id}/manifest-groups/{group_id}")
+async def update_manifest_group(shipment_id: str, group_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Rename or edit a manifest group's metadata."""
+    allowed = {"name", "consignee_name", "consignee_address", "notes"}
+    set_ops = {}
+    for k, v in data.items():
+        if k in allowed:
+            set_ops[f"manifest_groups.$.{k}"] = (v or "")[:500 if k != "name" else 120]
+    if not set_ops:
+        return {"updated": False}
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "manifest_groups.id": group_id},
+        {"$set": set_ops},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/manifest-groups/{group_id}")
+async def delete_manifest_group(shipment_id: str, group_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a manifest group.  All items currently tagged with this group
+    are moved back to the 'unassigned' pool (they stay on the container)."""
+    # Un-assign items first
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"items.$[itm].manifest_group_id": None}},
+        array_filters=[{"itm.manifest_group_id": group_id}],
+    )
+    r = await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$pull": {"manifest_groups": {"id": group_id}}},
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"deleted": True}
+
+
 # ========== HS CODE CLASSIFICATION + PRINTABLE MANIFEST (iter216) ==========
 
-async def _classify_hs_with_ai(name: str, category: str, condition: str = "used") -> dict:
-    """Call Gemini-3-flash to pick a 6-digit HS code for a single item.
-    Returns {hs_code, reason}. Raises HTTPException if AI unavailable.
+async def _classify_hs_with_ai(name: str, category: str, condition: str = "used", dest_country: str = "") -> dict:
+    """Call Gemini-3-flash to pick a 6-digit HS code + PVoC status for a single item.
+    Returns {hs_code, reason, requires_pvoc, pvoc_reason}.  Raises HTTPException if AI unavailable.
 
-    We ask for 6-digit (HS-6) which is the international harmonised level
-    (identical across all WCO countries — 200+). Country-specific 8/10-digit
-    suffixes vary by destination and are out of scope for a general classifier.
+    PVoC = Pre-Export Verification of Conformity (mandatory for Kenya/Uganda/Tanzania
+    /Rwanda on regulated goods — electricals, cosmetics, food, chemicals, textiles,
+    building materials, toys, vehicles).  Used clothing, personal effects, printed
+    books, most medical supplies, and second-hand household goods are typically EXEMPT.
     """
     api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
@@ -625,21 +709,35 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
         from emergentintegrations.llm.chat import LlmChat, UserMessage
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+    dest_hint = dest_country.strip().upper() or "UGANDA"
     sys_msg = (
-        "You are a customs classification assistant. Given a donation item, "
-        "return the most accurate 6-digit HS (Harmonized System) code used "
-        "in international shipping manifests.  Output STRICT JSON:\n"
-        '  {"hs_code": "XXXX.XX", "reason": "<=100 chars explaining the '
-        'classification"}\n'
-        "Rules:\n"
+        "You are a customs classification assistant for East African Community "
+        "shipments (Uganda, Kenya, Tanzania, Rwanda).  For each item, return "
+        "STRICT JSON:\n"
+        '  {"hs_code": "XXXX.XX", "reason": "<=100 chars", '
+        '"requires_pvoc": true|false, "pvoc_reason": "<=100 chars"}\n'
+        "HS RULES:\n"
         "- ALWAYS 6 digits formatted as XXXX.XX (e.g. 4901.99 for printed books).\n"
-        "- Prefer specific over generic — 6109.10 (cotton T-shirts) over 6109.90.\n"
-        "- Used clothing / worn textiles are consistently 6309.00.\n"
+        "- Used clothing / worn textiles → 6309.00.\n"
         "- Books & printed matter → 4901.xx.\n"
         "- Toys → 9503.00.\n"
         "- Medical supplies (bandages, first-aid) → 3005.90.\n"
         "- Consumer electronics with radio/wifi → 8517.62.\n"
-        "- No commentary, no markdown fences — JSON only."
+        "PVoC RULES (EAC Pre-Export Verification):\n"
+        "- NEW electricals, electronics, batteries, appliances → requires_pvoc=true\n"
+        "- NEW cosmetics, soaps, cleaning products → requires_pvoc=true\n"
+        "- NEW food, beverages, edible oils → requires_pvoc=true\n"
+        "- NEW chemicals, paints, fertilisers, pharmaceuticals → requires_pvoc=true\n"
+        "- NEW building materials (cement, tiles, steel, cables) → requires_pvoc=true\n"
+        "- NEW clothing/footwear/textiles (NOT used donations) → requires_pvoc=true\n"
+        "- NEW toys → requires_pvoc=true\n"
+        "- NEW motor vehicles / spare parts → requires_pvoc=true\n"
+        "- USED clothing (HS 6309.00), used personal effects, used household goods → false\n"
+        "- Printed books, magazines, educational materials → false\n"
+        "- Most medical supplies for humanitarian/donation use → false\n"
+        "- If condition is 'used' or 'refurbished' AND item is a personal/donation good → false\n"
+        f"Destination country: {dest_hint}\n"
+        "No commentary, no markdown fences — JSON only."
     )
     user_text = f"Item: {name}\nCategory: {category or '(unspecified)'}\nCondition: {condition}\n"
     chat = LlmChat(
@@ -655,30 +753,40 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        # Second-chance: extract the first {...} block
-        m = re.search(r"\{[^{}]*\}", text, re.S)
+        # Second-chance: extract the first {...} block (may span newlines)
+        m = re.search(r"\{.*\}", text, re.S)
         if not m:
             raise HTTPException(status_code=502, detail=f"AI returned invalid JSON: {text[:120]}")
         parsed = json.loads(m.group(0))
     hs_code = (parsed.get("hs_code") or "").strip()
     if not re.match(r"^\d{4}\.\d{2}$", hs_code):
         raise HTTPException(status_code=502, detail=f"AI returned malformed HS code: {hs_code!r}")
-    return {"hs_code": hs_code, "reason": (parsed.get("reason") or "")[:200]}
+    return {
+        "hs_code": hs_code,
+        "reason": (parsed.get("reason") or "")[:200],
+        "requires_pvoc": bool(parsed.get("requires_pvoc", False)),
+        "pvoc_reason": (parsed.get("pvoc_reason") or "")[:200],
+    }
 
 
 @router.post("/shipments/{shipment_id}/items/{item_id}/classify-hs")
 async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
-    """Ask AI to classify one item's HS code + store it on the item."""
-    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1})
+    """Ask AI to classify one item's HS code + PVoC status + store on the item."""
+    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1, "dest_country": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Item not found")
     item = s["items"][0]
-    result = await _classify_hs_with_ai(item.get("name", ""), item.get("category", ""), item.get("condition", "used"))
+    result = await _classify_hs_with_ai(
+        item.get("name", ""), item.get("category", ""),
+        item.get("condition", "used"), s.get("dest_country", "") or "",
+    )
     await db.shipments.update_one(
         {"id": shipment_id, "items.id": item_id},
         {"$set": {
             "items.$.hs_code": result["hs_code"],
             "items.$.hs_code_reason": result["reason"],
+            "items.$.requires_pvoc": result["requires_pvoc"],
+            "items.$.pvoc_reason": result["pvoc_reason"],
             "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
@@ -687,28 +795,39 @@ async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = 
 
 @router.post("/shipments/{shipment_id}/classify-hs-bulk")
 async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: dict = Depends(require_admin)):
-    """Classify HS codes for every item in the shipment that doesn't have one
-    (or all items when `force=true`).  Returns per-item results + counters."""
+    """Classify HS codes + PVoC for every item in the shipment that doesn't have
+    one (or all items when `force=true`).  Returns per-item results + counters."""
     force = bool((data or {}).get("force"))
-    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items = s.get("items") or []
+    dest_country = s.get("dest_country", "") or ""
     targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
     results = []
     skipped = len(items) - len(targets)
     for it in targets:
         try:
-            r = await _classify_hs_with_ai(it.get("name", ""), it.get("category", ""), it.get("condition", "used"))
+            r = await _classify_hs_with_ai(
+                it.get("name", ""), it.get("category", ""),
+                it.get("condition", "used"), dest_country,
+            )
             await db.shipments.update_one(
                 {"id": shipment_id, "items.id": it["id"]},
                 {"$set": {
                     "items.$.hs_code": r["hs_code"],
                     "items.$.hs_code_reason": r["reason"],
+                    "items.$.requires_pvoc": r["requires_pvoc"],
+                    "items.$.pvoc_reason": r["pvoc_reason"],
                     "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
-            results.append({"item_id": it["id"], "name": it["name"], "hs_code": r["hs_code"], "reason": r["reason"], "ok": True})
+            results.append({
+                "item_id": it["id"], "name": it["name"],
+                "hs_code": r["hs_code"], "reason": r["reason"],
+                "requires_pvoc": r["requires_pvoc"], "pvoc_reason": r["pvoc_reason"],
+                "ok": True,
+            })
         except HTTPException as ex:
             results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": ex.detail})
         except Exception as ex:  # pragma: no cover
@@ -718,84 +837,161 @@ async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: di
         "classified": sum(1 for r in results if r.get("ok")),
         "failed": sum(1 for r in results if not r.get("ok")),
         "skipped_existing": skipped,
+        "pvoc_flagged": sum(1 for r in results if r.get("requires_pvoc")),
         "results": results,
     }
 
 
+# ────── Shared helpers for manifest/invoice PDFs ────────────────────────
+
+def _sort_items_for_manifest(items: list) -> list:
+    """Manifest sort order (per user spec):
+      1. PVoC-required first (regulated goods go to top for customs attention)
+      2. Highest declared line-value first (value_usd × qty_acquired)
+      3. Heaviest first (weight_kg × qty_acquired)
+    """
+    def key(it):
+        qty = int(it.get("qty_acquired") or 0)
+        line_val = float(it.get("value_usd") or 0) * qty
+        line_wt = float(it.get("weight_kg") or 0) * qty
+        # False sorts before True → invert so PVoC-required comes first
+        return (0 if it.get("requires_pvoc") else 1, -line_val, -line_wt)
+    return sorted(items, key=key)
+
+
+def _loc_str(it: dict) -> str:
+    parts = []
+    if it.get("pallet_id"):
+        parts.append(f"Pallet {it['pallet_id'][-4:]}")
+    for k, label in (("x_cm", "X"), ("y_cm", "Y"), ("z_cm", "Z")):
+        if it.get(k):
+            parts.append(f"{label}={it[k]:.0f}cm")
+    return " · ".join(parts) or "—"
+
+
+def _resolve_group(shipment: dict, group_id: Optional[str]):
+    """Resolve a ?group= query param → filtered items + group metadata."""
+    items = shipment.get("items") or []
+    groups = shipment.get("manifest_groups") or []
+    group_meta = None
+    if group_id:
+        if group_id == "unassigned":
+            items = [i for i in items if not i.get("manifest_group_id")]
+            group_meta = {"name": "Unassigned Items", "consignee_name": "", "consignee_address": ""}
+        else:
+            group_meta = next((g for g in groups if g.get("id") == group_id), None)
+            if not group_meta:
+                raise HTTPException(status_code=404, detail="Manifest group not found")
+            items = [i for i in items if i.get("manifest_group_id") == group_id]
+    return items, group_meta
+
+
+_PDF_STYLES = """
+@page { size: A4 landscape; margin: 14mm; }
+body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color: #0f172a; }
+h1 { font-size: 20px; margin: 0 0 4px 0; }
+h2 { font-size: 13px; margin: 4px 0 2px 0; color: #334155; }
+.meta { font-size: 10px; color: #64748b; }
+.head { display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #0f172a; margin-bottom: 12px; }
+.totals { display: flex; gap: 24px; font-size: 11px; margin-top: 6px; flex-wrap: wrap; }
+.totals span { color: #64748b; }
+.consignee { background: #f1f5f9; padding: 6px 10px; border-left: 3px solid #0891b2; margin-bottom: 10px; font-size: 10.5px; }
+table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+th, td { padding: 5px 7px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+th { font-size: 10px; color: #64748b; background: #f8fafc; text-transform: uppercase; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+td.hs { font-family: 'Menlo', monospace; font-size: 10.5px; }
+td.loc { font-size: 10px; color: #475569; }
+td.c { text-align: center; }
+.cond { display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 9px; font-weight: 600; }
+.cond.new { background: #dcfce7; color: #166534; }
+.cond.used { background: #fef3c7; color: #92400e; }
+.cond.refurbished { background: #dbeafe; color: #1e3a8a; }
+.pvoc { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+tr.pvoc-row td { background: #fef2f2; }
+tfoot td { font-weight: 700; background: #f8fafc; border-top: 2px solid #0f172a; }
+"""
+
+
 @router.get("/shipments/{shipment_id}/manifest.pdf")
-async def shipment_manifest_pdf(shipment_id: str, current_user: dict = Depends(require_admin)):
-    """Server-rendered printable customs manifest PDF.  Columns:
-    Item · HS Code · Location (pallet / x-y-z) · Condition (new/used) · Qty."""
+async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Server-rendered printable customs manifest PDF.
+
+    Optional query param `group=<manifest_group_id>` scopes the PDF to a single
+    sub-consignment (e.g. "Lubwama Household Relocation").  Use `group=unassigned`
+    for items not tagged with any group.  No `group` = the whole container.
+
+    Items are sorted PVoC-required first, then highest value, then heaviest —
+    the natural review order for customs officers.
+    """
     s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
-    items = s.get("items") or []
-    def loc_str(it: dict) -> str:
-        parts = []
-        if it.get("pallet_id"):
-            parts.append(f"Pallet {it['pallet_id'][-4:]}")
-        for k, label in (("x_cm", "X"), ("y_cm", "Y"), ("z_cm", "Z")):
-            if it.get(k):
-                parts.append(f"{label}={it[k]:.0f}cm")
-        return " · ".join(parts) or "—"
+    items, group_meta = _resolve_group(s, group)
+    items = _sort_items_for_manifest(items)
+    shipment_title = s.get("name", "")
+    heading = shipment_title
+    if group_meta:
+        heading = f"{shipment_title} · {group_meta.get('name', '')}"
     rows_html = ""
     for i, it in enumerate(items, 1):
+        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
+        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
         rows_html += (
-            f"<tr>"
+            f"<tr class='{row_class}'>"
             f"<td class='n'>{i}</td>"
-            f"<td>{(it.get('name') or '')[:80]}</td>"
+            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
             f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
-            f"<td class='loc'>{loc_str(it)}</td>"
+            f"<td class='loc'>{_loc_str(it)}</td>"
             f"<td class='c'><span class='cond {it.get('condition','used')}'>{(it.get('condition') or 'used').upper()}</span></td>"
             f"<td class='n'>{it.get('qty_acquired', 0)}</td>"
             f"</tr>"
         )
     if not rows_html:
-        rows_html = "<tr><td colspan='6' style='text-align:center;color:#94a3b8;padding:24px'>No items yet</td></tr>"
+        rows_html = "<tr><td colspan='6' style='text-align:center;color:#94a3b8;padding:24px'>No items in this manifest</td></tr>"
     total_items = sum(int(it.get("qty_acquired") or 0) for it in items)
     total_weight = sum(float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0) for it in items)
     total_value = sum(float(it.get("value_usd") or 0) * int(it.get("qty_acquired") or 0) for it in items)
-    html = f"""<html><head><meta charset='utf-8' /><style>
-@page {{ size: A4 landscape; margin: 14mm; }}
-body {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color: #0f172a; }}
-h1 {{ font-size: 20px; margin: 0 0 4px 0; }}
-.meta {{ font-size: 10px; color: #64748b; }}
-.head {{ display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #0f172a; margin-bottom: 12px; }}
-.totals {{ display: flex; gap: 24px; font-size: 11px; margin-top: 6px; }}
-.totals span {{ color: #64748b; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 10.5px; }}
-th, td {{ padding: 5px 7px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }}
-th {{ font-size: 10px; color: #64748b; background: #f8fafc; text-transform: uppercase; }}
-td.n {{ text-align: right; font-variant-numeric: tabular-nums; }}
-td.hs {{ font-family: 'Menlo', monospace; font-size: 10.5px; }}
-td.loc {{ font-size: 10px; color: #475569; }}
-td.c {{ text-align: center; }}
-.cond {{ display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 9px; font-weight: 600; }}
-.cond.new {{ background: #dcfce7; color: #166534; }}
-.cond.used {{ background: #fef3c7; color: #92400e; }}
-.cond.refurbished {{ background: #dbeafe; color: #1e3a8a; }}
-</style></head><body>
+    pvoc_count = sum(1 for it in items if it.get("requires_pvoc"))
+    consignee_html = ""
+    if group_meta and (group_meta.get("consignee_name") or group_meta.get("consignee_address")):
+        consignee_html = (
+            f"<div class='consignee'><strong>Consignee:</strong> "
+            f"{group_meta.get('consignee_name', '')}"
+            f"{' — ' + group_meta.get('consignee_address', '') if group_meta.get('consignee_address') else ''}"
+            f"</div>"
+        )
+    pvoc_footnote = ""
+    if pvoc_count:
+        pvoc_footnote = (
+            f"<p class='meta' style='color:#991b1b;margin-top:6mm'><strong>{pvoc_count} PVoC item(s):</strong> "
+            f"Pre-Export Verification of Conformity certificate required at destination customs (EAC regulated goods).</p>"
+        )
+    html = f"""<html><head><meta charset='utf-8' /><style>{_PDF_STYLES}</style></head><body>
   <div class='head'>
     <div>
-      <h1>Container Manifest — {s.get('name', '')}</h1>
+      <h1>Container Manifest — {heading}</h1>
       <p class='meta'>Shipment ID: {s.get('id', '')} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
       <div class='totals'>
         <div><span>Line items:</span> <strong>{len(items)}</strong></div>
         <div><span>Units:</span> <strong>{total_items:,}</strong></div>
         <div><span>Total weight:</span> <strong>{total_weight:,.1f} kg</strong></div>
         <div><span>Declared value:</span> <strong>USD {total_value:,.2f}</strong></div>
+        <div><span>PVoC required:</span> <strong style='color:{"#991b1b" if pvoc_count else "#64748b"}'>{pvoc_count}</strong></div>
       </div>
     </div>
     <div style='text-align:right'>
       <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
-      <p class='meta'>Customs manifest · HS-6 classification</p>
+      <p class='meta'>Customs manifest · HS-6 · Sorted PVoC ▸ value ▸ weight</p>
     </div>
   </div>
+  {consignee_html}
   <table>
     <thead><tr><th class='n' style='width:32px'>#</th><th>Item</th><th style='width:80px'>HS Code</th><th style='width:180px'>Location</th><th class='c' style='width:70px'>Condition</th><th class='n' style='width:60px'>Qty</th></tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
-  <p class='meta' style='margin-top:18mm; text-align:center'>HS codes are 6-digit WCO Harmonized System classifications. Country-specific 8/10-digit suffixes must be applied at destination customs.</p>
+  {pvoc_footnote}
+  <p class='meta' style='margin-top:8mm; text-align:center'>HS codes are 6-digit WCO Harmonized System classifications. Country-specific 8/10-digit suffixes must be applied at destination customs.</p>
 </body></html>"""
     from weasyprint import HTML
     from starlette.responses import StreamingResponse
@@ -805,8 +1001,116 @@ td.c {{ text-align: center; }}
     except Exception as e:
         logger.error(f"Manifest PDF failed: {e}")
         raise HTTPException(status_code=500, detail="PDF generation failed")
-    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", s.get("name") or "manifest")[:40]
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (heading or "manifest"))[:60]
     filename = f"manifest_{safe_name}_{shipment_id[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/shipments/{shipment_id}/commercial-invoice.pdf")
+async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Printable commercial invoice PDF (customs-grade).
+
+    Columns: # · Item · HS · Origin · Qty · Unit Value · Line Total.
+    Same `?group=<gid>` filter + same PVoC-first sort as manifest.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items, group_meta = _resolve_group(s, group)
+    items = _sort_items_for_manifest(items)
+    shipment_title = s.get("name", "")
+    heading = shipment_title
+    if group_meta:
+        heading = f"{shipment_title} · {group_meta.get('name', '')}"
+    rows_html = ""
+    grand_qty = 0
+    grand_total = 0.0
+    for i, it in enumerate(items, 1):
+        qty = int(it.get("qty_acquired") or 0)
+        unit_val = float(it.get("value_usd") or 0)
+        line_total = unit_val * qty
+        grand_qty += qty
+        grand_total += line_total
+        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
+        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
+        origin = "USED — humanitarian donation" if it.get("condition") == "used" else (it.get("condition") or "used").upper()
+        rows_html += (
+            f"<tr class='{row_class}'>"
+            f"<td class='n'>{i}</td>"
+            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
+            f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
+            f"<td class='loc'>{origin}</td>"
+            f"<td class='n'>{qty}</td>"
+            f"<td class='n'>${unit_val:,.2f}</td>"
+            f"<td class='n'>${line_total:,.2f}</td>"
+            f"</tr>"
+        )
+    if not rows_html:
+        rows_html = "<tr><td colspan='7' style='text-align:center;color:#94a3b8;padding:24px'>No items in this invoice</td></tr>"
+    consignee_html = ""
+    if group_meta and (group_meta.get("consignee_name") or group_meta.get("consignee_address")):
+        consignee_html = (
+            f"<div class='consignee'><strong>Consignee:</strong> "
+            f"{group_meta.get('consignee_name', '')}"
+            f"{' — ' + group_meta.get('consignee_address', '') if group_meta.get('consignee_address') else ''}"
+            f"</div>"
+        )
+    html = f"""<html><head><meta charset='utf-8' /><style>{_PDF_STYLES}</style></head><body>
+  <div class='head'>
+    <div>
+      <h1>Commercial Invoice — {heading}</h1>
+      <p class='meta'>Invoice #: CI-{shipment_id[:8].upper()}{'-' + group[:6].upper() if group and group != 'unassigned' else ''} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
+      <p class='meta'>Currency: USD · Terms: Donation (non-commercial) unless marked NEW · Incoterms: as agreed</p>
+    </div>
+    <div style='text-align:right'>
+      <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p class='meta'>HS-6 · Sorted PVoC ▸ value ▸ weight</p>
+    </div>
+  </div>
+  {consignee_html}
+  <table>
+    <thead><tr>
+      <th class='n' style='width:32px'>#</th>
+      <th>Description of Goods</th>
+      <th style='width:70px'>HS Code</th>
+      <th style='width:170px'>Condition / Origin</th>
+      <th class='n' style='width:50px'>Qty</th>
+      <th class='n' style='width:75px'>Unit USD</th>
+      <th class='n' style='width:85px'>Line Total</th>
+    </tr></thead>
+    <tbody>{rows_html}</tbody>
+    <tfoot><tr>
+      <td colspan='4' style='text-align:right'>TOTAL</td>
+      <td class='n'>{grand_qty:,}</td>
+      <td></td>
+      <td class='n'>${grand_total:,.2f}</td>
+    </tr></tfoot>
+  </table>
+  <div style='margin-top:14mm; display:flex; justify-content:space-between; font-size:10px; color:#334155'>
+    <div style='width:45%'>
+      <p><strong>Declaration:</strong></p>
+      <p>I declare that the information above is true and complete to the best of my knowledge. Items marked USED are donated goods with no commercial value; declared values are for customs valuation purposes only.</p>
+      <div style='margin-top:14mm;border-top:1px solid #94a3b8;padding-top:4px'>Authorized signature / Date</div>
+    </div>
+    <div style='width:45%; text-align:right'>
+      <p class='meta' style='color:#991b1b'>Items marked <span class='pvoc'>PVoC</span> require Pre-Export Verification of Conformity certificate.</p>
+    </div>
+  </div>
+</body></html>"""
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Commercial invoice PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (heading or "invoice"))[:60]
+    filename = f"invoice_{safe_name}_{shipment_id[:8]}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",

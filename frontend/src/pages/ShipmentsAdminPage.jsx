@@ -20,7 +20,9 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { formatDimCm, formatWeightKg, parseDimToCm, parseWeightToKg, dimPlaceholder, weightPlaceholder } from '../services/shipmentUnits';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors, Loader2, ShieldAlert, Users, ChevronDown, FileText, MoreVertical, X } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '../components/ui/dropdown-menu';
+import { Checkbox } from '../components/ui/checkbox';
 import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -337,6 +339,9 @@ export default function ShipmentsAdminPage() {
         notes: editingItem.notes || '',
         condition: editingItem.condition || 'used',
         hs_code: (editingItem.hs_code || '').trim(),
+        requires_pvoc: !!editingItem.requires_pvoc,
+        pvoc_reason: editingItem.pvoc_reason || '',
+        manifest_group_id: editingItem.manifest_group_id || null,
       });
       toast.success('Item updated');
       setEditingItem(null);
@@ -344,7 +349,7 @@ export default function ShipmentsAdminPage() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
   };
 
-  // ─── AI bulk-classify HS codes (customs manifest) ─────────────
+  // ─── AI bulk-classify HS codes + PVoC (customs manifest) ─────────
   const [hsBusy, setHsBusy] = useState(false);
   const bulkClassifyHs = async () => {
     const missing = (selected?.items || []).filter(i => !(i.hs_code || '').trim());
@@ -353,27 +358,82 @@ export default function ShipmentsAdminPage() {
     setHsBusy(true);
     try {
       const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk`, { force });
-      const { classified, failed, skipped_existing } = r.data || {};
-      toast.success(`AI classified ${classified} item${classified === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}${skipped_existing ? ` · ${skipped_existing} already had HS code` : ''}`);
+      const { classified, failed, skipped_existing, pvoc_flagged } = r.data || {};
+      toast.success(`AI classified ${classified} item${classified === 1 ? '' : 's'}${pvoc_flagged ? ` · ${pvoc_flagged} PVoC-flagged` : ''}${failed ? ` · ${failed} failed` : ''}${skipped_existing ? ` · ${skipped_existing} already had HS code` : ''}`);
       await refreshDetail();
     } catch (e) { toast.error(e.response?.data?.detail || 'HS classification failed'); }
     finally { setHsBusy(false); }
   };
 
-  // ─── Download printable customs manifest PDF ──────────────────
-  const downloadManifest = async () => {
+  // ─── Toggle PVoC flag manually on a single item ────────────────
+  const togglePvoc = async (item) => {
     try {
-      const r = await api.get(`/shipments/${selectedId}/manifest.pdf`, { responseType: 'blob' });
+      await api.put(`/shipments/${selectedId}/items/${item.id}`, {
+        requires_pvoc: !item.requires_pvoc,
+        pvoc_reason: item.requires_pvoc ? '' : (item.pvoc_reason || 'Manually flagged'),
+      });
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'PVoC toggle failed'); }
+  };
+
+  // ─── Assign an item to a manifest group ────────────────────────
+  const setItemGroup = async (item, gid) => {
+    try {
+      await api.put(`/shipments/${selectedId}/items/${item.id}`, { manifest_group_id: gid || null });
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Group assignment failed'); }
+  };
+
+  // ─── Manifest groups CRUD ──────────────────────────────────────
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupConsignee, setNewGroupConsignee] = useState('');
+  const [showAddGroup, setShowAddGroup] = useState(false);
+  const addManifestGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    try {
+      await api.post(`/shipments/${selectedId}/manifest-groups`, { name, consignee_name: newGroupConsignee.trim() });
+      toast.success(`Group "${name}" created`);
+      setNewGroupName(''); setNewGroupConsignee(''); setShowAddGroup(false);
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to create group'); }
+  };
+  const deleteManifestGroup = async (g) => {
+    if (!window.confirm(`Delete group "${g.name}"? Items in it will move back to Unassigned.`)) return;
+    try {
+      await api.delete(`/shipments/${selectedId}/manifest-groups/${g.id}`);
+      toast.success('Group deleted');
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Delete failed'); }
+  };
+  const renameManifestGroup = async (g) => {
+    const name = window.prompt('New group name', g.name);
+    if (!name || name.trim() === g.name) return;
+    try {
+      await api.put(`/shipments/${selectedId}/manifest-groups/${g.id}`, { name: name.trim() });
+      await refreshDetail();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Rename failed'); }
+  };
+
+  // ─── Download printable customs manifest / invoice PDFs ─────────
+  const downloadPdf = async (kind, gid) => {
+    const path = kind === 'invoice' ? 'commercial-invoice.pdf' : 'manifest.pdf';
+    const qs = gid ? `?group=${encodeURIComponent(gid)}` : '';
+    try {
+      const r = await api.get(`/shipments/${selectedId}/${path}${qs}`, { responseType: 'blob' });
       const blob = new Blob([r.data], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `manifest-${(selected?.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.pdf`;
+      const groupSuffix = gid && gid !== 'unassigned' ? '_' + (selected?.manifest_groups || []).find(g => g.id === gid)?.name?.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40) : (gid === 'unassigned' ? '_unassigned' : '');
+      a.download = `${kind === 'invoice' ? 'invoice' : 'manifest'}-${(selected?.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}${groupSuffix}.pdf`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast.success('Manifest downloaded');
-    } catch (e) { toast.error(e.response?.data?.detail || 'Manifest generation failed'); }
+      toast.success(`${kind === 'invoice' ? 'Invoice' : 'Manifest'} downloaded`);
+    } catch (e) { toast.error(e.response?.data?.detail || 'PDF generation failed'); }
   };
+  const downloadManifest = (gid) => downloadPdf('manifest', gid);
+  const downloadInvoice = (gid) => downloadPdf('invoice', gid);
 
   const runAiPacking = async () => {
     setAiBusy(true);
@@ -644,22 +704,99 @@ export default function ShipmentsAdminPage() {
         </div>
       </div>
 
+      {/* Manifest Groups (sub-consignments) */}
+      <div className="mb-3" data-testid="ship-manifest-groups">
+        <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <Users size={12} className="text-slate-500" />
+            <p className="text-xs font-semibold">Manifest Groups ({(selected.manifest_groups || []).length})</p>
+            <span className="text-[10px] text-muted-foreground">— split one container into multiple consignments</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setShowAddGroup(true)} data-testid="ship-add-manifest-group-btn">
+            <Plus size={11} className="mr-1" /> New group
+          </Button>
+        </div>
+        {(selected.manifest_groups || []).length === 0 ? (
+          <p className="text-[10px] text-muted-foreground italic">No groups yet. Items ship on one combined manifest. Add a group (e.g. &ldquo;Lubwama Household Relocation&rdquo;) to split.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {(selected.manifest_groups || []).map(g => {
+              const count = (selected.items || []).filter(i => i.manifest_group_id === g.id).length;
+              return (
+                <div key={g.id} className="flex items-center gap-1 bg-cyan-50 border border-cyan-200 rounded px-2 py-1 text-[11px]" data-testid={`ship-mg-${g.id}`}>
+                  <span className="font-medium text-cyan-900">{g.name}</span>
+                  <span className="text-cyan-600">· {count} item{count === 1 ? '' : 's'}</span>
+                  {g.consignee_name && <span className="text-cyan-600 italic">· → {g.consignee_name}</span>}
+                  <button onClick={() => renameManifestGroup(g)} className="ml-1 text-cyan-700 hover:text-cyan-900" title="Rename group"><Pencil size={10} /></button>
+                  <button onClick={() => deleteManifestGroup(g)} className="text-rose-600 hover:text-rose-800" title="Delete group"><X size={11} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Items list */}
       <div>
         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-          <p className="text-xs font-semibold">Items ({(selected.items || []).length})</p>
+          <p className="text-xs font-semibold">Items ({(selected.items || []).length}) <span className="text-[10px] font-normal text-muted-foreground">— sorted PVoC ▸ value ▸ weight</span></p>
           <div className="flex gap-1.5 flex-wrap">
             {(() => {
               const missingHs = (selected.items || []).filter(i => !(i.hs_code || '').trim()).length;
               return (
-                <Button size="sm" variant="outline" className="text-teal-700 border-teal-300 hover:bg-teal-50" onClick={bulkClassifyHs} disabled={hsBusy || (selected.items || []).length === 0} data-testid="ship-bulk-hs-btn" title="Ask AI to assign customs HS-6 codes to every item without one">
-                  {hsBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Classifying…</> : <>🏷️ AI HS Codes{missingHs > 0 ? ` (${missingHs})` : ' · Re-classify'}</>}
+                <Button size="sm" variant="outline" className="text-teal-700 border-teal-300 hover:bg-teal-50" onClick={bulkClassifyHs} disabled={hsBusy || (selected.items || []).length === 0} data-testid="ship-bulk-hs-btn" title="Ask AI to assign customs HS-6 codes + PVoC flags to every item without one">
+                  {hsBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Classifying…</> : <>🏷️ AI HS + PVoC{missingHs > 0 ? ` (${missingHs})` : ' · Re-classify'}</>}
                 </Button>
               );
             })()}
-            <Button size="sm" variant="outline" className="text-slate-700 border-slate-300 hover:bg-slate-50" onClick={downloadManifest} disabled={(selected.items || []).length === 0} data-testid="ship-manifest-btn" title="Download printable customs manifest PDF (item · HS code · location · condition · qty)">
-              <Download size={11} className="mr-1" /> Print Manifest
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="text-slate-700 border-slate-300 hover:bg-slate-50" disabled={(selected.items || []).length === 0} data-testid="ship-manifest-btn" title="Download printable customs manifest PDF — full container or per manifest group">
+                  <Download size={11} className="mr-1" /> Print Manifest <ChevronDown size={10} className="ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel>Customs Manifest</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => downloadManifest(null)} data-testid="ship-manifest-all">
+                  <Download size={12} className="mr-2" /> All items (whole container)
+                </DropdownMenuItem>
+                {(selected.manifest_groups || []).length > 0 && <DropdownMenuSeparator />}
+                {(selected.manifest_groups || []).map(g => (
+                  <DropdownMenuItem key={g.id} onClick={() => downloadManifest(g.id)} data-testid={`ship-manifest-grp-${g.id}`}>
+                    <FileText size={12} className="mr-2" /> {g.name}
+                  </DropdownMenuItem>
+                ))}
+                {(selected.items || []).some(i => !i.manifest_group_id) && (selected.manifest_groups || []).length > 0 && (
+                  <DropdownMenuItem onClick={() => downloadManifest('unassigned')} data-testid="ship-manifest-unassigned">
+                    <FileText size={12} className="mr-2" /> Unassigned items
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" disabled={(selected.items || []).length === 0} data-testid="ship-invoice-btn" title="Download commercial invoice PDF (declared values, HS codes, PVoC-first sort)">
+                  <FileText size={11} className="mr-1" /> Invoice <ChevronDown size={10} className="ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel>Commercial Invoice</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => downloadInvoice(null)} data-testid="ship-invoice-all">
+                  <FileText size={12} className="mr-2" /> All items (whole container)
+                </DropdownMenuItem>
+                {(selected.manifest_groups || []).length > 0 && <DropdownMenuSeparator />}
+                {(selected.manifest_groups || []).map(g => (
+                  <DropdownMenuItem key={g.id} onClick={() => downloadInvoice(g.id)} data-testid={`ship-invoice-grp-${g.id}`}>
+                    <FileText size={12} className="mr-2" /> {g.name}
+                  </DropdownMenuItem>
+                ))}
+                {(selected.items || []).some(i => !i.manifest_group_id) && (selected.manifest_groups || []).length > 0 && (
+                  <DropdownMenuItem onClick={() => downloadInvoice('unassigned')} data-testid="ship-invoice-unassigned">
+                    <FileText size={12} className="mr-2" /> Unassigned items
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
             {(() => {
               const unlinked = (selected.items || []).filter(i => !i.source_url && (i.qty_acquired || 0) < (i.qty_needed || 0)).length;
               if (unlinked === 0) return null;
@@ -686,7 +823,21 @@ export default function ShipmentsAdminPage() {
             testid="ship-items-empty" />
         ) : (
           <div className="space-y-1.5" data-testid="ship-items">
-            {(selected.items || []).map(it => {
+            {(() => {
+              // Sort same as PDFs: PVoC-required first, then highest value, then heaviest.
+              const sorted = [...(selected.items || [])].sort((a, b) => {
+                const pvocA = a.requires_pvoc ? 0 : 1;
+                const pvocB = b.requires_pvoc ? 0 : 1;
+                if (pvocA !== pvocB) return pvocA - pvocB;
+                const valA = (a.value_usd || 0) * (a.qty_acquired || 0);
+                const valB = (b.value_usd || 0) * (b.qty_acquired || 0);
+                if (valA !== valB) return valB - valA;
+                const wtA = (a.weight_kg || 0) * (a.qty_acquired || 0);
+                const wtB = (b.weight_kg || 0) * (b.qty_acquired || 0);
+                return wtB - wtA;
+              });
+              return sorted;
+            })().map(it => {
               const remaining = Math.max(0, (it.qty_needed || 0) - (it.qty_acquired || 0));
               const covered = remaining === 0;
               return (
@@ -707,6 +858,42 @@ export default function ShipmentsAdminPage() {
                         {it.category && <Badge variant="outline" className="text-[10px]">{it.category}</Badge>}
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
+                        <button
+                          onClick={() => togglePvoc(it)}
+                          className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-semibold transition-colors ${it.requires_pvoc ? 'bg-rose-100 text-rose-800 border border-rose-300 hover:bg-rose-200' : 'bg-slate-50 text-slate-400 border border-slate-200 hover:bg-slate-100 hover:text-slate-600'}`}
+                          title={it.requires_pvoc ? `PVoC required: ${it.pvoc_reason || 'flagged manually'} — click to un-flag` : 'Click to flag as PVoC-required'}
+                          data-testid={`ship-item-pvoc-${it.id}`}
+                        >
+                          <ShieldAlert size={10} /> PVoC{it.requires_pvoc ? '' : '?'}
+                        </button>
+                        {(selected.manifest_groups || []).length > 0 && (() => {
+                          const g = (selected.manifest_groups || []).find(x => x.id === it.manifest_group_id);
+                          return (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${g ? 'bg-cyan-50 text-cyan-800 border-cyan-300 hover:bg-cyan-100' : 'bg-slate-50 text-slate-500 border-slate-200 border-dashed hover:bg-slate-100'}`}
+                                  title={g ? `In manifest group: ${g.name}` : 'Unassigned — click to add to a group'}
+                                  data-testid={`ship-item-group-${it.id}`}
+                                >
+                                  <Users size={10} /> {g?.name?.slice(0, 20) || 'unassigned'}
+                                  <ChevronDown size={9} />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start">
+                                <DropdownMenuItem onClick={() => setItemGroup(it, null)}>
+                                  <X size={11} className="mr-2" /> Unassigned
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                {(selected.manifest_groups || []).map(mg => (
+                                  <DropdownMenuItem key={mg.id} onClick={() => setItemGroup(it, mg.id)}>
+                                    <Users size={11} className="mr-2" /> {mg.name}
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          );
+                        })()}
                         {it.hs_code && (
                           <Badge variant="outline" className="text-[10px] font-mono bg-teal-50 text-teal-700 border-teal-200" title={it.hs_code_reason || 'AI-assigned HS-6 customs code'} data-testid={`ship-item-hs-${it.id}`}>
                             HS {it.hs_code}
@@ -947,6 +1134,39 @@ export default function ShipmentsAdminPage() {
                   <Input value={editingItem.hs_code || ''} onChange={e => setEditingItem({ ...editingItem, hs_code: e.target.value })} placeholder="e.g. 6309.00" className="font-mono" data-testid="ship-edit-item-hs" />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs flex items-center gap-2">
+                    <Checkbox
+                      checked={!!editingItem.requires_pvoc}
+                      onCheckedChange={v => setEditingItem({ ...editingItem, requires_pvoc: !!v })}
+                      data-testid="ship-edit-item-pvoc"
+                    />
+                    <span>Requires PVoC (Pre-Export Verification)</span>
+                  </Label>
+                  <Input
+                    value={editingItem.pvoc_reason || ''}
+                    onChange={e => setEditingItem({ ...editingItem, pvoc_reason: e.target.value })}
+                    placeholder="Reason (e.g. new electrical, cosmetic)"
+                    disabled={!editingItem.requires_pvoc}
+                    data-testid="ship-edit-item-pvoc-reason"
+                  />
+                </div>
+                <div className="space-y-1"><Label className="text-xs">Manifest group</Label>
+                  <Select
+                    value={editingItem.manifest_group_id || '__none__'}
+                    onValueChange={v => setEditingItem({ ...editingItem, manifest_group_id: v === '__none__' ? null : v })}
+                  >
+                    <SelectTrigger data-testid="ship-edit-item-group"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Unassigned</SelectItem>
+                      {(selected?.manifest_groups || []).map(g => (
+                        <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="space-y-1"><Label className="text-xs">Notes</Label>
                 <Textarea rows={2} value={editingItem.notes || ''} onChange={e => setEditingItem({ ...editingItem, notes: e.target.value })} />
               </div>
@@ -1061,6 +1281,44 @@ export default function ShipmentsAdminPage() {
       </Dialog>
 
       {/* Add item dialog */}
+      <Dialog open={showAddGroup} onOpenChange={setShowAddGroup}>
+        <DialogContent className="max-w-md" data-testid="ship-add-group-dialog">
+          <DialogHeader>
+            <DialogTitle>New manifest group</DialogTitle>
+            <DialogDescription>Split this container into sub-consignments — each group prints its own manifest + commercial invoice.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Group name *</Label>
+              <Input
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                placeholder="e.g. Lubwama Household Relocation"
+                autoFocus
+                data-testid="ship-add-group-name"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Consignee name (optional)</Label>
+              <Input
+                value={newGroupConsignee}
+                onChange={e => setNewGroupConsignee(e.target.value)}
+                placeholder="e.g. Lubwama Family"
+                data-testid="ship-add-group-consignee"
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              After creating the group, use the badge on each item row to assign it.
+              Items with no group print on the &ldquo;unassigned&rdquo; manifest.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => { setShowAddGroup(false); setNewGroupName(''); setNewGroupConsignee(''); }}>Cancel</Button>
+              <Button size="sm" onClick={addManifestGroup} disabled={!newGroupName.trim()} data-testid="ship-add-group-save">Create group</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showAddItem} onOpenChange={setShowAddItem}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="ship-add-item-dialog">
           <DialogHeader><DialogTitle>Add item to shipment</DialogTitle></DialogHeader>

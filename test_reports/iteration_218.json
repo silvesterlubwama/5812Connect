@@ -1,0 +1,29 @@
+{
+  "summary": "iter218 — Manifest groups (multi-consignee), Commercial Invoice PDF, PVoC classification, and PVoC-first sorted PDFs. Backend 19/19 pytest tests PASS (12.9s incl. one live AI call). Frontend fully wired: manifest-groups section, group chips, dropdowns for both Print Manifest + Invoice with All / per-group / Unassigned items, PVoC + group badges on item rows, working New group dialog (verified end-to-end via live UI).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter218_manifest_groups_invoice_pvoc.py",
+    "/app/test_reports/pytest/iter218_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routers/shipments.py:626-691 — Manifest groups CRUD is clean: PUT whitelist ({name, consignee_name, consignee_address, notes}) is strict, DELETE unassigns items back to null via arrayFilters before pulling the group. Verified via test that item survives group delete with manifest_group_id=None.",
+    "routers/shipments.py:847-859 — _sort_items_for_manifest sort key (PVoC first, -line_value, -line_weight). Verified via pypdf text extraction: A(pvoc) → B(high value) → C(heavy) order preserved in both manifest.pdf and commercial-invoice.pdf.",
+    "routers/shipments.py:872-886 — _resolve_group correctly raises 404 for bogus IDs and treats 'unassigned' as items with manifest_group_id=None. Verified.",
+    "routers/shipments.py:695-770 — AI classifier now returns {hs_code, reason, requires_pvoc, pvoc_reason}. PVoC rules in system prompt are opinionated and correct: NEW electricals/cosmetics/etc → true, USED donations → false. Live Gemini-3-flash confirmed: 'Used donated shoes' → PVoC=false, 'New Samsung wall charger' → PVoC=true.",
+    "routers/shipments.py:1013-1105 — Commercial invoice PDF: grand total correct ($1,001.00 for a 1+999+1 fixture), PVoC-first sort, group filter working. Declaration text and PVoC footnote render.",
+    "ShipmentsAdminPage.jsx already >1200 lines in iter217; iter218 adds another ~150 lines. Split into subcomponents recommended in a future refactor (already flagged in iter217). Not blocking.",
+    "PDF endpoints still block the event loop with weasyprint (still true from iter217). Fine for current usage (<50 items). Consider run_in_executor if manifests grow."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter218_manifest_groups_invoice_pvoc.py"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% (all wired testids verified live)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "All fixtures are pytest-scoped and torn down on teardown (TEST_iter218_* shipments, TEST_iter218_sort_*, TEST_iter218_gfilter_*, TEST_iter218_ai_*). One UI-created group mg_781b105d ('TEST_ui_group_iter218') on sh_1091d195ee cleaned up manually via DELETE. No orphan seed data left behind. sh_1091d195ee still has its original 2 groups (mg_c9733260 '58:12 Global Shipment' + mg_60d1d74f 'Lubwama Household Relocation') as documented in the review request.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter218 feature is COMPLETE. Reusable regression file: /app/backend/tests/test_iter218_manifest_groups_invoice_pvoc.py (19 tests, ~13s). Coverage: (a) Manifest groups CRUD + whitelist + 404s, (b) Item PUT whitelist for requires_pvoc/pvoc_reason/manifest_group_id + clearing, (c) Sort order verification via pypdf text extraction (PVoC ▸ value ▸ weight) in BOTH manifest and commercial invoice PDFs, (d) group filter (all / <gid> / unassigned / bogus→404) for both PDFs, (e) DELETE group unassigns items back to null (item survives), (f) AI PVoC classification (Gemini-3-flash) with response `pvoc_flagged` counter + persistence, (g) iter217 regression. Frontend UI verified live on shipment sh_1091d195ee (Dedupe Ship 1782772603): all 8 testids from the review request are present and functional: ship-manifest-groups, ship-add-manifest-group-btn, ship-mg-<gid>, ship-manifest-btn (dropdown with ship-manifest-all + ship-manifest-grp-<gid>), ship-invoice-btn (same layout with ship-invoice-*), ship-item-pvoc-<iid>, ship-item-group-<iid>. New group dialog E2E: clicked → filled name → submitted → toast 'Group TEST_ui_group_iter218 created' → new chip appeared → API returned mg_781b105d. Note: pypdf was pip-installed during this iteration for text extraction (already commonly available). No changes to source code.",
+  "rca of the issue": "N/A — no issues found."
+}
