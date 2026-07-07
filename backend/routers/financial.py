@@ -67,6 +67,8 @@ def _within_self_edit_window(doc: dict, user: dict) -> tuple[bool, str]:
     except (ValueError, TypeError):
         return False, "Invalid creation timestamp"
     age_days = (datetime.now(timezone.utc) - created_dt).total_seconds() / 86400
+    if age_days < 0:
+        return False, "Invalid creation timestamp (future-dated)"
     if age_days > SELF_EDIT_WINDOW_DAYS:
         return False, f"Edit window closed ({SELF_EDIT_WINDOW_DAYS} days) — ask an administrator"
     return True, ""

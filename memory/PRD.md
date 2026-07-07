@@ -3,7 +3,27 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 219 (Feb 2026)
+## Recently Resolved — Iteration 220 (Feb 2026)
+**Auto-wire missing CoA + 7-day self-service edit/delete window for financial entries.**
+
+### Auto-wire Chart-of-Accounts (companion to iter219 fixer)
+- **New endpoint** `POST /api/accounting/seed-bulk` (admin-only, idempotent). Body `{location_ids:[...], currency?:'UGX'}`. Seeds the 21-account `DEFAULT_COA` template for each location that doesn't already have those codes.
+- **Frontend flow** — When HR > "Fix Ledger Postings" reports `locations_missing_accounts`, a follow-up confirm() offers to auto-wire the default CoA for those locations, then automatically re-runs the fixer. Live smoke test on preview: after seeding 21 accounts × 2 locations, the previously-blocked payroll JEs posted successfully and the fixer reports 0 pending items.
+
+### Self-service edit / delete window (7 days)
+- **New helper** `_within_self_edit_window(doc, user)` in `financial.py` — admins always allowed; non-admins only if `doc.created_by == user.id` AND `age(created_at) < 7 days`. Rejects future-dated / malformed / missing timestamps.
+- **Endpoint changes**:
+  - `DELETE /api/financial/donations/{id}` — `require_admin` → `require_finance_view` + window check
+  - `DELETE /api/financial/expenses/{id}` — same
+  - `PUT /api/financial/donations/{id}` — same
+  - **NEW** `PUT /api/financial/expenses/{id}` — with same window check. Whitelist: title, amount, currency, category, date, notes, location_id, sublocation_id, department, budget_category, paid_from_account_id, vendor_name, receipt_url. Auto-reverses+reposts the JE when amount/category/date/paid-from changes and status='approved'. Cache invalidated.
+- **Audit trail** — every mutation writes an `audit_log` row with `by_creator: true/false` metadata so admins can see who touched what.
+- **Frontend** — FinancialPage rows now compute `canEditEntry(doc)` and gate the Edit/Del buttons accordingly (admin OR creator-within-7-days). Edit dialog wired to the new `updateExpense` endpoint (was incorrectly using `/approve` before).
+
+### Test coverage
+- `/app/tests/test_iter220_self_service_and_seed_bulk.py` — 18/18 pytest pass, plus iter219 regression 11/11.
+
+
 **HR "Fix Ledger Postings" button — backfill missing/mis-routed payroll journal entries.**
 
 - **New endpoint** `POST /api/hr/repair-payslip-journals` (admin-only, idempotent, defaults to dry-run). Runs three passes:
