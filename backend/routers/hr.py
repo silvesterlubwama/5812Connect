@@ -784,6 +784,214 @@ async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
         logger.error(f"Failed to post payroll JE for {expense_id}: {ex}")
 
 
+# ========== PAYROLL LEDGER REPAIR (iter219) ==========
+# One-click backfill for HR processes that never made it to the ledger.
+# Two categories of missing/broken postings this fixes:
+#   (A) Payroll aggregate expense docs exist but have NO active journal
+#       entry (or their JE was reversed and never re-posted).  This is the
+#       pre-iter210b payslip → these payslips WERE aggregated at Finance
+#       level but never hit Accounting.
+#   (B) Paid payslips whose (location, paid_at date) has NO aggregate
+#       expense doc at all — the pre-fix code path skipped aggregation
+#       entirely.  These are reconstructed as fresh daily aggregates.
+#   (C) JEs that WERE posted but landed in a SALES journal are handed off
+#       to the existing `/financial/repair-wrong-journal` migrator.
+
+@router.post("/repair-payslip-journals")
+async def repair_payslip_journals(data: dict = None, current_user: dict = Depends(require_admin)):
+    """One-click repair for payroll postings missing from Accounting.
+
+    Body (all optional): {
+      apply: bool = false            → default is dry-run preview
+      include_wrong_journal: true    → also delegate to /financial/repair-wrong-journal
+    }
+    Idempotent; safe to run multiple times.
+    """
+    data = data or {}
+    apply = bool(data.get("apply"))
+    include_wrong_journal = bool(data.get("include_wrong_journal", True))
+    from routers.financial import _post_to_accounting
+
+    # ── Pass A: existing payroll expenses missing an active JE ───────────
+    pass_a_fixes: list = []
+    async for exp in db.expenses.find({"source": "hr_payroll_aggregate"}, {"_id": 0}):
+        active_je = await db.accounting_entries.find_one(
+            {"auto_generated_from": "payroll", "source_id": exp["id"], "is_reversed": {"$ne": True}, "status": "posted"},
+            {"_id": 0, "id": 1},
+        )
+        if active_je:
+            continue
+        pass_a_fixes.append({
+            "expense_id": exp["id"],
+            "location_id": exp.get("location_id"),
+            "amount": exp.get("amount"),
+            "period": exp.get("payroll_period"),
+            "staff_count": exp.get("payroll_count"),
+            "action": "post_missing_je",
+        })
+        if apply:
+            try:
+                await _post_to_accounting("payroll", exp, current_user)
+                # Verify the JE was actually created (may be silently skipped if
+                # the location has no Wages/Salaries or Cash account in its CoA).
+                je_check = await db.accounting_entries.find_one(
+                    {"auto_generated_from": "payroll", "source_id": exp["id"],
+                     "is_reversed": {"$ne": True}, "status": "posted"},
+                    {"_id": 0, "id": 1},
+                )
+                if not je_check:
+                    pass_a_fixes[-1]["skipped"] = "no_wages_or_cash_account_in_chart_of_accounts"
+            except Exception as ex:
+                logger.error(f"Repair pass-A post failed for {exp['id']}: {ex}")
+                pass_a_fixes[-1]["error"] = str(ex)[:200]
+
+    # ── Pass B: paid payslips with no aggregate at all ───────────────────
+    # Group paid payslips by (payroll_location_id | location_id, paid_at date).
+    # For each group, check if a payroll_{loc}_{date} expense exists; if not,
+    # reconstruct it and post the JE.
+    pass_b_fixes: list = []
+    paid_payslips = await db.hr_payslips.find(
+        {"status": "paid"},
+        {"_id": 0, "id": 1, "staff_id": 1, "period": 1, "net_salary": 1, "currency": 1,
+         "paid_at": 1, "paid_from_account_id": 1, "payroll_location_id": 1, "location_id": 1},
+    ).to_list(50000)
+    # Group into (loc, date)
+    groups: dict = {}
+    for p in paid_payslips:
+        loc_id = p.get("payroll_location_id") or p.get("location_id")
+        if not loc_id:
+            continue
+        paid_at = (p.get("paid_at") or "")[:10]
+        if not paid_at:
+            continue
+        key = (loc_id, paid_at)
+        g = groups.setdefault(key, {
+            "loc_id": loc_id, "paid_at": paid_at, "count": 0, "total": 0.0,
+            "currency": p.get("currency") or "UGX", "period": p.get("period", ""),
+            "paid_from": p.get("paid_from_account_id"), "payslip_ids": [],
+        })
+        g["count"] += 1
+        g["total"] += float(p.get("net_salary") or 0)
+        g["payslip_ids"].append(p["id"])
+        # Prefer any explicit paid_from_account_id from the group
+        if not g["paid_from"] and p.get("paid_from_account_id"):
+            g["paid_from"] = p["paid_from_account_id"]
+
+    for (loc_id, paid_at), g in groups.items():
+        expense_id = f"payroll_{loc_id}_{paid_at}"
+        existing_exp = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
+        if existing_exp:
+            continue  # Pass A already covers it if the JE is missing
+        pass_b_fixes.append({
+            "expense_id": expense_id,
+            "location_id": loc_id,
+            "paid_at": paid_at,
+            "period": g["period"],
+            "staff_count": g["count"],
+            "amount": round(g["total"], 2),
+            "payslip_ids": g["payslip_ids"],
+            "action": "reconstruct_expense_and_je",
+        })
+        if apply:
+            # Determine paid_from — fall back to the store's default if not set
+            paid_from = g["paid_from"]
+            if not paid_from:
+                store_setting = await db.store_settings.find_one(
+                    {"location_id": loc_id}, {"_id": 0, "default_cash_account_id": 1}
+                ) or {}
+                paid_from = store_setting.get("default_cash_account_id") or ""
+            expense_doc = {
+                "id": expense_id,
+                "title": "Payroll (Wages & Salaries)",
+                "amount": round(g["total"], 2),
+                "currency": g["currency"],
+                "category": "Wages & Salaries",
+                "department": "HR",
+                "budget_category": "Wages & Salaries",
+                "date": paid_at,
+                "notes": f"Payroll for {g['count']} staff, period {g['period']} (retroactive repair)",
+                "location_id": loc_id,
+                "paid_from_account_id": paid_from,
+                "status": "approved",
+                "source": "hr_payroll_aggregate",
+                "payroll_count": g["count"],
+                "payroll_period": g["period"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": current_user["id"],
+                "retroactive_repair": True,
+                "repaired_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                await db.expenses.insert_one(expense_doc)
+                await _post_to_accounting("payroll", expense_doc, current_user)
+                je_check = await db.accounting_entries.find_one(
+                    {"auto_generated_from": "payroll", "source_id": expense_id,
+                     "is_reversed": {"$ne": True}, "status": "posted"},
+                    {"_id": 0, "id": 1},
+                )
+                if not je_check:
+                    pass_b_fixes[-1]["skipped"] = "no_wages_or_cash_account_in_chart_of_accounts"
+            except Exception as ex:
+                logger.error(f"Repair pass-B failed for {expense_id}: {ex}")
+                pass_b_fixes[-1]["error"] = str(ex)[:200]
+
+    # ── Pass C: delegate to existing wrong-journal repair for payroll ────
+    pass_c_result = None
+    if include_wrong_journal:
+        if apply:
+            from routers.financial import repair_wrong_journal
+            pass_c_result = await repair_wrong_journal(current_user)
+        else:
+            # Dry-run — just count the eligible entries
+            sales_journal_ids = [j["id"] async for j in db.accounting_journals.find(
+                {"kind": "sales"}, {"_id": 0, "id": 1}
+            )]
+            eligible = 0
+            if sales_journal_ids:
+                eligible = await db.accounting_entries.count_documents({
+                    "journal_id": {"$in": sales_journal_ids},
+                    "auto_generated_from": "payroll",
+                })
+            pass_c_result = {"scanned": eligible, "message": "would re-tag payroll JEs from sales to GL"}
+
+    if apply:
+        await _audit(current_user["id"], "repair", "payslip_journals", None, {
+            "pass_a": len(pass_a_fixes),
+            "pass_b": len(pass_b_fixes),
+            "pass_c": pass_c_result,
+        })
+        logger.warning(
+            f"HR PAYSLIP JOURNAL REPAIR by {current_user.get('email','?')} — "
+            f"pass_a={len(pass_a_fixes)} pass_b={len(pass_b_fixes)} pass_c={pass_c_result}"
+        )
+
+    return {
+        "dry_run": not apply,
+        "pass_a_missing_je": {
+            "count": len(pass_a_fixes),
+            "sample": pass_a_fixes[:10],
+            "total_amount": round(sum(f.get("amount") or 0 for f in pass_a_fixes), 2),
+            "skipped_no_accounts": sum(1 for f in pass_a_fixes if f.get("skipped") == "no_wages_or_cash_account_in_chart_of_accounts"),
+        },
+        "pass_b_reconstruct": {
+            "count": len(pass_b_fixes),
+            "sample": pass_b_fixes[:10],
+            "total_amount": round(sum(f.get("amount") or 0 for f in pass_b_fixes), 2),
+            "skipped_no_accounts": sum(1 for f in pass_b_fixes if f.get("skipped") == "no_wages_or_cash_account_in_chart_of_accounts"),
+        },
+        "pass_c_wrong_journal": pass_c_result,
+        "locations_missing_accounts": sorted(list({
+            f.get("location_id") for f in (pass_a_fixes + pass_b_fixes)
+            if f.get("skipped") == "no_wages_or_cash_account_in_chart_of_accounts" and f.get("location_id")
+        })),
+        "message": (
+            "Dry-run — POST again with {\"apply\": true} to persist changes."
+            if not apply else
+            "Applied.  Trial Balance & Chart-Account balances should now reflect all paid payslips."
+        ),
+    }
+
+
 # ========== CONTRACT TEMPLATES ==========
 
 @router.get("/contracts/templates")

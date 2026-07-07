@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -341,6 +341,62 @@ export default function HRPage() {
               }}><Download size={14} /> ZIP</Button>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              {['admin', 'system_admin'].includes(user?.role) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 h-8 text-amber-700 border-amber-300 hover:bg-amber-50"
+                  data-testid="repair-payslip-je-btn"
+                  onClick={async () => {
+                    try {
+                      // First: dry-run preview
+                      const preview = await api.post('/hr/repair-payslip-journals', {});
+                      const a = preview.data.pass_a_missing_je || {};
+                      const b = preview.data.pass_b_reconstruct || {};
+                      const c = preview.data.pass_c_wrong_journal || {};
+                      const totalFixes = (a.count || 0) + (b.count || 0) + (c.scanned || 0);
+                      if (totalFixes === 0) {
+                        toast.success('All payslip postings are already correct. No repair needed.');
+                        return;
+                      }
+                      const msg = [
+                        `Repair preview:`,
+                        ``,
+                        `• ${a.count} payroll expense(s) missing journal entries (total UGX ${(a.total_amount || 0).toLocaleString()})`,
+                        `• ${b.count} paid payslip group(s) never aggregated (total UGX ${(b.total_amount || 0).toLocaleString()})`,
+                        `• ${c.scanned || 0} journal entry(ies) mis-routed to a Sales journal`,
+                        ``,
+                        `Apply these fixes? This is idempotent (safe to re-run) but not reversible.`,
+                        ``,
+                        `Note: postings for locations without a "Wages & Salaries" expense account AND a Cash account in their Chart of Accounts will be silently skipped and reported back so you can set up the accounts.`,
+                      ].join('\n');
+                      if (!window.confirm(msg)) return;
+                      const res = await api.post('/hr/repair-payslip-journals', { apply: true });
+                      const ra = res.data.pass_a_missing_je || {};
+                      const rb = res.data.pass_b_reconstruct || {};
+                      const rc = res.data.pass_c_wrong_journal || {};
+                      const skippedLocs = res.data.locations_missing_accounts || [];
+                      const skippedTotal = (ra.skipped_no_accounts || 0) + (rb.skipped_no_accounts || 0);
+                      const fixed = (ra.count - (ra.skipped_no_accounts || 0)) + (rb.count - (rb.skipped_no_accounts || 0));
+                      toast.success(
+                        `Repaired ${fixed} JE${fixed === 1 ? '' : 's'}${(rc.entries_fixed || 0) > 0 ? ` · re-tagged ${rc.entries_fixed} from Sales` : ''}${skippedTotal ? ` · ${skippedTotal} skipped (missing Chart of Accounts)` : ''}`,
+                        { duration: 6000 }
+                      );
+                      if (skippedTotal > 0) {
+                        toast.warning(
+                          `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — location${skippedLocs.length === 1 ? '' : 's'} ${skippedLocs.join(', ')} need${skippedLocs.length === 1 ? 's' : ''} a Wages/Salaries expense account AND a Cash account in the Chart of Accounts. Add them then re-run this fixer.`,
+                          { duration: 12000 }
+                        );
+                      }
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Repair failed');
+                    }
+                  }}
+                  title="Backfill accounting entries for paid payslips that never made it to the ledger — safe to re-run"
+                >
+                  <Wrench size={14} /> Fix Ledger Postings
+                </Button>
+              )}
               <Button size="sm" variant="outline" className="gap-1.5" data-testid="generate-payday-btn" onClick={async () => {
                 try {
                   const res = await api.post('/hr/payslips/generate-payday');
