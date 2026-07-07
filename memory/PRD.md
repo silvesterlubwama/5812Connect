@@ -3,7 +3,33 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 216-217 (Feb 2026)
+## Recently Resolved — Iteration 218 (Feb 2026)
+**Multi-manifest container shipments + Commercial Invoice PDF + PVoC classification.**
+
+### User-requested feature set
+- **Two-or-more manifest groups per container** — one physical container (e.g. `Dedupe Ship 1782772603`) can now carry multiple consignments (e.g. "58:12 Global Shipment" + "Lubwama Household Relocation") each printing its OWN customs manifest + commercial invoice PDF. Items without a group print on an "unassigned" manifest.
+- **Commercial Invoice PDF** — new `GET /api/shipments/{sid}/commercial-invoice.pdf[?group=<gid>]` renders customs-grade invoice (Item · HS · Condition/Origin · Qty · Unit USD · Line Total + grand total + declaration block).
+- **Sort order (PVoC ▸ value ▸ weight)** — both manifest and invoice sort PVoC-flagged items to top for customs attention, then by highest declared line value, then heaviest.
+- **PVoC (Pre-Export Verification of Conformity)** — new item fields `requires_pvoc: bool` + `pvoc_reason: str`. Manual toggle chip on each item row (`data-testid=ship-item-pvoc-<iid>`) OR automatic classification via extended AI call — Gemini now returns `{hs_code, reason, requires_pvoc, pvoc_reason}` with EAC-aware rules (NEW electricals/cosmetics/food/chemicals → true; USED donations, printed books, medical donations → false).
+
+### Backend endpoints added
+- `POST/PUT/DELETE /api/shipments/{sid}/manifest-groups[/<gid>]` (whitelist: name, consignee_name, consignee_address, notes). DELETE unassigns items back to null.
+- `GET /api/shipments/{sid}/manifest.pdf?group=<gid|"unassigned">` — same endpoint, now filterable + sorted.
+- `GET /api/shipments/{sid}/commercial-invoice.pdf?group=<gid|"unassigned">` — new.
+- `POST /api/shipments/{sid}/classify-hs-bulk` — response summary now includes `pvoc_flagged` counter.
+
+### Frontend additions (`ShipmentsAdminPage.jsx`)
+- New "Manifest Groups" section above items (data-testid `ship-manifest-groups`) with rename/delete chips + "New group" dialog.
+- Item row: clickable PVoC badge (rose when flagged) + manifest-group dropdown chip.
+- Print Manifest + Invoice buttons converted to DropdownMenus with All / per-group / Unassigned options.
+- Edit item dialog adds PVoC checkbox + reason input + manifest-group Select.
+- Sort UI matches PDF sort (PVoC ▸ value ▸ weight).
+
+### Test coverage
+- `/app/backend/tests/test_iter218_manifest_groups_invoice_pvoc.py` — 19/19 pytest pass (~13s incl. one live Gemini call).
+- Frontend E2E: all 8 review-request testids verified live on `sh_1091d195ee`.
+
+
 **P0 routing/filtering bugs + Shipping AI HS Code Classifier & Manifest PDF.**
 
 ### Iter216 — P0 routing/filtering (backend 13/13 green)
