@@ -3,7 +3,22 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 218 (Feb 2026)
+## Recently Resolved — Iteration 219 (Feb 2026)
+**HR "Fix Ledger Postings" button — backfill missing/mis-routed payroll journal entries.**
+
+- **New endpoint** `POST /api/hr/repair-payslip-journals` (admin-only, idempotent, defaults to dry-run). Runs three passes:
+  - **A) Missing JE** — For every `expenses` doc with `source='hr_payroll_aggregate'` that has no active `accounting_entries` row (`auto_generated_from='payroll'`, not reversed, status='posted'), post the missing JE via `_post_to_accounting`. If the location's CoA lacks a Wages/Salaries expense OR a Cash asset, the item is silently skipped by `_post_to_accounting` — we detect that after-the-fact and report `skipped_no_accounts` + `locations_missing_accounts` back to the user.
+  - **B) Reconstruct** — For paid payslips (`status='paid'`, has `paid_at`) that have no matching daily aggregate expense (`payroll_<loc>_<date>`), rebuild the expense doc (with `retroactive_repair=true` marker) AND post its JE.
+  - **C) Wrong journal** — Delegates to existing `financial.repair_wrong_journal` to re-tag any payroll JEs mis-routed to a Sales journal.
+- **Frontend** — HRPage.jsx Payslips tab shows an amber "Fix Ledger Postings" button (admin-only, `data-testid=repair-payslip-je-btn`). Clicking:
+  1. Fires a dry-run preview
+  2. Shows a confirm() dialog with per-pass counts + total UGX + explanation of CoA-missing skips
+  3. On confirm, sends `{apply:true}` and shows a toast summarising fixed count. If any locations were skipped due to missing CoA, a second `toast.warning` lists them so the admin can add the accounts and re-run.
+- **Idempotent** — safe to re-run repeatedly; second run reports 0 fixes if all was clean.
+- **Audit** — every `apply=true` invocation writes an `audit_log` row (action=repair, entity=payslip_journals).
+- **Test coverage** — `/app/backend/tests/test_iter219_hr_repair_payslip_journals.py` (11/11 pytest pass, ~9s). Auth guard verified for admin, staff, HR, director, manager, unauthenticated.
+
+
 **Multi-manifest container shipments + Commercial Invoice PDF + PVoC classification.**
 
 ### User-requested feature set
