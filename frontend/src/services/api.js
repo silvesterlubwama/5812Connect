@@ -241,6 +241,7 @@ export const financialApi = {
   deleteDonation: (id) => api.delete(`/financial/donations/${id}`),
   deleteExpense: (id) => api.delete(`/financial/expenses/${id}`),
   updateDonation: (id, data) => api.put(`/financial/donations/${id}`, data),
+  updateExpense: (id, data) => api.put(`/financial/expenses/${id}`, data),
   // Bulk delete (admin) — atomic on the server
   bulkDeleteDonations: (ids) => api.post('/financial/donations/bulk-delete', { ids }),
   bulkDeleteExpenses: (ids) => api.post('/financial/expenses/bulk-delete', { ids }),

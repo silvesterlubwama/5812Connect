@@ -128,6 +128,18 @@ export default function FinancialPage() {
 
   const isFinanceAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(user?.role);
 
+  // Self-service edit/delete window: creator can modify their own entry within
+  // 7 days of creation.  Admins bypass the window.  Keep this logic aligned
+  // with backend `_within_self_edit_window` in routers/financial.py.
+  const canEditEntry = (entry) => {
+    if (isFinanceAdmin) return true;
+    if (!entry || entry.created_by !== user?.id) return false;
+    const createdAt = entry.created_at;
+    if (!createdAt) return false;
+    const ageMs = Date.now() - new Date(createdAt).getTime();
+    return ageMs >= 0 && ageMs < 7 * 24 * 60 * 60 * 1000;
+  };
+
   // Org-default currency: pulled from /api/admin/system-settings/public on mount,
   // falls back to UGX if the endpoint hasn't been configured yet. Lets the
   // financial UI reflect the org's actual home currency without code changes.
@@ -559,8 +571,8 @@ export default function FinancialPage() {
                           <td className="py-3 text-muted-foreground">{d.date}</td>
                           <td className="py-3">
                             <div className="flex gap-1">
-                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name, amount: d.amount, currency: d.currency, type: d.type, date: d.date, notes: d.notes || '' }); }}>Edit</Button>
-                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                              {canEditEntry(d) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`donation-edit-${d.id}`} onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name, amount: d.amount, currency: d.currency, type: d.type, date: d.date, notes: d.notes || '' }); }}>Edit</Button>}
+                              {canEditEntry(d) && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" data-testid={`donation-delete-${d.id}`} onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
                         </tr>
@@ -646,8 +658,8 @@ export default function FinancialPage() {
                                   <Button size="sm" variant="ghost" className="h-6 text-xs text-red-700 hover:bg-red-50" data-testid={`inline-reject-${e.id}`} onClick={() => { setRejectingExpense(e); setRejectReason(''); }}>✕ Reject</Button>
                                 </>
                               )}
-                              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>
-                              {isFinanceAdmin && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
+                              {canEditEntry(e) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`expense-edit-${e.id}`} onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>}
+                              {canEditEntry(e) && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" data-testid={`expense-delete-${e.id}`} onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
                         </tr>
@@ -672,7 +684,7 @@ export default function FinancialPage() {
           <Card className="rounded-xl shadow-soft"><CardContent className="p-0">
             <table className="w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left text-xs text-muted-foreground">From</th><th className="p-3 text-left text-xs text-muted-foreground">To</th><th className="p-3 text-right text-xs text-muted-foreground">Amount</th><th className="p-3 text-left text-xs text-muted-foreground">Date</th></tr></thead>
             <tbody>{(transfers || []).map(t => <tr key={t.id} className="border-b last:border-0"><td className="p-3">{t.from_name}</td><td className="p-3">{t.to_name}</td><td className="p-3 text-right font-medium">{(t.amount || 0).toLocaleString()}</td><td className="p-3 text-muted-foreground text-xs">{t.created_at?.slice(0, 10)}</td></tr>)}
-            {(!transfers || transfers.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs" data-testid="fin-transfers-empty">No transfers yet — click "Create Transfer" above to move funds between accounts.</td></tr>}
+            {(!transfers || transfers.length === 0) && <tr><td colSpan={4} className="p-6 text-center text-muted-foreground text-xs" data-testid="fin-transfers-empty">No transfers yet — click &ldquo;Create Transfer&rdquo; above to move funds between accounts.</td></tr>}
             </tbody></table>
           </CardContent></Card>
         </TabsContent>
@@ -1304,10 +1316,13 @@ export default function FinancialPage() {
                     await financialApi.updateDonation(editEntry.id, editForm);
                     setDonations(prev => prev.map(d => d.id === editEntry.id ? { ...d, ...editForm } : d));
                   } else {
-                    await financialApi.approveExpense(editEntry.id, editForm);
+                    // Use the real update endpoint (creator within 7 days OR admin);
+                    // /approve is a status-change route, not for edits.
+                    await financialApi.updateExpense(editEntry.id, editForm);
                     setExpenses(prev => prev.map(e => e.id === editEntry.id ? { ...e, ...editForm } : e));
                   }
                   toast.success('Updated'); setEditEntry(null);
+                  fetchAll();
                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
               }}>Save</Button>
             </div>

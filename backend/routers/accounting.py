@@ -134,6 +134,52 @@ async def seed_default_coa(data: dict = None, current_user: dict = Depends(requi
     return {"seeded": len(created), "skipped": len(DEFAULT_COA) - len(created), "accounts": created}
 
 
+@router.post("/seed-bulk")
+async def seed_default_coa_bulk(data: dict, current_user: dict = Depends(require_admin)):
+    """Seed the default CoA for a LIST of locations in one call (idempotent).
+    Body: { location_ids: [...], currency?: 'UGX' }
+    Companion to `/hr/repair-payslip-journals` — feed it the `locations_missing_accounts`
+    list and it wires up the minimum accounts needed for payroll postings to succeed."""
+    location_ids = data.get("location_ids") or []
+    if not location_ids or not isinstance(location_ids, list):
+        raise HTTPException(status_code=400, detail="location_ids (list) is required")
+    currency = (data.get("currency") or "UGX").upper()[:5]
+    results = []
+    for loc_id in location_ids:
+        if not loc_id:
+            continue
+        created_count = 0
+        try:
+            for acc in DEFAULT_COA:
+                existing = await db.accounting_accounts.find_one(
+                    {"location_id": loc_id, "code": acc["code"]}, {"_id": 0, "id": 1}
+                )
+                if existing:
+                    continue
+                doc = {
+                    "id": f"acc_{uuid.uuid4().hex[:10]}",
+                    "code": acc["code"], "name": acc["name"], "type": acc["type"],
+                    "currency": currency, "location_id": loc_id,
+                    "active": True, "is_default_seeded": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_by": current_user["id"],
+                }
+                await db.accounting_accounts.insert_one(doc)
+                created_count += 1
+            results.append({"location_id": loc_id, "seeded": created_count, "ok": True})
+        except Exception as ex:
+            results.append({"location_id": loc_id, "ok": False, "error": str(ex)[:200]})
+    await _audit(current_user["id"], "bulk_seed_coa", "accounting_accounts", None, {
+        "locations": len(results),
+        "total_seeded": sum(r.get("seeded", 0) for r in results),
+    })
+    return {
+        "locations_processed": len(results),
+        "total_accounts_seeded": sum(r.get("seeded", 0) for r in results),
+        "results": results,
+    }
+
+
 @router.get("/accounts")
 async def list_accounts(
     location_id: Optional[str] = None,

@@ -383,10 +383,26 @@ export default function HRPage() {
                         { duration: 6000 }
                       );
                       if (skippedTotal > 0) {
-                        toast.warning(
-                          `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — location${skippedLocs.length === 1 ? '' : 's'} ${skippedLocs.join(', ')} need${skippedLocs.length === 1 ? 's' : ''} a Wages/Salaries expense account AND a Cash account in the Chart of Accounts. Add them then re-run this fixer.`,
-                          { duration: 12000 }
-                        );
+                        const seedMsg = `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — ${skippedLocs.length} location${skippedLocs.length === 1 ? '' : 's'} (${skippedLocs.join(', ')}) need a full Chart of Accounts.\n\nAuto-wire the default Chart of Accounts for these locations now?\n(21 accounts × ${skippedLocs.length} location${skippedLocs.length === 1 ? '' : 's'}. Idempotent — skips codes that already exist.)`;
+                        if (window.confirm(seedMsg)) {
+                          try {
+                            const seedRes = await api.post('/accounting/seed-bulk', { location_ids: skippedLocs });
+                            const seeded = seedRes.data.total_accounts_seeded || 0;
+                            toast.success(`Auto-wired ${seeded} accounts. Re-running fixer…`);
+                            // Re-run the fixer now that accounts exist
+                            const rerun = await api.post('/hr/repair-payslip-journals', { apply: true });
+                            const na = rerun.data.pass_a_missing_je || {};
+                            const rerunFixed = (na.count || 0) - (na.skipped_no_accounts || 0);
+                            toast.success(`Round 2: repaired ${rerunFixed} more JE${rerunFixed === 1 ? '' : 's'}. Trial balance should now be in sync.`, { duration: 6000 });
+                          } catch (seedErr) {
+                            toast.error(seedErr.response?.data?.detail || 'Auto-wire failed');
+                          }
+                        } else {
+                          toast.warning(
+                            `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — manually add Wages/Salaries + Cash accounts to: ${skippedLocs.join(', ')}, then re-run this fixer.`,
+                            { duration: 12000 }
+                          );
+                        }
                       }
                     } catch (e) {
                       toast.error(e.response?.data?.detail || 'Repair failed');

@@ -34,6 +34,44 @@ async def _financial_campus_filter(user: dict) -> dict:
 router = APIRouter(prefix="/api", tags=["financial"])
 
 
+# ========== SELF-SERVICE EDIT/DELETE WINDOW (iter220) ==========
+# By popular request: any user who created a financial record (donation,
+# expense) can edit or delete it within 7 days of entry without needing
+# admin.  After the window closes, only admins can modify.
+SELF_EDIT_WINDOW_DAYS = 7
+
+
+def _is_finance_admin(user: dict) -> bool:
+    role = (user.get("role") or "")
+    return role in {"admin", "system_admin", "Executive Director", "Adviser", "Director"}
+
+
+def _within_self_edit_window(doc: dict, user: dict) -> tuple[bool, str]:
+    """Return (allowed, reason_if_denied).  Admins bypass everything.
+    Otherwise: creator + within 7-day window."""
+    if _is_finance_admin(user):
+        return True, ""
+    if not doc:
+        return False, "Record not found"
+    if doc.get("created_by") != user.get("id"):
+        return False, "Only the record's creator or an administrator can modify it"
+    created_at = doc.get("created_at") or ""
+    if not created_at:
+        return False, "Record has no creation timestamp — ask an admin to update it"
+    try:
+        # Handle both 'Z' suffix and offset formats
+        s = created_at.rstrip("Z")
+        created_dt = datetime.fromisoformat(s)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False, "Invalid creation timestamp"
+    age_days = (datetime.now(timezone.utc) - created_dt).total_seconds() / 86400
+    if age_days > SELF_EDIT_WINDOW_DAYS:
+        return False, f"Edit window closed ({SELF_EDIT_WINDOW_DAYS} days) — ask an administrator"
+    return True, ""
+
+
 class DonationCreate(BaseModel):
     donor_name: str; amount: float; currency: str = "UGX"; type: str = "tithe"
     date: Optional[str] = None; notes: str = ""; member_id: Optional[str] = None
@@ -413,28 +451,42 @@ async def create_expense(data: ExpenseCreate, current_user: dict = Depends(requi
 
 
 @router.delete("/financial/donations/{donation_id}")
-async def delete_donation(donation_id: str, current_user: dict = Depends(require_admin)):
-    """Admin delete a donation entry — also reverses any auto-posted JE so ledger stays consistent."""
-    doc = await db.donations.find_one({"id": donation_id}, {"_id": 0, "deposit_to_account_id": 1})
+async def delete_donation(donation_id: str, current_user: dict = Depends(require_finance_view)):
+    """Delete a donation entry.  Creator can delete within 7 days; admins any time.
+    Also reverses any auto-posted JE so the ledger stays consistent."""
+    doc = await db.donations.find_one({"id": donation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    ok, reason = _within_self_edit_window(doc, current_user)
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     await _reverse_auto_posted_je("donation", donation_id, current_user)
     await db.donations.delete_one({"id": donation_id})
-    if doc and doc.get("deposit_to_account_id"):
+    if doc.get("deposit_to_account_id"):
         from routers.chart_accounts import invalidate_balance_cache
         invalidate_balance_cache([doc["deposit_to_account_id"]])
-    await _audit(current_user["id"], "delete", "donation", donation_id)
+    await _audit(current_user["id"], "delete", "donation", donation_id,
+                 {"by_creator": not _is_finance_admin(current_user)})
     return {"message": "Donation deleted"}
 
 
 @router.delete("/financial/expenses/{expense_id}")
-async def delete_expense(expense_id: str, current_user: dict = Depends(require_admin)):
-    """Admin delete an expense entry — also reverses any auto-posted JE so ledger stays consistent."""
-    doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0, "paid_from_account_id": 1})
+async def delete_expense(expense_id: str, current_user: dict = Depends(require_finance_view)):
+    """Delete an expense entry.  Creator can delete within 7 days; admins any time.
+    Also reverses any auto-posted JE so the ledger stays consistent."""
+    doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    ok, reason = _within_self_edit_window(doc, current_user)
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     await _reverse_auto_posted_je("expense", expense_id, current_user)
     await db.expenses.delete_one({"id": expense_id})
-    if doc and doc.get("paid_from_account_id"):
+    if doc.get("paid_from_account_id"):
         from routers.chart_accounts import invalidate_balance_cache
         invalidate_balance_cache([doc["paid_from_account_id"]])
-    await _audit(current_user["id"], "delete", "expense", expense_id)
+    await _audit(current_user["id"], "delete", "expense", expense_id,
+                 {"by_creator": not _is_finance_admin(current_user)})
     return {"message": "Expense deleted"}
 
 
@@ -493,15 +545,72 @@ async def bulk_delete_budgets(data: dict, current_user: dict = Depends(require_m
 
 
 @router.put("/financial/donations/{donation_id}")
-async def update_donation(donation_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    """Admin edit a donation entry"""
+async def update_donation(donation_id: str, data: dict, current_user: dict = Depends(require_finance_view)):
+    """Edit a donation entry.  Creator can edit within 7 days; admins any time."""
+    doc = await db.donations.find_one({"id": donation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    ok, reason = _within_self_edit_window(doc, current_user)
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     allowed = {"donor_name", "amount", "currency", "type", "date", "notes", "location_id"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     update["updated_by"] = current_user["id"]
     await db.donations.update_one({"id": donation_id}, {"$set": update})
-    await _audit(current_user["id"], "update", "donation", donation_id)
+    # If amount/date changed and there's a live JE, reverse+repost so ledger stays honest
+    if any(k in update for k in ("amount", "date")):
+        try:
+            await _reverse_auto_posted_je("donation", donation_id, current_user)
+            fresh = await db.donations.find_one({"id": donation_id}, {"_id": 0})
+            await _post_to_accounting("donation", fresh, current_user)
+        except Exception as ex:
+            logger.warning(f"Donation edit re-post skipped: {ex}")
+    if doc.get("deposit_to_account_id"):
+        from routers.chart_accounts import invalidate_balance_cache
+        invalidate_balance_cache([doc["deposit_to_account_id"]])
+    await _audit(current_user["id"], "update", "donation", donation_id,
+                 {"by_creator": not _is_finance_admin(current_user)})
     return await db.donations.find_one({"id": donation_id}, {"_id": 0})
+
+
+@router.put("/financial/expenses/{expense_id}")
+async def update_expense(expense_id: str, data: dict, current_user: dict = Depends(require_finance_view)):
+    """Edit an expense entry.  Creator can edit within 7 days; admins any time.
+    Amount/category/paid-from changes trigger JE reversal + repost to keep the
+    ledger in sync."""
+    doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    ok, reason = _within_self_edit_window(doc, current_user)
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
+    allowed = {"title", "amount", "currency", "category", "date", "notes", "location_id",
+               "sublocation_id", "department", "budget_category", "paid_from_account_id",
+               "vendor_name", "receipt_url"}
+    update = {k: v for k, v in data.items() if k in allowed}
+    # Verify user can still use the paid_from_account if they changed it
+    if "paid_from_account_id" in update and update["paid_from_account_id"]:
+        from routers.chart_accounts import user_can_use_account
+        if not await user_can_use_account(current_user, update["paid_from_account_id"]):
+            raise HTTPException(status_code=403, detail="You are not assigned to that account")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    update["updated_by"] = current_user["id"]
+    await db.expenses.update_one({"id": expense_id}, {"$set": update})
+    # If amount/category/paid_from changed and there's a live JE, reverse+repost
+    if any(k in update for k in ("amount", "category", "paid_from_account_id", "date")):
+        try:
+            await _reverse_auto_posted_je("expense", expense_id, current_user)
+            fresh = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
+            if fresh.get("status") == "approved":
+                await _post_to_accounting("expense_approved", fresh, current_user)
+        except Exception as ex:
+            logger.warning(f"Expense edit re-post skipped: {ex}")
+    from routers.chart_accounts import invalidate_balance_cache
+    invalidate_balance_cache([doc.get("paid_from_account_id"), update.get("paid_from_account_id")])
+    await _audit(current_user["id"], "update", "expense", expense_id,
+                 {"by_creator": not _is_finance_admin(current_user), "fields": list(update.keys())})
+    return await db.expenses.find_one({"id": expense_id}, {"_id": 0})
 
 
 
