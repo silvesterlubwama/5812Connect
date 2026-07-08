@@ -3,7 +3,32 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 220 (Feb 2026)
+## Recently Resolved — Iteration 221 (Feb 2026)
+**Production feedback fixes: Fix-Ledger diagnostic modal + full Finance edit dialog.**
+
+### HR ledger repair — replaced silent toasts with a diagnostic modal
+Production user reported "nothing actually happened" when clicking Fix Ledger Postings — toasts and window.confirm() were too subtle. Replaced with a proper `<Dialog>` (data-testid=repair-modal) that ALWAYS shows regardless of outcome.
+
+- **New "Current ledger state" panel** — endpoint now returns a `diagnostics` block: `paid_payslips`, `paid_payslips_total_ugx`, `aggregate_expenses`, `aggregate_expenses_total_ugx`, `active_payroll_jes`, `active_payroll_jes_total_ugx`, `in_sync` (bool). This gives the operator immediate visibility into WHY nothing may need repairing (or exactly what's out of sync).
+- **Three-state UI** —
+  1. In-sync + no fixes → green "No repair needed" box explains what would cause new payslips to still fail (missing CoA)
+  2. Fixes pending → amber repair-plan card with an "Apply N fixes" button
+  3. Locations blocked → rose "missing Chart of Accounts" panel with one-click "Auto-wire CoA + re-run" (calls `/accounting/seed-bulk` then re-invokes repair)
+- **Button role guard broadened** — was `['admin','system_admin']`; now includes `'Executive Director'` (the production owner's role).
+
+### Finance edit dialog — added missing fields
+The in-list Edit dialog only exposed 5 fields; the Add dialog has 10+.  Completely rewrote it so both donations and expenses can be fully edited from the row, no admin-database access needed.
+
+- **Donation edit fields** (data-testids): fin-edit-donor, -amount, -type, -date, -currency, -sublocation, -deposit-to, -notes.
+- **Expense edit fields**: fin-edit-title, -amount, -category, -date, -currency, -sublocation, -paid-from, plus an "Advanced" section (fin-edit-vendor, -receipt-num, -account-tag, -dept, -budget), and -notes.
+- **Backend whitelists expanded**:
+  - donations: adds `sublocation_id`, `deposit_to_account_id`
+  - expenses: adds `vendor`, `vendor_name`, `receipt_number`, `account`
+
+### Test coverage
+`/app/tests/test_iter221_diagnostics_and_edit_whitelist.py` — 5 new tests all pass; iter220 regression 18/18 still passes. Total 23/23.
+
+
 **Auto-wire missing CoA + 7-day self-service edit/delete window for financial entries.**
 
 ### Auto-wire Chart-of-Accounts (companion to iter219 fixer)
