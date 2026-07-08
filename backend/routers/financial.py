@@ -555,7 +555,8 @@ async def update_donation(donation_id: str, data: dict, current_user: dict = Dep
     ok, reason = _within_self_edit_window(doc, current_user)
     if not ok:
         raise HTTPException(status_code=403, detail=reason)
-    allowed = {"donor_name", "amount", "currency", "type", "date", "notes", "location_id"}
+    allowed = {"donor_name", "amount", "currency", "type", "date", "notes",
+               "location_id", "sublocation_id", "deposit_to_account_id"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     update["updated_by"] = current_user["id"]
@@ -589,7 +590,7 @@ async def update_expense(expense_id: str, data: dict, current_user: dict = Depen
         raise HTTPException(status_code=403, detail=reason)
     allowed = {"title", "amount", "currency", "category", "date", "notes", "location_id",
                "sublocation_id", "department", "budget_category", "paid_from_account_id",
-               "vendor_name", "receipt_url"}
+               "vendor", "vendor_name", "receipt_url", "receipt_number", "account"}
     update = {k: v for k, v in data.items() if k in allowed}
     # Verify user can still use the paid_from_account if they changed it
     if "paid_from_account_id" in update and update["paid_from_account_id"]:

@@ -1,0 +1,28 @@
+{
+  "summary": "Iter221 backend+frontend testing. New: HR /repair-payslip-journals diagnostics block (paid_payslips, aggregate_expenses, active_payroll_jes with totals + in_sync bool) validated against direct DB probes — all match exactly (58 paid payslips / UGX 13,442,218; 14 aggregate expenses / UGX 13,781,103; 14 active JEs / UGX 13,781,103; in_sync=true). Donation update whitelist now correctly accepts sublocation_id + deposit_to_account_id and persists them. Expense update whitelist now correctly accepts vendor, receipt_number, account (plus previously-added sublocation_id/budget_category). Non-whitelisted fields ignored in both. Live frontend UI verified: Fix Ledger Postings modal opens with data-testid=repair-modal, shows repair-diagnostics + repair-nothing-to-fix (in_sync state), close button works. Donation Edit dialog exposes all 10 testids; Expense Edit dialog exposes all 15 testids including advanced section (vendor, receipt-num, account-tag, dept, budget). Regression: all 18 iter220 tests still pass. Total 23/23 pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [
+    {"screen": "Repair modal + Finance edit dialogs", "issues": ["Console warning: 'Missing Description or aria-describedby={undefined} for DialogContent' — Radix a11y hint, not a functional bug. Consider adding <DialogDescription> for screen-reader friendliness."]}
+  ]},
+  "test_report_links": [
+    "/app/tests/test_iter221_diagnostics_and_edit_whitelist.py",
+    "/app/tests/test_iter220_self_service_and_seed_bulk.py",
+    "/app/test_reports/pytest/iter221_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "hr.py repair_payslip_journals is ~225 lines and mixes diagnostics + 3 mutation passes; consider extracting _compute_diagnostics(db) helper for reuse in a future read-only GET endpoint so the frontend can poll state without hitting the mutation path.",
+    "financial.py update_expense whitelist accepts both 'vendor' and 'vendor_name' — dual fields risk drift. Suggest picking one canonical name and aliasing.",
+    "FinancialPage.jsx Edit dialog: fin-edit-account-tag/dept/budget live inside a <details> block (Advanced). They're in DOM regardless of open state (good for testing) but consider persisting the open-state per session so users don't have to re-expand each edit."
+  ],
+  "updated_files": [
+    "/app/tests/test_iter221_diagnostics_and_edit_whitelist.py (new)"
+  ],
+  "success_rate": {"backend": "100% (5/5 new iter221 + 18/18 iter220 regression = 23/23)", "frontend": "100% — all repair modal + edit dialog testids visible/present, Fix Ledger button visible for admin"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "One TEST_iter221 donor donation + one TEST_iter221 expense created and deleted per test run. No lingering data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Test at /app/tests/test_iter221_diagnostics_and_edit_whitelist.py. Auto-wire flow (POST /accounting/seed-bulk followed by re-invoke of repair with apply=true) was NOT exercised end-to-end here because the live DB is already in_sync (locations_missing_accounts=[] → repair-auto-wire-btn not rendered). Auto-wire's constituent parts are individually tested in iter220 (seed-bulk) and iter221 (repair diagnostics). Executive Director role button visibility not covered by an integration test — only admin role tested live; RBAC change is limited to the frontend button predicate in HRPage.jsx.",
+  "rca of the issue": "N/A — no bugs found in this iteration. Only pre-existing minor DialogContent a11y console warning."
+}

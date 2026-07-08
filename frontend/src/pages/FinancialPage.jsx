@@ -571,7 +571,7 @@ export default function FinancialPage() {
                           <td className="py-3 text-muted-foreground">{d.date}</td>
                           <td className="py-3">
                             <div className="flex gap-1">
-                              {canEditEntry(d) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`donation-edit-${d.id}`} onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name, amount: d.amount, currency: d.currency, type: d.type, date: d.date, notes: d.notes || '' }); }}>Edit</Button>}
+                              {canEditEntry(d) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`donation-edit-${d.id}`} onClick={() => { setEditEntry({ ...d, type: 'donation' }); setEditForm({ donor_name: d.donor_name || '', amount: d.amount, currency: d.currency || 'UGX', type: d.type || 'donation', date: d.date || '', notes: d.notes || '', sublocation_id: d.sublocation_id || '', deposit_to_account_id: d.deposit_to_account_id || '' }); }}>Edit</Button>}
                               {canEditEntry(d) && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" data-testid={`donation-delete-${d.id}`} onClick={async () => { if (!window.confirm('Delete this donation?')) return; try { await financialApi.deleteDonation(d.id); setDonations(prev => prev.filter(x => x.id !== d.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
@@ -658,7 +658,7 @@ export default function FinancialPage() {
                                   <Button size="sm" variant="ghost" className="h-6 text-xs text-red-700 hover:bg-red-50" data-testid={`inline-reject-${e.id}`} onClick={() => { setRejectingExpense(e); setRejectReason(''); }}>✕ Reject</Button>
                                 </>
                               )}
-                              {canEditEntry(e) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`expense-edit-${e.id}`} onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title, amount: e.amount, currency: e.currency, category: e.category, date: e.date, notes: e.notes || '' }); }}>Edit</Button>}
+                              {canEditEntry(e) && <Button size="sm" variant="ghost" className="h-6 text-xs" data-testid={`expense-edit-${e.id}`} onClick={() => { setEditEntry({ ...e, type: 'expense' }); setEditForm({ title: e.title || '', amount: e.amount, currency: e.currency || 'UGX', category: e.category || 'general', date: e.date || '', notes: e.notes || '', sublocation_id: e.sublocation_id || '', paid_from_account_id: e.paid_from_account_id || '', vendor: e.vendor || '', receipt_number: e.receipt_number || '', department: e.department || '', budget_category: e.budget_category || '', account: e.account || '' }); }}>Edit</Button>}
                               {canEditEntry(e) && <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" data-testid={`expense-delete-${e.id}`} onClick={async () => { if (!window.confirm('Delete this expense?')) return; try { await financialApi.deleteExpense(e.id); setExpenses(prev => prev.filter(x => x.id !== e.id)); toast.success('Deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }}>Del</Button>}
                             </div>
                           </td>
@@ -1286,42 +1286,189 @@ export default function FinancialPage() {
 
       {/* Edit Entry Dialog */}
       <Dialog open={!!editEntry} onOpenChange={v => { if (!v) setEditEntry(null); }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="fin-edit-dialog">
           <DialogHeader><DialogTitle>Edit {editEntry?.type === 'donation' ? 'Donation' : 'Expense'}</DialogTitle></DialogHeader>
-          <div className="space-y-4 mt-2">
+          <div className="space-y-3 mt-2">
             {editEntry?.type === 'donation' ? (
               <>
-                <div className="space-y-2"><Label>Donor Name</Label><Input value={editForm.donor_name || ''} onChange={e => setEditForm({...editForm, donor_name: e.target.value})} /></div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2"><Label>Amount</Label><Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({...editForm, amount: parseFloat(e.target.value) || 0})} /></div>
-                  <div className="space-y-2"><Label>Date</Label><Input type="date" value={editForm.date || ''} onChange={e => setEditForm({...editForm, date: e.target.value})} /></div>
+                <div className="space-y-1"><Label>Donor Name</Label>
+                  <Input value={editForm.donor_name || ''} onChange={e => setEditForm({ ...editForm, donor_name: e.target.value })} data-testid="fin-edit-donor" />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1"><Label>Amount</Label>
+                    <Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({ ...editForm, amount: parseFloat(e.target.value) || 0 })} data-testid="fin-edit-amount" />
+                  </div>
+                  <div className="space-y-1"><Label>Type</Label>
+                    <Select value={editForm.type || 'donation'} onValueChange={v => setEditForm({ ...editForm, type: v })}>
+                      <SelectTrigger data-testid="fin-edit-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tithe">Tithe</SelectItem>
+                        <SelectItem value="offering">Offering</SelectItem>
+                        <SelectItem value="donation">Donation</SelectItem>
+                        <SelectItem value="pledge">Pledge</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1"><Label>Date</Label>
+                    <Input type="date" value={editForm.date || ''} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="fin-edit-date" />
+                  </div>
+                  <div className="space-y-1"><Label>Currency</Label>
+                    <Select value={editForm.currency || 'UGX'} onValueChange={v => setEditForm({ ...editForm, currency: v })}>
+                      <SelectTrigger data-testid="fin-edit-currency"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="UGX">UGX</SelectItem>
+                        <SelectItem value="USD">USD</SelectItem>
+                        <SelectItem value="EUR">EUR</SelectItem>
+                        <SelectItem value="GBP">GBP</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1"><Label>Sub-Location</Label>
+                  <Select value={editForm.sublocation_id || '_none'} onValueChange={v => setEditForm({ ...editForm, sublocation_id: v === '_none' ? '' : v })}>
+                    <SelectTrigger data-testid="fin-edit-sublocation"><SelectValue placeholder="Campus default" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">Campus default</SelectItem>
+                      {subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {myChartAccounts.length > 0 && (
+                  <div className="space-y-1"><Label>Deposit To Account</Label>
+                    <Select value={editForm.deposit_to_account_id || '_none'} onValueChange={v => setEditForm({ ...editForm, deposit_to_account_id: v === '_none' ? '' : v })}>
+                      <SelectTrigger data-testid="fin-edit-deposit-to"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— None —</SelectItem>
+                        {myChartAccounts.map(a => (
+                          <SelectItem key={a.id} value={a.id}>{a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </>
             ) : (
               <>
-                <div className="space-y-2"><Label>Title</Label><Input value={editForm.title || ''} onChange={e => setEditForm({...editForm, title: e.target.value})} /></div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2"><Label>Amount</Label><Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({...editForm, amount: parseFloat(e.target.value) || 0})} /></div>
-                  <div className="space-y-2"><Label>Date</Label><Input type="date" value={editForm.date || ''} onChange={e => setEditForm({...editForm, date: e.target.value})} /></div>
+                <div className="space-y-1"><Label>Title</Label>
+                  <Input value={editForm.title || ''} onChange={e => setEditForm({ ...editForm, title: e.target.value })} data-testid="fin-edit-title" />
                 </div>
-                <div className="space-y-2"><Label>Category</Label><Input value={editForm.category || ''} onChange={e => setEditForm({...editForm, category: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1"><Label>Amount</Label>
+                    <Input type="number" value={editForm.amount || ''} onChange={e => setEditForm({ ...editForm, amount: parseFloat(e.target.value) || 0 })} data-testid="fin-edit-amount" />
+                  </div>
+                  <div className="space-y-1"><Label>Category</Label>
+                    <Select value={editForm.category || 'general'} onValueChange={v => setEditForm({ ...editForm, category: v })}>
+                      <SelectTrigger data-testid="fin-edit-category"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="salaries">Salaries</SelectItem>
+                        <SelectItem value="utilities">Utilities</SelectItem>
+                        <SelectItem value="supplies">Supplies</SelectItem>
+                        <SelectItem value="maintenance">Maintenance</SelectItem>
+                        <SelectItem value="programs">Programs</SelectItem>
+                        <SelectItem value="rent">Rent</SelectItem>
+                        <SelectItem value="general">General</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1"><Label>Date</Label>
+                    <Input type="date" value={editForm.date || ''} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="fin-edit-date" />
+                  </div>
+                  <div className="space-y-1"><Label>Currency</Label>
+                    <Select value={editForm.currency || 'UGX'} onValueChange={v => setEditForm({ ...editForm, currency: v })}>
+                      <SelectTrigger data-testid="fin-edit-currency"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="UGX">UGX</SelectItem>
+                        <SelectItem value="USD">USD</SelectItem>
+                        <SelectItem value="EUR">EUR</SelectItem>
+                        <SelectItem value="GBP">GBP</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1"><Label>Sub-Location</Label>
+                  <Select value={editForm.sublocation_id || '_none'} onValueChange={v => setEditForm({ ...editForm, sublocation_id: v === '_none' ? '' : v })}>
+                    <SelectTrigger data-testid="fin-edit-sublocation"><SelectValue placeholder="Campus default" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">Campus default</SelectItem>
+                      {subLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {myChartAccounts.length > 0 && (
+                  <div className="space-y-1"><Label>Paid From Account</Label>
+                    <Select value={editForm.paid_from_account_id || '_none'} onValueChange={v => setEditForm({ ...editForm, paid_from_account_id: v === '_none' ? '' : v })}>
+                      <SelectTrigger data-testid="fin-edit-paid-from"><SelectValue placeholder="Which account funded this?" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— None —</SelectItem>
+                        {myChartAccounts.map(a => (
+                          <SelectItem key={a.id} value={a.id}>{a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <details className="border border-border rounded-lg p-2">
+                  <summary className="text-xs font-semibold cursor-pointer text-muted-foreground">Advanced (Vendor · Receipt · Dept · Budget)</summary>
+                  <div className="space-y-2 mt-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1"><Label className="text-xs">Vendor/Payee</Label>
+                        <Input className="h-8 text-xs" value={editForm.vendor || ''} onChange={e => setEditForm({ ...editForm, vendor: e.target.value })} data-testid="fin-edit-vendor" />
+                      </div>
+                      <div className="space-y-1"><Label className="text-xs">Receipt #</Label>
+                        <Input className="h-8 text-xs" value={editForm.receipt_number || ''} onChange={e => setEditForm({ ...editForm, receipt_number: e.target.value })} data-testid="fin-edit-receipt-num" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1"><Label className="text-xs">Account (Source Tag)</Label>
+                        <Select value={editForm.account || '_none'} onValueChange={v => setEditForm({ ...editForm, account: v === '_none' ? '' : v })}>
+                          <SelectTrigger className="h-8 text-xs" data-testid="fin-edit-account-tag"><SelectValue placeholder="Select..." /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="_none">—</SelectItem>
+                            <SelectItem value="CASH DRAWER">Cash Drawer</SelectItem>
+                            <SelectItem value="MTN MOMO">MTN Mobile Money</SelectItem>
+                            <SelectItem value="AIRTEL MONEY">Airtel Money</SelectItem>
+                            <SelectItem value="BANK">Bank</SelectItem>
+                            <SelectItem value="OTHER">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1"><Label className="text-xs">Department</Label>
+                        <Select value={editForm.department || '_none'} onValueChange={v => setEditForm({ ...editForm, department: v === '_none' ? '' : v })}>
+                          <SelectTrigger className="h-8 text-xs" data-testid="fin-edit-dept"><SelectValue placeholder="Select..." /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="_none">—</SelectItem>
+                            {['FARM','SHELTER','OUTREACH','ADMIN/OPS','SECURITY','EDUCATION','MAINTENANCE','MEDIA','HR','FINANCE'].map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="space-y-1"><Label className="text-xs">Budget Line</Label>
+                      <Input className="h-8 text-xs" placeholder="e.g. Uganda Farm" value={editForm.budget_category || ''} onChange={e => setEditForm({ ...editForm, budget_category: e.target.value })} data-testid="fin-edit-budget" />
+                    </div>
+                  </div>
+                </details>
               </>
             )}
-            <div className="space-y-2"><Label>Notes</Label><Input value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})} /></div>
-            <div className="flex gap-3">
+            <div className="space-y-1"><Label>Notes</Label>
+              <Textarea rows={2} value={editForm.notes || ''} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} data-testid="fin-edit-notes" />
+            </div>
+            <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditEntry(null)}>Cancel</Button>
-              <Button className="flex-1" onClick={async () => {
+              <Button className="flex-1" data-testid="fin-edit-save" onClick={async () => {
                 try {
                   if (editEntry.type === 'donation') {
                     await financialApi.updateDonation(editEntry.id, editForm);
                     setDonations(prev => prev.map(d => d.id === editEntry.id ? { ...d, ...editForm } : d));
                   } else {
-                    // Use the real update endpoint (creator within 7 days OR admin);
-                    // /approve is a status-change route, not for edits.
                     await financialApi.updateExpense(editEntry.id, editForm);
                     setExpenses(prev => prev.map(e => e.id === editEntry.id ? { ...e, ...editForm } : e));
                   }
-                  toast.success('Updated'); setEditEntry(null);
+                  toast.success('Updated');
+                  setEditEntry(null);
                   fetchAll();
                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
               }}>Save</Button>

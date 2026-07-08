@@ -30,6 +30,7 @@ export default function HRPage() {
   const [loading, setLoading] = useState(true);
   const [showSalary, setShowSalary] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
+  const [repairModal, setRepairModal] = useState(null);   // { data, busy, phase }
   const [showPayslipGen, setShowPayslipGen] = useState(false);
   const [showManualPayslip, setShowManualPayslip] = useState(false);
   const [manualPayslip, setManualPayslip] = useState({
@@ -341,71 +342,20 @@ export default function HRPage() {
               }}><Download size={14} /> ZIP</Button>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              {['admin', 'system_admin'].includes(user?.role) && (
+              {['admin', 'system_admin', 'Executive Director'].includes(user?.role) && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="gap-1.5 h-8 text-amber-700 border-amber-300 hover:bg-amber-50"
                   data-testid="repair-payslip-je-btn"
                   onClick={async () => {
+                    setRepairModal({ busy: true, data: null, phase: 'preview' });
                     try {
-                      // First: dry-run preview
-                      const preview = await api.post('/hr/repair-payslip-journals', {});
-                      const a = preview.data.pass_a_missing_je || {};
-                      const b = preview.data.pass_b_reconstruct || {};
-                      const c = preview.data.pass_c_wrong_journal || {};
-                      const totalFixes = (a.count || 0) + (b.count || 0) + (c.scanned || 0);
-                      if (totalFixes === 0) {
-                        toast.success('All payslip postings are already correct. No repair needed.');
-                        return;
-                      }
-                      const msg = [
-                        `Repair preview:`,
-                        ``,
-                        `• ${a.count} payroll expense(s) missing journal entries (total UGX ${(a.total_amount || 0).toLocaleString()})`,
-                        `• ${b.count} paid payslip group(s) never aggregated (total UGX ${(b.total_amount || 0).toLocaleString()})`,
-                        `• ${c.scanned || 0} journal entry(ies) mis-routed to a Sales journal`,
-                        ``,
-                        `Apply these fixes? This is idempotent (safe to re-run) but not reversible.`,
-                        ``,
-                        `Note: postings for locations without a "Wages & Salaries" expense account AND a Cash account in their Chart of Accounts will be silently skipped and reported back so you can set up the accounts.`,
-                      ].join('\n');
-                      if (!window.confirm(msg)) return;
-                      const res = await api.post('/hr/repair-payslip-journals', { apply: true });
-                      const ra = res.data.pass_a_missing_je || {};
-                      const rb = res.data.pass_b_reconstruct || {};
-                      const rc = res.data.pass_c_wrong_journal || {};
-                      const skippedLocs = res.data.locations_missing_accounts || [];
-                      const skippedTotal = (ra.skipped_no_accounts || 0) + (rb.skipped_no_accounts || 0);
-                      const fixed = (ra.count - (ra.skipped_no_accounts || 0)) + (rb.count - (rb.skipped_no_accounts || 0));
-                      toast.success(
-                        `Repaired ${fixed} JE${fixed === 1 ? '' : 's'}${(rc.entries_fixed || 0) > 0 ? ` · re-tagged ${rc.entries_fixed} from Sales` : ''}${skippedTotal ? ` · ${skippedTotal} skipped (missing Chart of Accounts)` : ''}`,
-                        { duration: 6000 }
-                      );
-                      if (skippedTotal > 0) {
-                        const seedMsg = `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — ${skippedLocs.length} location${skippedLocs.length === 1 ? '' : 's'} (${skippedLocs.join(', ')}) need a full Chart of Accounts.\n\nAuto-wire the default Chart of Accounts for these locations now?\n(21 accounts × ${skippedLocs.length} location${skippedLocs.length === 1 ? '' : 's'}. Idempotent — skips codes that already exist.)`;
-                        if (window.confirm(seedMsg)) {
-                          try {
-                            const seedRes = await api.post('/accounting/seed-bulk', { location_ids: skippedLocs });
-                            const seeded = seedRes.data.total_accounts_seeded || 0;
-                            toast.success(`Auto-wired ${seeded} accounts. Re-running fixer…`);
-                            // Re-run the fixer now that accounts exist
-                            const rerun = await api.post('/hr/repair-payslip-journals', { apply: true });
-                            const na = rerun.data.pass_a_missing_je || {};
-                            const rerunFixed = (na.count || 0) - (na.skipped_no_accounts || 0);
-                            toast.success(`Round 2: repaired ${rerunFixed} more JE${rerunFixed === 1 ? '' : 's'}. Trial balance should now be in sync.`, { duration: 6000 });
-                          } catch (seedErr) {
-                            toast.error(seedErr.response?.data?.detail || 'Auto-wire failed');
-                          }
-                        } else {
-                          toast.warning(
-                            `${skippedTotal} posting${skippedTotal === 1 ? '' : 's'} skipped — manually add Wages/Salaries + Cash accounts to: ${skippedLocs.join(', ')}, then re-run this fixer.`,
-                            { duration: 12000 }
-                          );
-                        }
-                      }
+                      const res = await api.post('/hr/repair-payslip-journals', {});
+                      setRepairModal({ busy: false, data: res.data, phase: 'preview' });
                     } catch (e) {
-                      toast.error(e.response?.data?.detail || 'Repair failed');
+                      setRepairModal(null);
+                      toast.error(e.response?.data?.detail || 'Diagnostic failed');
                     }
                   }}
                   title="Backfill accounting entries for paid payslips that never made it to the ledger — safe to re-run"
@@ -1095,6 +1045,133 @@ export default function HRPage() {
               </div>
             ))}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Fix Ledger Postings — diagnostic + apply modal (HRPage-level) ─── */}
+      <Dialog open={!!repairModal} onOpenChange={o => { if (!o) setRepairModal(null); }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="repair-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wrench size={16} className="text-amber-600" /> Fix Ledger Postings
+            </DialogTitle>
+          </DialogHeader>
+          {repairModal?.busy && !repairModal?.data && (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              Scanning payslips, expenses and journal entries…
+            </div>
+          )}
+          {repairModal?.data && (() => {
+            const d = repairModal.data;
+            const a = d.pass_a_missing_je || {};
+            const b = d.pass_b_reconstruct || {};
+            const c = d.pass_c_wrong_journal || {};
+            const diag = d.diagnostics || {};
+            const totalFixes = (a.count || 0) + (b.count || 0) + (c.scanned || 0);
+            return (
+              <div className="space-y-4 text-sm">
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-1.5" data-testid="repair-diagnostics">
+                  <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Current ledger state</p>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <span className="text-slate-500">Paid payslips</span>
+                    <span className="font-mono text-right">{diag.paid_payslips || 0} · UGX {(diag.paid_payslips_total_ugx || 0).toLocaleString()}</span>
+                    <span className="text-slate-500">Aggregate expenses</span>
+                    <span className="font-mono text-right">{diag.aggregate_expenses || 0} · UGX {(diag.aggregate_expenses_total_ugx || 0).toLocaleString()}</span>
+                    <span className="text-slate-500">Active payroll JEs</span>
+                    <span className="font-mono text-right">{diag.active_payroll_jes || 0} · UGX {(diag.active_payroll_jes_total_ugx || 0).toLocaleString()}</span>
+                  </div>
+                  <div className={`text-xs font-semibold mt-2 ${diag.in_sync ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {diag.in_sync
+                      ? '✓ In sync — expenses total matches ledger total'
+                      : '⚠ Out of sync — expenses total ≠ ledger total (repair needed)'}
+                  </div>
+                </div>
+
+                {totalFixes === 0 ? (
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-emerald-800 text-sm" data-testid="repair-nothing-to-fix">
+                    <p className="font-semibold">No repair needed.</p>
+                    <p className="text-xs mt-1">All existing payroll expenses have matching journal entries and no paid payslips are missing an aggregate. If new payslips still aren&apos;t hitting the ledger after marking them paid, the issue is likely that their location lacks a Chart of Accounts — see below.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-2" data-testid="repair-plan">
+                      <p className="text-xs font-semibold text-amber-900 uppercase tracking-wide">Repair plan</p>
+                      <div className="space-y-1 text-xs text-amber-900">
+                        <p>• <strong>{a.count || 0}</strong> payroll expense(s) missing journal entries (UGX {(a.total_amount || 0).toLocaleString()})</p>
+                        <p>• <strong>{b.count || 0}</strong> paid payslip group(s) never aggregated (UGX {(b.total_amount || 0).toLocaleString()})</p>
+                        <p>• <strong>{c.scanned || 0}</strong> journal entry(ies) mis-routed to Sales journals</p>
+                      </div>
+                      <p className="text-[11px] text-amber-800 italic">Idempotent · safe to re-run · not reversible.</p>
+                    </div>
+                    {repairModal.phase === 'preview' && (
+                      <Button
+                        className="w-full bg-amber-600 hover:bg-amber-700 text-white"
+                        data-testid="repair-apply-btn"
+                        disabled={repairModal.busy}
+                        onClick={async () => {
+                          setRepairModal({ ...repairModal, busy: true });
+                          try {
+                            const res = await api.post('/hr/repair-payslip-journals', { apply: true });
+                            const ra = res.data.pass_a_missing_je || {};
+                            const rb = res.data.pass_b_reconstruct || {};
+                            const skippedLocs = res.data.locations_missing_accounts || [];
+                            const fixed = (ra.count - (ra.skipped_no_accounts || 0)) + (rb.count - (rb.skipped_no_accounts || 0));
+                            toast.success(`Repaired ${fixed} journal entr${fixed === 1 ? 'y' : 'ies'}${skippedLocs.length ? ` · ${skippedLocs.length} location(s) blocked` : ''}`);
+                            setRepairModal({ busy: false, data: res.data, phase: 'applied' });
+                          } catch (e) {
+                            toast.error(e.response?.data?.detail || 'Repair failed');
+                            setRepairModal({ ...repairModal, busy: false });
+                          }
+                        }}
+                      >
+                        {repairModal.busy ? 'Applying…' : `Apply ${totalFixes} fix${totalFixes === 1 ? '' : 'es'}`}
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                {(d.locations_missing_accounts || []).length > 0 && (
+                  <div className="rounded-lg bg-rose-50 border border-rose-200 p-3 space-y-2" data-testid="repair-blocked">
+                    <p className="text-xs font-semibold text-rose-900 uppercase tracking-wide">Blocked — missing Chart of Accounts</p>
+                    <p className="text-xs text-rose-800">
+                      These {d.locations_missing_accounts.length} location(s) don&apos;t have a Wages/Salaries expense account and a Cash asset account, so their payroll can&apos;t post:
+                    </p>
+                    <ul className="text-xs font-mono text-rose-900 pl-3">
+                      {d.locations_missing_accounts.map(lid => <li key={lid}>· {lid}</li>)}
+                    </ul>
+                    <Button
+                      size="sm"
+                      className="w-full bg-rose-600 hover:bg-rose-700 text-white"
+                      data-testid="repair-auto-wire-btn"
+                      disabled={repairModal.busy}
+                      onClick={async () => {
+                        setRepairModal({ ...repairModal, busy: true });
+                        try {
+                          const seedRes = await api.post('/accounting/seed-bulk', { location_ids: d.locations_missing_accounts });
+                          const seeded = seedRes.data.total_accounts_seeded || 0;
+                          toast.success(`Auto-wired ${seeded} accounts. Re-running fixer…`);
+                          const rerun = await api.post('/hr/repair-payslip-journals', { apply: true });
+                          const na = rerun.data.pass_a_missing_je || {};
+                          const nb = rerun.data.pass_b_reconstruct || {};
+                          const rerunFixed = (na.count - (na.skipped_no_accounts || 0)) + (nb.count - (nb.skipped_no_accounts || 0));
+                          toast.success(`Round 2: repaired ${rerunFixed} more JE${rerunFixed === 1 ? '' : 's'}. Trial balance should now be in sync.`, { duration: 6000 });
+                          setRepairModal({ busy: false, data: rerun.data, phase: 'applied' });
+                        } catch (e) {
+                          toast.error(e.response?.data?.detail || 'Auto-wire failed');
+                          setRepairModal({ ...repairModal, busy: false });
+                        }
+                      }}
+                    >
+                      {repairModal.busy ? 'Wiring…' : `Auto-wire Chart of Accounts + re-run`}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRepairModal(null)} data-testid="repair-close-btn">Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

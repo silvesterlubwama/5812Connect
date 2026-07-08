@@ -965,6 +965,31 @@ async def repair_payslip_journals(data: dict = None, current_user: dict = Depend
             f"pass_a={len(pass_a_fixes)} pass_b={len(pass_b_fixes)} pass_c={pass_c_result}"
         )
 
+    # Diagnostics — total state summary so the operator can compare
+    # (aggregate expense total) vs (posted JE debit total) vs (paid payslip total).
+    total_paid_payslips = await db.hr_payslips.count_documents({"status": "paid"})
+    payslip_sum_agg = await db.hr_payslips.aggregate([
+        {"$match": {"status": "paid"}},
+        {"$group": {"_id": None, "total": {"$sum": "$net_salary"}}},
+    ]).to_list(1)
+    total_paid_sum = float((payslip_sum_agg or [{}])[0].get("total") or 0)
+    total_aggregate_expenses = await db.expenses.count_documents({"source": "hr_payroll_aggregate"})
+    expense_sum_agg = await db.expenses.aggregate([
+        {"$match": {"source": "hr_payroll_aggregate"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+    ]).to_list(1)
+    total_expense_sum = float((expense_sum_agg or [{}])[0].get("total") or 0)
+    total_active_jes = await db.accounting_entries.count_documents({
+        "auto_generated_from": "payroll",
+        "is_reversed": {"$ne": True},
+        "status": "posted",
+    })
+    je_sum_agg = await db.accounting_entries.aggregate([
+        {"$match": {"auto_generated_from": "payroll", "is_reversed": {"$ne": True}, "status": "posted"}},
+        {"$group": {"_id": None, "total": {"$sum": "$total_debit"}}},
+    ]).to_list(1)
+    total_je_sum = float((je_sum_agg or [{}])[0].get("total") or 0)
+
     return {
         "dry_run": not apply,
         "pass_a_missing_je": {
@@ -984,6 +1009,15 @@ async def repair_payslip_journals(data: dict = None, current_user: dict = Depend
             f.get("location_id") for f in (pass_a_fixes + pass_b_fixes)
             if f.get("skipped") == "no_wages_or_cash_account_in_chart_of_accounts" and f.get("location_id")
         })),
+        "diagnostics": {
+            "paid_payslips": total_paid_payslips,
+            "paid_payslips_total_ugx": round(total_paid_sum, 2),
+            "aggregate_expenses": total_aggregate_expenses,
+            "aggregate_expenses_total_ugx": round(total_expense_sum, 2),
+            "active_payroll_jes": total_active_jes,
+            "active_payroll_jes_total_ugx": round(total_je_sum, 2),
+            "in_sync": abs(total_expense_sum - total_je_sum) < 0.01 and total_aggregate_expenses > 0,
+        },
         "message": (
             "Dry-run — POST again with {\"apply\": true} to persist changes."
             if not apply else
