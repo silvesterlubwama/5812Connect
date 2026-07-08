@@ -3,7 +3,28 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 221 (Feb 2026)
+## Recently Resolved — Iteration 222 (Feb 2026)
+**Root cause of "HR still not posting to Accounting" — location scope mismatch.**
+
+Production user reported: modal says "in_sync", Fix Ledger Postings shows no issues, but the Accounting page still doesn't show the payroll transactions.  The transactions WERE posting; they just weren't visible because of a strict-equality location filter bug that predates iter219.
+
+### The bug
+- Payroll auto-posting tags each journal entry with the **payslip's** location_id — usually a **sub-location** (e.g. "58:12 Uganda" = `loc_419f5d5e`).
+- The Accounting page's campus dropdown holds the **parent campus** id (e.g. "58:12 Global Central" = `loc_001`).
+- Both frontend (`AccountingPage.fetchAll` filter chain) and backend (`/accounting/accounts`, `/reports/trial-balance`, `/reports/cash-flow`) used **strict `location_id === locationFilter` equality** → payroll JEs were silently hidden.
+- Trial Balance card showed UGX 0 in Salaries expense despite the JEs existing.  User understandably thought HR wasn't posting.
+
+### The fix
+- **Backend** — new helper `_expand_location_scope(location_id)` walks the location tree recursively (depth 3 up + 3 down) and returns a set of related IDs. Used with `$in` in `list_accounts`, `trial_balance`, and `cash_flow_statement`. `profit_loss` + `balance_sheet` inherit via `trial_balance`.
+- **Frontend** — `AccountingPage.fetchAll` builds the same scope set (locationFilter + descendants + ancestors) and uses it in the client-side `.filter()` for entries/journals/taxes/fiscal-periods. `useCallback` deps include `allLocations` so filter recomputes when the tree loads.
+- Falls back to strict equality for isolated locations (no parent, no children) to preserve original behaviour.
+
+### Test coverage
+- `/app/tests/test_iter222_location_scope.py` — 7 new pytest tests covering all report endpoints under (a) sub-location, (b) parent campus, (c) isolated location, (d) no `location_id` regression. All 7 pass.
+- Regression: iter220 (18) + iter221 (5) still pass = 30/30 total.
+- **Live proof**: Trial balance for `loc_419f5d5e` (Uganda sub) — before fix: 0 rows / UGX 0; after fix: 20 rows / UGX 210,840,242.64 with Salaries & Wages 108,958,810 clearly showing.
+
+
 **Production feedback fixes: Fix-Ledger diagnostic modal + full Finance edit dialog.**
 
 ### HR ledger repair — replaced silent toasts with a diagnostic modal

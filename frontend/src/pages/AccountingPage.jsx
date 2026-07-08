@@ -287,16 +287,29 @@ export default function AccountingPage() {
         api.get('/accounting/reports/balance-sheet', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
       ]);
       setAccounts(accRes.data || []);
-      // Filter journals + entries to the picked campus AND its sub-locations
-      // (a payroll JE is often posted at the sub-location level, so strict
-      // equality to a campus id would hide it — bug reported in prod).
-      const scopedLocIds = new Set([
-        locationFilter,
-        ...allLocations.filter(l => l.parent_id === locationFilter).map(l => l.id),
-      ]);
-      // Also include the parent campus of `locationFilter` when a sub-location is picked.
-      const picked = allLocations.find(l => l.id === locationFilter);
-      if (picked?.parent_id) scopedLocIds.add(picked.parent_id);
+      // Filter journals + entries to the picked campus AND its full hierarchy
+      // (descendants + ancestors, bounded to depth 3).  Payroll JEs are often
+      // posted at sub-location level while operators pick campuses in the
+      // dropdown — strict equality would hide them (production bug iter222).
+      const scopedLocIds = new Set([locationFilter]);
+      let frontier = new Set([locationFilter]);
+      for (let d = 0; d < 3 && frontier.size; d++) {
+        const next = new Set();
+        for (const l of allLocations) {
+          if (l.parent_id && frontier.has(l.parent_id) && !scopedLocIds.has(l.id)) {
+            scopedLocIds.add(l.id);
+            next.add(l.id);
+          }
+        }
+        frontier = next;
+      }
+      let cur = locationFilter;
+      for (let d = 0; d < 3; d++) {
+        const node = allLocations.find(l => l.id === cur);
+        if (!node?.parent_id) break;
+        cur = node.parent_id;
+        scopedLocIds.add(cur);
+      }
       const inScope = (row) => !row.location_id || scopedLocIds.has(row.location_id);
       setJournals((jrnRes.data || []).filter(inScope));
       setAccountTypes(typesRes.data || []);

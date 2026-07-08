@@ -793,21 +793,33 @@ async def bulk_delete_entries(data: dict, current_user: dict = Depends(require_a
 # ============================================================
 async def _expand_location_scope(location_id: str) -> list:
     """Return a list of location IDs that should be considered "within" the
-    given location for reporting.  Includes: the picked id itself, all its
-    direct sub-locations (`parent_id=<id>`) and, if the picked id is itself
-    a sub-location, its parent campus.
+    given location for reporting.  Walks the tree recursively (bounded to
+    depth 3) to include: the picked id, ALL descendants (children, grand-
+    children), and ancestors (parent, grandparent).
 
     Rationale (iter222 production bug): payroll/expense auto-postings often
     tag entries with a sub-location id, while operators pick campuses in the
     report filter — strict equality would hide those very transactions.
     """
     ids = {location_id}
-    subs = await db.locations.find({"parent_id": location_id}, {"_id": 0, "id": 1}).to_list(500)
-    for s in subs:
-        ids.add(s["id"])
-    picked = await db.locations.find_one({"id": location_id}, {"_id": 0, "parent_id": 1})
-    if picked and picked.get("parent_id"):
-        ids.add(picked["parent_id"])
+    # Walk downward — collect descendants up to depth 3
+    frontier = {location_id}
+    for _ in range(3):
+        if not frontier:
+            break
+        subs = await db.locations.find(
+            {"parent_id": {"$in": list(frontier)}}, {"_id": 0, "id": 1}
+        ).to_list(500)
+        frontier = {s["id"] for s in subs if s["id"] not in ids}
+        ids.update(frontier)
+    # Walk upward — collect ancestors up to depth 3
+    current = location_id
+    for _ in range(3):
+        node = await db.locations.find_one({"id": current}, {"_id": 0, "parent_id": 1})
+        if not node or not node.get("parent_id"):
+            break
+        current = node["parent_id"]
+        ids.add(current)
     return list(ids)
 
 
