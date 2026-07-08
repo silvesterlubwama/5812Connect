@@ -191,7 +191,8 @@ async def list_accounts(
     if active:
         query["active"] = True
     if location_id:
-        query["location_id"] = location_id
+        scope_ids = await _expand_location_scope(location_id)
+        query["location_id"] = {"$in": scope_ids} if len(scope_ids) > 1 else location_id
     else:
         scope = await get_campus_filter(current_user)
         if scope:
@@ -790,6 +791,26 @@ async def bulk_delete_entries(data: dict, current_user: dict = Depends(require_a
 # ============================================================
 # REPORTS: TRIAL BALANCE + P&L + BALANCE SHEET
 # ============================================================
+async def _expand_location_scope(location_id: str) -> list:
+    """Return a list of location IDs that should be considered "within" the
+    given location for reporting.  Includes: the picked id itself, all its
+    direct sub-locations (`parent_id=<id>`) and, if the picked id is itself
+    a sub-location, its parent campus.
+
+    Rationale (iter222 production bug): payroll/expense auto-postings often
+    tag entries with a sub-location id, while operators pick campuses in the
+    report filter — strict equality would hide those very transactions.
+    """
+    ids = {location_id}
+    subs = await db.locations.find({"parent_id": location_id}, {"_id": 0, "id": 1}).to_list(500)
+    for s in subs:
+        ids.add(s["id"])
+    picked = await db.locations.find_one({"id": location_id}, {"_id": 0, "parent_id": 1})
+    if picked and picked.get("parent_id"):
+        ids.add(picked["parent_id"])
+    return list(ids)
+
+
 @router.get("/reports/trial-balance")
 async def trial_balance(
     date_from: Optional[str] = None,
@@ -805,7 +826,8 @@ async def trial_balance(
     if date_to:
         match.setdefault("date", {})["$lte"] = date_to[:10]
     if location_id:
-        match["location_id"] = location_id
+        scope_ids = await _expand_location_scope(location_id)
+        match["location_id"] = {"$in": scope_ids} if len(scope_ids) > 1 else location_id
     else:
         scope = await get_campus_filter(current_user)
         if scope:
@@ -1105,7 +1127,8 @@ async def cash_flow_statement(
     if date_to:
         match.setdefault("date", {})["$lte"] = date_to[:10]
     if location_id:
-        match["location_id"] = location_id
+        scope_ids = await _expand_location_scope(location_id)
+        match["location_id"] = {"$in": scope_ids} if len(scope_ids) > 1 else location_id
     else:
         scope = await get_campus_filter(current_user)
         if scope:

@@ -206,7 +206,7 @@ export default function AccountingPage() {
     if (!isFinanceAdmin && user?.location_id && locationFilter !== user.location_id) {
       setLocationFilter(user.location_id);
     }
-  }, [user, isFinanceAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, isFinanceAdmin]);
 
   const [showReversed, setShowReversed] = useState(false);
   const [selectedEntryIds, setSelectedEntryIds] = useState(new Set());
@@ -287,16 +287,25 @@ export default function AccountingPage() {
         api.get('/accounting/reports/balance-sheet', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
       ]);
       setAccounts(accRes.data || []);
-      // Filter journals + entries to the picked campus (so Director of one campus
-      // doesn't see another's journals if get_campus_filter happens to be permissive).
-      setJournals((jrnRes.data || []).filter(j => !j.location_id || j.location_id === locationFilter));
+      // Filter journals + entries to the picked campus AND its sub-locations
+      // (a payroll JE is often posted at the sub-location level, so strict
+      // equality to a campus id would hide it — bug reported in prod).
+      const scopedLocIds = new Set([
+        locationFilter,
+        ...allLocations.filter(l => l.parent_id === locationFilter).map(l => l.id),
+      ]);
+      // Also include the parent campus of `locationFilter` when a sub-location is picked.
+      const picked = allLocations.find(l => l.id === locationFilter);
+      if (picked?.parent_id) scopedLocIds.add(picked.parent_id);
+      const inScope = (row) => !row.location_id || scopedLocIds.has(row.location_id);
+      setJournals((jrnRes.data || []).filter(inScope));
       setAccountTypes(typesRes.data || []);
-      setEntries((entRes.data || []).filter(e => !e.location_id || e.location_id === locationFilter));
-      setTaxes((taxRes.data || []).filter(t => !t.location_id || t.location_id === locationFilter));
-      setFiscalPeriods((fpRes.data || []).filter(f => !f.location_id || f.location_id === locationFilter));
+      setEntries((entRes.data || []).filter(inScope));
+      setTaxes((taxRes.data || []).filter(inScope));
+      setFiscalPeriods((fpRes.data || []).filter(inScope));
       setTb(tbRes.data); setPl(plRes.data); setBs(bsRes.data);
     } finally { setLoading(false); }
-  }, [locationFilter, showReversed]);
+  }, [locationFilter, showReversed, allLocations]);
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const seedDefault = async () => {

@@ -1,0 +1,27 @@
+{
+  "summary": "iter222 validated the _expand_location_scope fix that unblocked HR-payroll ↔ Accounting reconciliation. Backend: 7 new pytest cases in test_iter222_location_scope.py covering trial-balance, accounts, cash-flow, profit-loss, balance-sheet under (a) sub-location, (b) parent campus, (c) isolated location, (d) no location_id regression. All 7 pass + all 23 iter220/iter221 regression tests pass = 30/30. Frontend UI verified live on preview: picking '58:12 Uganda' (sub of loc_001) in the Accounting campus switcher now shows Trial Balance UGX 210,840,242.64 across 20 rows — Salaries & Wages debit 108,958,810 clearly visible (this was the missing payroll bucket the user was complaining about). Previously would render 0 rows because all live entries are tagged at loc_001 while operator picked sub. Balance sheet + P&L cards also populate correctly. isFinanceAdmin gate on the campus dropdown intact.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/tests/test_iter222_location_scope.py",
+    "/app/tests/test_iter221_diagnostics_and_edit_whitelist.py",
+    "/app/tests/test_iter220_self_service_and_seed_bulk.py",
+    "/app/test_reports/pytest/iter222_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_expand_location_scope currently walks ONE level up (picked → parent) and ONE level down (picked → direct children). For 2+ level hierarchies (grandchildren) the payroll-hides bug will reappear. Recommend either documenting the 1-level constraint or making the walk recursive (bounded to say depth=3) to future-proof.",
+    "AccountingPage.jsx fetchAll now depends on allLocations in the useCallback deps — first render fetches BEFORE allLocations resolves (empty array), then refetches when locations arrive. Two round-trips per page open. Minor perf nit, not a correctness issue; could gate fetchAll on allLocations.length > 0.",
+    "Backend list_journals/list_taxes/list_fiscal_periods/list_entries still use strict get_campus_filter — same sub-vs-parent bug potentially applies (frontend now compensates client-side). Consider extending _expand_location_scope into get_campus_filter for consistency so future direct API consumers get the right data too."
+  ],
+  "updated_files": [
+    "/app/tests/test_iter222_location_scope.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7 new + 23/23 regression = 30/30)", "frontend": "100% — sub-location filter renders 20 TB rows with UGX 210.8M, matching backend probe exactly"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "None (read-only tests; iter220 tests create + delete TEST_ prefixed data as before).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Canonical fixture: loc_419f5d5e is the 58:12 Uganda sub of loc_001. Preview DB has ~200 accounting_entries all tagged at loc_001 with many sub-locations. Because scope-expansion is asymmetric (sub-scope={self,parent}; parent-scope={self, ALL children}) totals are NOT equal — parent > sub. Tests assert sub_totals > 0 AND sub_totals <= parent_totals in magnitude, which is the correct spec.",
+  "rca of the issue": "Bug: strict location_id equality in /accounting/accounts, /reports/trial-balance, /reports/cash-flow and in the frontend .filter chain hid payroll JEs. Payroll auto-posts JEs at sub-location IDs while operators pick campus IDs. Fix: new _expand_location_scope helper (backend, ~line 794) computes {picked_id ∪ direct_children ∪ parent} and $in-matches lines against it; falls back to strict equality when scope has exactly 1 element (isolated location). Frontend mirrors the same set (scopedLocIds in AccountingPage.jsx fetchAll ~L293). Reproduced pre-fix: TB for loc_419f5d5e = 0 rows. Post-fix: 20 rows / UGX 210.8M. Validated via backend pytest AND live browser test."
+}
