@@ -137,12 +137,17 @@ async def get_shipment(shipment_id: str, current_user: dict = Depends(require_ad
 @router.put("/shipments/{shipment_id}")
 async def update_shipment(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"name", "dest_country", "description", "target_ship_date", "status",
-               "max_payload_kg", "container_dims_cm", "units"}
+               "max_payload_kg", "container_dims_cm", "units",
+               # iter223 — mode + waybill/flight tracking fields
+               "mode", "waybill_no", "flight_no", "carrier_name", "tracking_url",
+               "departure_date", "arrival_date", "origin_country"}
     set_ops = {k: v for k, v in data.items() if k in allowed}
     if "status" in set_ops and set_ops["status"] not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(VALID_STATUSES)}")
     if "units" in set_ops and set_ops["units"] not in ("metric", "imperial"):
         raise HTTPException(status_code=400, detail="units must be 'metric' or 'imperial'")
+    if "mode" in set_ops and set_ops["mode"] not in ("container", "airport"):
+        raise HTTPException(status_code=400, detail="mode must be 'container' or 'airport'")
     if "container_dims_cm" in set_ops:
         c = set_ops["container_dims_cm"] or {}
         set_ops["container_dims_cm"] = {
@@ -258,6 +263,12 @@ def _normalise_item(data: dict, units: str = "metric") -> dict:
         "notes": (data.get("notes") or "")[:500],
         "priority": priority,
         "pallet_id": data.get("pallet_id") or None,
+        # iter223 — polymorphic packing units (pallet/box/tote/crate) with
+        # stacking parent, AND airport-mode suitcase / passenger references.
+        # At most ONE of packing_unit_id / suitcase_id should be set.
+        "packing_unit_id": data.get("packing_unit_id") or None,
+        "suitcase_id": data.get("suitcase_id") or None,
+        "passenger_id": data.get("passenger_id") or None,
         # Stacking: if `parent_id` points to another item, this item sits ON TOP
         # of that one. Otherwise it sits on its pallet (or on the container floor
         # when container_type=container).
@@ -377,7 +388,8 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
                "author", "publisher", "ai_identified",
                "x_cm", "y_cm", "z_cm",
                "hs_code", "hs_code_reason", "condition",
-               "manifest_group_id", "requires_pvoc", "pvoc_reason"}
+               "manifest_group_id", "requires_pvoc", "pvoc_reason",
+               "packing_unit_id", "suitcase_id", "passenger_id"}
     set_ops = {}
     for k, v in data.items():
         if k not in allowed:
@@ -2162,3 +2174,346 @@ async def public_waybill_html(token: str, request: Request):
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     return Response(content=_waybill_html(s), media_type="text/html")
+
+
+# ============================================================
+# iter223 — Polymorphic packing units, passengers/suitcases, AI tracking
+# ============================================================
+
+# Standard packing-unit dimension presets — populated from real freight specs.
+PACKING_PRESETS = {
+    "eur_pallet":   {"L_cm": 120, "W_cm": 80,  "H_cm": 14.5, "cap_kg": 1500, "label": "EUR pallet (EPAL)"},
+    "us_pallet":    {"L_cm": 122, "W_cm": 102, "H_cm": 14.5, "cap_kg": 1360, "label": "US pallet (48\"×40\")"},
+    "large_box":    {"L_cm": 60,  "W_cm": 45,  "H_cm": 40,   "cap_kg": 30,   "label": "Large moving box"},
+    "medium_box":   {"L_cm": 45,  "W_cm": 35,  "H_cm": 30,   "cap_kg": 20,   "label": "Medium box"},
+    "small_box":    {"L_cm": 30,  "W_cm": 25,  "H_cm": 20,   "cap_kg": 10,   "label": "Small box"},
+    "plastic_tote": {"L_cm": 70,  "W_cm": 45,  "H_cm": 40,   "cap_kg": 40,   "label": "Plastic tote (54L)"},
+    "crate_wood":   {"L_cm": 100, "W_cm": 60,  "H_cm": 60,   "cap_kg": 200,  "label": "Wooden crate"},
+    "banana_box":   {"L_cm": 50,  "W_cm": 40,  "H_cm": 25,   "cap_kg": 18,   "label": "Banana box"},
+    "suitcase_lg":  {"L_cm": 76,  "W_cm": 51,  "H_cm": 31,   "cap_kg": 23,   "label": "Large suitcase (28\")"},
+    "suitcase_md":  {"L_cm": 66,  "W_cm": 46,  "H_cm": 27,   "cap_kg": 23,   "label": "Medium suitcase (24\")"},
+    "carry_on":     {"L_cm": 55,  "W_cm": 40,  "H_cm": 22,   "cap_kg": 10,   "label": "Carry-on (22\")"},
+    "duffel":       {"L_cm": 76,  "W_cm": 36,  "H_cm": 36,   "cap_kg": 20,   "label": "Duffel bag"},
+}
+
+VALID_UNIT_TYPES = {"pallet", "box", "tote", "crate", "suitcase", "carry_on", "duffel"}
+VALID_MODES = {"container", "airport"}
+
+
+@router.get("/shipments/presets/packing-units")
+async def get_packing_presets(current_user: dict = Depends(require_admin)):
+    return PACKING_PRESETS
+
+
+@router.post("/shipments/{shipment_id}/packing-units")
+async def add_packing_unit(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Create a physical packing unit (pallet / box / tote / crate) inside a shipment.
+    Body: {type, name?, preset_key?, L_cm?, W_cm?, H_cm?, weight_capacity_kg?, color?, parent_id?}
+    If `preset_key` is given, dims/capacity default from PACKING_PRESETS."""
+    utype = (data.get("type") or "").lower()
+    if utype not in VALID_UNIT_TYPES:
+        raise HTTPException(status_code=400, detail=f"type must be one of {sorted(VALID_UNIT_TYPES)}")
+    preset = PACKING_PRESETS.get(data.get("preset_key") or "", {})
+    unit = {
+        "id": f"pku_{uuid.uuid4().hex[:8]}",
+        "type": utype,
+        "name": (data.get("name") or preset.get("label") or utype.title())[:80],
+        "preset_key": data.get("preset_key") or "",
+        "L_cm": float(data.get("L_cm") or preset.get("L_cm") or 60),
+        "W_cm": float(data.get("W_cm") or preset.get("W_cm") or 40),
+        "H_cm": float(data.get("H_cm") or preset.get("H_cm") or 30),
+        "weight_capacity_kg": float(data.get("weight_capacity_kg") or preset.get("cap_kg") or 20),
+        "color": (data.get("color") or "#94a3b8")[:20],
+        "parent_id": data.get("parent_id") or None,  # for stacking
+        "floor_x_cm": float(data.get("floor_x_cm") or 0),  # position on container floor
+        "floor_y_cm": float(data.get("floor_y_cm") or 0),
+        "notes": (data.get("notes") or "")[:300],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    r = await db.shipments.update_one({"id": shipment_id}, {"$push": {"packing_units": unit}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return unit
+
+
+@router.put("/shipments/{shipment_id}/packing-units/{unit_id}")
+async def update_packing_unit(shipment_id: str, unit_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "L_cm", "W_cm", "H_cm", "weight_capacity_kg", "color",
+               "parent_id", "floor_x_cm", "floor_y_cm", "notes"}
+    set_ops = {}
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        if k in ("L_cm", "W_cm", "H_cm", "weight_capacity_kg", "floor_x_cm", "floor_y_cm"):
+            set_ops[f"packing_units.$.{k}"] = max(0, float(v or 0))
+        elif k == "parent_id":
+            set_ops[f"packing_units.$.{k}"] = v or None
+        else:
+            set_ops[f"packing_units.$.{k}"] = (v or "")[:300 if k == "notes" else 80]
+    if not set_ops:
+        return {"updated": False}
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "packing_units.id": unit_id}, {"$set": set_ops}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Packing unit not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/packing-units/{unit_id}")
+async def delete_packing_unit(shipment_id: str, unit_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a packing unit.  Items in it move back to unassigned;
+    child units (stacked on top) have their parent_id cleared."""
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"items.$[itm].packing_unit_id": None}},
+        array_filters=[{"itm.packing_unit_id": unit_id}],
+    )
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"packing_units.$[u].parent_id": None}},
+        array_filters=[{"u.parent_id": unit_id}],
+    )
+    r = await db.shipments.update_one(
+        {"id": shipment_id}, {"$pull": {"packing_units": {"id": unit_id}}}
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Packing unit not found")
+    return {"deleted": True}
+
+
+# ============================================================
+# Passengers (airport mode) + Suitcases
+# ============================================================
+
+@router.post("/shipments/{shipment_id}/passengers")
+async def add_passenger(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Body: {name, passport_no?, ticket_no?, flight_no?, suitcase_allowance_kg?, suitcase_count_allowance?}"""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Passenger name required")
+    passenger = {
+        "id": f"pax_{uuid.uuid4().hex[:8]}",
+        "name": name[:120],
+        "passport_no": (data.get("passport_no") or "")[:40],
+        "ticket_no": (data.get("ticket_no") or "")[:40],
+        "flight_no": (data.get("flight_no") or "")[:20],
+        "suitcase_allowance_kg": float(data.get("suitcase_allowance_kg") or 23),
+        "suitcase_count_allowance": int(data.get("suitcase_count_allowance") or 2),
+        "notes": (data.get("notes") or "")[:300],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    r = await db.shipments.update_one({"id": shipment_id}, {"$push": {"passengers": passenger}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return passenger
+
+
+@router.put("/shipments/{shipment_id}/passengers/{passenger_id}")
+async def update_passenger(shipment_id: str, passenger_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "passport_no", "ticket_no", "flight_no",
+               "suitcase_allowance_kg", "suitcase_count_allowance", "notes"}
+    set_ops = {}
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        if k == "suitcase_allowance_kg":
+            set_ops[f"passengers.$.{k}"] = max(0, float(v or 0))
+        elif k == "suitcase_count_allowance":
+            set_ops[f"passengers.$.{k}"] = max(0, int(v or 0))
+        else:
+            set_ops[f"passengers.$.{k}"] = (v or "")[:300 if k == "notes" else 120]
+    if not set_ops:
+        return {"updated": False}
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "passengers.id": passenger_id}, {"$set": set_ops}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/passengers/{passenger_id}")
+async def delete_passenger(shipment_id: str, passenger_id: str, current_user: dict = Depends(require_admin)):
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"items.$[itm].passenger_id": None, "items.$[itm].suitcase_id": None}},
+        array_filters=[{"itm.passenger_id": passenger_id}],
+    )
+    # Remove any suitcases belonging to this passenger too
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$pull": {"suitcases": {"passenger_id": passenger_id}}},
+    )
+    r = await db.shipments.update_one(
+        {"id": shipment_id}, {"$pull": {"passengers": {"id": passenger_id}}}
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+    return {"deleted": True}
+
+
+@router.post("/shipments/{shipment_id}/suitcases")
+async def add_suitcase(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Body: {passenger_id, type?, preset_key?, name?, weight_kg?, weight_limit_kg?, tracking_no?}"""
+    pid = data.get("passenger_id")
+    if not pid:
+        raise HTTPException(status_code=400, detail="passenger_id required")
+    utype = (data.get("type") or "suitcase").lower()
+    if utype not in {"suitcase", "carry_on", "duffel", "tote"}:
+        utype = "suitcase"
+    preset = PACKING_PRESETS.get(data.get("preset_key") or "", {})
+    suitcase = {
+        "id": f"sc_{uuid.uuid4().hex[:8]}",
+        "passenger_id": pid,
+        "type": utype,
+        "name": (data.get("name") or preset.get("label") or utype.title())[:80],
+        "preset_key": data.get("preset_key") or "",
+        "L_cm": float(data.get("L_cm") or preset.get("L_cm") or 66),
+        "W_cm": float(data.get("W_cm") or preset.get("W_cm") or 46),
+        "H_cm": float(data.get("H_cm") or preset.get("H_cm") or 27),
+        "weight_kg": max(0, float(data.get("weight_kg") or 0)),
+        "weight_limit_kg": max(0, float(data.get("weight_limit_kg") or preset.get("cap_kg") or 23)),
+        "tracking_no": (data.get("tracking_no") or "")[:40],  # bag tag number after check-in
+        "color": (data.get("color") or "#334155")[:20],
+        "notes": (data.get("notes") or "")[:300],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    r = await db.shipments.update_one({"id": shipment_id}, {"$push": {"suitcases": suitcase}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return suitcase
+
+
+@router.put("/shipments/{shipment_id}/suitcases/{suitcase_id}")
+async def update_suitcase(shipment_id: str, suitcase_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "type", "L_cm", "W_cm", "H_cm", "weight_kg", "weight_limit_kg",
+               "tracking_no", "color", "notes", "passenger_id"}
+    set_ops = {}
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        if k in ("L_cm", "W_cm", "H_cm", "weight_kg", "weight_limit_kg"):
+            set_ops[f"suitcases.$.{k}"] = max(0, float(v or 0))
+        else:
+            set_ops[f"suitcases.$.{k}"] = (v or "")[:300 if k == "notes" else 120]
+    if not set_ops:
+        return {"updated": False}
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "suitcases.id": suitcase_id}, {"$set": set_ops}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Suitcase not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/suitcases/{suitcase_id}")
+async def delete_suitcase(shipment_id: str, suitcase_id: str, current_user: dict = Depends(require_admin)):
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"items.$[itm].suitcase_id": None}},
+        array_filters=[{"itm.suitcase_id": suitcase_id}],
+    )
+    r = await db.shipments.update_one(
+        {"id": shipment_id}, {"$pull": {"suitcases": {"id": suitcase_id}}}
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Suitcase not found")
+    return {"deleted": True}
+
+
+# ============================================================
+# AI tracking — natural-language shipment status lookup via Gemini
+# ============================================================
+
+@router.post("/shipments/{shipment_id}/ai-tracking")
+async def ai_track_shipment(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Ask Gemini to interpret the waybill / flight numbers and generate a
+    plain-language tracking summary. Returns {summary, hint, tracking_urls: []}.
+
+    We DO NOT hit paid carrier APIs (Maersk, Emirates SkyCargo, etc.) because
+    those all require B2B contracts. Instead we generate the correct public
+    tracking URLs and a Gemini-crafted natural-language status hint from what's
+    known so the operator can click through in one place."""
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI tracking unavailable (no LLM key configured)")
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    mode = s.get("mode") or "container"
+    waybill = (s.get("waybill_no") or "").strip()
+    flight = (s.get("flight_no") or "").strip()
+    carrier = (s.get("carrier_name") or "").strip()
+    dest = (s.get("dest_country") or "").strip()
+    dep = (s.get("departure_date") or s.get("target_ship_date") or "").strip()
+    arr = (s.get("arrival_date") or "").strip()
+
+    # Build a set of tracking URLs the operator can click.
+    tracking_urls = []
+    if s.get("tracking_url"):
+        tracking_urls.append({"label": "Direct tracking link", "url": s["tracking_url"]})
+    if waybill:
+        tracking_urls.append({"label": f"Google search: {waybill}",
+                              "url": f"https://www.google.com/search?q={waybill}+tracking"})
+    if flight:
+        tracking_urls.append({"label": f"FlightAware: {flight}",
+                              "url": f"https://flightaware.com/live/flight/{flight.replace(' ', '')}"})
+    # Passenger + suitcase tracking numbers
+    for sc in (s.get("suitcases") or []):
+        if sc.get("tracking_no"):
+            tracking_urls.append({
+                "label": f"Bag tag {sc['tracking_no']} (Google)",
+                "url": f"https://www.google.com/search?q={sc['tracking_no']}+baggage+tracking",
+            })
+
+    # Gemini natural-language status estimate
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        return {"summary": "AI client unavailable — use the direct tracking links below.",
+                "hint": str(e), "tracking_urls": tracking_urls}
+
+    context = (
+        f"Mode: {mode}\n"
+        f"Carrier: {carrier or '(unknown)'}\n"
+        f"Waybill/BOL: {waybill or '(none)'}\n"
+        f"Flight #: {flight or '(none)'}\n"
+        f"Destination: {dest or '(unknown)'}\n"
+        f"Departure planned: {dep or '(unknown)'}\n"
+        f"Arrival planned: {arr or '(unknown)'}\n"
+        f"Passengers: {len(s.get('passengers') or [])}\n"
+        f"Suitcases with bag-tag: "
+        f"{sum(1 for x in (s.get('suitcases') or []) if x.get('tracking_no'))}\n"
+    )
+    prompt = (
+        "You are a logistics tracking assistant. Given the shipment facts above, "
+        "produce a SHORT (max 90 words) plain-English status estimate for the operator: "
+        "what stage the shipment is likely at based on the dates provided, what the "
+        "operator should check next, and any known typical transit times to the "
+        "destination country. If no meaningful data is available, say so plainly. "
+        "No markdown fences — plain prose only."
+    )
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"ship_track_{uuid.uuid4().hex[:8]}",
+            system_message=prompt,
+        ).with_model("gemini", "gemini-3-flash-preview")
+        raw = await chat.send_message(UserMessage(text=context))
+        summary = (raw or "").strip()[:600]
+    except Exception as ex:
+        logger.warning(f"AI tracking Gemini call failed: {ex}")
+        summary = "AI status estimate unavailable right now — use the tracking links below."
+
+    return {
+        "summary": summary,
+        "hint": "AI estimates are heuristic; use the tracking URLs to confirm.",
+        "tracking_urls": tracking_urls,
+        "waybill_no": waybill,
+        "flight_no": flight,
+        "carrier": carrier,
+    }

@@ -27,6 +27,7 @@ import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import ContainerVisualizer from '../components/ContainerVisualizer';
+import { ShipmentPackingPanel } from './shipping/ShipmentPackingPanel';
 import Papa from 'papaparse';
 
 const PRIORITY_BADGE = {
@@ -703,6 +704,9 @@ export default function ShipmentsAdminPage() {
           })}
         </div>
       </div>
+
+      {/* iter223 — mode picker + waybill + AI tracking + packing units / passengers */}
+      <ShipmentPackingPanel shipment={selected} refresh={refreshDetail} />
 
       {/* Manifest Groups (sub-consignments) */}
       <div className="mb-3" data-testid="ship-manifest-groups">
