@@ -3,7 +3,40 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 222 (Feb 2026)
+## Recently Resolved — Iteration 223 (Feb 2026)
+**MAJOR shipping enhancement — Container/Airport modes, polymorphic packing units, passenger suitcases, AI tracking.**
+
+### Two shipment modes
+- New `mode` field on shipments: `"container"` (default) or `"airport"`. Validated at PUT. Existing shipments unaffected.
+- Waybill/BOL/flight fields on all shipments: `waybill_no`, `flight_no`, `carrier_name`, `tracking_url`, `departure_date`, `arrival_date`, `origin_country`.
+
+### Container mode — polymorphic packing units
+- New collection field `packing_units[]` on shipments — each unit has `{id, type: pallet|box|tote|crate, name, preset_key, L_cm, W_cm, H_cm, weight_capacity_kg, color, parent_id (stacking), floor_x_cm, floor_y_cm, notes}`.
+- **12 built-in presets** from real freight specs: EUR pallet (120×80×14.5cm/1500kg), US pallet, large/medium/small moving boxes, plastic tote 54L, wooden crate, banana box, plus airport suitcases and duffel.
+- CRUD endpoints: `POST/PUT/DELETE /api/shipments/{sid}/packing-units[/uid]`. DELETE cascades: items → unassigned, children stacked on it → floor.
+- **2D top-down SVG floor plan** — draws every floor-level unit to scale on the 40' container footprint (12.03m × 2.35m). Stacked children shown "+N stacked" on the parent. Click any unit → edit dialog. Live floor-% and total-kg-capacity readouts.
+
+### Airport mode — passengers + suitcases
+- `passengers[]` — `{name, passport_no, ticket_no, flight_no, suitcase_allowance_kg, suitcase_count_allowance}`.
+- `suitcases[]` — `{passenger_id, type (suitcase/carry_on/duffel/tote), preset dims, weight_kg, weight_limit_kg, tracking_no (bag-tag), color}`.
+- Over-limit warnings — per-bag AND per-passenger totals turn rose when exceeding allowance.
+- Cascade delete: removing a passenger clears items' passenger_id + suitcase_id AND pulls all their suitcases. Removing a suitcase clears items' suitcase_id only.
+
+### AI tracking (Gemini 3 Flash)
+- `POST /api/shipments/{sid}/ai-tracking` returns `{summary, hint, tracking_urls[]}`. Summary is a ≤90-word plain-English status estimate from waybill + flight + dates + destination. Also assembles a click-through list of tracking URLs: direct URL if set, Google search for waybill_no, FlightAware for flight_no, and Google search for each suitcase's bag-tag.
+- Graceful degradation — returns URL list even if Gemini call fails; returns 503 (not 500) if EMERGENT_LLM_KEY missing.
+
+### Item schema additions
+- `packing_unit_id`, `suitcase_id`, `passenger_id` — at most one of the first two should be set. All added to `_normalise_item` defaults and the PUT whitelist.
+
+### Files
+- Backend: `/app/backend/routers/shipments.py` — appended ~330 lines at file end.
+- Frontend: NEW file `/app/frontend/src/pages/shipping/ShipmentPackingPanel.jsx` (~600 lines) mounted via 1-line import + 1-line JSX in `ShipmentsAdminPage.jsx`.
+
+### Test coverage
+`/app/backend/tests/test_iter223_packing_airport.py` — 18/18 pass. Iter216-218 regression 45/45 pass. Frontend 12+ primary testids all present and dialogs render.
+
+
 **Root cause of "HR still not posting to Accounting" — location scope mismatch.**
 
 Production user reported: modal says "in_sync", Fix Ledger Postings shows no issues, but the Accounting page still doesn't show the payroll transactions.  The transactions WERE posting; they just weren't visible because of a strict-equality location filter bug that predates iter219.
