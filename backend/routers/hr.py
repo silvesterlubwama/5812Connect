@@ -1078,8 +1078,8 @@ async def reset_hr_module(
     # Build campus scope filter
     role = (current_user.get("role") or "").lower()
     if campus_scope == "all":
-        if role not in {"admin", "system_admin"}:
-            raise HTTPException(status_code=403, detail="Only system_admin can reset all campuses")
+        if role != "system_admin":
+            raise HTTPException(status_code=403, detail="Only system_admin can reset across all campuses")
         loc_filter: dict = {}
         loc_ids_for_expenses: list = []  # empty means all
     else:

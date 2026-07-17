@@ -1,5 +1,29 @@
 # 58:12 Connect — Changelog
 
+## Iteration 225 (Feb 2026) — HR Reset Danger Zone + shipments.py Modular Split
+
+### 🔴 P0 — HR Module Reset Button
+- **Backend** `DELETE /api/hr/reset` (admin-only). Query params: `scope` (`payslips` | `all`), `campus_scope` (`active` | `all` — system_admin only), `ledger` (`reverse` | `delete`), `confirm` (must equal `RESET-HR` to actually delete; otherwise returns a dry-run preview).
+- Deletes across up to 11 HR collections (`hr_payslips`, `hr_salaries`, `hr_salary_history`, `hr_contracts`, `hr_contract_templates`, `hr_doc_requests`, `hr_timesheets`, `hr_time_off`, `hr_leave_requests`, `hr_reimbursements`, `hr_attendance`) with the `_hr_reset=True` flag added to every recycled doc for later filtering.
+- Unwinds payroll ledger postings: `ledger=reverse` posts offsetting JEs (auditable) via `_reverse_auto_posted_je`; `ledger=delete` hard-removes the payroll expenses + JEs.
+- Recycle-bin dump — every deleted doc is snapshotted into `db.deleted_items` before hard-delete so admins can recover if needed.
+- **Frontend** — new red "Reset" button in the HR page header (admin/system_admin only) opens a two-step confirmation dialog: pick scope + campus + ledger action → "Preview count" fetches the dry-run → user types `RESET-HR` → "Permanently reset" applies.
+- 27/27 backend tests pass (1 destructive apply skipped for safety per test-agent policy).
+
+### 🔴 P0 — `shipments.py` split into modular package
+- Broke the 2737-line `/app/backend/routers/shipments.py` into `/app/backend/routers/shipments_pkg/` with 6 files (all ≤ 760 lines):
+  - `__init__.py` (17 lines) — combined router.
+  - `_common.py` (483 lines) — shared helpers, constants, PIN/security re-exports (`_normalise_item`, `_add_or_merge_item`, `_normalise_pallet`, `_classify_hs_with_ai`, `_sort_items_for_manifest`, `_loc_str`, `_resolve_group`, `_PDF_STYLES`, `_waybill_html`, `_persist_shipment_image`, `PACKING_PRESETS`, `PUBLIC_ITEM_WISHLIST_FIELDS`, `CONTAINER_40FT_HC`, `VALID_*` sets).
+  - `core.py` (154 lines) — shipment CRUD, PIN, token rotation.
+  - `items.py` (756 lines) — items CRUD, HS-code classification, manifest & commercial-invoice PDFs, photo upload, find-link, bulk import.
+  - `pallets.py` (435 lines) — pallets CRUD, packing units (pallet/box/tote/crate presets), AI packing scenario + AI suggest packing + apply, QR labels PDF.
+  - `public.py` (668 lines) — every `/api/public/shipments/*` endpoint (donor view, editor login, mirror mutations, kiosk scan-item).
+  - `airport.py` (247 lines) — passengers, suitcases, admin waybill HTML, AI tracking summaries.
+- All 55 original `@router.*` decorators preserved 1:1 (44 unique paths verified via FastAPI's route introspection). Server log confirms "All modular routers loaded" with zero errors.
+- `server.py` updated: `from routers.shipments_pkg import router as shipments_router`.
+- Old `shipments.py` file deleted.
+
+
 ## Iteration 210 (Feb 2026) — Reconcile: transfers included · Onboarding: inline Fix links
 ### 🟡 P2 — Reconcile now covers transfers
 - `GET /api/financial/reconciliation` returns two new arrays:

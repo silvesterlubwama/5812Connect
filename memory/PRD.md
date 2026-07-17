@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 225 (Feb 2026)
+**HR module Reset danger button · shipments.py split into a modular package.**
+
+- **HR Reset (P0)** — new `DELETE /api/hr/reset` admin-only endpoint with a two-axis knob: `scope` (`payslips` or `all` HR collections) × `campus_scope` (`active` or `all` — the latter is system_admin-only) × `ledger` (`reverse` posts offsetting JEs; `delete` hard-removes). Every deletion is dry-run-first and requires `confirm=RESET-HR`. Recycled docs are dumped into `db.deleted_items` with `_hr_reset=True` before hard-delete. Frontend adds a red "Reset" button in the HR header (admin-only) that opens a two-step confirmation dialog (preview count → type `RESET-HR` → apply).
+- **shipments.py modular split (P0)** — the 2737-line `/app/backend/routers/shipments.py` file was refactored into `/app/backend/routers/shipments_pkg/` with 6 files (all ≤ 760 lines): `_common.py` (shared helpers + constants + PIN/security re-exports), `core.py` (shipment CRUD + PIN + rotate-token), `items.py` (items CRUD + HS + manifest & invoice PDFs + bulk-import + photo + find-link), `pallets.py` (pallets + packing units + AI packing + labels), `public.py` (all `/api/public/shipments/*` endpoints including donor view + editor + kiosk scan), `airport.py` (passengers + suitcases + waybill + AI tracking). All 55 original `@router.*` decorators are preserved 1:1 (44 unique paths). Server logs confirm "All modular routers loaded". 27/27 backend tests pass.
+
+
 ## Recently Resolved — Iteration 224 (Feb 2026)
 **PIN-editor name capture · drag-and-drop floor plan · QR labels · AI-suggest packing.**
 
