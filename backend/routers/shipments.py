@@ -1464,8 +1464,10 @@ async def public_shipment(token: str, request: Request):
     # in the wishlist case (no 401 for anonymous callers).
     unlocked = False
     edit_token = (request.query_params.get("edit_token") or "").strip()
-    if edit_token and _verify_edit_token(edit_token) == s["id"]:
-        unlocked = True
+    if edit_token:
+        _v = _verify_edit_token(edit_token)
+        if _v and _v.get("shipment_id") == s["id"]:
+            unlocked = True
     if not unlocked:
         auth = request.headers.get("Authorization") or ""
         if auth.startswith("Bearer "):
@@ -1675,11 +1677,15 @@ async def public_donate(token: str, item_id: str, data: dict):
 
 @router.post("/public/shipments/{token}/login")
 async def public_login(token: str, data: dict):
-    """Trade a PIN for an edit_token. Default TTL 12h; the caller may pass
-    `ttl_hours` (capped to 24h) to extend the session for long pack days."""
+    """Trade a PIN + editor name for an edit_token.  `editor_name` is now
+    REQUIRED (iter224) so every downstream edit is audit-traceable to a real
+    person.  Default TTL 12h; caller may pass ttl_hours ≤ 24."""
     pin = (data.get("pin") or "").strip()
+    editor_name = (data.get("editor_name") or "").strip()
     if not pin:
         raise HTTPException(status_code=400, detail="PIN required")
+    if not editor_name or len(editor_name) < 2:
+        raise HTTPException(status_code=400, detail="Your name is required (min 2 characters)")
     s = await db.shipments.find_one(
         {"token": token}, {"_id": 0, "id": 1, "access_pin_hash": 1, "status": 1},
     )
@@ -1690,10 +1696,18 @@ async def public_login(token: str, data: dict):
     if not hmac.compare_digest(s["access_pin_hash"], _hash_pin(pin)):
         raise HTTPException(status_code=401, detail="Incorrect PIN")
     ttl = max(1, min(24, int(data.get("ttl_hours") or EDIT_TOKEN_TTL_HOURS)))
+    # Log the login for audit
+    await db.shipment_editor_logins.insert_one({
+        "shipment_id": s["id"],
+        "editor_name": editor_name[:80],
+        "at": datetime.now(timezone.utc).isoformat(),
+        "ttl_hours": ttl,
+    })
     return {
-        "edit_token": _make_edit_token(s["id"], ttl_hours=ttl),
+        "edit_token": _make_edit_token(s["id"], ttl_hours=ttl, editor_name=editor_name),
         "ttl_hours": ttl,
         "shipment_id": s["id"],
+        "editor_name": editor_name[:80],
     }
 
 
@@ -2517,3 +2531,188 @@ async def ai_track_shipment(shipment_id: str, current_user: dict = Depends(requi
         "flight_no": flight,
         "carrier": carrier,
     }
+
+
+# ============================================================
+# iter224 — QR labels + AI-suggest packing
+# ============================================================
+
+@router.get("/shipments/{shipment_id}/labels.pdf")
+async def shipment_labels_pdf(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Printable per-packing-unit labels PDF (10 labels per A4 sheet).
+    Each label carries a QR code encoding the unit's URL for warehouse check-in
+    scanning, plus type/name/dims/weight-cap."""
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    units = s.get("packing_units") or []
+    if not units:
+        raise HTTPException(status_code=400, detail="No packing units to label")
+    try:
+        import qrcode
+        import io as _io
+        import base64 as _b64
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"QR library unavailable: {e}")
+    base_url = _os.environ.get("PUBLIC_APP_URL", "").rstrip("/") or ""
+    label_rows = ""
+    for u in units:
+        qr_url = f"{base_url}/public/packing-unit/{shipment_id}/{u['id']}" if base_url else f"pku:{shipment_id}:{u['id']}"
+        img = qrcode.make(qr_url)
+        buf = _io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+        b64 = _b64.b64encode(buf.read()).decode()
+        label_rows += (
+            f"<div class='label'>"
+            f"  <img src='data:image/png;base64,{b64}' />"
+            f"  <div class='meta'>"
+            f"    <div class='type'>{u['type'].upper()}</div>"
+            f"    <div class='name'>{u.get('name','')[:40]}</div>"
+            f"    <div class='dims'>{u.get('L_cm')}×{u.get('W_cm')}×{u.get('H_cm')}cm · {u.get('weight_capacity_kg')}kg</div>"
+            f"    <div class='sid'>{u['id']}</div>"
+            f"  </div>"
+            f"</div>"
+        )
+    html = f"""<html><head><style>
+@page {{ size: A4; margin: 8mm; }}
+body {{ font-family: -apple-system, Arial, sans-serif; margin: 0; }}
+.grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 6mm; }}
+.label {{ border: 2px dashed #0f172a; padding: 6mm; display: flex; gap: 5mm; align-items: center; page-break-inside: avoid; min-height: 45mm; }}
+.label img {{ width: 35mm; height: 35mm; }}
+.meta {{ font-size: 10px; line-height: 1.3; }}
+.type {{ font-size: 14px; font-weight: 800; letter-spacing: 1px; color: #0f172a; }}
+.name {{ font-size: 12px; font-weight: 600; margin-top: 2mm; }}
+.dims {{ font-family: monospace; color: #64748b; margin-top: 1mm; }}
+.sid {{ font-family: monospace; font-size: 8px; color: #94a3b8; margin-top: 2mm; }}
+</style></head><body><div class='grid'>{label_rows}</div></body></html>"""
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    pdf = HTML(string=html).write_pdf()
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", s.get("name") or "shipment")[:40]
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="labels_{safe}_{shipment_id[:8]}.pdf"'},
+    )
+
+
+@router.post("/shipments/{shipment_id}/ai-suggest-packing")
+async def ai_suggest_packing(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Ask Gemini to look at the shipment's items + available packing presets
+    and propose an optimal breakdown into pallets/boxes/totes.  Returns a JSON
+    list of proposed units (not persisted — user must click "Apply")."""
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key configured)")
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items = s.get("items") or []
+    if not items:
+        raise HTTPException(status_code=400, detail="No items to plan for")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+
+    # Summarise items for the prompt (cap at 40 to control token cost)
+    items_desc = []
+    total_wt = 0.0
+    for i in items[:40]:
+        qty = int(i.get("qty_acquired") or 0)
+        wt = float(i.get("weight_kg") or 0) * qty
+        total_wt += wt
+        items_desc.append(f"- {i.get('name','?')[:60]} ({qty} units, {wt:.1f}kg total, category={i.get('category','?')}, condition={i.get('condition','used')})")
+    presets_desc = "\n".join([
+        f"- {k}: {p['L_cm']}×{p['W_cm']}×{p['H_cm']}cm, cap {p['cap_kg']}kg ({p['label']})"
+        for k, p in PACKING_PRESETS.items() if k not in ("suitcase_lg","suitcase_md","carry_on","duffel")
+    ])
+    sys_msg = (
+        "You are a container packing expert.  Given a list of donation items "
+        "and a menu of packing presets, propose an efficient breakdown into "
+        "pallets/boxes/totes.  Output STRICT JSON only:\n"
+        '{"units": [{"type":"pallet|box|tote|crate", "preset_key":"...", '
+        '"name":"...", "reason":"<=60 chars", "est_weight_kg": 0}], '
+        '"strategy": "<=200 chars summary"}\n'
+        "Rules:\n"
+        "- Group heavy items on pallets; light bulky items in totes; fragile in boxes.\n"
+        "- Do NOT exceed each preset's cap_kg.\n"
+        "- Provide roughly ceil(total_weight/1500) pallets when items are dense.\n"
+        "- Return between 3 and 20 units — no more.\n"
+        "- No markdown fences.  JSON only."
+    )
+    user_text = (
+        f"Total items lines: {len(items)} · Total weight (top 40): {total_wt:.1f}kg\n\n"
+        f"Items sample:\n" + "\n".join(items_desc) + "\n\n"
+        f"Packing presets available:\n{presets_desc}"
+    )
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"pack_suggest_{uuid.uuid4().hex[:8]}",
+            system_message=sys_msg,
+        ).with_model("gemini", "gemini-3-flash-preview")
+        raw = (await chat.send_message(UserMessage(text=user_text)) or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", raw).strip()
+        parsed = json.loads(raw)
+    except Exception as ex:
+        logger.warning(f"AI suggest-packing failed: {ex}")
+        raise HTTPException(status_code=502, detail=f"AI returned invalid response: {str(ex)[:120]}")
+    proposals = parsed.get("units") or []
+    # Enrich proposals with actual dims from PACKING_PRESETS for the UI to preview
+    for p in proposals:
+        preset = PACKING_PRESETS.get(p.get("preset_key") or "", {})
+        if preset:
+            p["L_cm"] = preset["L_cm"]; p["W_cm"] = preset["W_cm"]
+            p["H_cm"] = preset["H_cm"]; p["weight_capacity_kg"] = preset["cap_kg"]
+    return {
+        "strategy": (parsed.get("strategy") or "")[:250],
+        "units": proposals[:20],
+        "items_analysed": min(len(items), 40),
+        "total_weight_kg": round(total_wt, 1),
+    }
+
+
+@router.post("/shipments/{shipment_id}/apply-suggested-packing")
+async def apply_suggested_packing(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Persist the AI-proposed packing units (from ai-suggest-packing).  Lays them
+    out on the container floor in a simple left-to-right grid."""
+    units_data = (data or {}).get("units") or []
+    if not units_data:
+        raise HTTPException(status_code=400, detail="No units provided")
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "container_dims_cm": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    container_L = (s.get("container_dims_cm") or {}).get("length_cm", 1203)
+    x, y, row_h = 0, 0, 0
+    created_units = []
+    for u in units_data:
+        preset = PACKING_PRESETS.get(u.get("preset_key") or "", {})
+        L = float(u.get("L_cm") or preset.get("L_cm") or 60)
+        W = float(u.get("W_cm") or preset.get("W_cm") or 40)
+        # Simple shelf-packing: wrap when we hit container length
+        if x + L > container_L:
+            x = 0; y += row_h; row_h = 0
+        unit = {
+            "id": f"pku_{uuid.uuid4().hex[:8]}",
+            "type": (u.get("type") or "box").lower(),
+            "name": (u.get("name") or preset.get("label") or "Unit")[:80],
+            "preset_key": u.get("preset_key") or "",
+            "L_cm": L, "W_cm": W, "H_cm": float(u.get("H_cm") or preset.get("H_cm") or 30),
+            "weight_capacity_kg": float(u.get("weight_capacity_kg") or preset.get("cap_kg") or 20),
+            "color": (u.get("color") or "#94a3b8"),
+            "parent_id": None,
+            "floor_x_cm": float(x), "floor_y_cm": float(y),
+            "notes": (u.get("reason") or "")[:200],
+            "ai_suggested": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        created_units.append(unit)
+        x += L; row_h = max(row_h, W)
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$push": {"packing_units": {"$each": created_units}}},
+    )
+    return {"created": len(created_units), "units": created_units}

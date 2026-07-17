@@ -245,10 +245,41 @@ function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh }) {
         <Button size="sm" variant="outline" onClick={onAdd} data-testid="ship-add-packing-unit">
           <Plus size={12} className="mr-1" /> Add pallet / box / tote
         </Button>
+        <Button size="sm" variant="outline" className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                onClick={async () => {
+                  const items = shipment?.items || [];
+                  if (items.length === 0) { toast.warning('Add items first, then AI can suggest packing.'); return; }
+                  const t = toast.loading('AI analysing items…');
+                  try {
+                    const r = await api.post(`/shipments/${shipment.id}/ai-suggest-packing`);
+                    toast.dismiss(t);
+                    const msg = `AI proposes ${r.data.units.length} units:\n\n${r.data.strategy}\n\n${r.data.units.map(u => `• ${u.type.toUpperCase()} · ${u.preset_key} — ${u.reason || ''}`).join('\n')}\n\nApply this layout to your container?`;
+                    if (!window.confirm(msg)) return;
+                    const apply = await api.post(`/shipments/${shipment.id}/apply-suggested-packing`, { units: r.data.units });
+                    toast.success(`Created ${apply.data.created} packing units`); refresh();
+                  } catch (e) { toast.dismiss(t); toast.error(e.response?.data?.detail || 'AI packing failed'); }
+                }} data-testid="ship-ai-suggest-packing">
+          <Sparkles size={12} className="mr-1" /> AI Suggest
+        </Button>
+        <Button size="sm" variant="outline"
+                onClick={async () => {
+                  if ((shipment?.packing_units || []).length === 0) { toast.warning('Add packing units first.'); return; }
+                  try {
+                    const r = await api.get(`/shipments/${shipment.id}/labels.pdf`, { responseType: 'blob' });
+                    const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+                    const a = document.createElement('a'); a.href = url;
+                    a.download = `labels-${(shipment?.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.pdf`;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    URL.revokeObjectURL(url); toast.success('Labels PDF downloaded');
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Label generation failed'); }
+                }} data-testid="ship-print-labels">
+          <PackageOpen size={12} className="mr-1" /> Print QR labels
+        </Button>
       </div>
 
       {/* 2D top-down floor plan */}
-      <FloorPlanSVG L={L} W={W} floorUnits={floorUnits} childrenOf={childrenOf} onSelect={onEdit} />
+      <FloorPlanSVG L={L} W={W} floorUnits={floorUnits} childrenOf={childrenOf}
+                    onSelect={onEdit} sid={shipment.id} refresh={refresh} />
 
       {/* List of units by parent */}
       <div className="space-y-1.5">
@@ -263,38 +294,70 @@ function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh }) {
   );
 }
 
-// ─── 2D top-down container floor plan ────────────────────────────
-function FloorPlanSVG({ L, W, floorUnits, childrenOf, onSelect }) {
+// ─── 2D top-down container floor plan (with drag-and-drop) ──────
+function FloorPlanSVG({ L, W, floorUnits, childrenOf, onSelect, sid, refresh }) {
   const SCALE = 0.6; // px per cm
   const svgW = L * SCALE + 20;
   const svgH = W * SCALE + 20;
+  const [dragging, setDragging] = useState(null); // {id, offsetX, offsetY}
+
+  const onPointerDown = (e, u) => {
+    e.stopPropagation();
+    const svgRect = e.currentTarget.ownerSVGElement.getBoundingClientRect();
+    const px = e.clientX - svgRect.left - 10;  // svg-local x in px (minus 10 padding)
+    const py = e.clientY - svgRect.top - 10;
+    setDragging({ id: u.id, offX: px - u.floor_x_cm * SCALE, offY: py - u.floor_y_cm * SCALE, u });
+  };
+  const onPointerMove = (e) => {
+    if (!dragging) return;
+    const svgRect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - svgRect.left - 10;
+    const py = e.clientY - svgRect.top - 10;
+    const newX = Math.max(0, Math.min(L - dragging.u.L_cm, (px - dragging.offX) / SCALE));
+    const newY = Math.max(0, Math.min(W - dragging.u.W_cm, (py - dragging.offY) / SCALE));
+    // Live-update the SVG rect via DOM (avoids state churn during drag)
+    const rect = e.currentTarget.querySelector(`[data-uid="${dragging.id}"] rect`);
+    const nameLbl = e.currentTarget.querySelector(`[data-uid="${dragging.id}"] text`);
+    if (rect) { rect.setAttribute('x', 10 + newX * SCALE); rect.setAttribute('y', 10 + newY * SCALE); }
+    if (nameLbl) { nameLbl.setAttribute('x', 10 + newX * SCALE + 4); nameLbl.setAttribute('y', 10 + newY * SCALE + 12); }
+    dragging._pendingX = newX; dragging._pendingY = newY;
+  };
+  const onPointerUp = async () => {
+    if (!dragging) return;
+    const d = dragging; setDragging(null);
+    if (d._pendingX === undefined) return;
+    try {
+      await api.put(`/shipments/${sid}/packing-units/${d.id}`,
+                    { floor_x_cm: d._pendingX, floor_y_cm: d._pendingY });
+      refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); refresh(); }
+  };
+
   return (
-    <svg width={svgW} height={svgH} className="border border-slate-300 rounded bg-slate-50" data-testid="floor-plan-svg">
-      {/* Container outline */}
+    <svg
+      width={svgW} height={svgH}
+      className="border border-slate-300 rounded bg-slate-50 select-none"
+      data-testid="floor-plan-svg"
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+    >
       <rect x={10} y={10} width={L * SCALE} height={W * SCALE} fill="#fff" stroke="#334155" strokeWidth="2" />
-      <text x={12} y={svgH - 4} fontSize="9" fill="#64748b">{(L / 100).toFixed(1)}m × {(W / 100).toFixed(1)}m container floor</text>
-      {floorUnits.map((u, i) => {
+      <text x={12} y={svgH - 4} fontSize="9" fill="#64748b">{(L / 100).toFixed(1)}m × {(W / 100).toFixed(1)}m container floor · drag units to reposition</text>
+      {floorUnits.map((u) => {
         const stackCount = childrenOf(u.id).length;
         return (
-          <g key={u.id} onClick={() => onSelect(u)} style={{ cursor: 'pointer' }} data-testid={`floor-unit-${u.id}`}>
-            <rect
-              x={10 + u.floor_x_cm * SCALE}
-              y={10 + u.floor_y_cm * SCALE}
-              width={u.L_cm * SCALE}
-              height={u.W_cm * SCALE}
-              fill={u.color || UNIT_COLORS[u.type] || '#94a3b8'}
-              fillOpacity="0.7"
-              stroke="#0f172a"
-              strokeWidth="1"
-            />
-            <text x={10 + u.floor_x_cm * SCALE + 4} y={10 + u.floor_y_cm * SCALE + 12} fontSize="9" fill="#0f172a" fontWeight="600">
-              {u.name}
+          <g key={u.id} data-uid={u.id} onPointerDown={(e) => onPointerDown(e, u)}
+             onDoubleClick={() => onSelect(u)} style={{ cursor: dragging?.id === u.id ? 'grabbing' : 'grab' }}
+             data-testid={`floor-unit-${u.id}`}>
+            <rect x={10 + u.floor_x_cm * SCALE} y={10 + u.floor_y_cm * SCALE}
+                  width={u.L_cm * SCALE} height={u.W_cm * SCALE}
+                  fill={u.color || UNIT_COLORS[u.type] || '#94a3b8'}
+                  fillOpacity="0.7" stroke="#0f172a" strokeWidth="1" />
+            <text x={10 + u.floor_x_cm * SCALE + 4} y={10 + u.floor_y_cm * SCALE + 12}
+                  fontSize="9" fill="#0f172a" fontWeight="600" pointerEvents="none">
+              {u.name}{stackCount > 0 ? ` (+${stackCount})` : ''}
             </text>
-            {stackCount > 0 && (
-              <text x={10 + u.floor_x_cm * SCALE + 4} y={10 + u.floor_y_cm * SCALE + 24} fontSize="8" fill="#0f172a">
-                +{stackCount} stacked
-              </text>
-            )}
           </g>
         );
       })}

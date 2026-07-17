@@ -49,6 +49,9 @@ export default function ShipmentDonorPage() {
   });
   const [showLogin, setShowLogin] = useState(false);
   const [pinInput, setPinInput] = useState('');
+  const [editorNameInput, setEditorNameInput] = useState(() => {
+    try { return localStorage.getItem('ship-editor-name') || ''; } catch { return ''; }
+  });
   const [showScanner, setShowScanner] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanResult, setScanResult] = useState(null);  // result from /scan-item
@@ -122,17 +125,24 @@ export default function ShipmentDonorPage() {
 
   // ─── Editor login flow ───────────────────────────────────────────
   const submitLogin = async () => {
+    if (!editorNameInput.trim() || editorNameInput.trim().length < 2) {
+      toast.error('Please enter your name (min 2 characters)'); return;
+    }
     setLoginBusy(true);
     try {
       const r = await api.post(`/public/shipments/${token}/login`, {
         pin: pinInput.trim(),
+        editor_name: editorNameInput.trim(),
         ttl_hours: pinLongSession ? 24 : 12,
       });
-      try { localStorage.setItem(`ship-edit-token:${token}`, r.data.edit_token); } catch { /* ignore */ }
+      try {
+        localStorage.setItem(`ship-edit-token:${token}`, r.data.edit_token);
+        localStorage.setItem('ship-editor-name', editorNameInput.trim());
+      } catch { /* ignore */ }
       setEditToken(r.data.edit_token);
-      toast.success(`Editor session unlocked — ${r.data.ttl_hours}h`);
+      toast.success(`Welcome ${r.data.editor_name} — session unlocked ${r.data.ttl_hours}h`);
       setShowLogin(false); setPinInput(''); setPinLongSession(false);
-    } catch (e) { toast.error(e.response?.data?.detail || 'Incorrect PIN'); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Login failed'); }
     finally { setLoginBusy(false); }
   };
   const logoutEditor = () => {
@@ -637,7 +647,7 @@ export default function ShipmentDonorPage() {
                 <Input type="number" min="1" max={pickItem.qty_remaining}
                   value={donateForm.qty} onChange={e => setDonateForm({ ...donateForm, qty: e.target.value })}
                   data-testid="ship-donor-qty" />
-                <p className="text-[10px] text-muted-foreground">We'll cap at {pickItem.qty_remaining} (what's still needed).</p>
+                <p className="text-[10px] text-muted-foreground">We&apos;ll cap at {pickItem.qty_remaining} (what&apos;s still needed).</p>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium">Your name <span className="opacity-60">(optional)</span></label>
@@ -666,9 +676,15 @@ export default function ShipmentDonorPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 mt-2">
+            <div className="space-y-1"><Label className="text-xs">Your name *</Label>
+              <Input value={editorNameInput} onChange={e => setEditorNameInput(e.target.value)}
+                placeholder="e.g. Sarah Muyanja" autoFocus
+                data-testid="ship-donor-editor-name" />
+              <p className="text-[10px] text-muted-foreground italic">Every edit will be tagged with your name for audit.</p>
+            </div>
             <div className="space-y-1"><Label className="text-xs">Shipment PIN</Label>
               <Input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)}
-                placeholder="••••••••" autoFocus
+                placeholder="••••••••"
                 onKeyDown={e => e.key === 'Enter' && submitLogin()}
                 data-testid="ship-donor-pin-input" />
             </div>
@@ -683,7 +699,9 @@ export default function ShipmentDonorPage() {
             </label>
             <div className="flex gap-2 pt-1">
               <Button variant="ghost" className="flex-1" onClick={() => { setShowLogin(false); setPinInput(''); setPinLongSession(false); }}>Cancel</Button>
-              <Button className="flex-1" onClick={submitLogin} disabled={loginBusy || !pinInput.trim()} data-testid="ship-donor-pin-submit">
+              <Button className="flex-1" onClick={submitLogin}
+                      disabled={loginBusy || !pinInput.trim() || editorNameInput.trim().length < 2}
+                      data-testid="ship-donor-pin-submit">
                 {loginBusy ? 'Signing in…' : 'Sign in'}
               </Button>
             </div>

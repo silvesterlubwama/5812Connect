@@ -36,25 +36,37 @@ def hash_pin(pin: str) -> str:
     return hashlib.sha256(_PIN_SALT + pin.encode("utf-8")).hexdigest()
 
 
-def make_edit_token(shipment_id: str, ttl_hours: int = EDIT_TOKEN_TTL_HOURS) -> str:
-    """HMAC-signed 'shipment_id:expires_iso' token. Base64-url encoded.
-    `ttl_hours` lets the caller request a longer session (capped to 24h)."""
+def make_edit_token(shipment_id: str, ttl_hours: int = EDIT_TOKEN_TTL_HOURS, editor_name: str = "") -> str:
+    """HMAC-signed token carrying shipment_id, editor name (iter224) and expiry.
+    Base64-url encoded.  `editor_name` is embedded so every edit can be audited
+    back to a real person even though PIN-editors aren't in the user table."""
     ttl = max(1, min(24, int(ttl_hours or EDIT_TOKEN_TTL_HOURS)))
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl)).isoformat()
-    payload = f"{shipment_id}|{expires_at}"
+    # Sanitise editor_name — no pipes (our separator), keep it short.
+    en = (editor_name or "").replace("|", "").strip()[:80]
+    payload = f"{shipment_id}|{en}|{expires_at}"
     sig = hmac.new(_PIN_SECRET, payload.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode().rstrip("=")
 
 
-def verify_edit_token(token: str) -> Optional[str]:
-    """Return the shipment_id if the token is valid + unexpired, else None."""
+def verify_edit_token(token: str):
+    """Return {shipment_id, editor_name} if token valid + unexpired, else None.
+    Backwards-compatible with the pre-iter224 format (no editor_name segment)."""
     try:
         padded = token + "=" * (-len(token) % 4)
         raw = base64.urlsafe_b64decode(padded).decode()
-        shipment_id, expires_at, sig = raw.rsplit("|", 2)
+        parts = raw.rsplit("|", 3)
     except Exception:
         return None
-    payload = f"{shipment_id}|{expires_at}"
+    if len(parts) == 4:
+        shipment_id, editor_name, expires_at, sig = parts
+    elif len(parts) == 3:
+        # Legacy 3-part payload (shipment|expires|sig) — no editor_name.
+        shipment_id, expires_at, sig = parts
+        editor_name = ""
+    else:
+        return None
+    payload = "|".join(parts[:-1])
     expected = hmac.new(_PIN_SECRET, payload.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
@@ -63,7 +75,7 @@ def verify_edit_token(token: str) -> Optional[str]:
             return None
     except Exception:
         return None
-    return shipment_id
+    return {"shipment_id": shipment_id, "editor_name": editor_name}
 
 
 async def require_shipment_editor(request: Request, token: str):
@@ -102,7 +114,11 @@ async def require_shipment_editor(request: Request, token: str):
     if not edit_token:
         edit_token = (request.query_params.get("edit_token") or "").strip()
     if edit_token:
-        sid = verify_edit_token(edit_token)
-        if sid == s["id"]:
-            return {"shipment_id": s["id"], "actor": "pin"}
+        verified = verify_edit_token(edit_token)
+        if verified and verified.get("shipment_id") == s["id"]:
+            return {
+                "shipment_id": s["id"],
+                "actor": "pin",
+                "editor_name": verified.get("editor_name", ""),
+            }
     raise HTTPException(status_code=401, detail="Edit-PIN required for this shipment")
