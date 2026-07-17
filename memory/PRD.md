@@ -3,7 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
-## Recently Resolved — Iteration 223 (Feb 2026)
+## Recently Resolved — Iteration 224 (Feb 2026)
+**PIN-editor name capture · drag-and-drop floor plan · QR labels · AI-suggest packing.**
+
+- **External editor name required** — PIN login body now requires `editor_name` (min 2 chars). Baked into the HMAC-signed edit_token so every downstream edit is audit-traceable. Every login also inserted into new `db.shipment_editor_logins` collection. Backwards-compatible with pre-iter224 3-part tokens.
+- **Drag-and-drop 2D floor plan** — packing units can be dragged directly on the SVG. Live DOM update while dragging + single PUT on pointer-up. Server clamps `floor_x_cm/floor_y_cm` to `(0, container_L − unit_L)` × `(0, container_W − unit_W)` so nothing persists outside the container.
+- **QR labels PDF** — `GET /api/shipments/{sid}/labels.pdf` renders 2-per-A4 labels with a scannable QR (encodes public URL) + type/name/dims/kg/unit-id. Uses the `qrcode` library + WeasyPrint.
+- **AI-suggest packing** — `POST /api/shipments/{sid}/ai-suggest-packing` calls Gemini 3 Flash with the item list + all packing presets and returns a proposal. `POST /api/shipments/{sid}/apply-suggested-packing` persists them via shelf-pack (auto-assigns floor_x/y wrapping at container length). One-click UX in the header: "AI Suggest" button opens confirm() → applies.
+- **Test coverage** — 15/15 new pytest + 18/18 iter223 + iter220-222 45/45 all pass. Frontend 100% testid presence.
+
+
 **MAJOR shipping enhancement — Container/Airport modes, polymorphic packing units, passenger suitcases, AI tracking.**
 
 ### Two shipment modes

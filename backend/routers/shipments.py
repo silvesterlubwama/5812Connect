@@ -2255,11 +2255,29 @@ async def add_packing_unit(shipment_id: str, data: dict, current_user: dict = De
 async def update_packing_unit(shipment_id: str, unit_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"name", "L_cm", "W_cm", "H_cm", "weight_capacity_kg", "color",
                "parent_id", "floor_x_cm", "floor_y_cm", "notes"}
+    # Load shipment to clamp floor coords to the container's floor
+    # (drag-drop from the UI would otherwise persist off-container positions).
+    s = await db.shipments.find_one(
+        {"id": shipment_id, "packing_units.id": unit_id},
+        {"_id": 0, "container_dims_cm": 1, "packing_units.$": 1},
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Packing unit not found")
+    dims = s.get("container_dims_cm") or {}
+    max_x = float(dims.get("length_cm") or 1203)
+    max_y = float(dims.get("width_cm") or 235)
+    current_unit = (s.get("packing_units") or [{}])[0]
+    unit_L = float(data.get("L_cm") or current_unit.get("L_cm") or 0)
+    unit_W = float(data.get("W_cm") or current_unit.get("W_cm") or 0)
     set_ops = {}
     for k, v in data.items():
         if k not in allowed:
             continue
-        if k in ("L_cm", "W_cm", "H_cm", "weight_capacity_kg", "floor_x_cm", "floor_y_cm"):
+        if k == "floor_x_cm":
+            set_ops[f"packing_units.$.{k}"] = max(0.0, min(max(0.0, max_x - unit_L), float(v or 0)))
+        elif k == "floor_y_cm":
+            set_ops[f"packing_units.$.{k}"] = max(0.0, min(max(0.0, max_y - unit_W), float(v or 0)))
+        elif k in ("L_cm", "W_cm", "H_cm", "weight_capacity_kg"):
             set_ops[f"packing_units.$.{k}"] = max(0, float(v or 0))
         elif k == "parent_id":
             set_ops[f"packing_units.$.{k}"] = v or None
