@@ -1,0 +1,756 @@
+"""Item CRUD, HS-code classification, manifest / commercial-invoice PDFs, bulk import."""
+from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from datetime import datetime, timezone
+import uuid
+import re
+import os as _os
+from deps import db, logger, _audit, require_admin
+from ._common import (
+    _normalise_item,
+    _shipment_units,
+    _add_or_merge_item,
+    _classify_hs_with_ai,
+    _sort_items_for_manifest,
+    _loc_str,
+    _resolve_group,
+    _PDF_STYLES,
+    VALID_PRIORITIES,
+)
+
+router = APIRouter(prefix="/api", tags=["shipments"])
+
+@router.post("/shipments/{shipment_id}/items")
+async def add_item(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    units = await _shipment_units(shipment_id)
+    item = _normalise_item(data, units)
+    return await _add_or_merge_item(shipment_id, item)
+
+@router.put("/shipments/{shipment_id}/items/{item_id}")
+async def update_item(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    allowed = {"name", "category", "qty_needed", "qty_acquired", "weight_kg",
+               "dims_cm", "photo_url", "image_urls", "value_usd", "notes", "priority",
+               "pallet_id", "parent_id", "container_type", "isbn", "upc",
+               "author", "publisher", "ai_identified",
+               "x_cm", "y_cm", "z_cm",
+               "hs_code", "hs_code_reason", "condition",
+               "manifest_group_id", "requires_pvoc", "pvoc_reason",
+               "packing_unit_id", "suitcase_id", "passenger_id"}
+    set_ops = {}
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        # Clamp numeric fields just like create
+        if k in ("qty_needed",):
+            set_ops[f"items.$.{k}"] = max(1, int(v or 1))
+        elif k in ("qty_acquired",):
+            set_ops[f"items.$.{k}"] = max(0, int(v or 0))
+        elif k in ("weight_kg", "value_usd", "x_cm", "y_cm", "z_cm"):
+            set_ops[f"items.$.{k}"] = max(0, float(v or 0))
+        elif k == "priority":
+            p = (v or "normal").lower()
+            set_ops[f"items.$.{k}"] = p if p in VALID_PRIORITIES else "normal"
+        elif k == "requires_pvoc":
+            set_ops[f"items.$.{k}"] = bool(v)
+        elif k == "manifest_group_id":
+            # Empty string / null → clear the group
+            set_ops[f"items.$.{k}"] = v if v else None
+        else:
+            set_ops[f"items.$.{k}"] = v
+    set_ops["items.$.updated_at"] = datetime.now(timezone.utc).isoformat()
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": set_ops},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/items/{item_id}")
+async def delete_item(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
+    r = await db.shipments.update_one(
+        {"id": shipment_id}, {"$pull": {"items": {"id": item_id}}}
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"deleted": True}
+
+
+@router.post("/shipments/{shipment_id}/prune-over-pledged")
+async def prune_over_pledged(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Trim every item's `qty_acquired` down to its `qty_needed` cap. Surplus
+    is logged on each item under `surplus_redistributed` for audit so packers
+    can reroute it to another shipment or storage bin.
+
+    Returns `{ trimmed: [{item_id, name, surplus}], total_surplus }`. No-op
+    rows are skipped entirely so the audit log stays clean.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    trimmed = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for it in (s.get("items") or []):
+        needed = int(it.get("qty_needed") or 0)
+        acquired = int(it.get("qty_acquired") or 0)
+        if needed <= 0 or acquired <= needed:
+            continue
+        surplus = acquired - needed
+        # Append to redistribution log + reset qty
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": it["id"]},
+            {
+                "$set": {
+                    "items.$.qty_acquired": needed,
+                    "items.$.updated_at": now_iso,
+                },
+                "$push": {
+                    "items.$.surplus_redistributed": {
+                        "qty": surplus,
+                        "at": now_iso,
+                        "by": current_user.get("email") or current_user.get("id"),
+                    },
+                },
+            },
+        )
+        trimmed.append({"item_id": it["id"], "name": it.get("name") or "", "surplus": surplus})
+    return {"trimmed": trimmed, "total_surplus": sum(t["surplus"] for t in trimmed)}
+
+
+# ─── Item photo upload + link-to-size estimation ────────────────
+
+from fastapi import UploadFile, File  # noqa: E402
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/photo")
+async def upload_item_photo(
+    shipment_id: str, item_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+):
+    """Upload a product photo for an item. Cloud-storage with disk fallback,
+    same pattern as child-extras / receipts."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Photo must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo must be under 5 MB")
+    ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "jpg"
+    unique = f"{shipment_id}-{item_id}-{uuid.uuid4().hex[:6]}.{ext}"
+    file_url = None
+    try:
+        from storage import put_object
+        result = put_object(f"shipment-items/{unique}", data, file.content_type)
+        file_url = result.get("url", f"/api/storage/shipment-items/{unique}")
+    except Exception as e:
+        logger.warning(f"Cloud put failed, saving locally: {e}")
+        import os as _os
+        _os.makedirs("/app/backend/uploads/shipment-items", exist_ok=True)
+        with open(f"/app/backend/uploads/shipment-items/{unique}", "wb") as fh:
+            fh.write(data)
+        file_url = f"/api/uploads/shipment-items/{unique}"
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {"items.$.photo_url": file_url}},
+    )
+    return {"photo_url": file_url}
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/find-link")
+async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
+    """Given an item that has no `source_url` yet, ask Gemini to pick the
+    best retailer for its category and return a guaranteed-working SEARCH
+    URL. We deliberately don't ask for deep ASIN/SKU links because those
+    drift / 404 — search URLs always resolve.
+
+    Returns: { url: str, retailer: str, query: str } and stores `source_url`
+    on the item so volunteers can click straight from the wishlist.
+    """
+    s = await db.shipments.find_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+    name = (item.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Item has no name to search")
+    category = (item.get("category") or "").strip()
+    isbn = (item.get("isbn") or "").strip()
+    upc = (item.get("upc") or "").strip()
+
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key configured)")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+
+    sys_msg = (
+        "You pick the best retailer to buy a donation-bound item and return a "
+        "SEARCH URL (never a deep ASIN/SKU — those rot). Retailers to choose "
+        "from, by category fit:\n"
+        "  Books / educational           → amazon, abebooks, betterworldbooks\n"
+        "  Food / pantry / baby formula  → walmart, amazon, target\n"
+        "  Medical / first-aid           → amazon, walmart, henryschein\n"
+        "  Electronics                   → amazon, bestbuy, walmart\n"
+        "  Household / kitchen / linen   → walmart, ikea, amazon\n"
+        "  Furniture                     → ikea, wayfair, amazon, macbid\n"
+        "  Tools / Construction          → homedepot, lowes, harborfreight, amazon\n"
+        "  Agriculture / Seeds           → tractor_supply, amazon\n"
+        "  Sports                        → dickssportinggoods, amazon, walmart\n"
+        "  Toiletries / personal care    → walmart, target, amazon\n"
+        "  BabyGear / strollers          → target, amazon, buybuybaby\n"
+        "  Bicycle                       → walmart, amazon, decathlon\n"
+        "  Toys                          → target, walmart, amazon\n"
+        "Output STRICT JSON: {\"retailer\": str, \"query\": str (≤80 chars, "
+        "what to put in the retailer's search box), \"reason\": str (≤80 chars)}."
+        " Strip brand spam from the query; keep it precise."
+    )
+    user_text = (
+        f"Item: {name}\n"
+        f"Category: {category or '(unspecified)'}\n"
+        f"ISBN: {isbn or '-'}\n"
+        f"UPC: {upc or '-'}\n"
+        "Pick the BEST retailer and a clean search query."
+    )
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"shipment_findlink_{item_id}_{uuid.uuid4().hex[:6]}",
+        system_message=sys_msg,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    raw = await chat.send_message(UserMessage(text=user_text))
+    s_text = (raw or "").strip()
+    if s_text.startswith("```"):
+        s_text = s_text.strip("`")
+        if s_text.lower().startswith("json"):
+            s_text = s_text[4:].strip()
+    first, last = s_text.find("{"), s_text.rfind("}")
+    if first >= 0 and last > first:
+        s_text = s_text[first:last + 1]
+    import json as _json
+    try:
+        parsed = _json.loads(s_text)
+    except Exception:
+        # Fallback — Amazon search of the item name
+        parsed = {"retailer": "amazon", "query": name, "reason": "AI fallback"}
+    retailer = (parsed.get("retailer") or "amazon").strip().lower()
+    query = (parsed.get("query") or name).strip()
+    # ISBN/UPC short-circuit — always more specific than a name search.
+    if isbn and retailer in ("amazon", "abebooks", "betterworldbooks"):
+        query = isbn
+    elif upc:
+        query = upc
+
+    import urllib.parse as _u
+    q = _u.quote_plus(query)
+    SEARCH_URLS = {
+        "amazon": f"https://www.amazon.com/s?k={q}",
+        "walmart": f"https://www.walmart.com/search?q={q}",
+        "target": f"https://www.target.com/s?searchTerm={q}",
+        "ebay": f"https://www.ebay.com/sch/i.html?_nkw={q}",
+        "homedepot": f"https://www.homedepot.com/s/{q}",
+        "lowes": f"https://www.lowes.com/search?searchTerm={q}",
+        "harborfreight": f"https://www.harborfreight.com/search?q={q}",
+        "bestbuy": f"https://www.bestbuy.com/site/searchpage.jsp?st={q}",
+        "ikea": f"https://www.ikea.com/us/en/search/?q={q}",
+        "wayfair": f"https://www.wayfair.com/keyword.php?keyword={q}",
+        "macbid": f"https://www.mac.bid/search?text={q}",
+        "abebooks": f"https://www.abebooks.com/servlet/SearchResults?kn={q}",
+        "betterworldbooks": f"https://www.betterworldbooks.com/search/results?q={q}",
+        "tractor_supply": f"https://www.tractorsupply.com/tsc/search/{q}",
+        "buybuybaby": f"https://www.buybuybaby.com/store/s/{q}",
+        "dickssportinggoods": f"https://www.dickssportinggoods.com/search/SearchDisplay?searchTerm={q}",
+        "decathlon": f"https://www.decathlon.com/search?q={q}",
+        "henryschein": f"https://www.henryschein.com/us-en/Search.aspx?searchkeyWord={q}",
+        "aliexpress": f"https://www.aliexpress.com/wholesale?SearchText={q}",
+    }
+    url = SEARCH_URLS.get(retailer) or SEARCH_URLS["amazon"]
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {
+            "items.$.source_url": url,
+            "items.$.source_retailer": retailer,
+            "items.$.source_found_at": datetime.now(timezone.utc).isoformat(),
+            "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"url": url, "retailer": retailer, "query": query, "reason": parsed.get("reason") or ""}
+@router.post("/shipments/{shipment_id}/manifest-groups")
+async def add_manifest_group(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Create a new manifest group (sub-consignment) inside a shipment."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name is required")
+    group = {
+        "id": f"mg_{uuid.uuid4().hex[:8]}",
+        "name": name[:120],
+        "consignee_name": (data.get("consignee_name") or "")[:120],
+        "consignee_address": (data.get("consignee_address") or "")[:500],
+        "notes": (data.get("notes") or "")[:500],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$push": {"manifest_groups": group}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return group
+
+
+@router.put("/shipments/{shipment_id}/manifest-groups/{group_id}")
+async def update_manifest_group(shipment_id: str, group_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Rename or edit a manifest group's metadata."""
+    allowed = {"name", "consignee_name", "consignee_address", "notes"}
+    set_ops = {}
+    for k, v in data.items():
+        if k in allowed:
+            set_ops[f"manifest_groups.$.{k}"] = (v or "")[:500 if k != "name" else 120]
+    if not set_ops:
+        return {"updated": False}
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "manifest_groups.id": group_id},
+        {"$set": set_ops},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"updated": True}
+
+
+@router.delete("/shipments/{shipment_id}/manifest-groups/{group_id}")
+async def delete_manifest_group(shipment_id: str, group_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a manifest group.  All items currently tagged with this group
+    are moved back to the 'unassigned' pool (they stay on the container)."""
+    # Un-assign items first
+    await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$set": {"items.$[itm].manifest_group_id": None}},
+        array_filters=[{"itm.manifest_group_id": group_id}],
+    )
+    r = await db.shipments.update_one(
+        {"id": shipment_id},
+        {"$pull": {"manifest_groups": {"id": group_id}}},
+    )
+    if r.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"deleted": True}
+
+
+# ========== HS CODE CLASSIFICATION + PRINTABLE MANIFEST (iter216) ==========
+@router.post("/shipments/{shipment_id}/items/{item_id}/classify-hs")
+async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
+    """Ask AI to classify one item's HS code + PVoC status + store on the item."""
+    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1, "dest_country": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+    result = await _classify_hs_with_ai(
+        item.get("name", ""), item.get("category", ""),
+        item.get("condition", "used"), s.get("dest_country", "") or "",
+    )
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {
+            "items.$.hs_code": result["hs_code"],
+            "items.$.hs_code_reason": result["reason"],
+            "items.$.requires_pvoc": result["requires_pvoc"],
+            "items.$.pvoc_reason": result["pvoc_reason"],
+            "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return result
+
+
+@router.post("/shipments/{shipment_id}/classify-hs-bulk")
+async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: dict = Depends(require_admin)):
+    """Classify HS codes + PVoC for every item in the shipment that doesn't have
+    one (or all items when `force=true`).  Returns per-item results + counters."""
+    force = bool((data or {}).get("force"))
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items = s.get("items") or []
+    dest_country = s.get("dest_country", "") or ""
+    targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
+    results = []
+    skipped = len(items) - len(targets)
+    for it in targets:
+        try:
+            r = await _classify_hs_with_ai(
+                it.get("name", ""), it.get("category", ""),
+                it.get("condition", "used"), dest_country,
+            )
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.id": it["id"]},
+                {"$set": {
+                    "items.$.hs_code": r["hs_code"],
+                    "items.$.hs_code_reason": r["reason"],
+                    "items.$.requires_pvoc": r["requires_pvoc"],
+                    "items.$.pvoc_reason": r["pvoc_reason"],
+                    "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            results.append({
+                "item_id": it["id"], "name": it["name"],
+                "hs_code": r["hs_code"], "reason": r["reason"],
+                "requires_pvoc": r["requires_pvoc"], "pvoc_reason": r["pvoc_reason"],
+                "ok": True,
+            })
+        except HTTPException as ex:
+            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": ex.detail})
+        except Exception as ex:  # pragma: no cover
+            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": str(ex)[:120]})
+    return {
+        "shipment_id": shipment_id,
+        "classified": sum(1 for r in results if r.get("ok")),
+        "failed": sum(1 for r in results if not r.get("ok")),
+        "skipped_existing": skipped,
+        "pvoc_flagged": sum(1 for r in results if r.get("requires_pvoc")),
+        "results": results,
+    }
+
+
+# ────── Shared helpers for manifest/invoice PDFs ────────────────────────
+@router.get("/shipments/{shipment_id}/manifest.pdf")
+async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Server-rendered printable customs manifest PDF.
+
+    Optional query param `group=<manifest_group_id>` scopes the PDF to a single
+    sub-consignment (e.g. "Lubwama Household Relocation").  Use `group=unassigned`
+    for items not tagged with any group.  No `group` = the whole container.
+
+    Items are sorted PVoC-required first, then highest value, then heaviest —
+    the natural review order for customs officers.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items, group_meta = _resolve_group(s, group)
+    items = _sort_items_for_manifest(items)
+    shipment_title = s.get("name", "")
+    heading = shipment_title
+    if group_meta:
+        heading = f"{shipment_title} · {group_meta.get('name', '')}"
+    rows_html = ""
+    for i, it in enumerate(items, 1):
+        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
+        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
+        rows_html += (
+            f"<tr class='{row_class}'>"
+            f"<td class='n'>{i}</td>"
+            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
+            f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
+            f"<td class='loc'>{_loc_str(it)}</td>"
+            f"<td class='c'><span class='cond {it.get('condition','used')}'>{(it.get('condition') or 'used').upper()}</span></td>"
+            f"<td class='n'>{it.get('qty_acquired', 0)}</td>"
+            f"</tr>"
+        )
+    if not rows_html:
+        rows_html = "<tr><td colspan='6' style='text-align:center;color:#94a3b8;padding:24px'>No items in this manifest</td></tr>"
+    total_items = sum(int(it.get("qty_acquired") or 0) for it in items)
+    total_weight = sum(float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0) for it in items)
+    total_value = sum(float(it.get("value_usd") or 0) * int(it.get("qty_acquired") or 0) for it in items)
+    pvoc_count = sum(1 for it in items if it.get("requires_pvoc"))
+    consignee_html = ""
+    if group_meta and (group_meta.get("consignee_name") or group_meta.get("consignee_address")):
+        consignee_html = (
+            f"<div class='consignee'><strong>Consignee:</strong> "
+            f"{group_meta.get('consignee_name', '')}"
+            f"{' — ' + group_meta.get('consignee_address', '') if group_meta.get('consignee_address') else ''}"
+            f"</div>"
+        )
+    pvoc_footnote = ""
+    if pvoc_count:
+        pvoc_footnote = (
+            f"<p class='meta' style='color:#991b1b;margin-top:6mm'><strong>{pvoc_count} PVoC item(s):</strong> "
+            f"Pre-Export Verification of Conformity certificate required at destination customs (EAC regulated goods).</p>"
+        )
+    html = f"""<html><head><meta charset='utf-8' /><style>{_PDF_STYLES}</style></head><body>
+  <div class='head'>
+    <div>
+      <h1>Container Manifest — {heading}</h1>
+      <p class='meta'>Shipment ID: {s.get('id', '')} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
+      <div class='totals'>
+        <div><span>Line items:</span> <strong>{len(items)}</strong></div>
+        <div><span>Units:</span> <strong>{total_items:,}</strong></div>
+        <div><span>Total weight:</span> <strong>{total_weight:,.1f} kg</strong></div>
+        <div><span>Declared value:</span> <strong>USD {total_value:,.2f}</strong></div>
+        <div><span>PVoC required:</span> <strong style='color:{"#991b1b" if pvoc_count else "#64748b"}'>{pvoc_count}</strong></div>
+      </div>
+    </div>
+    <div style='text-align:right'>
+      <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p class='meta'>Customs manifest · HS-6 · Sorted PVoC ▸ value ▸ weight</p>
+    </div>
+  </div>
+  {consignee_html}
+  <table>
+    <thead><tr><th class='n' style='width:32px'>#</th><th>Item</th><th style='width:80px'>HS Code</th><th style='width:180px'>Location</th><th class='c' style='width:70px'>Condition</th><th class='n' style='width:60px'>Qty</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+  {pvoc_footnote}
+  <p class='meta' style='margin-top:8mm; text-align:center'>HS codes are 6-digit WCO Harmonized System classifications. Country-specific 8/10-digit suffixes must be applied at destination customs.</p>
+</body></html>"""
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Manifest PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (heading or "manifest"))[:60]
+    filename = f"manifest_{safe_name}_{shipment_id[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/shipments/{shipment_id}/commercial-invoice.pdf")
+async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str] = None, current_user: dict = Depends(require_admin)):
+    """Printable commercial invoice PDF (customs-grade).
+
+    Columns: # · Item · HS · Origin · Qty · Unit Value · Line Total.
+    Same `?group=<gid>` filter + same PVoC-first sort as manifest.
+    """
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items, group_meta = _resolve_group(s, group)
+    items = _sort_items_for_manifest(items)
+    shipment_title = s.get("name", "")
+    heading = shipment_title
+    if group_meta:
+        heading = f"{shipment_title} · {group_meta.get('name', '')}"
+    rows_html = ""
+    grand_qty = 0
+    grand_total = 0.0
+    for i, it in enumerate(items, 1):
+        qty = int(it.get("qty_acquired") or 0)
+        unit_val = float(it.get("value_usd") or 0)
+        line_total = unit_val * qty
+        grand_qty += qty
+        grand_total += line_total
+        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
+        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
+        origin = "USED — humanitarian donation" if it.get("condition") == "used" else (it.get("condition") or "used").upper()
+        rows_html += (
+            f"<tr class='{row_class}'>"
+            f"<td class='n'>{i}</td>"
+            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
+            f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
+            f"<td class='loc'>{origin}</td>"
+            f"<td class='n'>{qty}</td>"
+            f"<td class='n'>${unit_val:,.2f}</td>"
+            f"<td class='n'>${line_total:,.2f}</td>"
+            f"</tr>"
+        )
+    if not rows_html:
+        rows_html = "<tr><td colspan='7' style='text-align:center;color:#94a3b8;padding:24px'>No items in this invoice</td></tr>"
+    consignee_html = ""
+    if group_meta and (group_meta.get("consignee_name") or group_meta.get("consignee_address")):
+        consignee_html = (
+            f"<div class='consignee'><strong>Consignee:</strong> "
+            f"{group_meta.get('consignee_name', '')}"
+            f"{' — ' + group_meta.get('consignee_address', '') if group_meta.get('consignee_address') else ''}"
+            f"</div>"
+        )
+    html = f"""<html><head><meta charset='utf-8' /><style>{_PDF_STYLES}</style></head><body>
+  <div class='head'>
+    <div>
+      <h1>Commercial Invoice — {heading}</h1>
+      <p class='meta'>Invoice #: CI-{shipment_id[:8].upper()}{'-' + group[:6].upper() if group and group != 'unassigned' else ''} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
+      <p class='meta'>Currency: USD · Terms: Donation (non-commercial) unless marked NEW · Incoterms: as agreed</p>
+    </div>
+    <div style='text-align:right'>
+      <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      <p class='meta'>HS-6 · Sorted PVoC ▸ value ▸ weight</p>
+    </div>
+  </div>
+  {consignee_html}
+  <table>
+    <thead><tr>
+      <th class='n' style='width:32px'>#</th>
+      <th>Description of Goods</th>
+      <th style='width:70px'>HS Code</th>
+      <th style='width:170px'>Condition / Origin</th>
+      <th class='n' style='width:50px'>Qty</th>
+      <th class='n' style='width:75px'>Unit USD</th>
+      <th class='n' style='width:85px'>Line Total</th>
+    </tr></thead>
+    <tbody>{rows_html}</tbody>
+    <tfoot><tr>
+      <td colspan='4' style='text-align:right'>TOTAL</td>
+      <td class='n'>{grand_qty:,}</td>
+      <td></td>
+      <td class='n'>${grand_total:,.2f}</td>
+    </tr></tfoot>
+  </table>
+  <div style='margin-top:14mm; display:flex; justify-content:space-between; font-size:10px; color:#334155'>
+    <div style='width:45%'>
+      <p><strong>Declaration:</strong></p>
+      <p>I declare that the information above is true and complete to the best of my knowledge. Items marked USED are donated goods with no commercial value; declared values are for customs valuation purposes only.</p>
+      <div style='margin-top:14mm;border-top:1px solid #94a3b8;padding-top:4px'>Authorized signature / Date</div>
+    </div>
+    <div style='width:45%; text-align:right'>
+      <p class='meta' style='color:#991b1b'>Items marked <span class='pvoc'>PVoC</span> require Pre-Export Verification of Conformity certificate.</p>
+    </div>
+  </div>
+</body></html>"""
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Commercial invoice PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (heading or "invoice"))[:60]
+    filename = f"invoice_{safe_name}_{shipment_id[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/estimate-from-link")
+async def estimate_item_from_link(shipment_id: str, item_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """AI-estimate weight + dimensions from a product URL (Amazon, Walmart, etc.).
+
+    Pulls the page title + first content image (best-effort, no fancy scraping)
+    and asks Gemini-3-flash to estimate weight_kg + dims_cm + value_usd. Writes
+    the estimate onto the item — operator can edit afterward if it's off.
+
+    Body: { url: str }
+    """
+    url = (data.get("url") or "").strip()
+    if not url.startswith("http"):
+        raise HTTPException(status_code=400, detail="url must start with http/https")
+    s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = s["items"][0]
+
+    import os as _os
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI estimation unavailable (no LLM key configured)")
+
+    # Pull the page title + first image hint with a 6s timeout. Don't try to be
+    # clever; just grab whatever's in <title>, <meta og:image>, <meta og:title>.
+    title_hint = ""
+    image_hint = ""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (compatible; 5812Connect/1.0)"}) as client:
+            r = await client.get(url)
+            html = (r.text or "")[:50000]
+            import re
+            m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
+            if m:
+                title_hint = m.group(1).strip()[:300]
+            m = re.search(r'<meta[^>]*property=[\"\']og:image[\"\'][^>]*content=[\"\']([^\"\']+)', html, re.I)
+            if m:
+                image_hint = m.group(1).strip()[:500]
+            if not title_hint:
+                m = re.search(r'<meta[^>]*property=[\"\']og:title[\"\'][^>]*content=[\"\']([^\"\']+)', html, re.I)
+                if m:
+                    title_hint = m.group(1).strip()[:300]
+    except Exception as e:
+        logger.warning(f"link fetch failed: {e}")
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
+    sys_msg = (
+        "You estimate physical dimensions, weight, and US dollar value for a product. "
+        "Output STRICT JSON: {\"weight_kg\": float, \"dims_cm\": {\"length\": float, \"width\": float, \"height\": float}, "
+        "\"value_usd\": float, \"confidence\": \"high\"|\"medium\"|\"low\", \"reasoning\": str (≤120 chars)}\n"
+        "Use the product NAME + URL TITLE HINT to identify the item, then estimate per typical retail-packaging dimensions. "
+        "If you can't identify the product confidently, set confidence=low and use conservative round-number defaults."
+    )
+    chat = LlmChat(
+        api_key=api_key,
+        session_id=f"shipment_estimate_{item_id}_{uuid.uuid4().hex[:6]}",
+        system_message=sys_msg,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    user_text = (
+        f"Item name: {item.get('name', '')}\n"
+        f"Category: {item.get('category', '')}\n"
+        f"Product URL: {url}\n"
+        f"Page title hint: {title_hint or '(could not fetch)'}\n"
+        f"OG image hint: {image_hint or '(none)'}\n"
+        "Estimate the per-unit weight, dimensions, and USD value."
+    )
+    raw = await chat.send_message(UserMessage(text=user_text))
+    s_text = (raw or "").strip()
+    if s_text.startswith("```"):
+        s_text = s_text.strip("`")
+        if s_text.lower().startswith("json"):
+            s_text = s_text[4:].strip()
+    first, last = s_text.find("{"), s_text.rfind("}")
+    if first >= 0 and last > first:
+        s_text = s_text[first:last + 1]
+    import json as _json
+    try:
+        parsed = _json.loads(s_text)
+    except Exception:
+        raise HTTPException(status_code=502, detail="AI returned an unparseable response — please fill in dimensions manually")
+    weight = max(0.0, float(parsed.get("weight_kg") or 0))
+    dims = parsed.get("dims_cm") or {}
+    dims_cm = {
+        "length": max(0.0, float(dims.get("length") or 0)),
+        "width": max(0.0, float(dims.get("width") or 0)),
+        "height": max(0.0, float(dims.get("height") or 0)),
+    }
+    value = max(0.0, float(parsed.get("value_usd") or 0))
+    set_ops = {
+        "items.$.weight_kg": weight,
+        "items.$.dims_cm": dims_cm,
+        "items.$.value_usd": value,
+        "items.$.source_url": url,
+        "items.$.ai_estimate": {
+            "confidence": (parsed.get("confidence") or "medium").lower(),
+            "reasoning": (parsed.get("reasoning") or "")[:200],
+            "estimated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": set_ops},
+    )
+    return {
+        "weight_kg": weight, "dims_cm": dims_cm, "value_usd": value,
+        "confidence": (parsed.get("confidence") or "medium").lower(),
+        "reasoning": parsed.get("reasoning") or "",
+    }
+
+
+@router.post("/shipments/{shipment_id}/items/bulk-import")
+async def bulk_import_items(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):
+    """Body: { items: [{name, qty_needed, weight_kg, ...}] }. Skips rows with no name."""
+    rows = data.get("items") or []
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="items must be a list")
+    units = await _shipment_units(shipment_id)
+    items = []
+    for r in rows:
+        if not (r.get("name") or "").strip():
+            continue
+        try:
+            items.append(_normalise_item(r, units))
+        except HTTPException:
+            continue
+    if items:
+        await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": {"$each": items}}})
+    return {"imported": len(items)}
+
+

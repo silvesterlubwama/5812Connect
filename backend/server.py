@@ -589,7 +589,7 @@ try:
     from routers.system_settings import router as system_settings_router
     from routers.funds import router as funds_router
     from routers.social_review_forms import router as social_review_forms_router
-    from routers.shipments import router as shipments_router
+    from routers.shipments_pkg import router as shipments_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)

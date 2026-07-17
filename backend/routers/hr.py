@@ -1026,6 +1026,180 @@ async def repair_payslip_journals(data: dict = None, current_user: dict = Depend
     }
 
 
+# ========== DANGER ZONE: HR MODULE RESET (iter225) ==========
+# Admin-only nuclear button to wipe HR data. Two axes:
+#   scope       = 'payslips' | 'all'
+#   campus_scope= 'active'   | 'all'    (all requires system_admin)
+#   ledger      = 'reverse'  | 'delete' (how to unwind payroll postings)
+#
+# Reverse: creates offsetting JEs (auditable, keeps ledger history)
+# Delete : hard-removes the payroll expense + JE (no trail)
+#
+# Requires body { confirm: 'RESET-HR' } to actually apply. Otherwise dry-run.
+
+HR_ALL_COLLECTIONS = [
+    "hr_payslips",
+    "hr_salaries",
+    "hr_salary_history",
+    "hr_contracts",
+    "hr_contract_templates",
+    "hr_doc_requests",
+    "hr_timesheets",
+    "hr_time_off",
+    "hr_leave_requests",
+    "hr_reimbursements",
+    "hr_attendance",
+]
+
+
+@router.delete("/reset")
+async def reset_hr_module(
+    scope: str = "payslips",
+    campus_scope: str = "active",
+    ledger: str = "reverse",
+    confirm: str = "",
+    current_user: dict = Depends(require_admin),
+):
+    """DANGER: Reset HR data. Admin-only.
+
+    Query params:
+      scope        - 'payslips' (default) or 'all'
+      campus_scope - 'active' (default) or 'all' (system_admin only)
+      ledger       - 'reverse' (default: post offsetting JEs) or 'delete' (hard delete)
+      confirm      - must equal 'RESET-HR' to actually delete; otherwise returns a dry-run count.
+    """
+    if scope not in {"payslips", "all"}:
+        raise HTTPException(status_code=400, detail="scope must be 'payslips' or 'all'")
+    if campus_scope not in {"active", "all"}:
+        raise HTTPException(status_code=400, detail="campus_scope must be 'active' or 'all'")
+    if ledger not in {"reverse", "delete"}:
+        raise HTTPException(status_code=400, detail="ledger must be 'reverse' or 'delete'")
+
+    # Build campus scope filter
+    role = (current_user.get("role") or "").lower()
+    if campus_scope == "all":
+        if role not in {"admin", "system_admin"}:
+            raise HTTPException(status_code=403, detail="Only system_admin can reset all campuses")
+        loc_filter: dict = {}
+        loc_ids_for_expenses: list = []  # empty means all
+    else:
+        active = current_user.get("active_campus_id") or ""
+        if not active:
+            raise HTTPException(status_code=400, detail="No active campus set")
+        loc_filter = {"location_id": active}
+        loc_ids_for_expenses = [active]
+
+    apply_changes = (confirm or "").strip() == "RESET-HR"
+
+    # ── Preview: count what would be affected ────────────────────────────
+    counts: dict = {}
+    if scope == "payslips":
+        counts["hr_payslips"] = await db.hr_payslips.count_documents(loc_filter)
+    else:
+        for coll in HR_ALL_COLLECTIONS:
+            try:
+                counts[coll] = await db[coll].count_documents(loc_filter)
+            except Exception:
+                counts[coll] = 0
+
+    # Payroll aggregate expenses & JEs affected
+    exp_query: dict = {"source": "hr_payroll_aggregate"}
+    if loc_ids_for_expenses:
+        exp_query["location_id"] = {"$in": loc_ids_for_expenses}
+    payroll_expenses = await db.expenses.count_documents(exp_query)
+    # Related JEs — find by source_id in matching expenses
+    exp_ids = [e["id"] async for e in db.expenses.find(exp_query, {"_id": 0, "id": 1})]
+    je_query: dict = {"auto_generated_from": "payroll", "source_id": {"$in": exp_ids}, "is_reversed": {"$ne": True}} if exp_ids else {"_no_match": True}
+    payroll_jes = await db.accounting_entries.count_documents(je_query) if exp_ids else 0
+
+    counts["payroll_expenses"] = payroll_expenses
+    counts["payroll_journal_entries"] = payroll_jes
+
+    if not apply_changes:
+        return {
+            "dry_run": True,
+            "scope": scope,
+            "campus_scope": campus_scope,
+            "ledger": ledger,
+            "counts": counts,
+            "message": "Preview only. To apply, POST/DELETE again with confirm=RESET-HR",
+        }
+
+    # ── APPLY ────────────────────────────────────────────────────────────
+    result: dict = {
+        "dry_run": False,
+        "scope": scope,
+        "campus_scope": campus_scope,
+        "ledger": ledger,
+        "deleted": {},
+        "ledger_unwound": {"reversed_jes": 0, "deleted_jes": 0, "deleted_expenses": 0},
+    }
+
+    # 1) Unwind payroll ledger postings first (so we can still find them)
+    if exp_ids:
+        if ledger == "reverse":
+            try:
+                from routers.financial import _reverse_auto_posted_je
+                for eid in exp_ids:
+                    try:
+                        await _reverse_auto_posted_je("payroll", eid, current_user)
+                        result["ledger_unwound"]["reversed_jes"] += 1
+                    except Exception as ex:
+                        logger.warning(f"Reverse JE failed for expense {eid}: {ex}")
+            except Exception as ex:
+                logger.error(f"Ledger reverse import failed: {ex}")
+        else:  # delete
+            del_jes = await db.accounting_entries.delete_many({
+                "auto_generated_from": "payroll",
+                "source_id": {"$in": exp_ids},
+            })
+            result["ledger_unwound"]["deleted_jes"] = del_jes.deleted_count
+
+        # Delete or archive the payroll expenses themselves
+        # Route through recycle bin for auditability
+        async for exp in db.expenses.find(exp_query, {"_id": 0}):
+            exp["_deleted_from"] = "expenses"
+            exp["deleted_at"] = datetime.now(timezone.utc).isoformat()
+            exp["deleted_by"] = current_user["id"]
+            exp["_hr_reset"] = True
+            try:
+                await db.deleted_items.insert_one(exp)
+            except Exception:
+                pass
+        del_exp = await db.expenses.delete_many(exp_query)
+        result["ledger_unwound"]["deleted_expenses"] = del_exp.deleted_count
+
+    # 2) Delete HR collection docs (payslips only, or everything)
+    collections_to_wipe = ["hr_payslips"] if scope == "payslips" else HR_ALL_COLLECTIONS
+    for coll in collections_to_wipe:
+        try:
+            # Recycle bin dump before delete so admins can recover if needed
+            async for doc in db[coll].find(loc_filter, {"_id": 0}):
+                doc["_deleted_from"] = coll
+                doc["deleted_at"] = datetime.now(timezone.utc).isoformat()
+                doc["deleted_by"] = current_user["id"]
+                doc["_hr_reset"] = True
+                try:
+                    await db.deleted_items.insert_one(doc)
+                except Exception:
+                    pass
+            r = await db[coll].delete_many(loc_filter)
+            result["deleted"][coll] = r.deleted_count
+        except Exception as ex:
+            logger.error(f"HR reset failed to wipe {coll}: {ex}")
+            result["deleted"][coll] = f"error: {ex}"
+
+    await _audit(
+        current_user["id"], "reset", "hr_module", None,
+        {"scope": scope, "campus_scope": campus_scope, "ledger": ledger, "result": result["deleted"]},
+    )
+    logger.warning(
+        f"HR MODULE RESET by {current_user.get('email','?')} — scope={scope} "
+        f"campus_scope={campus_scope} ledger={ledger} result={result}"
+    )
+    return result
+
+
 # ========== CONTRACT TEMPLATES ==========
 
 @router.get("/contracts/templates")
