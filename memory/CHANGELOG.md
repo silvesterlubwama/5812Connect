@@ -1,5 +1,41 @@
 # 58:12 Connect — Changelog
 
+## Iteration 226 (Feb 2026) — Airport-mode overhaul: multi-flight, tickets, check-in, AI flight search, 3D per-suitcase
+
+### 🔴 P0 — Container layout hidden in airport mode
+- `ShipmentsAdminPage.jsx` now gates the `<ContainerVisualizer>` 3D/2D render behind `mode !== 'airport'`. Airport shipments no longer show the container floor plan (which was confusing for luggage-only shipments).
+
+### 🔴 P0 — Multi-airline / multi-flight per shipment
+- New `flights[]` array on shipment docs. Fields: `{id, airline, flight_no, origin, destination, departure_at, arrival_at, booking_url, status, ai_summary, last_ai_check_at, notes}`.
+- `POST/PUT/DELETE /api/shipments/{sid}/flights[/fid]` — full CRUD, admin-only.
+- Frontend Flights section shows every leg with airline + flight # + route + AI status summary. Booking URL opens in a new tab.
+
+### 🔴 P0 — Multi-ticket per passenger (connections supported)
+- New `tickets[]` array nested inside each passenger. Fields: `{id, flight_id, ticket_no, pnr, seat, checked_in, checked_in_at, boarding_pass_url, notes}`. A single passenger can hold one ticket per flight leg (JFK→AMS + AMS→EBB).
+- `POST/PUT/DELETE /api/shipments/{sid}/passengers/{pid}/tickets[/tid]`.
+- UI: each passenger card shows a nested Tickets list with flight linkage, PNR, seat, and check-in status badge (e.g. "1/2 checked in").
+
+### 🔴 P0 — Check-in log + boarding-pass upload
+- `POST /api/shipments/{sid}/passengers/{pid}/tickets/{tid}/check-in` accepts multipart form: `checked_in`, `seat`, optional `boarding_pass` file (max 2.5 MB, stored as data-URL on the ticket).
+- Frontend "Check in" button per ticket opens a dialog with seat + boarding-pass file picker. Existing boarding pass is viewable via a link.
+
+### 🟠 P1 — AI Flight Search (Gemini 3 Flash grounded on Google Search)
+- `POST /api/shipments/{sid}/ai-flight-search` — body `{origin, destination, date, passengers, cabin}` — returns a structured list of up to 6 flight suggestions with airline, flight #, times, duration, stops, cabin, USD price and booking URL. Uses Gemini 3 Flash + Google Search grounding via the Emergent LLM key.
+- Frontend "AI Flight Search" button on the Flights section opens a dialog with search fields and result table. "Add to shipment" button on each result creates a `flight` record in one click.
+
+### 🟠 P1 — Auto-refresh flight status every 15 minutes
+- Background asyncio loop in `server.py` (`_run_flight_status_refresh_loop`) iterates every 15 min through airport-mode shipments with any flight in `boarding/departed/in_air` status (or where the overall shipment is `shipped`) and calls Gemini for each flight's current status. Updates `status`, `ai_summary`, `last_ai_check_at` in-place.
+- Manual `POST /api/shipments/{sid}/refresh-flight-status` button available in the UI for immediate refresh.
+
+### 🟠 P1 — Per-suitcase 3D pack view
+- New `Suitcase3DScene.jsx` component (react-three-fiber + drei) — lazy-loaded to keep initial bundle small. Renders the suitcase as a transparent wireframe box with each of its assigned items positioned inside via a naive shelf-pack (row + wrap + layer) using each item's `dims_cm`. Orbit controls, ambient + directional lighting, item labels.
+- "3D pack view" toggle button on each suitcase row opens the scene in a modal.
+
+### Test coverage
+- Backend: manual curl end-to-end verified for add flight, add ticket, check-in, AI flight search (returned live KQ/KLM/Brussels/Turkish Airlines results with realistic caveat about the 330-360-day booking window).
+- Frontend: smoke screenshot confirms Airport panel visible, Flights section rendered, container visualizer hidden, tickets nested under passenger, "1/1 checked in" badge working.
+
+
 ## Iteration 225 (Feb 2026) — HR Reset Danger Zone + shipments.py Modular Split
 
 ### 🔴 P0 — HR Module Reset Button

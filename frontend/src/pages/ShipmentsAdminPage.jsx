@@ -992,13 +992,15 @@ export default function ShipmentsAdminPage() {
         )}
       </div>
 
-      {/* Container visualization — 2D / 3D */}
-      <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} container={selected.container_dims_cm} editable onPalletMove={async (pid, x, y) => {
-        try {
-          await api.put(`/shipments/${selectedId}/pallets/${pid}`, { x_cm: Math.round(x), y_cm: Math.round(y) });
-          await refreshDetail();
-        } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
-      }} />
+      {/* Container visualization — 2D / 3D (hidden in airport mode — iter226) */}
+      {(selected.mode || 'container') !== 'airport' && (
+        <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} container={selected.container_dims_cm} editable onPalletMove={async (pid, x, y) => {
+          try {
+            await api.put(`/shipments/${selectedId}/pallets/${pid}`, { x_cm: Math.round(x), y_cm: Math.round(y) });
+            await refreshDetail();
+          } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
+        }} />
+      )}
 
       {/* AI Packing scenario */}
       <Card className="rounded-xl border-primary/20">

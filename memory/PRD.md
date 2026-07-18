@@ -3,6 +3,18 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 226 (Feb 2026)
+**Airport-mode overhaul: multi-airline flights + multi-leg tickets per passenger + check-in log with boarding-pass upload + AI flight search (Gemini + Google grounding) + 15-min background flight-status refresh + per-suitcase 3D pack view.**
+
+- **Container layout hidden in airport mode** — `<ContainerVisualizer>` now conditionally rendered only when `mode !== 'airport'`.
+- **Flights CRUD** — new `flights[]` array on shipments with airline, flight #, origin, destination, times, status, booking URL. `POST/PUT/DELETE /api/shipments/{sid}/flights[/fid]`.
+- **Multi-ticket per passenger** — nested `tickets[]` inside each passenger for connections (JFK→AMS + AMS→EBB). CRUD endpoints under `/api/shipments/{sid}/passengers/{pid}/tickets`.
+- **Check-in log + boarding pass** — `POST /api/shipments/{sid}/passengers/{pid}/tickets/{tid}/check-in` accepts multipart form with optional boarding-pass photo/PDF (≤ 2.5 MB, stored as data URL). Frontend dialog offers seat + file upload; each ticket badge shows "X/Y checked in".
+- **AI Flight Search** — `POST /api/shipments/{sid}/ai-flight-search` uses Gemini 3 Flash with Google Search grounding to return top 6 flight options (airline, flight #, times, price USD, booking URL, caveat). Frontend "AI Flight Search" button opens a search dialog; "Add to shipment" creates a flight record in one click.
+- **Auto-refresh (15 min)** — background asyncio loop in `server.py` (`_run_flight_status_refresh_loop`) iterates every 15 min through airport-mode shipments with active flights and calls Gemini per-flight for current status. `POST /api/shipments/{sid}/refresh-flight-status` for manual refresh.
+- **Per-suitcase 3D pack view** — new `Suitcase3DScene.jsx` (react-three-fiber + drei, lazy-loaded) renders a suitcase as a wireframe box with items positioned inside via a naive shelf-pack. "3D pack view" button per suitcase opens the scene in a modal.
+
+
 ## Recently Resolved — Iteration 225 (Feb 2026)
 **HR module Reset danger button · shipments.py split into a modular package.**
 

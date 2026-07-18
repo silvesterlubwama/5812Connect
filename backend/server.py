@@ -1238,8 +1238,39 @@ async def startup():
         logger.warning(f"Sentry bootstrap skipped: {e}")
     # Start background task reminder scheduler
     asyncio.create_task(_run_due_date_reminder_scheduler())
+    # iter226 — every 15 min refresh flight status for departed/shipped shipments
+    asyncio.create_task(_run_flight_status_refresh_loop())
     # Defer heavy seeding so the app becomes ready immediately
     asyncio.create_task(_seed_initial_data())
+
+
+async def _run_flight_status_refresh_loop():
+    """Every 15 min, refresh AI flight status for shipments whose overall status
+    is `shipped` (or which have at least one flight in `departed`/`in_air`).
+    Best-effort — errors are logged and the loop continues."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(60)  # let startup + seeding finish first
+    while True:
+        try:
+            from routers.shipments_pkg.airport import _refresh_flight_status_for
+            cursor = db.shipments.find({
+                "mode": "airport",
+                "$or": [
+                    {"status": "shipped"},
+                    {"flights.status": {"$in": ["departed", "in_air", "boarding"]}},
+                ],
+            }, {"_id": 0})
+            total = 0
+            async for s in cursor:
+                try:
+                    total += await _refresh_flight_status_for(s)
+                except Exception as ex:
+                    logger.warning(f"Flight refresh error for {s.get('id')}: {ex}")
+            if total:
+                logger.info(f"Flight status refresh cycle: updated {total} flights")
+        except Exception as ex:
+            logger.warning(f"Flight refresh loop error: {ex}")
+        await _asyncio.sleep(15 * 60)  # 15 minutes
 
 
 async def _ensure_indexes():

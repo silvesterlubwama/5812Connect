@@ -11,7 +11,7 @@
  *
  * Designed as a drop-in section inside ShipmentsAdminPage.jsx (see mount).
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import { toast } from 'sonner';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -19,7 +19,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Badge } from '../../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
-import { Plus, Trash2, Pencil, Plane, Ship, Sparkles, PackageOpen, Loader2, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, Pencil, Plane, Ship, Sparkles, PackageOpen, Loader2, ExternalLink, Ticket, CheckCircle2, Box, Upload, RefreshCw, Search } from 'lucide-react';
 import api from '../../services/api';
 
 const CONTAINER_LENGTH_CM = 1203;
@@ -399,12 +399,20 @@ function UnitCard({ unit, stackedChildren, onEdit, onDelete }) {
   );
 }
 
-// ─── Airport mode: passengers + suitcases ────────────────────────
+// ─── Airport mode: flights + passengers + tickets + suitcases ────
 function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, onEditSuitcase, refresh }) {
   const passengers = shipment?.passengers || [];
   const suitcases = shipment?.suitcases || [];
+  const flights = shipment?.flights || [];
+  const [addingFlight, setAddingFlight] = useState(false);
+  const [editingFlight, setEditingFlight] = useState(null);
+  const [aiSearchOpen, setAiSearchOpen] = useState(false);
+  const [checkInFor, setCheckInFor] = useState(null); // {passenger, ticket}
+  const [threeDForSuitcase, setThreeDForSuitcase] = useState(null);
+  const [refreshingFlights, setRefreshingFlights] = useState(false);
+
   const delPassenger = async (p) => {
-    if (!window.confirm(`Delete ${p.name} and all their suitcases?`)) return;
+    if (!window.confirm(`Delete ${p.name} and all their suitcases/tickets?`)) return;
     try { await api.delete(`/shipments/${shipment.id}/passengers/${p.id}`); toast.success('Deleted'); refresh(); }
     catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -413,9 +421,66 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
     try { await api.delete(`/shipments/${shipment.id}/suitcases/${sc.id}`); toast.success('Deleted'); refresh(); }
     catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
+  const delFlight = async (f) => {
+    if (!window.confirm(`Delete flight ${f.flight_no}?`)) return;
+    try { await api.delete(`/shipments/${shipment.id}/flights/${f.id}`); toast.success('Deleted'); refresh(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  const refreshFlightStatus = async () => {
+    setRefreshingFlights(true);
+    try {
+      const r = await api.post(`/shipments/${shipment.id}/refresh-flight-status`);
+      toast.success(`Refreshed ${r.data?.refreshed || 0} flights`);
+      refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Refresh failed'); }
+    finally { setRefreshingFlights(false); }
+  };
 
   return (
-    <div className="space-y-2" data-testid="airport-mode-panel">
+    <div className="space-y-3" data-testid="airport-mode-panel">
+      {/* Flights section */}
+      <div className="rounded-lg border border-border p-3 bg-white space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-xs font-semibold flex items-center gap-1.5">
+            <Plane size={13} className="text-sky-600" /> Flights ({flights.length})
+            <span className="text-[10px] font-normal text-muted-foreground italic">multi-airline, multi-leg supported</span>
+          </p>
+          <div className="flex gap-1.5 flex-wrap">
+            <Button size="sm" variant="outline" onClick={() => setAiSearchOpen(true)} className="text-purple-700 border-purple-300 hover:bg-purple-50 h-7 text-[11px]" data-testid="ai-flight-search-btn">
+              <Search size={11} className="mr-1" /> AI Flight Search
+            </Button>
+            {flights.length > 0 && (
+              <Button size="sm" variant="outline" onClick={refreshFlightStatus} disabled={refreshingFlights} className="h-7 text-[11px]" data-testid="refresh-flight-status-btn">
+                {refreshingFlights ? <Loader2 size={11} className="mr-1 animate-spin" /> : <RefreshCw size={11} className="mr-1" />}
+                Refresh Status
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setAddingFlight(true)} className="h-7 text-[11px]" data-testid="ship-add-flight">
+              <Plus size={11} className="mr-1" /> Add Flight
+            </Button>
+          </div>
+        </div>
+        {flights.length === 0 && (
+          <p className="text-[11px] italic text-muted-foreground">No flights yet. Add a flight or use AI Flight Search to find options.</p>
+        )}
+        <div className="space-y-1">
+          {flights.map(f => (
+            <div key={f.id} className="flex items-center gap-2 text-[11px] rounded border border-border/60 px-2 py-1.5 bg-slate-50/40" data-testid={`flight-${f.id}`}>
+              <Badge className="text-[10px] font-mono" style={{ backgroundColor: statusColor(f.status), color: 'white' }}>{f.status || 'scheduled'}</Badge>
+              <span className="font-semibold">{f.airline || '—'}</span>
+              <span className="font-mono">{f.flight_no}</span>
+              <span className="text-muted-foreground">{f.origin || '?'} → {f.destination || '?'}</span>
+              {f.departure_at && <span className="text-[10px] text-muted-foreground">{f.departure_at.slice(0, 16).replace('T', ' ')}</span>}
+              {f.ai_summary && <span title={f.ai_summary} className="text-[10px] text-purple-700 italic truncate max-w-[240px]">🤖 {f.ai_summary.slice(0, 60)}</span>}
+              <button className="ml-auto text-slate-500 hover:text-slate-800" onClick={() => setEditingFlight(f)} data-testid={`flight-edit-${f.id}`}><Pencil size={11} /></button>
+              {f.booking_url && <a href={f.booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800"><ExternalLink size={11} /></a>}
+              <button className="text-rose-500 hover:text-rose-800" onClick={() => delFlight(f)} data-testid={`flight-del-${f.id}`}><Trash2 size={11} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Passengers section */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-semibold">Passengers ({passengers.length}) · Suitcases ({suitcases.length})</p>
         <Button size="sm" variant="outline" onClick={onAddPassenger} data-testid="ship-add-passenger">
@@ -423,7 +488,7 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
         </Button>
       </div>
       {passengers.length === 0 && (
-        <p className="text-[11px] italic text-muted-foreground">No passengers yet. Add a passenger to start tracking suitcases.</p>
+        <p className="text-[11px] italic text-muted-foreground">No passengers yet. Add a passenger to start tracking suitcases and tickets.</p>
       )}
       {passengers.map(p => {
         const paxCases = suitcases.filter(s => s.passenger_id === p.id);
@@ -431,13 +496,19 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
         const allowanceKg = (p.suitcase_allowance_kg || 0) * (p.suitcase_count_allowance || 0);
         const overWeight = totalKg > allowanceKg && allowanceKg > 0;
         const overCount = paxCases.length > (p.suitcase_count_allowance || 0);
+        const tickets = p.tickets || [];
+        const checkedIn = tickets.filter(t => t.checked_in).length;
         return (
-          <div key={p.id} className="rounded border border-border p-2" data-testid={`passenger-${p.id}`}>
+          <div key={p.id} className="rounded border border-border p-2 space-y-1.5" data-testid={`passenger-${p.id}`}>
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-sm">{p.name}</span>
-                {p.flight_no && <Badge variant="outline" className="text-[10px] font-mono">✈ {p.flight_no}</Badge>}
                 {p.passport_no && <Badge variant="outline" className="text-[10px]">Passport {p.passport_no}</Badge>}
+                {tickets.length > 0 && (
+                  <Badge className={`text-[10px] ${checkedIn === tickets.length ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                    <CheckCircle2 size={9} className="mr-0.5" /> {checkedIn}/{tickets.length} checked in
+                  </Badge>
+                )}
                 <Badge className={`text-[10px] ${overWeight ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}`}>
                   {totalKg.toFixed(1)}/{allowanceKg}kg
                 </Badge>
@@ -454,8 +525,13 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
                 </Button>
               </div>
             </div>
+
+            {/* Tickets nested list */}
+            <TicketsList sid={shipment.id} passenger={p} flights={flights} refresh={refresh} onCheckIn={(t) => setCheckInFor({ passenger: p, ticket: t })} />
+
+            {/* Suitcases nested list */}
             {paxCases.length > 0 && (
-              <div className="mt-1 space-y-0.5">
+              <div className="space-y-0.5">
                 {paxCases.map(sc => {
                   const scOver = sc.weight_kg > sc.weight_limit_kg && sc.weight_limit_kg > 0;
                   return (
@@ -466,7 +542,8 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
                         {sc.weight_kg}/{sc.weight_limit_kg}kg
                       </span>
                       {sc.tracking_no && <Badge variant="outline" className="text-[9px] font-mono bg-teal-50">🏷 {sc.tracking_no}</Badge>}
-                      <button className="ml-auto text-slate-500 hover:text-slate-800" onClick={() => onEditSuitcase(sc)}><Pencil size={10} /></button>
+                      <button className="ml-auto text-indigo-600 hover:text-indigo-800" title="3D pack view" onClick={() => setThreeDForSuitcase(sc)} data-testid={`suitcase-3d-${sc.id}`}><Box size={11} /></button>
+                      <button className="text-slate-500 hover:text-slate-800" onClick={() => onEditSuitcase(sc)}><Pencil size={10} /></button>
                       <button className="text-rose-500 hover:text-rose-800" onClick={() => delSuitcase(sc)}><Trash2 size={10} /></button>
                     </div>
                   );
@@ -476,8 +553,38 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
           </div>
         );
       })}
+
+      {addingFlight && (
+        <FlightDialog sid={shipment.id} onClose={() => setAddingFlight(false)}
+                      onSaved={() => { setAddingFlight(false); refresh(); }} />
+      )}
+      {editingFlight && (
+        <FlightDialog sid={shipment.id} flight={editingFlight}
+                      onClose={() => setEditingFlight(null)}
+                      onSaved={() => { setEditingFlight(null); refresh(); }} />
+      )}
+      {aiSearchOpen && (
+        <AiFlightSearchDialog shipment={shipment} onClose={() => setAiSearchOpen(false)} refresh={refresh} />
+      )}
+      {checkInFor && (
+        <CheckInDialog sid={shipment.id} passenger={checkInFor.passenger} ticket={checkInFor.ticket}
+                       onClose={() => setCheckInFor(null)}
+                       onSaved={() => { setCheckInFor(null); refresh(); }} />
+      )}
+      {threeDForSuitcase && (
+        <Suitcase3DDialog suitcase={threeDForSuitcase} items={(shipment.items || []).filter(i => i.suitcase_id === threeDForSuitcase.id)}
+                          onClose={() => setThreeDForSuitcase(null)} />
+      )}
     </div>
   );
+}
+
+function statusColor(status) {
+  const s = (status || 'scheduled').toLowerCase();
+  return {
+    scheduled: '#64748b', boarding: '#f59e0b', departed: '#0ea5e9', in_air: '#0284c7',
+    landed: '#10b981', delayed: '#f97316', cancelled: '#ef4444',
+  }[s] || '#64748b';
 }
 
 // ─── Packing-unit add/edit dialog ────────────────────────────────
@@ -697,3 +804,323 @@ function TrackingResultDialog({ data, onClose }) {
     </Dialog>
   );
 }
+
+
+// ─── Flight add/edit dialog ──────────────────────────────────────
+function FlightDialog({ sid, flight, onClose, onSaved }) {
+  const isEdit = !!flight;
+  const [form, setForm] = useState(flight || {
+    airline: '', flight_no: '', origin: '', destination: '',
+    departure_at: '', arrival_at: '', booking_url: '', status: 'scheduled', notes: '',
+  });
+  const save = async () => {
+    try {
+      if (isEdit) await api.put(`/shipments/${sid}/flights/${flight.id}`, form);
+      else await api.post(`/shipments/${sid}/flights`, form);
+      toast.success(isEdit ? 'Flight updated' : 'Flight added');
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-md" data-testid="flight-dialog">
+        <DialogHeader><DialogTitle>{isEdit ? 'Edit' : 'Add'} Flight</DialogTitle></DialogHeader>
+        <div className="space-y-2 text-sm">
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label className="text-xs">Airline</Label><Input value={form.airline} onChange={e => setForm({ ...form, airline: e.target.value })} placeholder="Kenya Airways" data-testid="flt-airline" /></div>
+            <div><Label className="text-xs">Flight # *</Label><Input value={form.flight_no} onChange={e => setForm({ ...form, flight_no: e.target.value })} placeholder="KQ411" className="font-mono" data-testid="flt-no" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label className="text-xs">Origin</Label><Input value={form.origin} onChange={e => setForm({ ...form, origin: e.target.value })} placeholder="JFK / New York" data-testid="flt-origin" /></div>
+            <div><Label className="text-xs">Destination</Label><Input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder="EBB / Entebbe" data-testid="flt-dest" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label className="text-xs">Departure at</Label><Input type="datetime-local" value={form.departure_at?.slice(0, 16)} onChange={e => setForm({ ...form, departure_at: e.target.value })} data-testid="flt-dep" /></div>
+            <div><Label className="text-xs">Arrival at</Label><Input type="datetime-local" value={form.arrival_at?.slice(0, 16)} onChange={e => setForm({ ...form, arrival_at: e.target.value })} data-testid="flt-arr" /></div>
+          </div>
+          <div><Label className="text-xs">Booking URL</Label><Input value={form.booking_url} onChange={e => setForm({ ...form, booking_url: e.target.value })} placeholder="https://…" data-testid="flt-booking" /></div>
+          {isEdit && (
+            <div>
+              <Label className="text-xs">Status</Label>
+              <Select value={form.status} onValueChange={v => setForm({ ...form, status: v })}>
+                <SelectTrigger data-testid="flt-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="scheduled">Scheduled</SelectItem>
+                  <SelectItem value="boarding">Boarding</SelectItem>
+                  <SelectItem value="departed">Departed</SelectItem>
+                  <SelectItem value="in_air">In air</SelectItem>
+                  <SelectItem value="landed">Landed</SelectItem>
+                  <SelectItem value="delayed">Delayed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={!form.flight_no.trim()} data-testid="flt-save">Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Tickets list nested per passenger ───────────────────────────
+function TicketsList({ sid, passenger, flights, refresh, onCheckIn }) {
+  const [adding, setAdding] = useState(false);
+  const tickets = passenger.tickets || [];
+  const flightById = (id) => flights.find(f => f.id === id);
+  const del = async (t) => {
+    if (!window.confirm(`Delete ticket ${t.ticket_no}?`)) return;
+    try { await api.delete(`/shipments/${sid}/passengers/${passenger.id}/tickets/${t.id}`); toast.success('Deleted'); refresh(); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  return (
+    <div className="pl-2 border-l-2 border-slate-200 ml-1 space-y-0.5">
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <Ticket size={10} /> Tickets ({tickets.length})
+        <button className="ml-auto text-blue-600 hover:underline" onClick={() => setAdding(true)} data-testid={`add-ticket-${passenger.id}`}>+ ticket</button>
+      </div>
+      {tickets.map(t => {
+        const f = flightById(t.flight_id);
+        return (
+          <div key={t.id} className="flex items-center gap-2 text-[10.5px]" data-testid={`ticket-${t.id}`}>
+            <Badge variant="outline" className={`text-[9px] font-mono ${t.checked_in ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : ''}`}>
+              {t.checked_in ? <CheckCircle2 size={9} className="mr-0.5 inline" /> : null}
+              {t.ticket_no}
+            </Badge>
+            {f && <span className="text-muted-foreground">{f.airline} {f.flight_no} · {f.origin || '?'}→{f.destination || '?'}</span>}
+            {t.seat && <span className="font-mono text-[10px]">🪑 {t.seat}</span>}
+            {t.pnr && <span className="font-mono text-[10px] text-slate-500">PNR {t.pnr}</span>}
+            {t.boarding_pass_url && <a href={t.boarding_pass_url} target="_blank" rel="noopener noreferrer" className="text-blue-600" title="View boarding pass"><Upload size={10} /></a>}
+            <button className="ml-auto text-emerald-700 hover:text-emerald-900 text-[10px]" onClick={() => onCheckIn(t)} data-testid={`checkin-${t.id}`}>
+              {t.checked_in ? 'Update ✓' : 'Check in'}
+            </button>
+            <button className="text-rose-500 hover:text-rose-800" onClick={() => del(t)}><Trash2 size={10} /></button>
+          </div>
+        );
+      })}
+      {adding && (
+        <AddTicketDialog sid={sid} passengerId={passenger.id} flights={flights}
+                         onClose={() => setAdding(false)}
+                         onSaved={() => { setAdding(false); refresh(); }} />
+      )}
+    </div>
+  );
+}
+
+function AddTicketDialog({ sid, passengerId, flights, onClose, onSaved }) {
+  const [form, setForm] = useState({ ticket_no: '', pnr: '', seat: '', flight_id: '' });
+  const save = async () => {
+    try {
+      const payload = { ...form, flight_id: form.flight_id || null };
+      await api.post(`/shipments/${sid}/passengers/${passengerId}/tickets`, payload);
+      toast.success('Ticket added'); onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm" data-testid="ticket-dialog">
+        <DialogHeader><DialogTitle>Add Ticket</DialogTitle></DialogHeader>
+        <div className="space-y-2 text-sm">
+          <div><Label className="text-xs">Ticket # *</Label><Input value={form.ticket_no} onChange={e => setForm({ ...form, ticket_no: e.target.value })} placeholder="074-2154678901" className="font-mono" autoFocus data-testid="tkt-no" /></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label className="text-xs">PNR</Label><Input value={form.pnr} onChange={e => setForm({ ...form, pnr: e.target.value })} placeholder="ABC123" className="font-mono" data-testid="tkt-pnr" /></div>
+            <div><Label className="text-xs">Seat</Label><Input value={form.seat} onChange={e => setForm({ ...form, seat: e.target.value })} placeholder="14A" className="font-mono" data-testid="tkt-seat" /></div>
+          </div>
+          <div>
+            <Label className="text-xs">Flight (leg)</Label>
+            <Select value={form.flight_id || '__none__'} onValueChange={v => setForm({ ...form, flight_id: v === '__none__' ? '' : v })}>
+              <SelectTrigger data-testid="tkt-flight"><SelectValue placeholder="No flight" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No flight (link later) —</SelectItem>
+                {flights.map(f => <SelectItem key={f.id} value={f.id}>{f.airline} {f.flight_no} ({f.origin || '?'}→{f.destination || '?'})</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={!form.ticket_no.trim()} data-testid="tkt-save">Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Check-in dialog: mark checked-in + optional boarding pass upload
+function CheckInDialog({ sid, passenger, ticket, onClose, onSaved }) {
+  const [seat, setSeat] = useState(ticket.seat || '');
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (markCheckedIn) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('checked_in', String(markCheckedIn));
+      fd.append('seat', seat);
+      if (file) fd.append('boarding_pass', file);
+      await api.post(`/shipments/${sid}/passengers/${passenger.id}/tickets/${ticket.id}/check-in`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success(markCheckedIn ? 'Checked in ✓' : 'Un-checked-in');
+      onSaved();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-sm" data-testid="checkin-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><CheckCircle2 size={16} className="text-emerald-600" /> Check-in — {passenger.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-[11px] text-muted-foreground">Ticket <span className="font-mono">{ticket.ticket_no}</span>. Attach the boarding pass photo/PDF (max 2.5 MB).</p>
+          <div>
+            <Label className="text-xs">Seat</Label>
+            <Input value={seat} onChange={e => setSeat(e.target.value)} placeholder="14A" className="font-mono" data-testid="checkin-seat" />
+          </div>
+          <div>
+            <Label className="text-xs">Boarding pass (photo or PDF)</Label>
+            <Input type="file" accept="image/*,application/pdf" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="checkin-file" />
+            {file && <p className="text-[10px] text-muted-foreground mt-1">{file.name} · {(file.size / 1024).toFixed(0)} KB</p>}
+          </div>
+          {ticket.boarding_pass_url && (
+            <a href={ticket.boarding_pass_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-700 hover:underline flex items-center gap-1">
+              <ExternalLink size={11} /> View existing boarding pass
+            </a>
+          )}
+        </div>
+        <DialogFooter className="flex-wrap gap-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          {ticket.checked_in && (
+            <Button variant="outline" onClick={() => submit(false)} disabled={busy} className="text-amber-700 border-amber-300">Un-check-in</Button>
+          )}
+          <Button onClick={() => submit(true)} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700" data-testid="checkin-submit">
+            {busy ? 'Saving…' : ticket.checked_in ? 'Update' : 'Check in ✓'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── AI Flight Search dialog ─────────────────────────────────────
+function AiFlightSearchDialog({ shipment, onClose, refresh }) {
+  const [form, setForm] = useState({
+    origin: '', destination: shipment?.dest_country || '',
+    date: shipment?.departure_date || '', passengers: (shipment?.passengers || []).length || 1, cabin: 'economy',
+  });
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  const search = async () => {
+    setBusy(true); setResults(null);
+    try {
+      const r = await api.post(`/shipments/${shipment.id}/ai-flight-search`, form);
+      setResults(r.data);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Search failed'); }
+    finally { setBusy(false); }
+  };
+  const addFlightFromResult = async (f) => {
+    try {
+      await api.post(`/shipments/${shipment.id}/flights`, {
+        airline: f.airline, flight_no: f.flight_no,
+        origin: form.origin, destination: form.destination,
+        departure_at: f.depart, arrival_at: f.arrive,
+        booking_url: f.booking_url, status: 'scheduled',
+        notes: `Est. USD ${f.price_usd} · ${f.stops || 0} stops · ${f.duration || ''}`,
+      });
+      toast.success(`Added ${f.airline} ${f.flight_no}`);
+      refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="ai-flight-search-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Search size={16} className="text-purple-600" /> AI Flight Search <span className="text-[10px] italic text-muted-foreground">Gemini + Google grounding</span></DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <div><Label className="text-[10px]">Origin</Label><Input value={form.origin} onChange={e => setForm({ ...form, origin: e.target.value })} placeholder="JFK" data-testid="ai-origin" /></div>
+            <div><Label className="text-[10px]">Destination</Label><Input value={form.destination} onChange={e => setForm({ ...form, destination: e.target.value })} placeholder="EBB" data-testid="ai-dest" /></div>
+            <div><Label className="text-[10px]">Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} data-testid="ai-date" /></div>
+            <div><Label className="text-[10px]">Pax</Label><Input type="number" min="1" value={form.passengers} onChange={e => setForm({ ...form, passengers: parseInt(e.target.value, 10) || 1 })} data-testid="ai-pax" /></div>
+            <div>
+              <Label className="text-[10px]">Cabin</Label>
+              <Select value={form.cabin} onValueChange={v => setForm({ ...form, cabin: v })}>
+                <SelectTrigger data-testid="ai-cabin"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="economy">Economy</SelectItem>
+                  <SelectItem value="premium_economy">Premium Economy</SelectItem>
+                  <SelectItem value="business">Business</SelectItem>
+                  <SelectItem value="first">First</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={search} disabled={busy || !form.origin || !form.destination || !form.date} data-testid="ai-search-btn">
+              {busy ? <><Loader2 size={12} className="mr-1 animate-spin" />Searching…</> : <><Search size={12} className="mr-1" />Search flights</>}
+            </Button>
+          </div>
+          {results?.error && (
+            <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{results.error}</p>
+          )}
+          {results?.flights?.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] italic text-muted-foreground">{results.search_note || 'AI suggestions — verify on airline site before booking.'}</p>
+              {results.flights.map((f, i) => (
+                <div key={i} className="rounded border border-border p-2 flex items-center gap-2 flex-wrap text-[11px]" data-testid={`ai-flight-result-${i}`}>
+                  <Badge className="text-[10px]">{f.stops === 0 ? 'Nonstop' : `${f.stops} stops`}</Badge>
+                  <span className="font-semibold">{f.airline}</span>
+                  <span className="font-mono">{f.flight_no}</span>
+                  <span>{f.depart} → {f.arrive}</span>
+                  <span className="text-muted-foreground">{f.duration}</span>
+                  <span className="font-semibold text-emerald-700">${f.price_usd}</span>
+                  <span className="capitalize text-muted-foreground">{f.cabin}</span>
+                  {f.booking_url && <a href={f.booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-0.5"><ExternalLink size={9} /> Book</a>}
+                  <Button size="sm" variant="outline" className="ml-auto h-6 text-[10px]" onClick={() => addFlightFromResult(f)} data-testid={`ai-use-flight-${i}`}>Add to shipment</Button>
+                </div>
+              ))}
+              {results.flights[0]?.caveat && (
+                <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">{results.flights[0].caveat}</p>
+              )}
+            </div>
+          )}
+          {results && !results.flights?.length && !results.error && (
+            <p className="text-xs text-muted-foreground italic">No flights returned. Try different dates/routes.</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── 3D suitcase pack view (react-three-fiber, lazy-loaded) ──────
+const Suitcase3DScene = React.lazy(() => import('./Suitcase3DScene'));
+
+function Suitcase3DDialog({ suitcase, items, onClose }) {
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl" data-testid="suitcase-3d-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Box size={16} className="text-indigo-600" /> 3D Pack View — {suitcase.name}</DialogTitle></DialogHeader>
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">Suitcase {suitcase.L_cm} × {suitcase.W_cm} × {suitcase.H_cm} cm · {items.length} items inside</p>
+          <div className="h-[420px] rounded-lg border border-border bg-slate-100 overflow-hidden">
+            <Suspense fallback={<div className="flex items-center justify-center h-full text-xs text-muted-foreground">Loading 3D…</div>}>
+              <Suitcase3DScene suitcase={suitcase} items={items} />
+            </Suspense>
+          </div>
+          {items.length === 0 && (
+            <p className="text-[11px] italic text-muted-foreground text-center">No items assigned to this suitcase yet. Assign items via the Items tab (set suitcase_id).</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
