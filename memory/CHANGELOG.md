@@ -1,5 +1,30 @@
 # 58:12 Connect — Changelog
 
+## Iteration 227 (Feb 2026) — Boarding-pass OCR · Fare Alerts · Passenger Portal
+
+### 🔴 P0 — Boarding-pass OCR (Gemini vision)
+- Backend: `POST /api/shipments/{sid}/passengers/{pid}/tickets/{tid}/scan-boarding-pass` — accepts image or PDF, calls Gemini 3 Flash with vision, returns STRICT JSON with `passenger_name`, `airline`, `flight_no`, `pnr`, `seat`, `gate`, `boarding_time`, `departure_time`, `origin`, `destination`, `ticket_no`, `boarding_group`, `cabin`, `confidence`. Uses `emergentintegrations` `ImageContent` for images and `FileContentWithMimeType` for PDFs.
+- Frontend: "AI scan" button in the check-in dialog runs OCR on the picked file, previews extracted fields in a purple review panel, and auto-fills the seat input. On check-in, extracted PNR is also patched onto the ticket.
+
+### 🔴 P0 — Fare Alerts (daily AI fare-watch + Resend email)
+- New collection `fare_alerts` and router `/api/fare-alerts` (`GET/POST/PUT/DELETE`, plus `POST /{id}/check-now`).
+- Fields: `{origin, destination, date, target_usd, cabin, passengers, alert_email, active, last_check_at, last_min_price_usd, last_result, notify_count}`.
+- Background asyncio loop `_run_fare_alerts_loop` in `server.py` — every 24h iterates active, non-past alerts and calls Gemini for the current cheapest fare. If `min_price_usd <= target_usd`, sends a "fare drop" email via `send_notification_email` (Resend) with route + price + "Book now" link. Increments `notify_count`.
+- Frontend: new `/fare-alerts` route with a full CRUD page — cards show target, last-found price with delta %, notify count, cheapest booking link, pause/resume toggle, "Check now" trigger.
+- Sidebar nav entry added under Operations (director+ visibility).
+
+### 🔴 P0 — Passenger Portal (public token-based self-service)
+- Each passenger now has a `portal_token` (auto-generated on create; backfilled for existing passengers via startup migration).
+- Admin CRUD extended: `POST /api/shipments/{sid}/passengers/{pid}/rotate-portal-token` to invalidate & re-issue.
+- Public endpoints (no auth): `GET /api/passenger-portal/{token}` (returns shipment + passenger + their tickets + relevant flights + their suitcases), `POST /api/passenger-portal/{token}/tickets/{tid}/check-in` (self-check-in with boarding-pass file upload), `POST /api/passenger-portal/{token}/tickets/{tid}/scan-boarding-pass` (public OCR mirror).
+- Frontend new route `/p/passenger/:token` — clean single-page view with the passenger's flights, tickets, suitcases; "Check in ✓" button per ticket opens a mobile-friendly modal with file input + AI scan button + seat field + submit.
+- Admin UI: new "Portal" button on each passenger card copies the unique link to clipboard.
+
+### Testing
+- Backend: verified via curl end-to-end. Fare alert `check-now` returned live JFK→EBB min-price of $1764 from Gemini (didn't trigger since target=$900, correct). Passenger portal GET returned expected shape. Portal check-in flow independent of admin auth.
+- Frontend: smoke screenshots confirm `/fare-alerts` page renders with two live-data alerts (Active badge, $900 target, $1920 last-found, +113% delta, "Check now" and "Pause" buttons) and `/p/passenger/{token}` portal shows passenger name, one flight, one ticket with "Update boarding pass" button and check-in timestamp. Ruff & ESLint clean.
+
+
 ## Iteration 226 (Feb 2026) — Airport-mode overhaul: multi-flight, tickets, check-in, AI flight search, 3D per-suitcase
 
 ### 🔴 P0 — Container layout hidden in airport mode

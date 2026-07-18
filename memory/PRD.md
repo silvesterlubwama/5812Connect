@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 227 (Feb 2026)
+**Three shipping enhancements built on top of iter226**: Boarding-pass OCR (Gemini vision) · Group Fare Alerts (24h AI watch + email) · Passenger Portal (token-based public self-service).
+
+- **Boarding-pass OCR** — `POST /api/shipments/{sid}/passengers/{pid}/tickets/{tid}/scan-boarding-pass` uses Gemini 3 Flash with vision to extract seat, gate, boarding time, PNR, flight #, origin/dest, cabin from an uploaded image or PDF. Frontend "AI scan" button in the check-in dialog previews the fields and auto-fills the seat.
+- **Fare Alerts** — new `fare_alerts` collection + `/api/fare-alerts` router. Background asyncio loop runs every 24h, calls Gemini for the min price on each active alert, and emails the operator via Resend when the fare drops to target. Frontend page at `/fare-alerts` with CRUD, pause/resume, "Check now" and delta %. Sidebar nav entry added.
+- **Passenger Portal** — every passenger now has a `portal_token`. Public route `/p/passenger/:token` (no login) lets each passenger see their tickets, flights and suitcases, upload/scan a boarding pass with AI OCR, and self-mark checked-in. Admin UI copies the portal link with one click.
+
+
 ## Recently Resolved — Iteration 226 (Feb 2026)
 **Airport-mode overhaul: multi-airline flights + multi-leg tickets per passenger + check-in log with boarding-pass upload + AI flight search (Gemini + Google grounding) + 15-min background flight-status refresh + per-suitcase 3D pack view.**
 

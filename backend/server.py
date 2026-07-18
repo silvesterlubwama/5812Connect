@@ -590,6 +590,7 @@ try:
     from routers.funds import router as funds_router
     from routers.social_review_forms import router as social_review_forms_router
     from routers.shipments_pkg import router as shipments_router
+    from routers.fare_alerts import router as fare_alerts_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -613,6 +614,7 @@ try:
     app.include_router(funds_router)
     app.include_router(social_review_forms_router)
     app.include_router(shipments_router)
+    app.include_router(fare_alerts_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")
@@ -1240,8 +1242,41 @@ async def startup():
     asyncio.create_task(_run_due_date_reminder_scheduler())
     # iter226 — every 15 min refresh flight status for departed/shipped shipments
     asyncio.create_task(_run_flight_status_refresh_loop())
+    # iter227 — daily fare-alert check
+    asyncio.create_task(_run_fare_alerts_loop())
     # Defer heavy seeding so the app becomes ready immediately
     asyncio.create_task(_seed_initial_data())
+
+
+async def _run_fare_alerts_loop():
+    """Once per 24h, iterate active fare alerts and re-check via AI. Emails
+    on drop-to-target are handled inside _check_single_alert."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(90)  # let startup + seeding finish
+    while True:
+        try:
+            from routers.fare_alerts import _check_single_alert
+            n_checked = 0
+            n_triggered = 0
+            async for a in db.fare_alerts.find({"active": True}, {"_id": 0}):
+                # Skip alerts whose date has already passed
+                try:
+                    if a.get("date") and datetime.fromisoformat(a["date"]).date() < datetime.now(timezone.utc).date():
+                        continue
+                except Exception:
+                    pass
+                try:
+                    r = await _check_single_alert(a)
+                    n_checked += 1
+                    if r.get("triggered"):
+                        n_triggered += 1
+                except Exception as ex:
+                    logger.warning(f"Fare alert {a.get('id')} check failed: {ex}")
+            if n_checked:
+                logger.info(f"Fare-alert cycle: checked {n_checked}, triggered {n_triggered}")
+        except Exception as ex:
+            logger.warning(f"Fare-alert loop error: {ex}")
+        await _asyncio.sleep(24 * 3600)  # 24h
 
 
 async def _run_flight_status_refresh_loop():
@@ -1407,6 +1442,23 @@ async def _ensure_indexes():
         # Auto-posted journal entry lookup by source (donation/expense delete cascade)
         await db.accounting_entries.create_index([("auto_generated_from", 1), ("source_id", 1)])
         await db.accounting_entries.create_index([("status", 1), ("is_reversed", 1)])
+        # iter227 — fare alert lookup + passenger portal token lookup
+        await db.fare_alerts.create_index("created_by")
+        await db.fare_alerts.create_index([("active", 1), ("date", 1)])
+        await db.shipments.create_index("passengers.portal_token")
+        # Backfill portal_token on any existing passenger docs
+        try:
+            import secrets as _secrets
+            async for s in db.shipments.find({"passengers": {"$elemMatch": {"portal_token": {"$exists": False}}}}, {"_id": 1, "passengers": 1}):
+                changed = False
+                for p in s.get("passengers") or []:
+                    if not p.get("portal_token"):
+                        p["portal_token"] = _secrets.token_urlsafe(20)
+                        changed = True
+                if changed:
+                    await db.shipments.update_one({"_id": s["_id"]}, {"$set": {"passengers": s["passengers"]}})
+        except Exception as ex:
+            logger.warning(f"portal_token backfill: {ex}")
         logger.info("Indexes ensured (idempotent)")
     except Exception as e:
         logger.warning(f"Index ensure: {e}")

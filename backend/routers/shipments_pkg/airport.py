@@ -25,6 +25,7 @@ async def add_passenger(shipment_id: str, data: dict, current_user: dict = Depen
     name = (data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Passenger name required")
+    import secrets as _secrets
     passenger = {
         "id": f"pax_{uuid.uuid4().hex[:8]}",
         "name": name[:120],
@@ -35,6 +36,8 @@ async def add_passenger(shipment_id: str, data: dict, current_user: dict = Depen
         "suitcase_count_allowance": int(data.get("suitcase_count_allowance") or 2),
         "notes": (data.get("notes") or "")[:300],
         "tickets": [],  # iter226 — multi-leg tickets
+        # iter227 — passenger portal token so pax can self-serve check-in
+        "portal_token": _secrets.token_urlsafe(20),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
@@ -42,6 +45,20 @@ async def add_passenger(shipment_id: str, data: dict, current_user: dict = Depen
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Shipment not found")
     return passenger
+
+
+@router.post("/shipments/{shipment_id}/passengers/{passenger_id}/rotate-portal-token")
+async def rotate_passenger_portal_token(shipment_id: str, passenger_id: str, current_user: dict = Depends(require_admin)):
+    """Regenerate the passenger's portal_token — invalidates old link."""
+    import secrets as _secrets
+    new_tok = _secrets.token_urlsafe(20)
+    r = await db.shipments.update_one(
+        {"id": shipment_id, "passengers.id": passenger_id},
+        {"$set": {"passengers.$.portal_token": new_tok}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+    return {"portal_token": new_tok}
 
 
 @router.put("/shipments/{shipment_id}/passengers/{passenger_id}")
@@ -381,6 +398,72 @@ async def delete_ticket(shipment_id: str, passenger_id: str, ticket_id: str, cur
     return {"deleted": True}
 
 
+@router.post("/shipments/{shipment_id}/passengers/{passenger_id}/tickets/{ticket_id}/scan-boarding-pass")
+async def scan_boarding_pass(
+    shipment_id: str,
+    passenger_id: str,
+    ticket_id: str,
+    boarding_pass: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+):
+    """OCR a boarding pass with Gemini Vision. Returns extracted fields
+    WITHOUT persisting anything. The frontend previews the values and the
+    user confirms via the normal check-in endpoint."""
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key)")
+    raw = await boarding_pass.read()
+    if len(raw) > 4_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 4 MB for OCR)")
+    mime = boarding_pass.content_type or "image/jpeg"
+    if not (mime.startswith("image/") or mime == "application/pdf"):
+        raise HTTPException(status_code=400, detail="Only images or PDF supported")
+    b64 = base64.b64encode(raw).decode("ascii")
+    data_url = f"data:{mime};base64,{b64}"
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, FileContentWithMimeType
+    except Exception as ex:
+        raise HTTPException(status_code=503, detail=f"AI client not installed: {ex}")
+    system_prompt = (
+        "You are a boarding-pass OCR expert. Read the attached boarding pass "
+        "(image or PDF page) and return STRICT JSON with these fields (empty "
+        "string if not visible): "
+        '{"passenger_name":"","airline":"","flight_no":"","pnr":"","seat":"","gate":"","boarding_time":"","departure_time":"","origin":"","destination":"","ticket_no":"","boarding_group":"","cabin":"","confidence":0.0}. '
+        "Return ONLY the JSON — no markdown fences, no commentary. "
+        "Use 24h HH:MM for times, IATA codes when present for origin/destination."
+    )
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"bp_ocr_{ticket_id}_{uuid.uuid4().hex[:6]}",
+            system_message=system_prompt,
+        ).with_model("gemini", "gemini-3-flash-preview")
+        # Image path: use ImageContent (base64). PDF path: save temp file and pass as FileContentWithMimeType.
+        if mime.startswith("image/"):
+            msg = UserMessage(text="Extract the boarding pass fields now.", file_contents=[ImageContent(image_base64=b64)])
+        else:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(raw)
+                tmp_path = tmp.name
+            msg = UserMessage(text="Extract the boarding pass fields now.", file_contents=[FileContentWithMimeType(mime_type=mime, file_path=tmp_path)])
+        raw_reply = await chat.send_message(msg)
+    except Exception as ex:
+        logger.warning(f"Boarding pass OCR failed: {ex}")
+        raise HTTPException(status_code=503, detail=f"OCR failed: {ex}")
+    text = (raw_reply or "").strip().strip("`")
+    if text.startswith("json"):
+        text = text[4:].strip()
+    import json as _json
+    try:
+        parsed = _json.loads(text)
+    except Exception:
+        return {"error": "AI did not return valid JSON", "raw": text[:1000], "preview": data_url[:100]}
+    parsed["scanned_at"] = datetime.now(timezone.utc).isoformat()
+    parsed["preview_data_url"] = data_url
+    return parsed
+
+
 @router.post("/shipments/{shipment_id}/passengers/{passenger_id}/tickets/{ticket_id}/check-in")
 async def check_in_ticket(
     shipment_id: str,
@@ -572,4 +655,159 @@ async def manual_refresh_flight_status(shipment_id: str, current_user: dict = De
     n = await _refresh_flight_status_for(s)
     return {"refreshed": n}
 
+
+
+
+
+# ============================================================
+# iter227 — PASSENGER PORTAL (public self-service via token)
+# ============================================================
+
+async def _find_passenger_by_token(token: str):
+    """Resolve a portal token to (shipment, passenger). Returns (None, None) if not found."""
+    s = await db.shipments.find_one({"passengers.portal_token": token}, {"_id": 0})
+    if not s:
+        return None, None
+    pax = next((p for p in s.get("passengers", []) if p.get("portal_token") == token), None)
+    return s, pax
+
+
+@router.get("/passenger-portal/{token}")
+async def passenger_portal_view(token: str):
+    """PUBLIC — returns the passenger's own data + their flights + tickets.
+    Only exposes the fields the passenger needs; no admin fields."""
+    s, pax = await _find_passenger_by_token(token)
+    if not pax:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    # Filter flights to only those referenced by this passenger's tickets
+    ticket_flight_ids = {t.get("flight_id") for t in (pax.get("tickets") or []) if t.get("flight_id")}
+    flights_public = [
+        {k: f.get(k) for k in ("id", "airline", "flight_no", "origin", "destination",
+                                "departure_at", "arrival_at", "status", "ai_summary",
+                                "booking_url", "last_ai_check_at")}
+        for f in (s.get("flights") or []) if f.get("id") in ticket_flight_ids
+    ]
+    suitcases_public = [
+        {k: c.get(k) for k in ("id", "name", "type", "weight_kg", "weight_limit_kg", "tracking_no")}
+        for c in (s.get("suitcases") or []) if c.get("passenger_id") == pax.get("id")
+    ]
+    return {
+        "shipment": {
+            "id": s["id"],
+            "name": s.get("name"),
+            "status": s.get("status"),
+            "mode": s.get("mode"),
+            "dest_country": s.get("dest_country"),
+        },
+        "passenger": {k: pax.get(k) for k in ("id", "name", "passport_no",
+                                              "suitcase_allowance_kg", "suitcase_count_allowance",
+                                              "tickets", "notes")},
+        "flights": flights_public,
+        "suitcases": suitcases_public,
+    }
+
+
+@router.post("/passenger-portal/{token}/tickets/{ticket_id}/check-in")
+async def passenger_portal_check_in(
+    token: str,
+    ticket_id: str,
+    boarding_pass: Optional[UploadFile] = File(default=None),
+    checked_in: str = Form(default="true"),
+    seat: str = Form(default=""),
+):
+    """PUBLIC — passenger self-check-in via portal token. Same shape as the
+    admin check-in endpoint."""
+    s, pax = await _find_passenger_by_token(token)
+    if not pax:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    ticket = next((t for t in (pax.get("tickets") or []) if t.get("id") == ticket_id), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    now = datetime.now(timezone.utc).isoformat()
+    bp_data_url = ""
+    if boarding_pass is not None:
+        raw = await boarding_pass.read()
+        if len(raw) > 2_500_000:
+            raise HTTPException(status_code=413, detail="Boarding pass too large (max 2.5 MB)")
+        mime = boarding_pass.content_type or "application/octet-stream"
+        b64 = base64.b64encode(raw).decode("ascii")
+        bp_data_url = f"data:{mime};base64,{b64}"
+    is_in = str(checked_in).lower() in ("true", "1", "yes")
+    set_ops = {
+        "passengers.$[pax].tickets.$[tkt].checked_in": is_in,
+        "passengers.$[pax].tickets.$[tkt].checked_in_at": now if is_in else None,
+        "passengers.$[pax].tickets.$[tkt].checked_in_by": pax["name"] + " (self)",
+    }
+    if bp_data_url:
+        set_ops["passengers.$[pax].tickets.$[tkt].boarding_pass_url"] = bp_data_url
+    if seat:
+        set_ops["passengers.$[pax].tickets.$[tkt].seat"] = seat[:10]
+    await db.shipments.update_one(
+        {"id": s["id"]},
+        {"$set": set_ops},
+        array_filters=[{"pax.id": pax["id"]}, {"tkt.id": ticket_id}],
+    )
+    logger.info(f"Portal check-in: {pax['name']} ticket {ticket_id} in={is_in}")
+    return {"checked_in": is_in, "checked_in_at": now if is_in else None, "has_boarding_pass": bool(bp_data_url)}
+
+
+@router.post("/passenger-portal/{token}/tickets/{ticket_id}/scan-boarding-pass")
+async def passenger_portal_scan_boarding_pass(
+    token: str,
+    ticket_id: str,
+    boarding_pass: UploadFile = File(...),
+):
+    """PUBLIC — passenger uploads their boarding pass, we OCR and return the
+    extracted fields so they can review before confirming check-in."""
+    s, pax = await _find_passenger_by_token(token)
+    if not pax:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    if not any(t.get("id") == ticket_id for t in (pax.get("tickets") or [])):
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    # Reuse the admin scan-boarding-pass logic by directly calling helper
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable")
+    raw = await boarding_pass.read()
+    if len(raw) > 4_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 4 MB for OCR)")
+    mime = boarding_pass.content_type or "image/jpeg"
+    if not (mime.startswith("image/") or mime == "application/pdf"):
+        raise HTTPException(status_code=400, detail="Only images or PDF supported")
+    b64 = base64.b64encode(raw).decode("ascii")
+    data_url = f"data:{mime};base64,{b64}"
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, FileContentWithMimeType
+    except Exception as ex:
+        raise HTTPException(status_code=503, detail=f"AI client not installed: {ex}")
+    system_prompt = (
+        "You are a boarding-pass OCR expert. Read the attached boarding pass "
+        "and return STRICT JSON: "
+        '{"passenger_name":"","airline":"","flight_no":"","pnr":"","seat":"","gate":"","boarding_time":"","departure_time":"","origin":"","destination":"","ticket_no":"","boarding_group":"","cabin":"","confidence":0.0}. '
+        "Return ONLY JSON, no markdown. 24h HH:MM times, IATA codes."
+    )
+    try:
+        chat = LlmChat(api_key=api_key, session_id=f"bp_portal_{ticket_id}",
+                        system_message=system_prompt).with_model("gemini", "gemini-3-flash-preview")
+        if mime.startswith("image/"):
+            msg = UserMessage(text="Extract fields now.", file_contents=[ImageContent(image_base64=b64)])
+        else:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(raw); tmp_path = tmp.name
+            msg = UserMessage(text="Extract fields now.", file_contents=[FileContentWithMimeType(mime_type=mime, file_path=tmp_path)])
+        raw_reply = await chat.send_message(msg)
+    except Exception as ex:
+        logger.warning(f"Portal OCR failed: {ex}")
+        raise HTTPException(status_code=503, detail=f"OCR failed: {ex}")
+    text = (raw_reply or "").strip().strip("`")
+    if text.startswith("json"):
+        text = text[4:].strip()
+    import json as _json
+    try:
+        parsed = _json.loads(text)
+    except Exception:
+        return {"error": "AI did not return valid JSON", "raw": text[:1000]}
+    parsed["preview_data_url"] = data_url
+    return parsed
 

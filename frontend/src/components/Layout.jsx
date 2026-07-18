@@ -60,6 +60,7 @@ const NAV_SECTIONS = [
       { to: '/social-work', icon: HeartHandshake, label: 'Social Work', roles: STAFF_PLUS, module: 'social_work' },
       { to: '/funds', icon: Banknote, label: 'Fund Requests', roles: STAFF_PLUS },
       { to: '/shipments', icon: Container, label: 'Container Shipments', roles: DIRECTOR_PLUS },
+      { to: '/fare-alerts', icon: Bell, label: 'Fare Alerts', roles: DIRECTOR_PLUS },
       { to: '/access', icon: ScanLine, label: 'Access Control', roles: COORDINATOR_PLUS },
     ]
   },
@@ -407,6 +408,7 @@ export default function Layout() {
       '/approvals': { roles: null, module: 'finance' },
       '/funds': { roles: STAFF_PLUS, module: null },
       '/shipments': { roles: DIRECTOR_PLUS, module: null },
+      '/fare-alerts': { roles: DIRECTOR_PLUS, module: null },
       '/pbx': { roles: ADMIN_ROLES, module: null },
       '/sales': { roles: null, module: 'sales' },
       '/social-work': { roles: STAFF_PLUS, module: 'social_work' },

@@ -31,6 +31,8 @@ import SettingsPage from './pages/SettingsPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import FundsPage from './pages/FundsPage';
 const ShipmentsAdminPage = lazy(() => import('./pages/ShipmentsAdminPage'));
+const FareAlertsPage = lazy(() => import('./pages/FareAlertsPage'));
+const PassengerPortalPage = lazy(() => import('./pages/PassengerPortalPage'));
 const PBXAdminPage = lazy(() => import('./pages/PBXAdminPage'));
 const ShipmentDonorPage = lazy(() => import('./pages/ShipmentDonorPage'));
 import SchoolPortalPage from './pages/SchoolPortalPage';
@@ -131,6 +133,7 @@ function AppRoutes() {
       <Route path="/school-portal/:portalToken" element={<SchoolPortalPage />} />
       <Route path="/sponsor-portal/:portalToken" element={<SponsorPortalPage />} />
       <Route path="/donate/shipment/:token" element={<ShipmentDonorPage />} />
+      <Route path="/p/passenger/:token" element={<PassengerPortalPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/security-checkpoint" element={<SecurityCheckpointPage />} />
@@ -151,6 +154,7 @@ function AppRoutes() {
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="funds" element={<FundsPage />} />
         <Route path="shipments" element={<ShipmentsAdminPage />} />
+        <Route path="fare-alerts" element={<FareAlertsPage />} />
         <Route path="social-work" element={<SocialWorkPage />} />
         <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />

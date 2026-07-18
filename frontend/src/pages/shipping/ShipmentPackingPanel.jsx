@@ -520,6 +520,21 @@ function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, on
                 <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => onAddSuitcase(p.id)} data-testid={`add-suitcase-${p.id}`}>
                   <Plus size={10} className="mr-0.5" /> Suitcase
                 </Button>
+                {p.portal_token && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[10px] text-indigo-700 border-indigo-300 hover:bg-indigo-50"
+                    onClick={() => {
+                      const url = `${window.location.origin}/p/passenger/${p.portal_token}`;
+                      navigator.clipboard.writeText(url).then(() => toast.success('Portal link copied'));
+                    }}
+                    data-testid={`copy-portal-${p.id}`}
+                    title="Copy passenger self-service portal link"
+                  >
+                    <ExternalLink size={10} className="mr-0.5" /> Portal
+                  </Button>
+                )}
                 <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-rose-600" onClick={() => delPassenger(p)} data-testid={`passenger-del-${p.id}`}>
                   <Trash2 size={12} />
                 </Button>
@@ -954,6 +969,26 @@ function CheckInDialog({ sid, passenger, ticket, onClose, onSaved }) {
   const [seat, setSeat] = useState(ticket.seat || '');
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [ocr, setOcr] = useState(null);
+  const [scanning, setScanning] = useState(false);
+
+  const runOcr = async () => {
+    if (!file) return;
+    setScanning(true); setOcr(null);
+    try {
+      const fd = new FormData();
+      fd.append('boarding_pass', file);
+      const r = await api.post(`/shipments/${sid}/passengers/${passenger.id}/tickets/${ticket.id}/scan-boarding-pass`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setOcr(r.data);
+      if (r.data?.seat) setSeat(r.data.seat);
+      if (r.data?.error) toast.warning(r.data.error);
+      else toast.success('Fields extracted — review below');
+    } catch (e) { toast.error(e.response?.data?.detail || 'OCR failed'); }
+    finally { setScanning(false); }
+  };
+
   const submit = async (markCheckedIn) => {
     setBusy(true);
     try {
@@ -964,6 +999,15 @@ function CheckInDialog({ sid, passenger, ticket, onClose, onSaved }) {
       await api.post(`/shipments/${sid}/passengers/${passenger.id}/tickets/${ticket.id}/check-in`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      // If OCR gave us extra fields, patch the ticket too
+      if (ocr && (ocr.pnr || ocr.flight_no)) {
+        try {
+          await api.put(`/shipments/${sid}/passengers/${passenger.id}/tickets/${ticket.id}`, {
+            ...(ocr.pnr ? { pnr: ocr.pnr } : {}),
+            ...(ocr.seat && !seat ? { seat: ocr.seat } : {}),
+          });
+        } catch { /* non-fatal */ }
+      }
       toast.success(markCheckedIn ? 'Checked in ✓' : 'Un-checked-in');
       onSaved();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
@@ -971,19 +1015,41 @@ function CheckInDialog({ sid, passenger, ticket, onClose, onSaved }) {
   };
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-sm" data-testid="checkin-dialog">
+      <DialogContent className="max-w-md" data-testid="checkin-dialog">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><CheckCircle2 size={16} className="text-emerald-600" /> Check-in — {passenger.name}</DialogTitle></DialogHeader>
         <div className="space-y-3 text-sm">
-          <p className="text-[11px] text-muted-foreground">Ticket <span className="font-mono">{ticket.ticket_no}</span>. Attach the boarding pass photo/PDF (max 2.5 MB).</p>
+          <p className="text-[11px] text-muted-foreground">Ticket <span className="font-mono">{ticket.ticket_no}</span>. Attach the boarding pass (max 2.5 MB) and optionally scan it with AI to auto-fill.</p>
           <div>
             <Label className="text-xs">Seat</Label>
             <Input value={seat} onChange={e => setSeat(e.target.value)} placeholder="14A" className="font-mono" data-testid="checkin-seat" />
           </div>
           <div>
             <Label className="text-xs">Boarding pass (photo or PDF)</Label>
-            <Input type="file" accept="image/*,application/pdf" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="checkin-file" />
+            <div className="flex gap-2 items-center">
+              <Input type="file" accept="image/*,application/pdf" onChange={e => { setFile(e.target.files?.[0] || null); setOcr(null); }} data-testid="checkin-file" className="flex-1" />
+              <Button size="sm" variant="outline" onClick={runOcr} disabled={!file || scanning} className="text-purple-700 border-purple-300 hover:bg-purple-50" data-testid="ocr-scan-btn">
+                {scanning ? <><Loader2 size={11} className="mr-1 animate-spin" />Scanning…</> : <><Sparkles size={11} className="mr-1" />AI scan</>}
+              </Button>
+            </div>
             {file && <p className="text-[10px] text-muted-foreground mt-1">{file.name} · {(file.size / 1024).toFixed(0)} KB</p>}
           </div>
+          {ocr && !ocr.error && (
+            <div className="rounded-md border border-purple-200 bg-purple-50 p-2 text-[11px] space-y-1" data-testid="ocr-result">
+              <p className="font-semibold text-purple-900 flex items-center gap-1"><Sparkles size={11} /> AI extracted <span className="text-[10px] text-purple-600">(confidence {Math.round((ocr.confidence || 0) * 100)}%)</span></p>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10.5px]">
+                {ocr.airline && <span><b>Airline:</b> {ocr.airline}</span>}
+                {ocr.flight_no && <span><b>Flight:</b> {ocr.flight_no}</span>}
+                {ocr.pnr && <span><b>PNR:</b> {ocr.pnr}</span>}
+                {ocr.seat && <span><b>Seat:</b> {ocr.seat}</span>}
+                {ocr.gate && <span><b>Gate:</b> {ocr.gate}</span>}
+                {ocr.boarding_time && <span><b>Boarding:</b> {ocr.boarding_time}</span>}
+                {ocr.departure_time && <span><b>Departure:</b> {ocr.departure_time}</span>}
+                {ocr.origin && <span><b>From:</b> {ocr.origin}</span>}
+                {ocr.destination && <span><b>To:</b> {ocr.destination}</span>}
+                {ocr.boarding_group && <span><b>Group:</b> {ocr.boarding_group}</span>}
+              </div>
+            </div>
+          )}
           {ticket.boarding_pass_url && (
             <a href={ticket.boarding_pass_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-700 hover:underline flex items-center gap-1">
               <ExternalLink size={11} /> View existing boarding pass
