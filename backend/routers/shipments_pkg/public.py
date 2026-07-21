@@ -107,6 +107,18 @@ async def public_shipment(token: str, request: Request):
         "y_cm": p.get("y_cm") or 0,
         "color": p.get("color") or "",
     } for p in (s.get("pallets") or [])]) if unlocked else []
+    # iter228 — expose packing_units too so unlocked donors/editors see the
+    # unified 2D + 3D layout (same as staff on the admin side).
+    packing_units_lite = ([{
+        "id": u.get("id"),
+        "name": u.get("name"),
+        "type": u.get("type"),
+        "preset_key": u.get("preset_key"),
+        "L_cm": u.get("L_cm"), "W_cm": u.get("W_cm"), "H_cm": u.get("H_cm"),
+        "x_cm": u.get("x_cm") or 0, "y_cm": u.get("y_cm") or 0,
+        "color": u.get("color") or "",
+        "parent_id": u.get("parent_id"),
+    } for u in (s.get("packing_units") or [])]) if unlocked else []
     donor_totals: dict[str, int] = {}
     donor_set = set()
     for it in items:
@@ -133,6 +145,7 @@ async def public_shipment(token: str, request: Request):
         "still_needed": still_needed,
         "already_acquired": already_acquired,
         "pallets": pallets_lite,
+        "packing_units": packing_units_lite,
         "totals": {
             "weight_kg": round(total_weight, 1),
             "weight_pct": round(min(100, (total_weight / cap) * 100), 1) if cap else 0,
@@ -509,7 +522,6 @@ async def public_scan_item(
             if not data or len(data) > 8_000_000:
                 continue
             image_bytes_list.append(data)
-            from routers.shipments import _persist_shipment_image  # type: ignore
             try:
                 url = await _persist_shipment_image(ctx["shipment_id"], data, img.content_type or "image/jpeg")
                 image_urls.append(url)

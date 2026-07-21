@@ -277,9 +277,9 @@ function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh }) {
         </Button>
       </div>
 
-      {/* 2D top-down floor plan */}
-      <FloorPlanSVG L={L} W={W} floorUnits={floorUnits} childrenOf={childrenOf}
-                    onSelect={onEdit} sid={shipment.id} refresh={refresh} />
+      {/* iter228: 2D floor plan removed — the top-level ContainerVisualizer
+          (2D + 3D) on ShipmentsAdminPage now renders both legacy pallets AND
+          these packing_units in a single unified layout. No duplicate views. */}
 
       {/* List of units by parent */}
       <div className="space-y-1.5">

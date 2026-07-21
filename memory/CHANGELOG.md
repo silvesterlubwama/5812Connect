@@ -1,5 +1,36 @@
 # 58:12 Connect — Changelog
 
+## Iteration 228 (Feb 2026) — Shipping consolidation + AI-scan bug fix
+
+### 🔴 P0 — Fixed "Scan failed" on the donor-page AI item scanner
+- **Root cause**: `/app/backend/routers/shipments_pkg/public.py` (post iter-224 split) still held a stale `from routers.shipments import _persist_shipment_image` inside the image-persistence loop. Since `routers/shipments.py` was deleted when we broke it into `shipments_pkg/`, this import raised `ImportError` before every photo scan could complete — the frontend saw a 500 and toast'd "Scan failed".
+- **Fix**: removed the stale import — `_persist_shipment_image` is already imported from `._common` at the top of the file. Scan now completes end-to-end.
+
+### 🔴 P0 — Admin-side AI Scan (was donor-only before)
+- **New endpoint** `POST /api/shipments/{shipment_id}/scan-item` (admin-only via `require_admin`). Mirrors the public `/public/shipments/{token}/scan-item` UX (up to 3 photos + ISBN/UPC → Gemini vision) but with no PIN gate so back-office staff can bulk-scan items from the admin page.
+- **New UI**: purple "AI Scan" button on the shipment items toolbar (next to "Item" and "Import CSV") opens a mobile-friendly dialog with photo upload + "Identify with AI" → review card → "Add to shipment" one-click.
+
+### 🔴 P0 — Consolidated the two pallet surfaces
+- Deleted the OLD dedicated "Pallets" row + "Pallet" button + `editingPallet` dialog on ShipmentsAdminPage. There is now ONE surface: the "Packing units" section inside `ShipmentPackingPanel` which handles pallets, boxes, totes and crates uniformly.
+- Existing legacy `pallets` docs still render fine — `ContainerVisualizer` merges them with `packing_units` into a single unified layout via a helper that normalises `L_cm/W_cm/H_cm` ↔ `length_cm/width_cm/height_cm`.
+
+### 🔴 P0 — Consolidated the two floor-plan / 3D views
+- Removed the standalone `FloorPlanSVG` inside `ShipmentPackingPanel` (2D-only). The top-level `ContainerVisualizer` (2D + 3D) already covers this and now consumes both legacy `pallets` AND new `packing_units` in one merged layout.
+- Drag-move on the visualizer auto-detects whether the moved id is a pallet or a packing unit and routes to the right PUT endpoint.
+
+### 🔴 P0 — Public donor page: hide everything unless PIN-authed
+- **Un-authed donors** now only see: shipment header + progress bar + "Still needed" list with "I'll donate" buttons. That's it. Cleaner, more focused, more donation-friendly.
+- **PIN-authed editors** still see the full experience: 3D container, "Already on the truck", editor toolbar, detailed stats grid, donor leaderboard.
+- **Backend**: `/api/public/shipments/{token}` now exposes `packing_units` too when unlocked, so admin/editor visualizer renders the same unified layout as the admin page.
+
+### Testing
+- Backend: curl end-to-end verified `/scan-item` (admin) and `/public/shipments/.../scan-item` both return HTTP 200 with structured JSON (Google Books quota is exhausted so ISBN returns "Unidentified" fallback, but the endpoint itself no longer throws). Route table intact (57 shipment routes).
+- Frontend: smoke screenshots confirmed:
+  - Public donor URL (no PIN) shows ONLY progress bar + "Still needed" list — no container/pallets/acquired/stats
+  - Admin shipment page has "AI Scan" button, unified packing-unit section, no duplicate pallets row
+  - `admin-scan-dialog` opens with photo picker + "Identify with AI"
+
+
 ## Iteration 227 (Feb 2026) — Boarding-pass OCR · Fare Alerts · Passenger Portal
 
 ### 🔴 P0 — Boarding-pass OCR (Gemini vision)

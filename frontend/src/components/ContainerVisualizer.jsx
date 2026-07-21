@@ -27,21 +27,38 @@ import { Box, RotateCw, Grid3x3 } from 'lucide-react';
 const CONTAINER = { length: 1203, width: 235, height: 269 };
 
 /** Compute the layout from shipment data — returns { boxes:[], total_volume_m3, fill_pct, scenes:'ok'|'overflow' }.
- *  If `pallets` provide explicit `x_cm`/`y_cm` + dims, they are used verbatim
- *  (admin-positioned). Otherwise we fall back to greedy heaviest-first packing.
+ *  Accepts BOTH `pallets` (legacy) and `packing_units` (iter223+) merged into
+ *  a single list keyed by id, so callers don't have to choose.
  */
-function computeLayout(items, pallets, containerOverride) {
+function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   const CONT = containerOverride && containerOverride.length_cm ? {
     length: containerOverride.length_cm,
     width: containerOverride.width_cm,
     height: containerOverride.height_cm,
   } : CONTAINER;
-  // Group items by pallet (or null for "Loose")
+  // iter228 — unify legacy pallets + new packing_units (pallets/boxes/totes/crates)
+  // Packing-unit fields use L_cm/W_cm/H_cm; legacy pallets use length_cm/width_cm/height_cm.
+  // We normalise packing_units to the pallet shape so downstream code is identical.
+  const unifiedPallets = [
+    ...(pallets || []),
+    ...((packingUnits || []).map(u => ({
+      id: u.id,
+      label: u.name || u.preset_key || u.type || 'Unit',
+      length_cm: u.L_cm ?? u.length_cm,
+      width_cm: u.W_cm ?? u.width_cm,
+      height_cm: u.H_cm ?? u.height_cm,
+      x_cm: u.x_cm,
+      y_cm: u.y_cm,
+      color: u.color || null,
+      _packing_unit_type: u.type,
+    }))),
+  ];
+  // Group items by pallet_id OR packing_unit_id (both supported)
   const groups = new Map();
   items.forEach(it => {
     const acquired = Number(it.qty_acquired || 0);
-    if (acquired <= 0) return;  // only render what's actually in the container
-    const key = it.pallet_id || '_loose';
+    if (acquired <= 0) return;
+    const key = it.pallet_id || it.packing_unit_id || '_loose';
     if (!groups.has(key)) {
       groups.set(key, { id: key, items: [], total_weight: 0, total_volume: 0 });
     }
@@ -52,17 +69,20 @@ function computeLayout(items, pallets, containerOverride) {
     const vol = (Number(d.length) || 0) * (Number(d.width) || 0) * (Number(d.height) || 0) * acquired;
     g.total_volume += vol;
   });
+  // Ensure every explicit pallet/unit appears even if empty (so users see them
+  // on the floor plan before assigning items)
+  unifiedPallets.forEach(p => {
+    if (!groups.has(p.id)) {
+      groups.set(p.id, { id: p.id, items: [], total_weight: 0, total_volume: 0 });
+    }
+  });
   if (groups.size === 0) return { boxes: [], total_volume_m3: 0, fill_pct: 0, container: CONT };
 
-  // Standardize pallet footprint when no explicit dims: 120 x 100 cm.
   const PALLET_L = 120;
   const PALLET_W = 100;
-
-  // Sort heaviest-first so heavy pallets pack against the back wall
   const sorted = Array.from(groups.values()).sort((a, b) => b.total_weight - a.total_weight);
-
   const boxes = [];
-  const palletMeta = new Map((pallets || []).map(p => [p.id, p]));
+  const palletMeta = new Map(unifiedPallets.map(p => [p.id, p]));
   let row = 0;
   let col = 0;
   const totalVolume = sorted.reduce((s, g) => s + g.total_volume, 0);
@@ -338,9 +358,9 @@ const ThreeCanvas = React.lazy(async () => {
 // ───────────────────────────────────────────────────────────────
 // Public component
 // ───────────────────────────────────────────────────────────────
-export default function ContainerVisualizer({ items = [], pallets = [], container, editable = false, onPalletMove, defaultMode = '2d' }) {
+export default function ContainerVisualizer({ items = [], pallets = [], packing_units = [], container, editable = false, onPalletMove, defaultMode = '2d' }) {
   const [mode, setMode] = useState(defaultMode);
-  const layout = useMemo(() => computeLayout(items, pallets, container), [items, pallets, container]);
+  const layout = useMemo(() => computeLayout(items, pallets, container, packing_units), [items, pallets, container, packing_units]);
 
   if (!layout.boxes.length) {
     return (

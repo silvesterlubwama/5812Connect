@@ -1,6 +1,6 @@
 """Item CRUD, HS-code classification, manifest / commercial-invoice PDFs, bulk import."""
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
 import re
@@ -10,6 +10,7 @@ from ._common import (
     _normalise_item,
     _shipment_units,
     _add_or_merge_item,
+    _persist_shipment_image,
     _classify_hs_with_ai,
     _sort_items_for_manifest,
     _loc_str,
@@ -19,6 +20,169 @@ from ._common import (
 )
 
 router = APIRouter(prefix="/api", tags=["shipments"])
+
+
+# ============================================================
+# iter228 — Admin-side item scan (same UX as public /scan-item
+# but auth via require_admin, no PIN gate). Mirrors public logic
+# so a staff member can bulk-scan items from the back office.
+# ============================================================
+
+@router.post("/shipments/{shipment_id}/scan-item")
+async def admin_scan_item(
+    shipment_id: str,
+    images: List[UploadFile] = File(default=[]),
+    isbn: Optional[str] = None,
+    upc: Optional[str] = None,
+    current_user: dict = Depends(require_admin),
+):
+    """Identify a shipment item from up to 3 photos and/or a barcode.
+    Returns a candidate dict (NOT yet persisted). Admin equivalent of
+    /api/public/shipments/{token}/scan-item."""
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "id": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    if not images and not isbn and not upc:
+        raise HTTPException(status_code=400, detail="Provide at least one image, ISBN, or UPC")
+
+    enriched: dict = {}
+
+    # 1) Barcode lookups (cheap + definitive)
+    if isbn:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6) as cli:
+                r = await cli.get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn.strip()}")
+                if r.status_code == 200:
+                    js = r.json()
+                    if js.get("totalItems", 0) > 0:
+                        v = js["items"][0]["volumeInfo"]
+                        enriched = {
+                            "name": v.get("title") or "",
+                            "author": ", ".join(v.get("authors") or []),
+                            "publisher": v.get("publisher") or "",
+                            "category": (v.get("categories") or ["Books"])[0],
+                            "isbn": isbn.strip(),
+                            "photo_url": ((v.get("imageLinks") or {}).get("thumbnail") or "").replace("http://", "https://"),
+                            "weight_kg": 0.3,
+                            "dims_cm": {"length": 20, "width": 13, "height": 2},
+                            "value_usd": float(((js["items"][0].get("saleInfo") or {}).get("listPrice") or {}).get("amount") or 12.0),
+                            "ai_identified": False,
+                            "source": "google_books",
+                        }
+        except Exception as e:
+            logger.warning(f"[admin_scan_item] google books lookup failed: {e}")
+
+    if upc and not enriched:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=6) as cli:
+                r = await cli.get(f"https://world.openfoodfacts.org/api/v2/product/{upc.strip()}.json")
+                if r.status_code == 200:
+                    js = r.json()
+                    if js.get("status") == 1:
+                        p = js.get("product") or {}
+                        enriched = {
+                            "name": p.get("product_name") or p.get("generic_name") or "",
+                            "category": (p.get("categories", "").split(",") or ["Food"])[0].strip()[:60],
+                            "upc": upc.strip(),
+                            "photo_url": p.get("image_front_url") or "",
+                            "weight_kg": 0.5,
+                            "dims_cm": {"length": 10, "width": 10, "height": 20},
+                            "value_usd": 4.0,
+                            "ai_identified": False,
+                            "source": "openfoodfacts",
+                        }
+        except Exception as e:
+            logger.warning(f"[admin_scan_item] openfoodfacts lookup failed: {e}")
+
+    # 2) AI vision fallback
+    image_urls: List[str] = []
+    image_bytes_list: List[bytes] = []
+    if images:
+        for img in images[:3]:
+            data = await img.read()
+            if not data or len(data) > 8_000_000:
+                continue
+            image_bytes_list.append(data)
+            try:
+                url = await _persist_shipment_image(shipment_id, data, img.content_type or "image/jpeg")
+                image_urls.append(url)
+            except Exception:
+                pass
+
+    if not enriched and image_bytes_list:
+        api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+        if api_key:
+            try:
+                from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+                import tempfile
+                fd, tmp = tempfile.mkstemp(suffix=".jpg")
+                with _os.fdopen(fd, "wb") as fh:
+                    fh.write(image_bytes_list[0])
+                sys_msg = (
+                    "You identify physical items from photos for a charity shipment inventory. "
+                    "Items can be ANYTHING a humanitarian container carries — books, clothing, "
+                    "shoes, food, toys, medical supplies, electronics, household goods, furniture, "
+                    "tools, construction, school supplies, agriculture, sports, toiletries, baby "
+                    "gear, bicycles. Read any barcodes, ISBNs, titles, or text on the item. "
+                    "Cross-reference Amazon/Walmart/eBay/Target/Home Depot/Costco/IKEA listings "
+                    "for accurate dimensions, weight and USD retail price. "
+                    "Output STRICT JSON: {\"name\":\"\",\"category\":\"\",\"author\":\"\",\"publisher\":\"\",\"isbn\":\"\",\"upc\":\"\",\"weight_kg\":0.5,\"dims_cm\":{\"length\":20,\"width\":13,\"height\":5},\"value_usd\":5.0,\"source\":\"\",\"confidence\":\"high|medium|low\"}. "
+                    "No markdown fences."
+                )
+                chat = LlmChat(
+                    api_key=api_key,
+                    session_id=f"admin_scan_{uuid.uuid4().hex[:6]}",
+                    system_message=sys_msg,
+                ).with_model("gemini", "gemini-3-flash-preview")
+                msg = UserMessage(
+                    text="Identify this item. Return strict JSON.",
+                    file_contents=[FileContentWithMimeType(file_path=tmp, mime_type="image/jpeg")],
+                )
+                raw = await chat.send_message(msg)
+                s_text = (raw or "").strip().strip("`")
+                if s_text.lower().startswith("json"):
+                    s_text = s_text[4:].strip()
+                first, last = s_text.find("{"), s_text.rfind("}")
+                if first >= 0 and last > first:
+                    s_text = s_text[first:last + 1]
+                import json as _json
+                parsed = _json.loads(s_text)
+                enriched = {
+                    "name": parsed.get("name") or "",
+                    "category": parsed.get("category") or "Other",
+                    "author": parsed.get("author") or "",
+                    "publisher": parsed.get("publisher") or "",
+                    "isbn": parsed.get("isbn") or "",
+                    "upc": parsed.get("upc") or "",
+                    "weight_kg": float(parsed.get("weight_kg") or 0.5),
+                    "dims_cm": parsed.get("dims_cm") or {"length": 20, "width": 13, "height": 5},
+                    "value_usd": float(parsed.get("value_usd") or 5.0),
+                    "ai_identified": True,
+                    "ai_confidence": parsed.get("confidence") or "low",
+                    "source": "ai_vision",
+                }
+                try:
+                    _os.remove(tmp)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"[admin_scan_item] AI scan failed: {e}")
+
+    # 3) Fallback minimum shape
+    if not enriched:
+        enriched = {
+            "name": "Unidentified item", "category": "Other", "ai_identified": False,
+            "ai_confidence": "low", "source": "manual",
+            "weight_kg": 0.5, "dims_cm": {"length": 20, "width": 20, "height": 10}, "value_usd": 5.0,
+        }
+    enriched["image_urls"] = image_urls
+    enriched["photo_url"] = enriched.get("photo_url") or (image_urls[0] if image_urls else "")
+    enriched["scanned_by"] = current_user.get("name", "admin")
+    enriched["scanned_at"] = datetime.now(timezone.utc).isoformat()
+    return enriched
+
 
 @router.post("/shipments/{shipment_id}/items")
 async def add_item(shipment_id: str, data: dict, current_user: dict = Depends(require_admin)):

@@ -465,8 +465,10 @@ export default function ShipmentDonorPage() {
               </div>
               {t.value_usd > 0 && <p className="text-[11px] text-muted-foreground">Estimated value contributed: <strong>${t.value_usd.toLocaleString()}</strong></p>}
             </div>
-            {/* At-a-glance stat row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1" data-testid="ship-donor-stats">
+            {/* At-a-glance stat row — richer view for PIN-authed editors only.
+                Public donors just see the progress bar above. iter228 */}
+            {isEditor && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1" data-testid="ship-donor-stats">
               <div className="rounded-lg border bg-muted/30 p-2 text-center">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Pallets</p>
                 <p className="text-sm font-semibold flex items-center justify-center gap-1"><Layers size={11} /> {t.pallet_count || 0}</p>
@@ -486,11 +488,12 @@ export default function ShipmentDonorPage() {
                 </p>
               </div>
             </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Donor leaderboard */}
-        {(t.leaderboard || []).length > 0 && (
+        {/* Donor leaderboard — only visible to PIN-authed editors iter228 */}
+        {isEditor && (t.leaderboard || []).length > 0 && (
           <Card className="rounded-xl" data-testid="ship-donor-leaderboard">
             <CardContent className="p-3 space-y-1.5">
               <p className="text-sm font-semibold flex items-center gap-1.5"><Trophy size={13} className="text-amber-500" /> Top contributors</p>
@@ -533,15 +536,19 @@ export default function ShipmentDonorPage() {
           </Card>
         )}
 
-        {/* Container visualization (3D by default — let donors see what's in the truck) */}
-        {((data.already_acquired || []).length > 0 || (data.still_needed || []).length > 0) && (
+        {/* iter228 — Container visualization ONLY when PIN-authenticated.
+            Public (un-authed) donors just see the "Still needed" wishlist +
+            progress bar so they can pick items to donate without being
+            overwhelmed by pallets, 3D or already-donated items. */}
+        {isEditor && ((data.already_acquired || []).length > 0 || (data.still_needed || []).length > 0) && (
           <ContainerVisualizer
             items={[...(data.already_acquired || []), ...(data.still_needed || [])]}
             pallets={data.pallets || []}
+            packing_units={data.packing_units || []}
             container={data.container_dims_cm}
             defaultMode="3d"
             editable={isEditor}
-            onPalletMove={isEditor ? movePallet : undefined}
+            onPalletMove={movePallet}
           />
         )}
 
@@ -584,8 +591,8 @@ export default function ShipmentDonorPage() {
           )}
         </section>
 
-        {/* Already acquired */}
-        {(data.already_acquired || []).length > 0 && (
+        {/* iter228 — "Already on the truck" list only visible to PIN-authed editors */}
+        {isEditor && (data.already_acquired || []).length > 0 && (
           <section>
             <h2 className="text-sm font-semibold mb-2 flex items-center gap-1.5"><CheckCircle2 size={13} className="text-emerald-600" /> Already on the truck ({data.already_acquired.length})</h2>
             <div className="space-y-1.5" data-testid="ship-donor-acquired">

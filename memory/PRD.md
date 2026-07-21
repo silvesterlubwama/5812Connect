@@ -3,6 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 228 (Feb 2026)
+**Shipping consolidation + AI-scan "Scan failed" bug fix.**
+
+- **Fixed "Scan failed"** on the public donor page — a stale `from routers.shipments import _persist_shipment_image` inside the image-persistence loop was raising `ImportError` on every photo upload (regression from the iter-224 module split). Removed the stale import.
+- **Admin-side AI Scan** — new `POST /api/shipments/{sid}/scan-item` endpoint + purple "AI Scan" button on the shipment items toolbar. Same UX as the donor-side scanner (photos → Gemini vision → review card → "Add to shipment"), but admin-authed instead of PIN-gated.
+- **Consolidated two pallet surfaces** — deleted the old dedicated "Pallets" row on ShipmentsAdminPage. Only "Packing units" (which handles pallets/boxes/totes/crates uniformly) remains. `ContainerVisualizer` now merges legacy `pallets` + new `packing_units` into one layout so existing data still renders.
+- **Consolidated two floor-plan/3D views** — removed the redundant 2D `FloorPlanSVG` inside `ShipmentPackingPanel`. Only the top-level `ContainerVisualizer` (2D + 3D) remains, now driven by the unified pallets + packing_units list.
+- **Public donor page privacy** — un-authed visitors now ONLY see: shipment header, progress bar, and "Still needed" wishlist with per-item "I'll donate" buttons. Everything else (container 3D, "Already on the truck", editor toolbar, detailed stats grid, donor leaderboard) is gated behind the PIN. Focused, donation-first UX.
+
+
 ## Recently Resolved — Iteration 227 (Feb 2026)
 **Three shipping enhancements built on top of iter226**: Boarding-pass OCR (Gemini vision) · Group Fare Alerts (24h AI watch + email) · Passenger Portal (token-based public self-service).
 

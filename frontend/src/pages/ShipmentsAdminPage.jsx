@@ -45,6 +45,11 @@ export default function ShipmentsAdminPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
+  // iter228 — admin-side AI scan (mirrors public /scan-item without PIN gate)
+  const [showAdminScan, setShowAdminScan] = useState(false);
+  const [adminScanImages, setAdminScanImages] = useState([]);
+  const [adminScanBusy, setAdminScanBusy] = useState(false);
+  const [adminScanResult, setAdminScanResult] = useState(null);
   const [csvRows, setCsvRows] = useState([]);
   const [csvBusy, setCsvBusy] = useState(false);
   const [linkBusyId, setLinkBusyId] = useState(null);
@@ -678,34 +683,11 @@ export default function ShipmentsAdminPage() {
         </CardContent>
       </Card>
 
-      {/* Pallets row */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-xs font-semibold flex items-center gap-1"><Layers size={11} /> Pallets ({(selected.pallets || []).length})</p>
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={openNewPallet} data-testid="ship-add-pallet"><Plus size={10} className="mr-1" /> Pallet</Button>
-        </div>
-        <div className="flex gap-2 flex-wrap" data-testid="ship-pallets">
-          {(selected.pallets || []).length === 0 ? (
-            <p className="text-[11px] text-muted-foreground italic">No pallets yet — items will be loose until grouped.</p>
-          ) : (selected.pallets || []).map(p => {
-            const palletItems = (selected.items || []).filter(i => i.pallet_id === p.id);
-            const w = palletItems.reduce((s, i) => s + (Number(i.weight_kg) || 0) * (Number(i.qty_acquired) || 0), 0);
-            return (
-              <div key={p.id} className="px-3 py-1.5 rounded border text-xs flex items-center gap-2" data-testid={`ship-pallet-${p.id}`} style={p.color ? { borderLeft: `4px solid ${p.color}` } : {}}>
-                <span className="font-medium">{p.label}</span>
-                <span className="text-muted-foreground">
-                  · {palletItems.length} items · {formatWeightKg(w, selected.units)}
-                  {(p.length_cm && p.width_cm) ? ` · ${formatDimCm(p.length_cm, selected.units)} × ${formatDimCm(p.width_cm, selected.units)} × ${formatDimCm(p.height_cm || 0, selected.units)}` : ''}
-                </span>
-                <button onClick={() => setEditingPallet({ ...p })} className="text-primary hover:text-primary/80" title="Edit pallet" data-testid={`ship-pallet-edit-${p.id}`}><Pencil size={10} /></button>
-                <button onClick={() => deletePallet(p.id)} className="text-rose-600 hover:text-rose-800" title="Delete" data-testid={`ship-pallet-del-${p.id}`}><Trash2 size={10} /></button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       {/* iter223 — mode picker + waybill + AI tracking + packing units / passengers */}
+      {/* iter228: The old dedicated "Pallets" row has been folded into the unified
+          "Packing units" section below (which handles pallets/boxes/totes as one
+          consistent surface). ContainerVisualizer now renders both legacy
+          `pallets` AND `packing_units` in a single 2D+3D layout. */}
       <ShipmentPackingPanel shipment={selected} refresh={refreshDetail} />
 
       {/* Manifest Groups (sub-consignments) */}
@@ -817,6 +799,9 @@ export default function ShipmentsAdminPage() {
             )}
             <Button size="sm" variant="outline" onClick={() => setShowCsvImport(true)} data-testid="ship-csv-import-btn">
               <FileSpreadsheet size={11} className="mr-1" /> Import CSV
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowAdminScan(true)} className="text-purple-700 border-purple-300 hover:bg-purple-50" data-testid="ship-ai-scan-btn">
+              <Sparkles size={11} className="mr-1" /> AI Scan
             </Button>
             <Button size="sm" onClick={() => setShowAddItem(true)} data-testid="ship-add-item"><Plus size={11} className="mr-1" /> Item</Button>
           </div>
@@ -992,14 +977,28 @@ export default function ShipmentsAdminPage() {
         )}
       </div>
 
-      {/* Container visualization — 2D / 3D (hidden in airport mode — iter226) */}
+      {/* Container visualization — 2D / 3D (hidden in airport mode — iter226).
+          iter228: now receives both legacy `pallets` AND new `packing_units` so
+          the single visualizer shows the unified layout — no duplicate views. */}
       {(selected.mode || 'container') !== 'airport' && (
-        <ContainerVisualizer items={selected.items || []} pallets={selected.pallets || []} container={selected.container_dims_cm} editable onPalletMove={async (pid, x, y) => {
-          try {
-            await api.put(`/shipments/${selectedId}/pallets/${pid}`, { x_cm: Math.round(x), y_cm: Math.round(y) });
-            await refreshDetail();
-          } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
-        }} />
+        <ContainerVisualizer
+          items={selected.items || []}
+          pallets={selected.pallets || []}
+          packing_units={selected.packing_units || []}
+          container={selected.container_dims_cm}
+          editable
+          onPalletMove={async (pid, x, y) => {
+            try {
+              // iter228 — decide which collection this ID belongs to
+              const isPackingUnit = (selected.packing_units || []).some(u => u.id === pid);
+              const url = isPackingUnit
+                ? `/shipments/${selectedId}/packing-units/${pid}`
+                : `/shipments/${selectedId}/pallets/${pid}`;
+              await api.put(url, { x_cm: Math.round(x), y_cm: Math.round(y) });
+              await refreshDetail();
+            } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
+          }}
+        />
       )}
 
       {/* AI Packing scenario */}
@@ -1455,6 +1454,123 @@ export default function ShipmentsAdminPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter228 — Admin AI Scan dialog (same UX as public donor page but no PIN gate) */}
+      <Dialog open={showAdminScan} onOpenChange={(o) => { if (!o) { setShowAdminScan(false); setAdminScanImages([]); setAdminScanResult(null); } }}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="admin-scan-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Sparkles size={16} className="text-purple-600" /> AI Scan item</DialogTitle>
+            <DialogDescription className="text-xs">Snap up to 3 photos of an item — Gemini identifies it and estimates weight, dimensions and retail value.</DialogDescription>
+          </DialogHeader>
+          {!adminScanResult ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border-2 border-dashed border-border p-4 text-center">
+                <input
+                  id="admin-scan-file"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  capture="environment"
+                  className="hidden"
+                  data-testid="admin-scan-file"
+                  onChange={e => {
+                    const files = Array.from(e.target.files || []).slice(0, 3 - adminScanImages.length);
+                    setAdminScanImages([...adminScanImages, ...files]);
+                    e.target.value = '';
+                  }}
+                />
+                <label htmlFor="admin-scan-file" className="cursor-pointer inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                  <ImageIcon size={16} /> Tap to add photos ({adminScanImages.length}/3)
+                </label>
+              </div>
+              {adminScanImages.length > 0 && (
+                <div className="flex gap-2 flex-wrap">
+                  {adminScanImages.map((f, i) => (
+                    <div key={i} className="relative">
+                      <img src={URL.createObjectURL(f)} alt="" className="w-20 h-20 object-cover rounded border" />
+                      <button className="absolute -top-1.5 -right-1.5 rounded-full bg-rose-500 text-white p-0.5" onClick={() => setAdminScanImages(adminScanImages.filter((_, j) => j !== i))} data-testid={`admin-scan-remove-${i}`}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground text-center">Cover, barcode, and clear-shot help AI accuracy.</p>
+              <Button
+                className="w-full bg-emerald-600 hover:bg-emerald-700"
+                disabled={adminScanBusy || adminScanImages.length === 0}
+                data-testid="admin-scan-submit"
+                onClick={async () => {
+                  setAdminScanBusy(true);
+                  try {
+                    const fd = new FormData();
+                    adminScanImages.forEach(f => fd.append('images', f));
+                    const r = await api.post(`/shipments/${selectedId}/scan-item`, fd, {
+                      headers: { 'Content-Type': 'multipart/form-data' },
+                    });
+                    setAdminScanResult(r.data);
+                  } catch (e) {
+                    toast.error(e.response?.data?.detail || 'Scan failed');
+                  } finally { setAdminScanBusy(false); }
+                }}
+              >
+                {adminScanBusy ? <><Loader2 size={12} className="mr-1 animate-spin" /> Identifying…</> : <><Sparkles size={12} className="mr-1" /> Identify with AI</>}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2" data-testid="admin-scan-result">
+              <div className="rounded-lg border p-3 space-y-1 bg-muted/30">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Identified</p>
+                <p className="text-base font-semibold">{adminScanResult.name || 'Unknown'}</p>
+                {adminScanResult.author && <p className="text-xs">by {adminScanResult.author}</p>}
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] pt-1">
+                  {adminScanResult.category && <span><b>Category:</b> {adminScanResult.category}</span>}
+                  {adminScanResult.isbn && <span><b>ISBN:</b> {adminScanResult.isbn}</span>}
+                  {adminScanResult.upc && <span><b>UPC:</b> {adminScanResult.upc}</span>}
+                  <span><b>Weight:</b> {adminScanResult.weight_kg} kg</span>
+                  <span><b>Value:</b> ~${adminScanResult.value_usd}</span>
+                  {adminScanResult.source && <span><b>Source:</b> {adminScanResult.source}</span>}
+                  {adminScanResult.ai_confidence && <span><b>Confidence:</b> <span className={`font-semibold ${adminScanResult.ai_confidence === 'high' ? 'text-emerald-700' : adminScanResult.ai_confidence === 'medium' ? 'text-amber-700' : 'text-rose-700'}`}>{adminScanResult.ai_confidence}</span></span>}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => { setAdminScanResult(null); setAdminScanImages([]); }} data-testid="admin-scan-again">Scan another</Button>
+                <Button
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                  data-testid="admin-scan-add"
+                  onClick={async () => {
+                    try {
+                      await api.post(`/shipments/${selectedId}/items`, {
+                        name: adminScanResult.name || 'Unidentified',
+                        category: adminScanResult.category || 'Other',
+                        author: adminScanResult.author,
+                        publisher: adminScanResult.publisher,
+                        isbn: adminScanResult.isbn,
+                        upc: adminScanResult.upc,
+                        weight_kg: adminScanResult.weight_kg,
+                        dims_cm: adminScanResult.dims_cm,
+                        value_usd: adminScanResult.value_usd,
+                        qty_needed: 1,
+                        qty_acquired: 1,
+                        photo_url: adminScanResult.photo_url,
+                        image_urls: adminScanResult.image_urls || [],
+                        priority: 'normal',
+                        source: adminScanResult.source,
+                        ai_confidence: adminScanResult.ai_confidence,
+                      });
+                      toast.success('Item added');
+                      setShowAdminScan(false); setAdminScanImages([]); setAdminScanResult(null);
+                      await refreshDetail();
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Add failed'); }
+                  }}
+                >
+                  Add to shipment
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
