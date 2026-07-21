@@ -50,6 +50,9 @@ export default function ShipmentsAdminPage() {
   const [adminScanImages, setAdminScanImages] = useState([]);
   const [adminScanBusy, setAdminScanBusy] = useState(false);
   const [adminScanResult, setAdminScanResult] = useState(null);
+  // iter229 — hide items that have been packed into a box/pallet/packing-unit/suitcase
+  // (they still appear on the manifest & PDFs — just cleaner working view).
+  const [hidePacked, setHidePacked] = useState(true);
   const [csvRows, setCsvRows] = useState([]);
   const [csvBusy, setCsvBusy] = useState(false);
   const [linkBusyId, setLinkBusyId] = useState(null);
@@ -725,7 +728,27 @@ export default function ShipmentsAdminPage() {
       {/* Items list */}
       <div>
         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-          <p className="text-xs font-semibold">Items ({(selected.items || []).length}) <span className="text-[10px] font-normal text-muted-foreground">— sorted PVoC ▸ value ▸ weight</span></p>
+          {/* iter229 — item count now shows visible/total when hidePacked is on */}
+          {(() => {
+            const items = selected.items || [];
+            const packed = items.filter(i => i.pallet_id || i.packing_unit_id || i.suitcase_id).length;
+            const visible = hidePacked ? items.length - packed : items.length;
+            return (
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-xs font-semibold">
+                  Items ({visible}
+                  {hidePacked && packed > 0 && <span className="text-slate-500 font-normal"> of {items.length}, {packed} packed hidden</span>})
+                  <span className="text-[10px] font-normal text-muted-foreground ml-1">— sorted PVoC ▸ value ▸ weight</span>
+                </p>
+                {packed > 0 && (
+                  <label className="flex items-center gap-1 text-[10.5px] cursor-pointer select-none text-muted-foreground hover:text-foreground" data-testid="hide-packed-toggle">
+                    <input type="checkbox" checked={hidePacked} onChange={e => setHidePacked(e.target.checked)} className="accent-emerald-600" />
+                    Hide packed
+                  </label>
+                )}
+              </div>
+            );
+          })()}
           <div className="flex gap-1.5 flex-wrap">
             {(() => {
               const missingHs = (selected.items || []).filter(i => !(i.hs_code || '').trim()).length;
@@ -814,7 +837,12 @@ export default function ShipmentsAdminPage() {
           <div className="space-y-1.5" data-testid="ship-items">
             {(() => {
               // Sort same as PDFs: PVoC-required first, then highest value, then heaviest.
-              const sorted = [...(selected.items || [])].sort((a, b) => {
+              // iter229 — optionally hide items already assigned to a box/pallet/suitcase
+              // (they're still on manifests & PDFs — cleaner working view).
+              const source = hidePacked
+                ? (selected.items || []).filter(i => !(i.pallet_id || i.packing_unit_id || i.suitcase_id))
+                : (selected.items || []);
+              const sorted = [...source].sort((a, b) => {
                 const pvocA = a.requires_pvoc ? 0 : 1;
                 const pvocB = b.requires_pvoc ? 0 : 1;
                 if (pvocA !== pvocB) return pvocA - pvocB;
