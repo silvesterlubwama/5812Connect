@@ -342,6 +342,8 @@ export default function ShipmentsAdminPage() {
           height: Number(editingItem.dims_cm?.height) || 0,
         },
         pallet_id: editingItem.pallet_id || null,
+        packing_unit_id: editingItem.packing_unit_id || null,
+        suitcase_id: editingItem.suitcase_id || null,
         x_cm: Number(editingItem.x_cm) || 0,
         y_cm: Number(editingItem.y_cm) || 0,
         z_cm: Number(editingItem.z_cm) || 0,
@@ -972,17 +974,29 @@ export default function ShipmentsAdminPage() {
                     {/* iter229 — unified "Place in..." select combines legacy
                         pallets + new packing_units + suitcases so the user
                         always has a way to pack items regardless of which
-                        surface they've been created in. */}
+                        surface they've been created in. Always shown so users
+                        know packing is possible even before adding a container. */}
                     {(() => {
                       const legacyPallets = selected.pallets || [];
                       const packingUnits = selected.packing_units || [];
                       const suitcases = selected.suitcases || [];
-                      if (legacyPallets.length + packingUnits.length + suitcases.length === 0) return null;
+                      const totalContainers = legacyPallets.length + packingUnits.length + suitcases.length;
                       // Current value key: id prefixed by kind so we can route on save
                       const currentKey = it.pallet_id ? `p:${it.pallet_id}`
                         : it.packing_unit_id ? `u:${it.packing_unit_id}`
                         : it.suitcase_id ? `s:${it.suitcase_id}`
                         : 'none';
+                      if (totalContainers === 0) {
+                        return (
+                          <span
+                            className="text-[10.5px] italic text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 whitespace-nowrap"
+                            title="Add a pallet / box / tote in the Packing units section above, then come back to assign this item."
+                            data-testid={`ship-item-no-container-${it.id}`}
+                          >
+                            ↑ Add a box first
+                          </span>
+                        );
+                      }
                       return (
                         <Select
                           value={currentKey}
@@ -1190,17 +1204,43 @@ export default function ShipmentsAdminPage() {
                     data-testid="ship-edit-item-height" />
                 </div>
               </div>
-              {(selected.pallets || []).length > 0 && (
-                <div className="space-y-1"><Label className="text-xs">Pallet placement</Label>
-                  <Select value={editingItem.pallet_id || 'none'} onValueChange={v => setEditingItem({ ...editingItem, pallet_id: v === 'none' ? null : v })}>
-                    <SelectTrigger data-testid="ship-edit-item-pallet"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">— Unassigned (loose) —</SelectItem>
-                      {(selected.pallets || []).map(p => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              {/* iter229 — unified placement select in edit dialog too */}
+              {(() => {
+                const legacyPallets = selected.pallets || [];
+                const packingUnits = selected.packing_units || [];
+                const suitcases = selected.suitcases || [];
+                if (legacyPallets.length + packingUnits.length + suitcases.length === 0) return null;
+                const currentKey = editingItem.pallet_id ? `p:${editingItem.pallet_id}`
+                  : editingItem.packing_unit_id ? `u:${editingItem.packing_unit_id}`
+                  : editingItem.suitcase_id ? `s:${editingItem.suitcase_id}`
+                  : 'none';
+                return (
+                  <div className="space-y-1">
+                    <Label className="text-xs">Place in container</Label>
+                    <Select
+                      value={currentKey}
+                      onValueChange={v => {
+                        const patch = { pallet_id: null, packing_unit_id: null, suitcase_id: null };
+                        if (v.startsWith('p:')) patch.pallet_id = v.slice(2);
+                        else if (v.startsWith('u:')) patch.packing_unit_id = v.slice(2);
+                        else if (v.startsWith('s:')) patch.suitcase_id = v.slice(2);
+                        setEditingItem({ ...editingItem, ...patch });
+                      }}
+                    >
+                      <SelectTrigger data-testid="ship-edit-item-place"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">— Loose (no container) —</SelectItem>
+                        {legacyPallets.map(p => <SelectItem key={p.id} value={`p:${p.id}`}>🟫 {p.label}</SelectItem>)}
+                        {packingUnits.map(u => {
+                          const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : '🟫';
+                          return <SelectItem key={u.id} value={`u:${u.id}`}>{icon} {u.name || u.preset_key || u.type}</SelectItem>;
+                        })}
+                        {suitcases.map(sc => <SelectItem key={sc.id} value={`s:${sc.id}`}>🧳 {sc.name || 'Suitcase'}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                );
+              })()}
               {editingItem.pallet_id && (
                 <div className="space-y-1">
                   <Label className="text-xs">Position within pallet (cm) — X · Y · Z</Label>

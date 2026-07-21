@@ -2,17 +2,17 @@
 # TLS termination and the reverse-proxy to the FastAPI backend.
 #
 # Two stages:
-#   1. node:22 builds the React bundle with REACT_APP_BACKEND_URL=''
-#      (Node 22 is current LTS as of Feb 2026; several transitive deps
-#      like camera-controls@3.x and @zxing/library@0.22 require it.)
+#   1. node:22-slim (Debian) builds the React bundle. Chosen over alpine
+#      because glibc + built-in build tools avoids an entire class of
+#      musl / node-gyp / native-module failures during yarn install.
+#      Trade-off: ~200 MB larger image, but the runtime stage is still
+#      caddy:2-alpine so the shipped image is small.
 #   2. caddy:2-alpine serves the static bundle + acts as the front door.
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 
-# iter229 — some yarn deps (fsevents optional, node-gyp fallbacks, bindings) need
-# python + a C toolchain even when we're only building the JS bundle. Alpine's
-# base image doesn't ship these, so bare `yarn install` can 500 on rebuild-native
-# steps. Install them ahead of yarn install.
-RUN apk add --no-cache python3 make g++ libc6-compat git
+# iter229 — debian-slim already has glibc + a working toolchain, but we still
+# need git for any git+https deps yarn might pull.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 # Copy package.json first, then yarn.lock if present (the wildcard makes
