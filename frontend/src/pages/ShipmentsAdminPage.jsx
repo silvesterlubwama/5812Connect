@@ -941,7 +941,20 @@ export default function ShipmentsAdminPage() {
                         {it.weight_kg ? ` · ${formatWeightKg(it.weight_kg, selected.units)}/unit` : ''}
                         {(it.dims_cm?.length || it.dims_cm?.width || it.dims_cm?.height) ? ` · ${formatDimCm(it.dims_cm?.length || 0, selected.units)} × ${formatDimCm(it.dims_cm?.width || 0, selected.units)} × ${formatDimCm(it.dims_cm?.height || 0, selected.units)}` : ''}
                         {it.value_usd ? ` · $${it.value_usd}/unit` : ''}
-                        {it.pallet_id ? ` · ${palletsById[it.pallet_id]?.label || it.pallet_id}` : ''}
+                        {(() => {
+                          // iter229 — show placement no matter which surface it came from
+                          if (it.pallet_id) return ` · 🟫 ${palletsById[it.pallet_id]?.label || it.pallet_id}`;
+                          if (it.packing_unit_id) {
+                            const u = (selected.packing_units || []).find(x => x.id === it.packing_unit_id);
+                            const icon = u?.type === 'box' ? '📦' : u?.type === 'tote' ? '🗑️' : u?.type === 'crate' ? '🪵' : '🟫';
+                            return ` · ${icon} ${u?.name || u?.preset_key || it.packing_unit_id}`;
+                          }
+                          if (it.suitcase_id) {
+                            const sc = (selected.suitcases || []).find(x => x.id === it.suitcase_id);
+                            return ` · 🧳 ${sc?.name || it.suitcase_id}`;
+                          }
+                          return '';
+                        })()}
                       </p>
                       {it.source_url && (
                         <a
@@ -956,15 +969,61 @@ export default function ShipmentsAdminPage() {
                         </a>
                       )}
                     </div>
-                    {(selected.pallets || []).length > 0 && (
-                      <Select value={it.pallet_id || 'none'} onValueChange={v => updateItem(it.id, { pallet_id: v === 'none' ? null : v })}>
-                        <SelectTrigger className="h-7 w-32 text-[11px]" data-testid={`ship-item-pallet-${it.id}`}><SelectValue placeholder="Pallet" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">— Unassigned —</SelectItem>
-                          {(selected.pallets || []).map(p => <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    )}
+                    {/* iter229 — unified "Place in..." select combines legacy
+                        pallets + new packing_units + suitcases so the user
+                        always has a way to pack items regardless of which
+                        surface they've been created in. */}
+                    {(() => {
+                      const legacyPallets = selected.pallets || [];
+                      const packingUnits = selected.packing_units || [];
+                      const suitcases = selected.suitcases || [];
+                      if (legacyPallets.length + packingUnits.length + suitcases.length === 0) return null;
+                      // Current value key: id prefixed by kind so we can route on save
+                      const currentKey = it.pallet_id ? `p:${it.pallet_id}`
+                        : it.packing_unit_id ? `u:${it.packing_unit_id}`
+                        : it.suitcase_id ? `s:${it.suitcase_id}`
+                        : 'none';
+                      return (
+                        <Select
+                          value={currentKey}
+                          onValueChange={v => {
+                            const patch = { pallet_id: null, packing_unit_id: null, suitcase_id: null };
+                            if (v.startsWith('p:')) patch.pallet_id = v.slice(2);
+                            else if (v.startsWith('u:')) patch.packing_unit_id = v.slice(2);
+                            else if (v.startsWith('s:')) patch.suitcase_id = v.slice(2);
+                            updateItem(it.id, patch);
+                          }}
+                        >
+                          <SelectTrigger className="h-7 w-40 text-[11px]" data-testid={`ship-item-place-${it.id}`}>
+                            <SelectValue placeholder="Place in…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— Loose (no container) —</SelectItem>
+                            {legacyPallets.length > 0 && (
+                              <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground">Pallets</div>
+                            )}
+                            {legacyPallets.map(p => (
+                              <SelectItem key={p.id} value={`p:${p.id}`}>🟫 {p.label}</SelectItem>
+                            ))}
+                            {packingUnits.length > 0 && (
+                              <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground">Packing units</div>
+                            )}
+                            {packingUnits.map(u => {
+                              const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : '🟫';
+                              return (
+                                <SelectItem key={u.id} value={`u:${u.id}`}>{icon} {u.name || u.preset_key || u.type}</SelectItem>
+                              );
+                            })}
+                            {suitcases.length > 0 && (
+                              <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground">Suitcases</div>
+                            )}
+                            {suitcases.map(sc => (
+                              <SelectItem key={sc.id} value={`s:${sc.id}`}>🧳 {sc.name || 'Suitcase'}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      );
+                    })()}
                     <Input type="number" className="h-7 w-20 text-[11px]" value={it.qty_acquired || 0}
                       onChange={e => updateItem(it.id, { qty_acquired: parseInt(e.target.value) || 0 })} title="Manual adjustment of acquired qty" />
                     {(() => {

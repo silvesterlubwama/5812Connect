@@ -18,10 +18,10 @@ COPY frontend/yarn.lock* /src/
 # lock is present (CI builds are reproducible), fall back to plain install
 # when it's missing (first-time bootstrap).
 RUN if [ -f yarn.lock ]; then \
-        yarn install --frozen-lockfile --network-timeout 600000; \
+        yarn install --frozen-lockfile --ignore-engines --network-timeout 600000; \
     else \
         echo "WARNING: yarn.lock not committed — using non-reproducible install"; \
-        yarn install --network-timeout 600000; \
+        yarn install --ignore-engines --network-timeout 600000; \
     fi
 
 COPY frontend/ /src/
