@@ -61,7 +61,7 @@ jobs:
       # ── Toolchains ──────────────────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           # Note: yarn cache deliberately omitted — yarn.lock may not exist on
           # first run (the lockfile is gitignored in some bootstrap configs).
           # The Build-frontend step generates one if missing.
