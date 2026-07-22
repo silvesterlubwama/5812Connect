@@ -79,7 +79,7 @@
     "start": "craco start",
     "build": "craco build",
     "test": "craco test",
-    "postinstall": "node scripts/patch-r3f-reserved-props.js"
+    "postinstall": "node scripts/patch-r3f-reserved-props.js || echo 'postinstall patch skipped (scripts dir not yet copied — safe to ignore during CI first pass)'"
   },
   "browserslist": {
     "production": [

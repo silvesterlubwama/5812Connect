@@ -21,6 +21,10 @@ WORKDIR /src
 # commit the lockfile and the `--frozen-lockfile` flag below kicks in).
 COPY frontend/package.json /src/package.json
 COPY frontend/yarn.lock* /src/
+# iter229 — the postinstall hook runs `node scripts/patch-r3f-reserved-props.js`
+# so that script MUST exist before `yarn install`. Copy it (and any other
+# scripts) ahead of the install step.
+COPY frontend/scripts /src/scripts
 # corepack/yarn 1 is already in the base image. Use --frozen-lockfile when a
 # lock is present (CI builds are reproducible), fall back to plain install
 # when it's missing (first-time bootstrap).
