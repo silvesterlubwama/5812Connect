@@ -693,7 +693,19 @@ export default function ShipmentsAdminPage() {
           "Packing units" section below (which handles pallets/boxes/totes as one
           consistent surface). ContainerVisualizer now renders both legacy
           `pallets` AND `packing_units` in a single 2D+3D layout. */}
-      <ShipmentPackingPanel shipment={selected} refresh={refreshDetail} />
+      <ShipmentPackingPanel
+        shipment={selected}
+        refresh={refreshDetail}
+        onDropItem={(itemId, kind, containerId) => {
+          // iter230 — drag-drop packing. kind is 'p' (legacy pallet) | 'u'
+          // (packing unit) | 's' (suitcase); we normalise to the right field.
+          const patch = { pallet_id: null, packing_unit_id: null, suitcase_id: null };
+          if (kind === 'p') patch.pallet_id = containerId;
+          else if (kind === 'u') patch.packing_unit_id = containerId;
+          else if (kind === 's') patch.suitcase_id = containerId;
+          return updateItem(itemId, patch);
+        }}
+      />
 
       {/* Manifest Groups (sub-consignments) */}
       <div className="mb-3" data-testid="ship-manifest-groups">
@@ -742,6 +754,12 @@ export default function ShipmentsAdminPage() {
                   {hidePacked && packed > 0 && <span className="text-slate-500 font-normal"> of {items.length}, {packed} packed hidden</span>})
                   <span className="text-[10px] font-normal text-muted-foreground ml-1">— sorted PVoC ▸ value ▸ weight</span>
                 </p>
+                {/* iter230 — drag-drop hint (auto-hides once any item is packed) */}
+                {items.length > 0 && packed === 0 && (
+                  <span className="text-[10px] italic text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-2 py-0.5">
+                    💡 Tip: drag any item onto a pallet / box / suitcase below to pack it
+                  </span>
+                )}
                 {packed > 0 && (
                   <label className="flex items-center gap-1 text-[10.5px] cursor-pointer select-none text-muted-foreground hover:text-foreground" data-testid="hide-packed-toggle">
                     <input type="checkbox" checked={hidePacked} onChange={e => setHidePacked(e.target.checked)} className="accent-emerald-600" />
@@ -860,7 +878,20 @@ export default function ShipmentsAdminPage() {
               const remaining = Math.max(0, (it.qty_needed || 0) - (it.qty_acquired || 0));
               const covered = remaining === 0;
               return (
-                <Card key={it.id} className={`rounded-lg ${covered ? 'bg-emerald-50/50' : ''}`} data-testid={`ship-item-${it.id}`}>
+                <Card
+                  key={it.id}
+                  className={`rounded-lg ${covered ? 'bg-emerald-50/50' : ''} cursor-move hover:shadow-md transition-shadow`}
+                  data-testid={`ship-item-${it.id}`}
+                  draggable
+                  onDragStart={(e) => {
+                    // iter230 — HTML5 drag: item card carries its id; drop target
+                    // decides which container field (`pallet_id` / `packing_unit_id`
+                    // / `suitcase_id`) receives the id.
+                    e.dataTransfer.setData('application/x-ship-item-id', it.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  title="Drag me onto a pallet, box or suitcase to pack this item"
+                >
                   <CardContent className="p-2.5 flex items-center gap-3 flex-wrap">
                     {/* Photo thumbnail + upload */}
                     <label className="relative w-12 h-12 rounded border bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-primary shrink-0" title="Click to upload photo">

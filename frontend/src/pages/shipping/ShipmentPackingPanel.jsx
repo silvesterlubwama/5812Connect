@@ -35,7 +35,7 @@ const UNIT_COLORS = {
   duffel: '#ec4899',
 };
 
-export function ShipmentPackingPanel({ shipment, refresh }) {
+export function ShipmentPackingPanel({ shipment, refresh, onDropItem }) {
   const [presets, setPresets] = useState({});
   const [addingUnit, setAddingUnit] = useState(false);
   const [editingUnit, setEditingUnit] = useState(null);
@@ -91,6 +91,7 @@ export function ShipmentPackingPanel({ shipment, refresh }) {
           onAdd={() => setAddingUnit(true)}
           onEdit={setEditingUnit}
           refresh={refresh}
+          onDropItem={onDropItem}
         />
       ) : (
         <AirportModePanel
@@ -99,6 +100,7 @@ export function ShipmentPackingPanel({ shipment, refresh }) {
           onAddPassenger={() => setAddingPassenger(true)}
           onAddSuitcase={setAddingSuitcase}
           onEditSuitcase={setEditingSuitcase}
+          onDropItem={onDropItem}
           refresh={refresh}
         />
       )}
@@ -212,7 +214,7 @@ function ModeAndTrackingHeader({ shipment, mode, setMode, saveWaybill, onAiTrack
 }
 
 // ─── Container mode: 2D floor plan + packing units list ──────────
-function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh }) {
+function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh, onDropItem }) {
   const units = shipment?.packing_units || [];
   // Only floor-level (parent_id=null) units are placed; children stack on top
   const floorUnits = units.filter(u => !u.parent_id);
@@ -287,7 +289,14 @@ function ContainerModePanel({ shipment, presets, onAdd, onEdit, refresh }) {
           <p className="text-[11px] italic text-muted-foreground">No packing units yet. Click &ldquo;Add pallet / box / tote&rdquo; to plan your container layout.</p>
         )}
         {floorUnits.map(u => (
-          <UnitCard key={u.id} unit={u} stackedChildren={childrenOf(u.id)} onEdit={onEdit} onDelete={del} />
+          <UnitCard
+            key={u.id}
+            unit={u}
+            stackedChildren={childrenOf(u.id)}
+            onEdit={onEdit}
+            onDelete={del}
+            onDropItem={onDropItem}
+          />
         ))}
       </div>
     </div>
@@ -366,9 +375,28 @@ function FloorPlanSVG({ L, W, floorUnits, childrenOf, onSelect, sid, refresh }) 
 }
 
 // ─── Single packing-unit card + its stacked children ─────────────
-function UnitCard({ unit, stackedChildren, onEdit, onDelete }) {
+function UnitCard({ unit, stackedChildren, onEdit, onDelete, onDropItem }) {
+  // iter230 — drop target for drag-drop item packing
+  const [dragOver, setDragOver] = useState(false);
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const itemId = e.dataTransfer.getData('application/x-ship-item-id');
+    if (!itemId || !onDropItem) return;
+    try {
+      await onDropItem(itemId, 'u', unit.id);
+      toast.success(`Packed into ${unit.name}`);
+    } catch { /* upstream toasts */ }
+  };
   return (
-    <div className="rounded border border-border p-2 text-xs" style={{ borderLeftColor: unit.color || UNIT_COLORS[unit.type], borderLeftWidth: 4 }} data-testid={`unit-card-${unit.id}`}>
+    <div
+      className={`rounded border-2 p-2 text-xs transition-all ${dragOver ? 'border-emerald-500 bg-emerald-50 shadow-md scale-[1.01]' : 'border-border'}`}
+      style={{ borderLeftColor: unit.color || UNIT_COLORS[unit.type], borderLeftWidth: 4 }}
+      data-testid={`unit-card-${unit.id}`}
+      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <Badge variant="outline" className="text-[10px] capitalize">{unit.type}</Badge>
@@ -400,7 +428,7 @@ function UnitCard({ unit, stackedChildren, onEdit, onDelete }) {
 }
 
 // ─── Airport mode: flights + passengers + tickets + suitcases ────
-function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, onEditSuitcase, refresh }) {
+function AirportModePanel({ shipment, presets, onAddPassenger, onAddSuitcase, onEditSuitcase, refresh, onDropItem }) {
   const passengers = shipment?.passengers || [];
   const suitcases = shipment?.suitcases || [];
   const flights = shipment?.flights || [];
