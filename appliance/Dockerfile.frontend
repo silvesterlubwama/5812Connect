@@ -2,13 +2,14 @@
 # TLS termination and the reverse-proxy to the FastAPI backend.
 #
 # Two stages:
-#   1. node:22-slim (Debian) builds the React bundle. Chosen over alpine
+#   1. node:24-slim (Debian) builds the React bundle. Chosen over alpine
 #      because glibc + built-in build tools avoids an entire class of
 #      musl / node-gyp / native-module failures during yarn install.
+#      Node 24 aligns with the GitHub Actions runner (see .github/workflows/ci.yml).
 #      Trade-off: ~200 MB larger image, but the runtime stage is still
 #      caddy:2-alpine so the shipped image is small.
 #   2. caddy:2-alpine serves the static bundle + acts as the front door.
-FROM node:22-slim AS builder
+FROM node:24-slim AS builder
 
 # iter229 — debian-slim already has glibc + a working toolchain, but we still
 # need git for any git+https deps yarn might pull.
