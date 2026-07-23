@@ -150,7 +150,54 @@ Images are version-tagged (`v0.1.0`, `v0.2.0`, …) and the `latest` tag tracks 
 
 ---
 
-## Architecture diagram
+## Bring your own PBX (Grandstream UCM)
+
+Instead of running a local Asterisk container, the app registers each staff
+member's browser as an additional SIP endpoint on their existing Grandstream
+UCM extension (via WSS + JsSIP). Trunks, DID mapping, IVR, and voicemail
+continue to live on the UCM — the app just becomes another line on the phone.
+
+**One-time UCM setup**
+
+1. **Enable WSS** — PBX Settings → SIP Settings → "Enable WebSocket / WSS".
+   Provision a valid TLS certificate (Let's Encrypt or an internal CA) — browsers
+   silently reject self-signed certs.
+2. **Allow concurrent registrations per extension** — Extension → Features →
+   set *Concurrent Registrations* to 3+. This lets desk phone, Wave, and our
+   browser softphone coexist.
+3. **Create an API user** (or reuse Super Admin) with permission to hit the
+   HTTPS API — used for voicemail + CDR retrieval.
+4. Open these ports on the UCM/firewall as reachable by staff:
+   - UDP 5060 (SIP) — if any hard phones dial in
+   - TCP 8089 (WSS) — for the browser softphone
+   - UDP media ports (default 10000-20000)
+
+**In-app setup** (Admin → VoIP)
+
+1. UCM host, WSS URL (e.g. `wss://pbx.example.org:8089/ws`), STUN URLs.
+2. UCM HTTPS API base URL + username + password (Fernet-encrypted at rest).
+3. Per staff: paste their extension number + SIP password.
+
+**Remote staff (mobile hotspot / hotel wifi)**
+
+Enable the bundled coturn TURN relay:
+
+```bash
+sudo nano /opt/connect/appliance/.env
+# Set:
+COMPOSE_PROFILES=turn
+TURN_EXTERNAL_IP=<box's public IP>
+TURN_USERNAME=connect
+TURN_PASSWORD=<strong secret>
+
+sudo docker compose --profile turn up -d coturn
+```
+
+Then in Admin → VoIP add `turn:<box-ip>:3478` with the same creds. Ports:
+UDP/TCP 3478 + UDP 49152-65535 must be reachable.
+
+---
+
 
 ```
   Phone, Chromebook, Windows PC (LAN)

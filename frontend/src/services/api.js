@@ -907,6 +907,26 @@ export const callingApi = {
   deleteOutgoingRule: (id) => api.delete(`/calling/outgoing-rules/${id}`),
 };
 
+// ---- VOIP (JsSIP → Grandstream UCM) ----
+// The primary calling surface for the app going forward. Everything else in
+// callingApi above is legacy from the retired in-app Asterisk PBX and is kept
+// only so old pages don't break at import time.
+export const voipApi = {
+  getTenantConfig: () => api.get('/voip/tenant/config'),
+  updateTenantConfig: (data) => api.put('/voip/tenant/config', data),
+  testConnection: () => api.post('/voip/tenant/test'),
+  listUsersWithSip: () => api.get('/voip/users'),
+  setUserSip: (userId, data) => api.put(`/voip/users/${userId}/sip`, data),
+  clearUserSip: (userId) => api.delete(`/voip/users/${userId}/sip`),
+  mySipConfig: () => api.get('/voip/me/sip-config'),
+  myDirectory: () => api.get('/voip/me/directory'),
+  myVoicemails: () => api.get('/voip/me/voicemails'),
+  voicemailAudioUrl: (msgId) => `${BACKEND_URL}/api/voip/me/voicemails/${msgId}/audio`,
+  markVoicemailRead: (msgId) => api.post(`/voip/me/voicemails/${msgId}/mark-read`),
+  deleteVoicemail: (msgId) => api.delete(`/voip/me/voicemails/${msgId}`),
+  myCallHistory: (limit = 50) => api.get(`/voip/me/call-history?limit=${limit}`),
+};
+
 // ---- PRESENCE ----
 export const presenceApi = {
   getStatus: (userId) => api.get(`/presence/status/${userId}`),
@@ -943,14 +963,17 @@ export const reactionsApi = {
   getRecentReactions: (conversationId, limit = 10) => api.get(`/reactions/conversation/${conversationId}/recent?limit=${limit}`),
 };
 
-// ---- WAVE (Grandstream CloudUCM) ----
+// ---- WAVE (Grandstream CloudUCM) — RETIRED ----
+// The Wave iframe integration was replaced by the built-in JsSIP softphone
+// (see voipApi above). Left here only so old imports don't crash; endpoints
+// return 404 since the backend router was removed.
 export const waveApi = {
-  listServers: () => api.get('/wave/servers'),
-  addServer: (data) => api.post('/wave/servers', data),
-  updateServer: (id, data) => api.put(`/wave/servers/${id}`, data),
-  deleteServer: (id) => api.delete(`/wave/servers/${id}`),
-  getMyConfig: () => api.get('/wave/my-config'),
-  saveMyCredentials: (data) => api.put('/wave/my-credentials', data),
+  listServers: () => Promise.resolve({ data: [] }),
+  addServer: () => Promise.reject(new Error('Wave integration retired — use VoIP admin instead.')),
+  updateServer: () => Promise.reject(new Error('Wave integration retired.')),
+  deleteServer: () => Promise.reject(new Error('Wave integration retired.')),
+  getMyConfig: () => Promise.resolve({ data: null }),
+  saveMyCredentials: () => Promise.reject(new Error('Wave integration retired.')),
 };
 
 

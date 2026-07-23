@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight, Trash2, Settings } from 'lucide-react';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight, Trash2, Settings, Voicemail } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -14,18 +14,20 @@ import { chatApi, membersApi, presenceApi, reactionsApi, conferencesApi } from '
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
-import { useCall } from '../context/CallContext';
+import { useCall } from '../hooks/useCallCompat';
 import { toast } from 'sonner';
 import { ConferenceDialog } from '../components/comms/ConferenceDialog';
 import { NewConversationDialog } from '../components/comms/NewConversationDialog';
 import { AnnouncementDialog } from '../components/comms/AnnouncementDialog';
 import EmptyState from '../components/EmptyState';
+import VoicemailList from '../components/voip/VoicemailList';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
 
 const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon: 'bot' };
 const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
+const VOICEMAIL_ROOM = { id: '__voicemail__', name: 'Voicemail', type: 'voicemail', icon: 'voicemail', is_no_reply: true };
 const ORG_ROLES = ['Adviser', 'Executive Director', 'Director', 'Manager', 'Leader', 'Coordinator', 'Staff', 'Volunteer'];
 
 const PRESENCE_DOTS = {
@@ -416,6 +418,14 @@ export default function CommsPage() {
       );
     }
 
+    if (selectedRoom.id === '__voicemail__') {
+      return (
+        <div className="flex-1 overflow-y-auto p-4">
+          <VoicemailList />
+        </div>
+      );
+    }
+
     if (selectedRoom.id === '__ai__') {
       return (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -567,6 +577,7 @@ export default function CommsPage() {
   const isInputDisabled = () => {
     if (!selectedRoom) return true;
     if (selectedRoom.id === '__announcements__' && !isAdmin) return true;
+    if (selectedRoom.id === '__voicemail__') return true;
     return false;
   };
 
@@ -614,6 +625,7 @@ export default function CommsPage() {
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Pinned</p>
             <SidebarItem room={AI_ROOM} selected={selectedRoom?.id === '__ai__'} icon={<Bot size={14} className="text-primary" />} subtitle="Powered by Gemini" onClick={() => selectRoom(AI_ROOM)} />
             <SidebarItem room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'} icon={<Megaphone size={14} className="text-amber-600" />} subtitle={`${announcements.length} announcements`} badge={announcements.length > 0 ? announcements.length : null} onClick={() => selectRoom(ANNOUNCE_ROOM)} />
+            <SidebarItem room={VOICEMAIL_ROOM} selected={selectedRoom?.id === '__voicemail__'} icon={<Voicemail size={14} className="text-emerald-600" />} subtitle="From your PBX extension" onClick={() => selectRoom(VOICEMAIL_ROOM)} />
           </div>
 
           {/* Unified scroll container — org chart + conversations share one wheel so
@@ -726,6 +738,7 @@ export default function CommsPage() {
               <div className="p-1.5 rounded-lg bg-secondary">
                 {selectedRoom.id === '__ai__' ? <Bot size={16} className="text-primary" /> :
                  selectedRoom.id === '__announcements__' ? <Megaphone size={16} className="text-amber-600" /> :
+                 selectedRoom.id === '__voicemail__' ? <Voicemail size={16} className="text-emerald-600" /> :
                  selectedRoom.type === 'group' ? <Users size={16} className="text-blue-500" /> :
                  <MessageSquare size={16} className="text-muted-foreground" />}
               </div>
@@ -734,12 +747,13 @@ export default function CommsPage() {
                 <p className="text-xs text-muted-foreground">
                   {selectedRoom.id === '__ai__' ? 'Gemini AI' :
                    selectedRoom.id === '__announcements__' ? 'No-reply channel' :
+                   selectedRoom.id === '__voicemail__' ? 'Pulled live from your UCM extension' :
                    currentTyping ? <span className="text-primary italic">{typingUserName} is typing...</span> :
                    `${selectedRoom.participants?.length || 0} participants`}
                 </p>
               </div>
               {/* Call buttons for staff conversations */}
-              {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && (
+              {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && selectedRoom.id !== '__voicemail__' && (
                 <div className="flex items-center gap-1">
                   <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-green-600" data-testid="voice-call-btn"
                     onClick={() => {

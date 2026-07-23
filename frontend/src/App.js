@@ -33,7 +33,7 @@ import FundsPage from './pages/FundsPage';
 const ShipmentsAdminPage = lazy(() => import('./pages/ShipmentsAdminPage'));
 const FareAlertsPage = lazy(() => import('./pages/FareAlertsPage'));
 const PassengerPortalPage = lazy(() => import('./pages/PassengerPortalPage'));
-const PBXAdminPage = lazy(() => import('./pages/PBXAdminPage'));
+const VoipAdminPage = lazy(() => import('./pages/VoipAdminPage'));
 const ShipmentDonorPage = lazy(() => import('./pages/ShipmentDonorPage'));
 import SchoolPortalPage from './pages/SchoolPortalPage';
 import SponsorPortalPage from './pages/SponsorPortalPage';
@@ -71,14 +71,9 @@ import VolunteerSchedulingPage from './pages/VolunteerSchedulingPage';
 import EmailTemplatesPage from './pages/EmailTemplatesPage';
 import FinancialApisPage from './pages/FinancialApisPage';
 import GdprSettingsPage from './pages/GdprSettingsPage';
-// Calling Feature Pages
-import CallHistoryPage from './pages/CallHistoryPage';
-import PbxSettingsPage from './pages/PbxSettingsPage';
-// ExtensionsPage removed — PBX page handles extensions
-// Calling Components
-import { CallProvider } from './context/CallContext';
-import CallInterface from './components/CallInterface';
-import IncomingCallModal from './components/IncomingCallModal';
+// Softphone (JsSIP → Grandstream UCM)
+import { VoipProvider } from './context/VoipContext';
+import SoftphonePanel from './components/voip/SoftphonePanel';
 import WalletBadgePage from './pages/WalletBadgePage';
 import ReceiptViewPage from './pages/ReceiptViewPage';
 import ResourceViewPage from './pages/ResourceViewPage';
@@ -171,7 +166,7 @@ function AppRoutes() {
         <Route path="sales-analytics" element={<SalesAnalyticsPage />} />
         <Route path="location-analytics" element={<LocationAnalyticsPage />} />
         <Route path="comms" element={<CommsPage />} />
-        <Route path="pbx" element={<PBXAdminPage />} />
+        <Route path="voip" element={<VoipAdminPage />} />
         <Route path="outreach" element={<OutreachPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="access" element={<AccessPage />} />
@@ -187,8 +182,6 @@ function AppRoutes() {
         <Route path="financial-apis" element={<FinancialApisPage />} />
         <Route path="hr" element={<HRPage />} />
         <Route path="gdpr" element={<GdprSettingsPage />} />
-        {/* Calling Feature Routes */}
-        <Route path="call-history" element={<CallHistoryPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
@@ -215,17 +208,16 @@ function App() {
         <BrandingProvider>
         <AuthProvider>
           <WebSocketProvider>
-            <CallProvider>
+            <VoipProvider>
               <BrowserRouter>
                 <OfflineBanner />
                 <ErrorBoundary>
                   <AppRoutes />
                 </ErrorBoundary>
-                <CallInterface />
-                <IncomingCallModal />
+                <SoftphonePanel />
                 <Toaster />
               </BrowserRouter>
-            </CallProvider>
+            </VoipProvider>
           </WebSocketProvider>
         </AuthProvider>
         </BrandingProvider>

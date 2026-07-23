@@ -532,7 +532,7 @@ try:
     from routers.reactions import router as reactions_router
     from routers.locations import router as locations_router
     from routers.settings import router as settings_router
-    from routers.wave import router as wave_router
+    from routers.voip import router as voip_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -563,9 +563,7 @@ try:
     app.include_router(reactions_router)
     app.include_router(locations_router)
     app.include_router(settings_router)
-    app.include_router(wave_router)
-    from routers.pbx import router as pbx_router
-    app.include_router(pbx_router)
+    app.include_router(voip_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
     from routers.donors_vendors import router as donors_vendors_router

@@ -3,6 +3,34 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 230 (Feb 2026)
+**Calling reboot: retired the local Asterisk PBX + Grandstream Wave iframe. The app now acts as a shared browser softphone that registers each staff profile directly into the existing Grandstream UCM as an additional endpoint on their extension.**
+
+- **Backend**
+  - Added `POST/PUT /api/voip/tenant/config` — single-tenant UCM host, WSS URL, STUN/TURN, HTTPS API creds. Admin passwords Fernet-encrypted (`voip_crypto.py`) at rest.
+  - Added `PUT /api/voip/users/{id}/sip` — admin pastes an extension + SIP password from UCM; per-user creds are Fernet-encrypted.
+  - Added `GET /api/voip/me/sip-config` — returns the current user's decrypted SIP creds + WSS URL for the browser softphone (JsSIP).
+  - Added `GET /api/voip/me/voicemails` + audio streaming + `mark-read` + delete — proxies straight to UCM 63xx HTTPS API (`ucm_client.py`, challenge/response MD5 login).
+  - Added `GET /api/voip/me/call-history` — CDR pulled live from UCM `cdrapi`.
+  - Added `GET /api/voip/me/directory` — colleagues with SIP extensions for intra-office click-to-dial.
+- **Frontend**
+  - `VoipContext` provider (React) + `SoftphonePanel` component: always-mounted status pill + floating dialer + in-call panel (mute / hold / DTMF / blind transfer) + incoming-call toast. Powered by **JsSIP** WebSocket + WebRTC audio.
+  - `VoipAdminPage` at `/voip` — admin-only UCM connection + STUN/TURN + per-user extension provisioning.
+  - `VoicemailList` component — pinned "Voicemail" room in Comms; play/mark-read/delete surface, auto-marks read on playback.
+  - `ClickToCallButton` rewritten to dispatch through `useVoip().dial()` — no more AMI roundtrip.
+- **Removed** (retired legacy stack)
+  - Backend: `pbx_ami.py`, `pbx_helpers.py`, `routers/pbx.py`, `routers/wave.py`, six `test_iter{175,176,177,178,180,182}` + iter33/34/37/39/40/41/43 SIP/PBX test files.
+  - Frontend: `PBXAdminPage.jsx`, `PbxSettingsPage.jsx`, `WavePage.jsx`, `CallHistoryPage.jsx`, `BrowserSoftphone.jsx`, `CallInterface.jsx`, `IncomingCallModal.jsx`, `PBXAnalytics.jsx`, `sipService.js`, `usePeerConnections.js`, `useMediaControls.js`, `context/CallContext.js`.
+  - Appliance: `asterisk` service + `pbx/` directory retired from `docker-compose.yml`.
+- **Added `coturn`** service (behind `--profile turn`) so remote staff on hostile NATs can still make calls.
+- **Docs** — `appliance/README.md` gained a "Bring your own PBX (Grandstream UCM)" section: WSS enablement, concurrent registrations, TURN server setup, one-time admin steps.
+
+## Recently Resolved — Iteration 229 (Feb 2026)
+**Node 24 alignment across CI + appliance frontend image.**
+
+- Updated `actions/setup-node@v4` from Node 20 → Node 24 in `.github/workflows/ci.yml` and `.github/workflows/desktop-release.yml`.
+- `appliance/Dockerfile.frontend` bumped from `node:22-slim` → `node:24-slim` so the container build image matches the CI runner. `--ignore-engines` is still passed to yarn since `camera-controls` still declares older engine ranges.
+
 ## Recently Resolved — Iteration 228 (Feb 2026)
 **Shipping consolidation + AI-scan "Scan failed" bug fix.**
 

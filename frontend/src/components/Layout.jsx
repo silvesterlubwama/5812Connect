@@ -26,8 +26,6 @@ import { useI18n } from '../context/I18nContext';
 import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
 import Dialer from './Dialer';
-import BrowserSoftphone from './BrowserSoftphone';
-import { useCall } from '../context/CallContext';
 
 // Role helpers
 const ADMIN_ROLES = ['admin', 'system_admin'];
@@ -69,8 +67,7 @@ const NAV_SECTIONS = [
     collapsible: true,
     items: [
       { to: '/comms', icon: MessageSquare, label: 'Chat' },
-      { to: '/call-history', icon: PhoneCall, label: 'Call History', roles: STAFF_PLUS },
-      { to: '/pbx', icon: PhoneCall, label: 'PBX Admin', roles: ADMIN_ROLES },
+      { to: '/voip', icon: PhoneCall, label: 'VoIP / Softphone', roles: ADMIN_ROLES },
     ]
   },
   {
@@ -193,7 +190,8 @@ export default function Layout() {
   const searchTimeout = useRef(null);
 
   let missedCallCount = 0;
-  try { const callCtx = useCall(); missedCallCount = callCtx?.missedCallCount || 0; } catch (e) {}
+  // (Legacy WebRTC missed-call badge removed alongside the old CallContext.
+  //  The new VoIP softphone surfaces its own status pill instead.)
 
   const toggleDarkMode = () => {
     const next = !darkMode;
@@ -409,7 +407,8 @@ export default function Layout() {
       '/funds': { roles: STAFF_PLUS, module: null },
       '/shipments': { roles: DIRECTOR_PLUS, module: null },
       '/fare-alerts': { roles: DIRECTOR_PLUS, module: null },
-      '/pbx': { roles: ADMIN_ROLES, module: null },
+      '/pbx': { roles: ADMIN_ROLES, module: null },  // legacy — keep as no-op fallback
+      '/voip': { roles: ADMIN_ROLES, module: null },
       '/sales': { roles: null, module: 'sales' },
       '/social-work': { roles: STAFF_PLUS, module: 'social_work' },
       // Sub-pages that piggy-back off finance/accounting/sales modules
@@ -669,8 +668,8 @@ export default function Layout() {
         <main className="flex-1 overflow-y-auto"><Outlet /></main>
       </div>
 
-      {/* Global WebRTC softphone — renders nothing if the user has no WSS extension */}
-      <BrowserSoftphone />
+      {/* Global JsSIP softphone is mounted in App.js (SoftphonePanel) so it
+          persists across route transitions. Nothing to render here. */}
 
       {/* Global Search */}
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>

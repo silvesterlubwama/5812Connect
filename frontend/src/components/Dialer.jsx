@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Badge } from './ui/badge';
-import { useCall } from '../context/CallContext';
+import { useCall } from '../hooks/useCallCompat';
 import { toast } from 'sonner';
 
 export default function Dialer({ open, onClose }) {

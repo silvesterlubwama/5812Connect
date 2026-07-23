@@ -88,41 +88,40 @@ services:
     # also starts it.
 
   # ────────────────────────────────────────────────────────────
-  # Asterisk PBX — Phase 1 of the in-app PBX.
+  # coturn — TURN relay for WebRTC media when staff are outside the office LAN.
   #
-  # Bring up with `docker compose --profile pbx up -d` (gated so people
-  # who don't need calling don't pay the ~150 MB image cost).
+  # Our in-app softphone (JsSIP) registers straight into your Grandstream UCM
+  # over WSS. When a user is on a hostile NAT (mobile hotspot, hotel wifi,
+  # locked-down office network) STUN alone can't punch through — the browser
+  # needs a relay. This runs coturn (~5 MB image) on the appliance and hands
+  # its URL + creds to the browser via VoIP settings.
   #
-  # Required host ports:
-  #   • UDP 5060   — SIP signalling (hardphones + softphones)
-  #   • TCP 8089   — WSS for the browser softphone (Caddy proxies /ws → here)
-  #   • UDP 10000-10100 — RTP media (NAT-traversal mid-call audio)
+  # Bring up with `docker compose --profile turn up -d`.
   #
-  # The container pulls its config from the FastAPI backend on boot/reload via
-  # `/api/pbx/config/*.conf` (admin JWT in /etc/asterisk/.pbx_token). A
-  # cron-like loop refreshes every 60s + on SIGHUP. Edit the entrypoint
-  # script in ./pbx/entrypoint.sh.
-  asterisk:
-    image: andrius/asterisk:20-current
+  # Required firewall ports (open on the host):
+  #   • UDP 3478   — TURN listener
+  #   • TCP 3478   — TURN over TCP fallback
+  #   • UDP 49152-65535 — relayed media (or the range configured in TURN_MIN/MAX)
+  #
+  # After starting, configure the TURN URL + shared secret in Admin → VoIP:
+  #   turn:pbx.example.org:3478    (username/password from the env below)
+  coturn:
+    image: coturn/coturn:latest
     restart: unless-stopped
-    depends_on:
-      - backend
     profiles:
-      - pbx
-    network_mode: host          # Required for RTP — UDP NAT in bridge mode is fragile
-    environment:
-      PBX_TOKEN: ${PBX_TOKEN:-}
-      PBX_API_URL: ${PBX_API_URL:-http://localhost/api/pbx}
-      PBX_RELOAD_INTERVAL: ${PBX_RELOAD_INTERVAL:-60}
-      # AMI — used by the FastAPI backend for live reload + originate
-      AMI_USERNAME: ${AMI_USERNAME:-connect-app}
-      AMI_SECRET: ${AMI_SECRET:-}
-    volumes:
-      - ./data/asterisk-config:/etc/asterisk
-      - ./data/asterisk-voicemail:/var/spool/asterisk/voicemail
-      - ./data/asterisk-recordings:/var/spool/asterisk/monitor
-      - ./pbx/entrypoint.sh:/usr/local/bin/connect-pbx-entrypoint.sh:ro
-    entrypoint: ["/usr/local/bin/connect-pbx-entrypoint.sh"]
+      - turn
+    network_mode: host          # Required for UDP relay; bridge NAT breaks it
+    command: >
+      -n --log-file=stdout
+      --external-ip=${TURN_EXTERNAL_IP:-$$(detect-external-ip)}
+      --listening-port=3478
+      --min-port=${TURN_MIN_PORT:-49152}
+      --max-port=${TURN_MAX_PORT:-65535}
+      --fingerprint
+      --lt-cred-mech
+      --user=${TURN_USERNAME:-connect}:${TURN_PASSWORD:-changeme}
+      --realm=${TURN_REALM:-connect.local}
+      --no-tls --no-dtls
 
 networks:
   default:
