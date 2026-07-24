@@ -196,6 +196,35 @@ class UCMClient:
         except UCMError:
             await self._call("voicemail_delete", {"extension": extension, "id": msg_id})
 
+    # ── registration status (used for the "who's actually reachable" dot) ───
+
+    async def list_accounts(self) -> List[Dict[str, Any]]:
+        """Return every SIP account on the UCM with its registration state.
+        Used by the /api/voip/blf endpoint to draw green/red dots next to
+        colleague names in the directory. Cached briefly at the router layer."""
+        try:
+            res = await self._call("listAccount", {"item_num": "500"})
+        except UCMError:
+            return []
+        rows = res.get("account") or res.get("data") or res.get("extension") or []
+        out: List[Dict[str, Any]] = []
+        for a in rows:
+            ext = str(a.get("extension") or a.get("user_id") or a.get("account") or "")
+            if not ext:
+                continue
+            # UCM firmwares vary: some emit "status", others "sip_online" (bool),
+            # others "reg" (Y/N). Cover the common ones.
+            status_raw = (a.get("status") or a.get("registration_status") or
+                          a.get("sip_online") or a.get("reg") or "")
+            status_str = str(status_raw).lower()
+            registered = status_str in ("registered", "y", "yes", "true", "1", "online")
+            out.append({
+                "extension": ext,
+                "registered": registered,
+                "raw_status": str(status_raw),
+            })
+        return out
+
     # ── CDR (call detail records) ───────────────────────────────
 
     async def list_cdr(self, extension: str, limit: int = 50) -> List[Dict[str, Any]]:

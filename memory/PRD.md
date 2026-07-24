@@ -3,6 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 231 (Feb 2026)
+**Comms consolidation + BLF + video toggle.** Everything staff-facing for calling now lives in the `/comms` page — no more bouncing between separate pages.
+
+- **Phone pinned room** inside Comms — dial pad, live colleague directory with BLF dots, and recent-calls (from UCM CDR). Every dial has an audio and a video variant. New `components/voip/PhoneRoom.jsx`.
+- **Voicemail badge** — red unread count on the Voicemail sidebar item, poll every 60 s via `GET /api/voip/me/voicemails/unread-count`.
+- **BLF (Busy Lamp Field)** — VoipContext now issues a SIP `SUBSCRIBE` to each colleague's extension on the UCM's `dialog` event package (requires UCM Presence to be enabled). Parses inbound `NOTIFY` XML for `state="early|confirmed|terminated"` → colored dot in both the Phone room and the org chart. Coarse "who's registered" polling (`GET /api/voip/blf`, cached 20 s) drives the fallback dot when Presence isn't enabled.
+- **Video toggle** — In-call panel gained a Video button; the incoming-call toast now lets the operator answer as audio-only or with video. Small local video PIP + full-width remote video render inside the call panel when active.
+- **SIP presence in org chart** — the Chat sidebar's per-role staff list now shows a tiny SIP phone icon next to each colleague's name, colored by BLF state (green idle, amber ringing, red on-call, grey offline).
+- **Softphone pill** remains on every page (option a) so calls stay reachable outside `/comms`.
+
 ## Recently Resolved — Iteration 230 (Feb 2026)
 **Calling reboot: retired the local Asterisk PBX + Grandstream Wave iframe. The app now acts as a shared browser softphone that registers each staff profile directly into the existing Grandstream UCM as an additional endpoint on their extension.**
 

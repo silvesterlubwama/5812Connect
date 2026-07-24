@@ -339,3 +339,50 @@ async def my_call_history(limit: int = 50, current_user: dict = Depends(get_curr
         raise
     except UCMError as e:
         raise HTTPException(status_code=502, detail=f"UCM: {e}")
+
+
+# ============================================================
+# BLF / PRESENCE (polled — sub-second SIP SUBSCRIBE happens client-side)
+# ============================================================
+# Cache the UCM listAccount response for a short window so N staff hitting
+# /me/directory in the same 30 s don't fan out into N UCM calls.
+
+_BLF_CACHE: Dict[str, Any] = {"at": 0.0, "rows": []}
+
+
+@router.get("/blf")
+async def blf_snapshot(current_user: dict = Depends(get_current_user)):
+    """Return {extension: registered:bool} for every extension the UCM knows
+    about. Cached 20 s. Used to draw green/red dots in the org directory —
+    real-time on-call / ringing state comes from browser-side SIP SUBSCRIBE
+    against the same UCM's dialog event package (see VoipContext.subscribeBlf)."""
+    import time as _t
+    now = _t.time()
+    if now - _BLF_CACHE["at"] > 20:
+        try:
+            client = await _ucm_from_config()
+            _BLF_CACHE["rows"] = await client.list_accounts()
+            _BLF_CACHE["at"] = now
+        except HTTPException:
+            # Return the last successful snapshot (possibly empty) rather than
+            # bubbling a 502 into every heartbeat call — the FE degrades gracefully.
+            pass
+        except UCMError:
+            pass
+    return {"registrations": _BLF_CACHE["rows"], "cached_age_sec": int(now - _BLF_CACHE["at"])}
+
+
+@router.get("/me/voicemails/unread-count")
+async def my_voicemail_unread_count(current_user: dict = Depends(get_current_user)):
+    """Lightweight count for the sidebar badge. Falls back to 0 on any error."""
+    ext = await _current_user_ext(current_user)
+    if not ext:
+        return {"unread": 0}
+    try:
+        client = await _ucm_from_config()
+        items = await client.list_voicemail(ext)
+        return {"unread": sum(1 for v in items if not v.get("is_read"))}
+    except HTTPException:
+        return {"unread": 0}
+    except UCMError:
+        return {"unread": 0}

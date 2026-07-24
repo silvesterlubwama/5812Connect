@@ -925,6 +925,8 @@ export const voipApi = {
   markVoicemailRead: (msgId) => api.post(`/voip/me/voicemails/${msgId}/mark-read`),
   deleteVoicemail: (msgId) => api.delete(`/voip/me/voicemails/${msgId}`),
   myCallHistory: (limit = 50) => api.get(`/voip/me/call-history?limit=${limit}`),
+  blf: () => api.get('/voip/blf'),
+  unreadVoicemailCount: () => api.get('/voip/me/voicemails/unread-count'),
 };
 
 // ---- PRESENCE ----

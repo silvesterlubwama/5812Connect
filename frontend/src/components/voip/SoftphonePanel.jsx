@@ -10,7 +10,7 @@
  * during a session so the operator can keep working without losing context.
  */
 import React, { useState } from 'react';
-import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff, Pause, Play, Grid3x3, ArrowRightLeft, X } from 'lucide-react';
+import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff, Pause, Play, Grid3x3, ArrowRightLeft, X, Video, VideoOff } from 'lucide-react';
 import { useVoip } from '../../context/VoipContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -62,8 +62,12 @@ export default function SoftphonePanel() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={v.answer} data-testid="answer-call-btn">
+            <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => v.answer()} data-testid="answer-call-btn">
               <Phone size={14} className="mr-1" /> Answer
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => v.answer({ video: true })} title="Answer with video"
+                    data-testid="answer-video-btn">
+              <Video size={14} />
             </Button>
             <Button size="sm" variant="outline" className="flex-1" onClick={v.hangup} data-testid="reject-call-btn">
               <PhoneOff size={14} className="mr-1" /> Decline
@@ -88,6 +92,23 @@ export default function SoftphonePanel() {
             </button>
           </div>
 
+          {/* Video PIP — only when at least one side has video */}
+          {(v.isVideoEnabled || v.hasRemoteVideo) && (
+            <div className="relative mb-3 rounded-lg overflow-hidden bg-black" data-testid="video-panel">
+              <video ref={v._videoRefRemote} autoPlay playsInline className="w-full aspect-video object-cover" />
+              {v.isVideoEnabled && (
+                <video ref={v._videoRefLocal} autoPlay playsInline muted
+                       className="absolute bottom-2 right-2 w-20 aspect-video rounded border border-white/40 object-cover"
+                       data-testid="local-video-preview" />
+              )}
+              {!v.hasRemoteVideo && (
+                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-slate-400">
+                  Waiting for remote video…
+                </div>
+              )}
+            </div>
+          )}
+
           {showKeypad && (
             <div className="grid grid-cols-3 gap-1.5 mb-3">
               {['1','2','3','4','5','6','7','8','9','*','0','#'].map(k => (
@@ -98,7 +119,7 @@ export default function SoftphonePanel() {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-2 mb-2">
+          <div className="grid grid-cols-4 gap-2 mb-2">
             <Button variant="secondary" size="sm" onClick={v.toggleMute} data-testid="mute-btn"
                     className={`${v.isMuted ? 'bg-amber-500 hover:bg-amber-600 text-white' : ''}`}>
               {v.isMuted ? <MicOff size={14} /> : <Mic size={14} />}
@@ -106,6 +127,10 @@ export default function SoftphonePanel() {
             <Button variant="secondary" size="sm" onClick={v.toggleHold} data-testid="hold-btn"
                     className={`${v.isOnHold ? 'bg-amber-500 hover:bg-amber-600 text-white' : ''}`}>
               {v.isOnHold ? <Play size={14} /> : <Pause size={14} />}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={v.toggleVideo} data-testid="video-toggle-btn"
+                    className={`${v.isVideoEnabled ? 'bg-blue-500 hover:bg-blue-600 text-white' : ''}`}>
+              {v.isVideoEnabled ? <Video size={14} /> : <VideoOff size={14} />}
             </Button>
             <Button variant="destructive" size="sm" onClick={v.hangup} data-testid="hangup-btn">
               <PhoneOff size={14} />

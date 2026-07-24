@@ -21,6 +21,8 @@ import { NewConversationDialog } from '../components/comms/NewConversationDialog
 import { AnnouncementDialog } from '../components/comms/AnnouncementDialog';
 import EmptyState from '../components/EmptyState';
 import VoicemailList from '../components/voip/VoicemailList';
+import PhoneRoom from '../components/voip/PhoneRoom';
+import { useVoip } from '../context/VoipContext';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
@@ -28,6 +30,7 @@ const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', 
 const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon: 'bot' };
 const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
 const VOICEMAIL_ROOM = { id: '__voicemail__', name: 'Voicemail', type: 'voicemail', icon: 'voicemail', is_no_reply: true };
+const PHONE_ROOM = { id: '__phone__', name: 'Phone', type: 'phone', icon: 'phone', is_no_reply: true };
 const ORG_ROLES = ['Adviser', 'Executive Director', 'Director', 'Manager', 'Leader', 'Coordinator', 'Staff', 'Volunteer'];
 
 const PRESENCE_DOTS = {
@@ -43,6 +46,7 @@ export default function CommsPage() {
   const { user } = useAuth();
   const { onlineUsers, typingUsers, sendTyping, sendChatMessage, sendReadReceipt, addListener } = useWebSocket();
   const { initiateCall, isInCall } = useCall();
+  const voip = useVoip();
   const [conversations, setConversations] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -53,6 +57,8 @@ export default function CommsPage() {
   const [replyTo, setReplyTo] = useState(null);
   const [showEditGroup, setShowEditGroup] = useState(false);
   const [groupAddSearch, setGroupAddSearch] = useState('');
+  const [voicemailUnread, setVoicemailUnread] = useState(0);
+  const [sipDirByUserId, setSipDirByUserId] = useState({});   // user_id → extension
 
   const [aiMessages, setAiMessages] = useState([]);
   const [aiSessionId] = useState(() => `ai_${user?.id || 'anon'}_${Date.now()}`);
@@ -130,6 +136,34 @@ export default function CommsPage() {
     };
     load();
   }, [fetchConversations, user?.id]);
+
+  // Voicemail unread badge — poll every 60 s, and once when Voicemail room opens/closes.
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await api.get('/voip/me/voicemails/unread-count');
+        if (!cancelled) setVoicemailUnread(r.data?.unread || 0);
+      } catch { /* ignore */ }
+    };
+    tick();
+    const id = setInterval(tick, 60000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [user?.id, selectedRoom?.id]);
+
+  // Map user_id → SIP extension so the org chart can show a real SIP presence dot.
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    api.get('/voip/me/directory').then(r => {
+      if (cancelled) return;
+      const m = {};
+      (r.data || []).forEach(u => { if (u.extension) m[u.user_id] = u.extension; });
+      setSipDirByUserId(m);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   // Fetch presence for online users
   useEffect(() => {
@@ -426,6 +460,10 @@ export default function CommsPage() {
       );
     }
 
+    if (selectedRoom.id === '__phone__') {
+      return <PhoneRoom />;
+    }
+
     if (selectedRoom.id === '__ai__') {
       return (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -578,6 +616,7 @@ export default function CommsPage() {
     if (!selectedRoom) return true;
     if (selectedRoom.id === '__announcements__' && !isAdmin) return true;
     if (selectedRoom.id === '__voicemail__') return true;
+    if (selectedRoom.id === '__phone__') return true;
     return false;
   };
 
@@ -623,9 +662,10 @@ export default function CommsPage() {
 
           <div className="border-b border-border">
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1">Pinned</p>
+            <SidebarItem room={PHONE_ROOM} selected={selectedRoom?.id === '__phone__'} icon={<Phone size={14} className="text-slate-600" />} subtitle={voip.extension ? `Ext ${voip.extension} · ${voip.status === 'registered' ? 'Registered' : voip.status}` : 'No SIP extension'} onClick={() => selectRoom(PHONE_ROOM)} />
             <SidebarItem room={AI_ROOM} selected={selectedRoom?.id === '__ai__'} icon={<Bot size={14} className="text-primary" />} subtitle="Powered by Gemini" onClick={() => selectRoom(AI_ROOM)} />
             <SidebarItem room={ANNOUNCE_ROOM} selected={selectedRoom?.id === '__announcements__'} icon={<Megaphone size={14} className="text-amber-600" />} subtitle={`${announcements.length} announcements`} badge={announcements.length > 0 ? announcements.length : null} onClick={() => selectRoom(ANNOUNCE_ROOM)} />
-            <SidebarItem room={VOICEMAIL_ROOM} selected={selectedRoom?.id === '__voicemail__'} icon={<Voicemail size={14} className="text-emerald-600" />} subtitle="From your PBX extension" onClick={() => selectRoom(VOICEMAIL_ROOM)} />
+            <SidebarItem room={VOICEMAIL_ROOM} selected={selectedRoom?.id === '__voicemail__'} icon={<Voicemail size={14} className="text-emerald-600" />} subtitle="From your PBX extension" badge={voicemailUnread > 0 ? voicemailUnread : null} onClick={() => selectRoom(VOICEMAIL_ROOM)} />
           </div>
 
           {/* Unified scroll container — org chart + conversations share one wheel so
@@ -658,6 +698,18 @@ export default function CommsPage() {
                             } catch { toast.error('Failed to start conversation'); }
                           }}>
                             <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[pres] || 'bg-gray-400'}`} title={PRESENCE_LABELS[pres] || 'Offline'} />
+                            {(() => {
+                              const ext = sipDirByUserId[s.id];
+                              if (!ext) return null;
+                              const bs = voip.blfStates?.[ext];
+                              const reg = !!voip.registrationMap?.[ext];
+                              const cls = bs === 'ringing' ? 'bg-amber-400 animate-pulse' :
+                                          bs === 'on-call' ? 'bg-red-500' :
+                                          bs === 'idle' ? 'bg-emerald-500' :
+                                          reg ? 'bg-emerald-500/70' : 'bg-slate-300';
+                              const lbl = bs === 'ringing' ? 'Ringing' : bs === 'on-call' ? 'On a call' : bs === 'idle' ? 'Softphone available' : reg ? 'Softphone registered' : 'Softphone offline';
+                              return <Phone size={9} className={`text-white rounded-full p-[1px] ${cls}`} title={`Ext ${ext} · ${lbl}`} data-testid={`org-sip-dot-${s.id}`} />;
+                            })()}
                             <span className="truncate flex-1">{s.name}</span>
                             {s.is_cross_campus && <span className="text-[8px] px-1 rounded bg-purple-100 text-purple-700">xCampus</span>}
                           </div>
@@ -739,6 +791,7 @@ export default function CommsPage() {
                 {selectedRoom.id === '__ai__' ? <Bot size={16} className="text-primary" /> :
                  selectedRoom.id === '__announcements__' ? <Megaphone size={16} className="text-amber-600" /> :
                  selectedRoom.id === '__voicemail__' ? <Voicemail size={16} className="text-emerald-600" /> :
+                 selectedRoom.id === '__phone__' ? <Phone size={16} className="text-slate-600" /> :
                  selectedRoom.type === 'group' ? <Users size={16} className="text-blue-500" /> :
                  <MessageSquare size={16} className="text-muted-foreground" />}
               </div>
@@ -748,12 +801,13 @@ export default function CommsPage() {
                   {selectedRoom.id === '__ai__' ? 'Gemini AI' :
                    selectedRoom.id === '__announcements__' ? 'No-reply channel' :
                    selectedRoom.id === '__voicemail__' ? 'Pulled live from your UCM extension' :
+                   selectedRoom.id === '__phone__' ? `${voip.extension ? `Ext ${voip.extension} · ` : ''}${voip.status === 'registered' ? 'Softphone registered' : (voip.statusReason || 'Not registered')}` :
                    currentTyping ? <span className="text-primary italic">{typingUserName} is typing...</span> :
                    `${selectedRoom.participants?.length || 0} participants`}
                 </p>
               </div>
               {/* Call buttons for staff conversations */}
-              {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && selectedRoom.id !== '__voicemail__' && (
+              {isStaff && selectedRoom.id !== '__ai__' && selectedRoom.id !== '__announcements__' && selectedRoom.id !== '__voicemail__' && selectedRoom.id !== '__phone__' && (
                 <div className="flex items-center gap-1">
                   <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-green-600" data-testid="voice-call-btn"
                     onClick={() => {

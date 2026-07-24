@@ -33,9 +33,12 @@ export const useVoip = () => useContext(VoipContext) || _EMPTY_CTX;
 
 const _EMPTY_CTX = {
   status: 'offline', statusReason: '', extension: '',
-  callState: 'idle', remotePeer: '', isMuted: false, isOnHold: false, callDurationSec: 0,
+  callState: 'idle', remotePeer: '', isMuted: false, isOnHold: false, isVideoEnabled: false,
+  hasRemoteVideo: false, localStream: null, remoteStream: null, callDurationSec: 0,
+  blfStates: {}, registrationMap: {},
   dial: () => {}, answer: () => {}, hangup: () => {},
-  toggleMute: () => {}, toggleHold: () => {}, sendDtmf: () => {}, blindTransfer: () => {},
+  toggleMute: () => {}, toggleHold: () => {}, toggleVideo: () => {},
+  sendDtmf: () => {}, blindTransfer: () => {},
 };
 
 // Suppress JsSIP's verbose console spam in production builds.
@@ -52,12 +55,23 @@ export function VoipProvider({ children }) {
   const [remotePeer, setRemotePeer] = useState('');
   const [isMuted, setIsMuted] = useState(false);
   const [isOnHold, setIsOnHold] = useState(false);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   const [callDurationSec, setCallDurationSec] = useState(0);
+  // BLF: extension → 'idle' | 'ringing' | 'on-call' | 'early' (from JsSIP dialog SUBSCRIBE)
+  const [blfStates, setBlfStates] = useState({});
+  // Coarse "registered anywhere" flag per extension, from UCM listAccount polling.
+  const [registrationMap, setRegistrationMap] = useState({});
 
   const uaRef = useRef(null);
   const sessionRef = useRef(null);
   const audioRef = useRef(null);
+  const videoRefLocal = useRef(null);
+  const videoRefRemote = useRef(null);
   const timerRef = useRef(null);
+  const blfSubsRef = useRef({});   // extension → JsSIP.Subscriber
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
 
   // ── audio element ───────────────────────────────────────────
   useEffect(() => {
@@ -128,6 +142,7 @@ export function VoipProvider({ children }) {
           const peer = (isIncoming ? (request?.from?.display_name || request?.from?.uri?.user) : (session.remote_identity?.uri?.user)) || '';
           setRemotePeer(peer);
           setCallState(isIncoming ? 'incoming' : 'outgoing');
+          setHasRemoteVideo(false);
 
           if (isIncoming) toast.info(`Incoming call from ${peer}`, { duration: 15000 });
 
@@ -141,11 +156,19 @@ export function VoipProvider({ children }) {
           session.on('failed', (e) => { teardown(); toast.error(`Call ended: ${e?.cause || 'failed'}`); });
           session.on('peerconnection', ({ peerconnection }) => {
             peerconnection.addEventListener('track', (ev) => {
-              if (audioRef.current && ev.streams?.[0]) audioRef.current.srcObject = ev.streams[0];
+              const stream = ev.streams?.[0];
+              if (!stream) return;
+              remoteStreamRef.current = stream;
+              if (ev.track.kind === 'audio' && audioRef.current) {
+                audioRef.current.srcObject = stream;
+              }
+              if (ev.track.kind === 'video') {
+                setHasRemoteVideo(true);
+                if (videoRefRemote.current) videoRefRemote.current.srcObject = stream;
+              }
             });
           });
           if (isIncoming) {
-            // Show incoming toast — user answers via context.answer()
             session.on('accepted', () => setCallState('in-call'));
           }
         });
@@ -176,33 +199,85 @@ export function VoipProvider({ children }) {
   const teardown = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     if (audioRef.current) audioRef.current.srcObject = null;
+    if (videoRefRemote.current) videoRefRemote.current.srcObject = null;
+    if (videoRefLocal.current) videoRefLocal.current.srcObject = null;
+    try { localStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
     sessionRef.current = null;
     setCallState('idle');
     setRemotePeer('');
     setIsMuted(false);
     setIsOnHold(false);
+    setIsVideoEnabled(false);
+    setHasRemoteVideo(false);
     setCallDurationSec(0);
   }, []);
 
-  const dial = useCallback((number) => {
+  const dial = useCallback((number, opts = {}) => {
     const ua = uaRef.current;
     if (!ua || status !== 'registered') { toast.error('Softphone not registered'); return; }
     if (sessionRef.current) { toast.error('Already on a call'); return; }
     const target = String(number || '').trim();
     if (!target) return;
-    // Strip visual formatting except '+' and digits.
     const clean = target.replace(/[^\d+*#]/g, '');
+    const withVideo = !!opts.video;
     const cfg = ua._sipConnectOptions || {};
-    ua.call(`sip:${clean}@${ua.configuration.uri.host}`, cfg);
+    const mediaConstraints = { audio: true, video: withVideo };
+    ua.call(`sip:${clean}@${ua.configuration.uri.host}`, { ...cfg, mediaConstraints });
     setRemotePeer(clean);
     setCallState('outgoing');
+    setIsVideoEnabled(withVideo);
+    // Wire the local stream to the preview element once JsSIP has fetched it.
+    setTimeout(() => {
+      try {
+        const stream = sessionRef.current?.connection?.getLocalStreams?.()?.[0]
+          || sessionRef.current?.connection?.getSenders?.()?.[0]?.streams?.[0];
+        if (stream) {
+          localStreamRef.current = stream;
+          if (videoRefLocal.current && withVideo) videoRefLocal.current.srcObject = stream;
+        }
+      } catch {}
+    }, 800);
   }, [status]);
 
-  const answer = useCallback(() => {
+  const answer = useCallback((opts = {}) => {
     const s = sessionRef.current;
     if (!s || s.direction !== 'incoming') return;
-    s.answer(uaRef.current?._sipConnectOptions || { mediaConstraints: { audio: true, video: false } });
+    const withVideo = !!opts.video;
+    setIsVideoEnabled(withVideo);
+    s.answer({
+      ...(uaRef.current?._sipConnectOptions || {}),
+      mediaConstraints: { audio: true, video: withVideo },
+    });
   }, []);
+
+  const toggleVideo = useCallback(async () => {
+    const s = sessionRef.current;
+    if (!s || !s.connection) return;
+    const senders = s.connection.getSenders();
+    const videoSender = senders.find(sd => sd.track?.kind === 'video');
+    if (isVideoEnabled && videoSender) {
+      // Stop the outgoing video track; ICE renegotiation not needed for pause.
+      videoSender.track.enabled = false;
+      setIsVideoEnabled(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const track = stream.getVideoTracks()[0];
+        if (videoSender) {
+          await videoSender.replaceTrack(track);
+        } else {
+          s.connection.addTrack(track, stream);
+        }
+        localStreamRef.current = stream;
+        if (videoRefLocal.current) videoRefLocal.current.srcObject = stream;
+        setIsVideoEnabled(true);
+      } catch (e) {
+        toast.error('Camera unavailable');
+      }
+    }
+  }, [isVideoEnabled]);
 
   const hangup = useCallback(() => {
     const s = sessionRef.current;
@@ -238,11 +313,88 @@ export function VoipProvider({ children }) {
     try { s.refer(`sip:${clean}@${uaRef.current?.configuration.uri.host}`); toast.success(`Transferring to ${clean}…`); } catch (e) { toast.error('Transfer failed'); }
   }, []);
 
+  // ── BLF: SIP SUBSCRIBE dialog event package ────────────────────
+  //
+  // Once the UA is registered, subscribe to each colleague's extension on the
+  // UCM's `dialog` event package. UCM must have Presence enabled
+  // (SIP Settings → Advanced → Enable Presence). On each NOTIFY we parse the
+  // XML body — the `<state>` inside `<dialog>` tells us whether the peer is
+  // idle (`terminated`), ringing (`early`), or on-call (`confirmed`).
+  const subscribeBlfList = useCallback((extensions) => {
+    const ua = uaRef.current;
+    if (!ua || status !== 'registered') return;
+    const seen = new Set(extensions);
+    // Tear down subs for extensions no longer in the list
+    Object.entries(blfSubsRef.current).forEach(([ext, sub]) => {
+      if (!seen.has(ext)) {
+        try { sub.terminate(); } catch {}
+        delete blfSubsRef.current[ext];
+      }
+    });
+    // Add new subs. JsSIP v3 exposes `ua.subscribe(target, event, options)`.
+    if (typeof ua.subscribe !== 'function') return;   // older JsSIP builds — skip BLF
+    extensions.forEach(ext => {
+      if (blfSubsRef.current[ext]) return;
+      try {
+        const target = `sip:${ext}@${ua.configuration.uri.host}`;
+        const sub = ua.subscribe(target, 'dialog', {
+          expires: 3600,
+          contentType: 'application/dialog-info+xml',
+          accept: 'application/dialog-info+xml',
+        });
+        sub.on('notify', (n) => {
+          const body = n?.request?.body || '';
+          // Cheap parse — full XML parser is overkill for this fragment.
+          let state = 'idle';
+          if (/state="early"/.test(body) || /<state>early<\/state>/.test(body)) state = 'ringing';
+          else if (/state="confirmed"/.test(body) || /<state>confirmed<\/state>/.test(body)) state = 'on-call';
+          else if (/state="terminated"/.test(body) || /<state>terminated<\/state>/.test(body)) state = 'idle';
+          setBlfStates(prev => ({ ...prev, [ext]: state }));
+        });
+        sub.on('failed', () => {
+          // Presence disabled on UCM — fall back to coarse registration polling only.
+          delete blfSubsRef.current[ext];
+        });
+        sub.subscribe();
+        blfSubsRef.current[ext] = sub;
+      } catch (e) {
+        // Best-effort — swallow to avoid a noisy loop.
+      }
+    });
+  }, [status]);
+
+  // ── Directory + coarse-registration polling ─────────────────────
+  //
+  // Every 30 s the FE hits /api/voip/blf to refresh the "registered anywhere"
+  // dot. Also drives the initial BLF subscribe list — as new colleagues get
+  // extensions provisioned, they auto-appear here.
+  useEffect(() => {
+    if (status !== 'registered') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await api.get('/voip/blf');
+        if (cancelled) return;
+        const rows = r.data?.registrations || [];
+        const map = {};
+        rows.forEach(x => { map[x.extension] = !!x.registered; });
+        setRegistrationMap(map);
+        subscribeBlfList(rows.map(x => x.extension).filter(x => x && x !== extension));
+      } catch { /* ignore */ }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [status, extension, subscribeBlfList]);
+
   return (
     <VoipContext.Provider value={{
       status, statusReason, extension,
-      callState, remotePeer, isMuted, isOnHold, callDurationSec,
-      dial, answer, hangup, toggleMute, toggleHold, sendDtmf, blindTransfer,
+      callState, remotePeer, isMuted, isOnHold, isVideoEnabled, hasRemoteVideo, callDurationSec,
+      blfStates, registrationMap,
+      dial, answer, hangup, toggleMute, toggleHold, toggleVideo, sendDtmf, blindTransfer,
+      // Refs the SoftphonePanel / PhoneRoom bind their <video> elements to.
+      _videoRefLocal: videoRefLocal, _videoRefRemote: videoRefRemote,
     }}>
       {children}
     </VoipContext.Provider>
