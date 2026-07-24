@@ -67,6 +67,49 @@ class TenantConfigIn(BaseModel):
     ucm_verify_tls: bool = True
 
 
+def _clean_host(raw: str) -> str:
+    """Strip protocol prefix, trailing slashes, and any inline path — this
+    field is meant to be a bare hostname for use inside SIP URIs. Users
+    frequently paste in a full https:// URL by mistake, which then makes
+    JsSIP build invalid SIP URIs like `sip:1042@https://pbx.example.org`."""
+    if not raw:
+        return ""
+    v = raw.strip()
+    for prefix in ("https://", "http://", "wss://", "ws://", "sip:", "sips:"):
+        if v.lower().startswith(prefix):
+            v = v[len(prefix):]
+            break
+    # Drop anything after the first '/' — the host doesn't own a path.
+    v = v.split("/", 1)[0]
+    # Preserve :port because SIP realms sometimes include it, but strip a
+    # dangling colon.
+    return v.rstrip(":").strip()
+
+
+def _clean_api_url(raw: str) -> str:
+    """The API URL DOES need a protocol. Normalise: default to https:// if
+    missing, strip trailing slashes, and reject obviously wrong values."""
+    if not raw:
+        return ""
+    v = raw.strip().rstrip("/")
+    if not v.lower().startswith(("http://", "https://")):
+        v = "https://" + v
+    return v
+
+
+def _clean_ws_url(raw: str) -> str:
+    """Must be wss:// (or ws:// for insecure local dev)."""
+    if not raw:
+        return ""
+    v = raw.strip().rstrip("/")
+    if not v.lower().startswith(("wss://", "ws://")):
+        # Assume they typed a bare host — default to wss on 8089/ws (Grandstream default)
+        host = _clean_host(v)
+        if host:
+            v = f"wss://{host}:8089/ws"
+    return v
+
+
 class UserSipIn(BaseModel):
     extension: str = Field(..., min_length=2, max_length=10)
     sip_password: str = Field(..., min_length=1)
@@ -80,6 +123,30 @@ class UserSipIn(BaseModel):
 
 async def _get_config_doc() -> Dict[str, Any]:
     doc = await db.voip_config.find_one({"id": "singleton"}, {"_id": 0}) or {}
+    # One-shot self-heal: if legacy data still has a protocol prefix in the
+    # host, silently clean it on read. Prevents stale bad values from breaking
+    # JsSIP for users who saved before the sanitiser was added.
+    if doc:
+        cleaned_host = _clean_host(doc.get("ucm_host", ""))
+        cleaned_realm = _clean_host(doc.get("sip_domain", ""))
+        cleaned_ws = _clean_ws_url(doc.get("ws_url", ""))
+        cleaned_api = _clean_api_url(doc.get("ucm_api_url", ""))
+        if (cleaned_host != doc.get("ucm_host", "")
+                or cleaned_realm != doc.get("sip_domain", "")
+                or cleaned_ws != doc.get("ws_url", "")
+                or cleaned_api != doc.get("ucm_api_url", "")):
+            doc.update({
+                "ucm_host": cleaned_host,
+                "sip_domain": cleaned_realm or cleaned_host,
+                "ws_url": cleaned_ws,
+                "ucm_api_url": cleaned_api,
+            })
+            await db.voip_config.update_one({"id": "singleton"}, {"$set": {
+                "ucm_host": cleaned_host,
+                "sip_domain": cleaned_realm or cleaned_host,
+                "ws_url": cleaned_ws,
+                "ucm_api_url": cleaned_api,
+            }})
     return doc
 
 
@@ -133,16 +200,21 @@ async def get_tenant_config(current_user: dict = Depends(require_admin)):
 @router.put("/tenant/config")
 async def set_tenant_config(data: TenantConfigIn, current_user: dict = Depends(require_admin)):
     existing = await _get_config_doc()
+    # Auto-strip protocol prefixes from host fields — otherwise JsSIP will
+    # build malformed SIP URIs like sip:1042@https://pbx.example.org and the
+    # WebSocket will silently refuse to open.
+    clean_host = _clean_host(data.ucm_host)
+    clean_realm = _clean_host(data.sip_domain) or clean_host
     update: Dict[str, Any] = {
         "id": "singleton",
-        "ucm_host": data.ucm_host.strip(),
-        "sip_domain": (data.sip_domain or data.ucm_host).strip(),
-        "ws_url": data.ws_url.strip(),
+        "ucm_host": clean_host,
+        "sip_domain": clean_realm,
+        "ws_url": _clean_ws_url(data.ws_url),
         "stun_urls": [u.strip() for u in data.stun_urls if u.strip()],
         "turn_urls": [u.strip() for u in data.turn_urls if u.strip()],
         "turn_username": (data.turn_username or "").strip(),
         "turn_password": (data.turn_password or "").strip(),
-        "ucm_api_url": data.ucm_api_url.strip(),
+        "ucm_api_url": _clean_api_url(data.ucm_api_url),
         "ucm_api_username": data.ucm_api_username.strip(),
         "ucm_verify_tls": bool(data.ucm_verify_tls),
     }

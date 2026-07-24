@@ -152,12 +152,19 @@ export default function VoipAdminPage() {
           <div>
             <Label>UCM host / IP</Label>
             <Input value={cfg.ucm_host} onChange={e => setCfg({ ...cfg, ucm_host: e.target.value })}
-                   placeholder="pbx.example.org" data-testid="ucm-host-input" />
+                   placeholder="pbx.example.org  (no https://)" data-testid="ucm-host-input" />
+            <div className="text-[10px] text-slate-500 mt-1">
+              Hostname only — do <b>not</b> paste <code>https://</code> or a trailing slash. Auto-cleaned on save.
+            </div>
           </div>
           <div>
             <Label>SIP realm (optional)</Label>
             <Input value={cfg.sip_domain} onChange={e => setCfg({ ...cfg, sip_domain: e.target.value })}
                    placeholder="Defaults to UCM host" data-testid="sip-domain-input" />
+            <div className="text-[10px] text-slate-500 mt-1">
+              Set only if your UCM's SIP realm differs from its DNS name
+              (<span className="font-mono">PBX Settings → SIP Settings → Realm</span>).
+            </div>
           </div>
           <div className="md:col-span-2">
             <Label>Browser WebSocket URL (WSS)</Label>
