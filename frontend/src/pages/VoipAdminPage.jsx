@@ -21,6 +21,7 @@ import api from '../services/api';
 export default function VoipAdminPage() {
   const [cfg, setCfg] = useState(null);
   const [rotatePw, setRotatePw] = useState('');
+  const [rotateV2Pw, setRotateV2Pw] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [users, setUsers] = useState([]);
@@ -53,8 +54,11 @@ export default function VoipAdminPage() {
         turn_username: cfg.turn_username, turn_password: cfg.turn_password,
         ucm_api_url: cfg.ucm_api_url, ucm_api_username: cfg.ucm_api_username,
         ucm_verify_tls: cfg.ucm_verify_tls,
+        ucm_v2_api_url: cfg.ucm_v2_api_url || '',
+        ucm_v2_username: cfg.ucm_v2_username || '',
       };
       if (rotatePw) payload.ucm_api_password = rotatePw;
+      if (rotateV2Pw) payload.ucm_v2_password = rotateV2Pw;
       const r = await api.put('/voip/tenant/config', payload);
       setCfg(r.data);
       setRotatePw('');
@@ -235,6 +239,41 @@ export default function VoipAdminPage() {
           <Button onClick={saveConfig} disabled={saving} data-testid="save-voip-config-btn">
             <Save size={14} className="mr-1" /> {saving ? 'Saving…' : 'Save VoIP settings'}
           </Button>
+        </div>
+      </section>
+
+      {/* ── V2 API (voicemail) ─────────────────────────────── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-6 space-y-4" data-testid="voip-v2-section">
+        <div>
+          <h2 className="font-medium">Voicemail — UCM v2.0 API</h2>
+          <p className="text-[11px] text-slate-500 mt-1">
+            The legacy API on port 8443 doesn't expose voicemail. UCM 6304's new
+            v2.0 API (OAuth2, typically on the main HTTPS port 8089) does.
+            Enter a separate API user with voicemail permissions here.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <Label>V2 API base URL</Label>
+            <Input value={cfg.ucm_v2_api_url || ''} onChange={e => setCfg({ ...cfg, ucm_v2_api_url: e.target.value })}
+                   placeholder="https://ucm.example.org:8089" data-testid="ucm-v2-url-input" />
+            <div className="text-[10px] text-slate-500 mt-1">Usually the same host as the WSS URL, port 8089.</div>
+          </div>
+          <div>
+            <Label>V2 API username</Label>
+            <Input value={cfg.ucm_v2_username || ''} onChange={e => setCfg({ ...cfg, ucm_v2_username: e.target.value })}
+                   placeholder="e.g. silvesterlubwama" data-testid="ucm-v2-user-input" />
+          </div>
+          <div className="md:col-span-2">
+            <Label>V2 API password {cfg.ucm_v2_configured && <span className="text-[10px] text-emerald-600">(saved — leave blank to keep)</span>}</Label>
+            <Input type="password" value={rotateV2Pw} onChange={e => setRotateV2Pw(e.target.value)}
+                   placeholder={cfg.ucm_v2_configured ? 'Enter to rotate' : 'Set V2 password'}
+                   data-testid="ucm-v2-pw-input" />
+            <div className="text-[10px] text-slate-500 mt-1">
+              Voicemail requires this. If left blank, the app falls back to the
+              Old API and voicemail will likely show as empty.
+            </div>
+          </div>
         </div>
       </section>
 

@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 232 (Feb 2026)
+**UCM 6304 New API v2.0 integration for voicemail.**
+
+- Added `backend/ucm_client_v2.py` — OAuth2 client for Grandstream UCM 63xx v2.0 API (Basic-auth → access_token → Bearer). Handles token refresh, endpoint aliasing (list/query/vmail), and both binary + base64-encoded voicemail downloads.
+- Extended `TenantConfigIn` in `routers/voip.py` with three new fields: `ucm_v2_api_url`, `ucm_v2_username`, `ucm_v2_password_enc` (Fernet-encrypted).
+- Voicemail endpoints now prefer V2 API when configured, fall back to Old API (challenge/MD5) otherwise — no crash if V2 is missing, just empty voicemail list.
+- Frontend `VoipAdminPage.jsx` gained a dedicated "Voicemail — UCM v2.0 API" section for the second set of credentials.
+- CDR + BLF (via `listAccount`) still flow through Old API on port 8443.
+
 ## Recently Resolved — Iteration 231 (Feb 2026)
 **Comms consolidation + BLF + video toggle.** Everything staff-facing for calling now lives in the `/comms` page — no more bouncing between separate pages.
 

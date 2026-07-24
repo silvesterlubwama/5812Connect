@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from deps import db, get_current_user, require_admin
 from voip_crypto import decrypt_password, encrypt_password
 from ucm_client import UCMClient, UCMError, get_client_for_config
+from ucm_client_v2 import UCMApiV2Client
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,10 @@ class TenantConfigIn(BaseModel):
     ucm_api_username: str = Field("", description="Super Admin (or apiuser) account name")
     ucm_api_password: Optional[str] = Field(None, description="Only send when rotating; omit to keep existing")
     ucm_verify_tls: bool = True
+    # New API v2.0 (OAuth2) — used specifically for voicemail; Old API doesn't expose those endpoints.
+    ucm_v2_api_url: str = Field("", description="V2 API base URL, e.g. https://pbx.example.org:8089")
+    ucm_v2_username: str = Field("", description="V2 API user (separate from Old API user)")
+    ucm_v2_password: Optional[str] = Field(None, description="Only send when rotating; omit to keep")
 
 
 def _clean_host(raw: str) -> str:
@@ -166,6 +171,9 @@ def _redact_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "ucm_api_username": cfg.get("ucm_api_username") or "",
         "ucm_api_configured": bool(cfg.get("ucm_api_password_enc")),
         "ucm_verify_tls": bool(cfg.get("ucm_verify_tls", True)),
+        "ucm_v2_api_url": cfg.get("ucm_v2_api_url") or "",
+        "ucm_v2_username": cfg.get("ucm_v2_username") or "",
+        "ucm_v2_configured": bool(cfg.get("ucm_v2_password_enc")),
     }
 
 
@@ -185,6 +193,20 @@ async def _ucm_from_config() -> UCMClient:
         raise HTTPException(status_code=502, detail="UCM API is not configured. Ask an admin to set it up under VoIP settings.")
     password = await decrypt_password(db, cfg["ucm_api_password_enc"])
     return await get_client_for_config(cfg, password)
+
+
+async def _ucm_v2_from_config() -> UCMApiV2Client:
+    """Load V2 API config (used for voicemail). 502s if unconfigured."""
+    cfg = await _get_config_doc()
+    if not cfg.get("ucm_v2_api_url") or not cfg.get("ucm_v2_username") or not cfg.get("ucm_v2_password_enc"):
+        raise HTTPException(status_code=502, detail="UCM v2 API (voicemail) is not configured. Under VoIP settings, fill the second set of API credentials.")
+    pw = await decrypt_password(db, cfg["ucm_v2_password_enc"])
+    return await UCMApiV2Client.get(
+        base_url=cfg["ucm_v2_api_url"],
+        username=cfg["ucm_v2_username"],
+        password=pw,
+        verify_tls=bool(cfg.get("ucm_verify_tls", True)),
+    )
 
 
 # ============================================================
@@ -217,11 +239,17 @@ async def set_tenant_config(data: TenantConfigIn, current_user: dict = Depends(r
         "ucm_api_url": _clean_api_url(data.ucm_api_url),
         "ucm_api_username": data.ucm_api_username.strip(),
         "ucm_verify_tls": bool(data.ucm_verify_tls),
+        "ucm_v2_api_url": _clean_api_url(data.ucm_v2_api_url),
+        "ucm_v2_username": (data.ucm_v2_username or "").strip(),
     }
     if data.ucm_api_password is not None and data.ucm_api_password != "":
         update["ucm_api_password_enc"] = await encrypt_password(db, data.ucm_api_password)
     elif "ucm_api_password_enc" in existing:
         update["ucm_api_password_enc"] = existing["ucm_api_password_enc"]
+    if data.ucm_v2_password is not None and data.ucm_v2_password != "":
+        update["ucm_v2_password_enc"] = await encrypt_password(db, data.ucm_v2_password)
+    elif "ucm_v2_password_enc" in existing:
+        update["ucm_v2_password_enc"] = existing["ucm_v2_password_enc"]
     await db.voip_config.update_one({"id": "singleton"}, {"$set": update}, upsert=True)
     return _redact_config(await _get_config_doc())
 
@@ -341,6 +369,18 @@ async def my_voicemails(current_user: dict = Depends(get_current_user)):
     ext = await _current_user_ext(current_user)
     if not ext:
         return []
+    # Prefer V2 API (has real voicemail endpoints). Fall back to Old API if
+    # V2 isn't configured — some deployments only use Old API and voicemail
+    # will just return empty rather than 502.
+    cfg = await _get_config_doc()
+    if cfg.get("ucm_v2_password_enc"):
+        try:
+            v2 = await _ucm_v2_from_config()
+            return await v2.list_voicemail(ext)
+        except HTTPException:
+            raise
+        except UCMError as e:
+            raise HTTPException(status_code=502, detail=f"UCM v2: {e}")
     try:
         client = await _ucm_from_config()
         return await client.list_voicemail(ext)
@@ -355,15 +395,18 @@ async def my_voicemail_audio(msg_id: str, current_user: dict = Depends(get_curre
     ext = await _current_user_ext(current_user)
     if not ext:
         raise HTTPException(status_code=404, detail="You have no SIP extension configured.")
+    cfg = await _get_config_doc()
     try:
-        client = await _ucm_from_config()
-        audio = await client.download_voicemail(ext, msg_id)
-        # Auto-mark as read once the browser has fetched the audio (matches
-        # every other VOIP client's behaviour).
-        try:
-            await client.mark_voicemail_read(ext, msg_id)
-        except UCMError:
-            pass
+        if cfg.get("ucm_v2_password_enc"):
+            v2 = await _ucm_v2_from_config()
+            audio = await v2.download_voicemail(ext, msg_id)
+            try: await v2.mark_voicemail_read(ext, msg_id)
+            except UCMError: pass
+        else:
+            client = await _ucm_from_config()
+            audio = await client.download_voicemail(ext, msg_id)
+            try: await client.mark_voicemail_read(ext, msg_id)
+            except UCMError: pass
         return Response(content=audio, media_type="audio/wav",
                         headers={"Content-Disposition": f'inline; filename="vm-{msg_id}.wav"'})
     except HTTPException:
@@ -377,9 +420,14 @@ async def my_voicemail_mark_read(msg_id: str, current_user: dict = Depends(get_c
     ext = await _current_user_ext(current_user)
     if not ext:
         raise HTTPException(status_code=404, detail="You have no SIP extension configured.")
+    cfg = await _get_config_doc()
     try:
-        client = await _ucm_from_config()
-        await client.mark_voicemail_read(ext, msg_id)
+        if cfg.get("ucm_v2_password_enc"):
+            v2 = await _ucm_v2_from_config()
+            await v2.mark_voicemail_read(ext, msg_id)
+        else:
+            client = await _ucm_from_config()
+            await client.mark_voicemail_read(ext, msg_id)
     except UCMError as e:
         raise HTTPException(status_code=502, detail=f"UCM: {e}")
     return {"marked_read": True}
@@ -390,9 +438,14 @@ async def my_voicemail_delete(msg_id: str, current_user: dict = Depends(get_curr
     ext = await _current_user_ext(current_user)
     if not ext:
         raise HTTPException(status_code=404, detail="You have no SIP extension configured.")
+    cfg = await _get_config_doc()
     try:
-        client = await _ucm_from_config()
-        await client.delete_voicemail(ext, msg_id)
+        if cfg.get("ucm_v2_password_enc"):
+            v2 = await _ucm_v2_from_config()
+            await v2.delete_voicemail(ext, msg_id)
+        else:
+            client = await _ucm_from_config()
+            await client.delete_voicemail(ext, msg_id)
     except UCMError as e:
         raise HTTPException(status_code=502, detail=f"UCM: {e}")
     return {"deleted": True}
