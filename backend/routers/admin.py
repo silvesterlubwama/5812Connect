@@ -58,6 +58,7 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
     # Enrich with member profile existence and location name
     loc_cache = {}
+    sec_co_cache = {}
     for u in users:
         member = await db.members.find_one(
             {"$or": [{"user_id": u["id"]}, {"email": u.get("email", "__none__")}]},
@@ -73,6 +74,16 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
                 loc = await db.locations.find_one({"id": lid}, {"_id": 0, "name": 1})
                 loc_cache[lid] = loc.get("name") if loc else ""
             u["location_name"] = loc_cache[lid]
+        # Resolve security company details so badges + printed IDs render the
+        # contractor firm's logo without a second round-trip.
+        sc_id = u.get("security_company_id")
+        if sc_id:
+            if sc_id not in sec_co_cache:
+                co = await db.security_companies.find_one({"id": sc_id}, {"_id": 0, "name": 1, "logo_url": 1})
+                sec_co_cache[sc_id] = co or {}
+            co = sec_co_cache[sc_id]
+            u["security_company_name"] = co.get("name")
+            u["security_company_logo_url"] = co.get("logo_url")
     return users
 
 
@@ -117,6 +128,9 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         "extension": (data.get("extension") or "").strip(),
         "extension_pin": (data.get("extension_pin") or "").strip(),
         "forward_to": (data.get("forward_to") or "").strip(),
+        # Security contractor metadata — only used when role == 'Security Contractor'
+        "security_company_id": data.get("security_company_id") or None,
+        "security_rank": (data.get("security_rank") or "").strip() or None,
         "password_hash": hash_password(password),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
@@ -250,7 +264,8 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                       "address", "emergency_contact", "department", "departments", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
                       "location_id", "location_ids", "title", "extension", "extension_pin", "forward_to",
-                      "gender", "date_of_birth", "group", "program"}
+                      "gender", "date_of_birth", "group", "program",
+                      "security_company_id", "security_rank"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()

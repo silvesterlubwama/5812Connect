@@ -196,6 +196,17 @@ export const securityCheckpointApi = {
   returnId: (grantId) => api.post(`/security/checkpoint/one-time/${grantId}/return-id`, null, { headers: _sessHeaders() }),
 };
 
+// ---- Security contractor companies (external firms whose personnel man the checkpoint) ----
+export const securityCompaniesApi = {
+  list: () => api.get('/security-companies'),
+  create: (data) => api.post('/security-companies', data),
+  update: (id, data) => api.put(`/security-companies/${id}`, data),
+  remove: (id) => api.delete(`/security-companies/${id}`),
+  uploadLogo: (id, formData) => api.post(`/security-companies/${id}/logo`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+};
+
 // ---- OCR (staff auth — same Gemini pipeline used by the security checkpoint) ----
 export const ocrApi = {
   id: (formData) => api.post('/ocr/id', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),

@@ -519,6 +519,19 @@ async def serve_local_review_scan(filename: str):
     return FileResponse(filepath, media_type=ct)
 
 
+@router.get("/uploads/security-company-logos/{filename}")
+async def serve_local_security_logo(filename: str):
+    """Serve locally saved security company logos (fallback when object
+    storage is unavailable). Public — logos aren't sensitive."""
+    safe = os.path.basename(filename)
+    filepath = f"/app/backend/uploads/security-company-logos/{safe}"
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Logo not found")
+    ext = safe.rsplit('.', 1)[-1].lower() if '.' in safe else 'png'
+    ct = {'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp', 'svg': 'image/svg+xml'}.get(ext, 'image/png')
+    return FileResponse(filepath, media_type=ct)
+
+
 @router.get("/storage/{full_path:path}")
 async def serve_object_storage(full_path: str):
     """Proxy through Emergent object storage.

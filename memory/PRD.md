@@ -3,6 +3,32 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 237 (Feb 2026)
+**Security contractor vendor management + dual-logo badge.**
+
+- **Backend**
+  - New `routers/security_companies.py` — CRUD for external contractor firms (name, phone, contact_email, address, logo, active). Directors+ can write; anyone signed in can read. Delete is soft when any user is linked (keeps historical checkpoint logs intact).
+  - Logo upload endpoint `POST /security-companies/{id}/logo` — cloud + local disk fallback. Local serving via `/api/uploads/security-company-logos/{filename}`.
+  - Added `security_company_id` and `security_rank` to admin `POST /users` and `PUT /users/{id}` ACCOUNT_FIELDS.
+  - Enrichment: `GET /admin/users` and `GET /auth/me` now hydrate `security_company_name` + `security_company_logo_url` from the linked company record — so badges render dual-logo without a second round-trip.
+- **Frontend**
+  - `SecurityCompaniesManager` card + dialog on Admin page: add / edit / upload-logo / deactivate / delete companies.
+  - Security Contractor fields (company dropdown + rank input) show in both `UserCreateDialog` and `UserEditDialog` when the selected role is `Security Contractor`, in a red-outlined section that explains kiosk-only access.
+  - `UnifiedBadge`:
+    - New `security` badge type (slate + red accent, `SECURITY` label, shield icon).
+    - Header shows **58:12 logo AND the contractor's company logo side-by-side** (separator `|`) — falls back to company NAME if no logo.
+    - Rank rendered as a prominent pill under the person's name (red-tinted background).
+    - Company name appears as a secondary line for context.
+- **RBAC**
+  - `Security Contractor` role (level 3.5) already existed and is already pinned to the checkpoint terminal via `KIOSK_ONLY_ROLES` in `App.js` + `RouteGuards.jsx` — verified. New profile fields don't change access; they only decorate the badge.
+- **Verified**
+  - `POST /security-companies` → 201 with id / logo_url null.
+  - Duplicate name → 409.
+  - `POST /admin/users` with `role=Security Contractor` + `security_company_id` + `security_rank` → saved.
+  - `GET /admin/users?search=…` for the new user returns enriched `security_company_name` (`Sentry Solutions`) + `security_rank` (`Officer`).
+  - Delete company with linked user → `{deactivated: true, linked_users: 1}` (soft).
+
+
 ## Recently Resolved — Iteration 236 (Feb 2026)
 **Badge redesign — QR left, large photo right (for faster security checks).**
 

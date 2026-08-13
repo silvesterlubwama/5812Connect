@@ -1,5 +1,5 @@
-import React from 'react';
-import { Users, Plus } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Users, Plus, Shield } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -7,10 +7,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
 import { toast } from 'sonner';
+import { securityCompaniesApi } from '../../services/api';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Security Contractor', 'Member', 'Parent', 'Customer', 'Guest'];
 
 export function UserCreateDialog({ open, onOpenChange, form, setForm, locations, createdUser, onCreateUser }) {
+  const isSecurityContractor = form.role === 'Security Contractor';
+  const [securityCompanies, setSecurityCompanies] = useState([]);
+  useEffect(() => {
+    if (!open || !isSecurityContractor) return;
+    securityCompaniesApi.list().then(r => setSecurityCompanies(r.data || [])).catch(() => {});
+  }, [open, isSecurityContractor]);
   return (
     <Dialog open={open} onOpenChange={o => { onOpenChange(o); }}>
       <DialogContent className="max-w-md">
@@ -68,6 +75,27 @@ export function UserCreateDialog({ open, onOpenChange, form, setForm, locations,
               <div><Label className="text-xs font-medium">System Admin Access</Label><p className="text-[10px] text-muted-foreground">Full cross-campus visibility</p></div>
               <Switch data-testid="create-admin-toggle" checked={form.is_admin || false} onCheckedChange={v => setForm({ ...form, is_admin: v })} />
             </div>
+            {isSecurityContractor && (
+              <div className="p-3 rounded-lg border-2 border-dashed border-red-200 bg-red-50/40 space-y-3" data-testid="create-security-fields">
+                <p className="text-xs font-semibold text-red-700 uppercase tracking-wide flex items-center gap-1.5"><Shield size={13} /> Security Contractor</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Security Company</Label>
+                    <Select value={form.security_company_id || ''} onValueChange={v => setForm({...form, security_company_id: v})}>
+                      <SelectTrigger className="h-9 text-xs" data-testid="create-security-company"><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        {securityCompanies.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">Add companies via Admin → Security Companies</div>}
+                        {securityCompanies.filter(c => c.active !== false).map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Rank</Label>
+                    <Input placeholder="e.g. Guard, Supervisor" value={form.security_rank || ''} onChange={e => setForm({...form, security_rank: e.target.value})} data-testid="create-security-rank" />
+                  </div>
+                </div>
+              </div>
+            )}
             <label className="flex items-center gap-2 cursor-pointer text-sm">
               <input type="checkbox" className="accent-primary" checked={form.also_create_member} onChange={e => setForm({ ...form, also_create_member: e.target.checked })} />
               Also add to People directory (recommended)

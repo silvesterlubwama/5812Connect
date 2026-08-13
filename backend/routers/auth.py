@@ -227,6 +227,15 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
     if user_out.get("location_id"):
         loc = await db.locations.find_one({"id": user_out["location_id"]}, {"_id": 0, "name": 1})
         user_out["location_name"] = loc.get("name") if loc else ""
+    # Enrich security-contractor users with their company name+logo so the
+    # portal badge can render dual-logo without a follow-up round-trip.
+    if user_out.get("security_company_id"):
+        co = await db.security_companies.find_one(
+            {"id": user_out["security_company_id"]}, {"_id": 0, "name": 1, "logo_url": 1}
+        )
+        if co:
+            user_out["security_company_name"] = co.get("name")
+            user_out["security_company_logo_url"] = co.get("logo_url")
     return user_out
 
 

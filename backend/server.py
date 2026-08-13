@@ -589,6 +589,7 @@ try:
     from routers.social_review_forms import router as social_review_forms_router
     from routers.shipments_pkg import router as shipments_router
     from routers.fare_alerts import router as fare_alerts_router
+    from routers.security_companies import router as security_companies_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -613,6 +614,7 @@ try:
     app.include_router(social_review_forms_router)
     app.include_router(shipments_router)
     app.include_router(fare_alerts_router)
+    app.include_router(security_companies_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

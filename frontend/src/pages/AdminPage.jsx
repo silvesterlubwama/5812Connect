@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi } from '../services/api';
+import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
@@ -349,6 +349,7 @@ export default function AdminPage() {
         <>
           <ModuleAccessManager />
           <SecurityCheckpointsManager />
+          <SecurityCompaniesManager />
           <KioskLinksManager />
           <BackupRestoreManager />
           <IntegrationsManager />
@@ -797,7 +798,7 @@ function AdminLogbookDialog({ cp, onClose }) {
         <DialogHeader>
           <DialogTitle>{cp?.name} — Visitor Logbook</DialogTitle>
           <DialogDescription className="text-xs">
-            Entry / exit times per person, by day. Residents are filtered out by default — they live at this location so they aren't tracked as daily guests.
+            Entry / exit times per person, by day. Residents are filtered out by default — they live at this location so they aren&apos;t tracked as daily guests.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 mt-2">
@@ -845,5 +846,117 @@ function AdminLogbookDialog({ cp, onClose }) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+// ============== SECURITY COMPANIES MANAGER ==============
+// Contractor firms whose personnel man the checkpoint kiosk. Each company
+// has a name, phone, and optional logo. Individual Security Contractor users
+// link to a company via `security_company_id` on their user record.
+function SecurityCompaniesManager() {
+  const [companies, setCompanies] = useState([]);
+  const [showManager, setShowManager] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: '', phone: '', contact_email: '', address: '' });
+  const [saving, setSaving] = useState(false);
+
+  const load = () => securityCompaniesApi.list().then(r => setCompanies(r.data || [])).catch(() => {});
+  useEffect(() => { if (showManager) load(); }, [showManager]);
+
+  const startAdd = () => { setEditing(null); setForm({ name: '', phone: '', contact_email: '', address: '' }); };
+  const startEdit = (c) => { setEditing(c); setForm({ name: c.name, phone: c.phone || '', contact_email: c.contact_email || '', address: c.address || '' }); };
+  const save = async () => {
+    if (!form.name.trim()) { toast.error('Name is required'); return; }
+    setSaving(true);
+    try {
+      if (editing) { await securityCompaniesApi.update(editing.id, form); toast.success('Company updated'); }
+      else { await securityCompaniesApi.create(form); toast.success('Company added'); }
+      startAdd();
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
+    finally { setSaving(false); }
+  };
+  const remove = async (id) => {
+    if (!window.confirm('Delete this security company? If any users are linked, it will be deactivated instead.')) return;
+    try { const r = await securityCompaniesApi.remove(id); toast.success(r.data?.deactivated ? 'Deactivated (users still linked)' : 'Deleted'); load(); }
+    catch { toast.error('Delete failed'); }
+  };
+  const uploadLogo = async (companyId, file) => {
+    if (!file) return;
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      await securityCompaniesApi.uploadLogo(companyId, fd);
+      toast.success('Logo uploaded');
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Logo upload failed'); }
+  };
+  const toggleActive = async (c) => {
+    try { await securityCompaniesApi.update(c.id, { active: !c.active }); load(); }
+    catch { toast.error('Failed to toggle'); }
+  };
+
+  return (
+    <>
+      <Card className="mt-6"><CardContent className="pt-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2"><Shield size={18} /> Security Companies</h2>
+            <p className="text-sm text-muted-foreground mt-1">External firms whose personnel man the security checkpoint. Their logo appears on personnel badges.</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setShowManager(true)} data-testid="open-security-companies">Manage</Button>
+        </div>
+      </CardContent></Card>
+
+      <Dialog open={showManager} onOpenChange={setShowManager}>
+        <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Shield size={18} /> Security Companies</DialogTitle>
+            <DialogDescription>Manage the vendor firms whose personnel are contracted to secure your locations.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border p-3 space-y-2 bg-muted/30">
+              <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">{editing ? 'Edit Company' : 'Add New Company'}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Input placeholder="Company name *" value={form.name} onChange={e => setForm({...form, name: e.target.value})} data-testid="sec-co-name" />
+                <Input placeholder="Phone" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} data-testid="sec-co-phone" />
+                <Input placeholder="Contact email" value={form.contact_email} onChange={e => setForm({...form, contact_email: e.target.value})} />
+                <Input placeholder="Address" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+              </div>
+              <div className="flex gap-2 justify-end">
+                {editing && <Button size="sm" variant="ghost" onClick={startAdd}>Cancel</Button>}
+                <Button size="sm" onClick={save} disabled={saving} data-testid="sec-co-save">{saving ? 'Saving...' : (editing ? 'Update' : 'Add Company')}</Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {companies.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No security companies yet</p>
+              ) : companies.map(c => (
+                <div key={c.id} className="flex items-center gap-3 p-3 rounded-lg border" data-testid={`sec-co-row-${c.id}`}>
+                  <div className="w-12 h-12 rounded bg-muted flex items-center justify-center overflow-hidden shrink-0 border">
+                    {c.logo_url ? <img src={c.logo_url} alt={c.name} className="w-full h-full object-contain" /> : <Shield size={20} className="text-muted-foreground" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium truncate">{c.name}</p>
+                      {c.active === false && <Badge variant="secondary" className="text-[10px]">Deactivated</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{[c.phone, c.contact_email].filter(Boolean).join(' · ') || '—'}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    <input type="file" accept="image/*" className="hidden" id={`logo-upload-${c.id}`} onChange={e => uploadLogo(c.id, e.target.files?.[0])} />
+                    <Button size="sm" variant="ghost" onClick={() => document.getElementById(`logo-upload-${c.id}`).click()} title="Upload logo"><Plus size={13} /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => startEdit(c)} title="Edit"><Edit size={13} /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => toggleActive(c)} title={c.active === false ? 'Reactivate' : 'Deactivate'}><Key size={13} /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => remove(c.id)} title="Delete" className="text-destructive"><Trash2 size={13} /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

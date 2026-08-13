@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Textarea } from '../ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
-import { documentsApi } from '../../services/api';
+import { documentsApi, securityCompaniesApi } from '../../services/api';
 import api from '../../services/api';
 import { toast } from 'sonner';
 import { useUnsavedWarning, useFormDirty } from '../../hooks/useUnsavedWarning';
@@ -41,6 +41,15 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
   const [nfcSerial, setNfcSerial] = useState('');
   const [nfcLabel, setNfcLabel] = useState('');
   const [nfcScanning, setNfcScanning] = useState(false);
+
+  // Lazy-load security companies when the Security Contractor role is set
+  // so a dropdown lets the admin bind this user to a specific vendor firm.
+  const [securityCompanies, setSecurityCompanies] = useState([]);
+  const isSecurityContractor = editForm.role === 'Security Contractor';
+  useEffect(() => {
+    if (!open || !isSecurityContractor) return;
+    securityCompaniesApi.list().then(r => setSecurityCompanies(r.data || [])).catch(() => setSecurityCompanies([]));
+  }, [open, isSecurityContractor]);
 
   useEffect(() => {
     if (open && selectedUser?.member_id) {
@@ -365,6 +374,38 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <Label>Title <span className="text-xs text-muted-foreground">(auto-suggested, editable)</span></Label>
               <Input data-testid="edit-title-input" value={editForm.title || ''} onChange={e => setEditForm({...editForm, title: e.target.value})} placeholder={`e.g. ${editForm.role || 'Staff'} of ${locations.find(l => l.id === (editForm.location_ids || [])[0])?.name || 'Location'}`} />
             </div>
+            {isSecurityContractor && (
+              <div className="p-3 rounded-lg border-2 border-dashed border-red-200 bg-red-50/40 space-y-3" data-testid="security-contractor-fields">
+                <p className="text-xs font-semibold text-red-700 uppercase tracking-wide">Security Contractor Details</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Security Company</Label>
+                    <Select
+                      value={editForm.security_company_id || ''}
+                      onValueChange={v => setEditForm({...editForm, security_company_id: v})}
+                    >
+                      <SelectTrigger className="h-9 text-xs" data-testid="edit-security-company"><SelectValue placeholder="Select company..." /></SelectTrigger>
+                      <SelectContent>
+                        {securityCompanies.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No companies yet — add one in Admin → Security Companies</div>}
+                        {securityCompanies.filter(c => c.active !== false).map(c => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Rank</Label>
+                    <Input
+                      placeholder="e.g. Guard, Supervisor, Officer"
+                      value={editForm.security_rank || ''}
+                      onChange={e => setEditForm({...editForm, security_rank: e.target.value})}
+                      data-testid="edit-security-rank"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">Security contractors are pinned to the checkpoint terminal and cannot access the main app or portal.</p>
+              </div>
+            )}
             <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})} /></div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -467,7 +508,7 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
                   <Wifi size={16} className="text-blue-600" />
                   <div>
                     <p className="text-sm font-medium">Write NFC Tag</p>
-                    <p className="text-xs text-muted-foreground">Write this member's ID to a blank NFC card</p>
+                    <p className="text-xs text-muted-foreground">Write this member&apos;s ID to a blank NFC card</p>
                   </div>
                 </div>
                 {nfcWriteStatus === 'success' ? (

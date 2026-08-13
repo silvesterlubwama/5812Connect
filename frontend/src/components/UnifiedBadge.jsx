@@ -17,6 +17,9 @@ const BADGE_COLORS = {
   child: { bg: '#0f766e', accent: '#5eead4', label: 'CHILD' },
   parent: { bg: '#1e3a5f', accent: '#93c5fd', label: 'PARENT' },
   member: { bg: '#1a1a2e', accent: '#e2e8f0', label: 'MBR' },
+  // Contracted security personnel — neutral slate with red accent so they
+  // read as clearly distinct from staff at a glance.
+  security: { bg: '#1e293b', accent: '#ef4444', label: 'SECURITY' },
 };
 
 // Badge type icons (inline SVG) — replace text labels
@@ -29,6 +32,7 @@ function BadgeTypeIcon({ type, size = 14, color }) {
     case 'child': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>;
     case 'parent': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>;
     case 'guest': case 'visitor': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/></svg>;
+    case 'security': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
     default: return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
   }
 }
@@ -48,6 +52,7 @@ const STAFF_TYPES = new Set(['staff', 'director', 'volunteer']);
 
 function getBadgeType(person) {
   const role = (person.role || person.type || '').toLowerCase();
+  if (role === 'security contractor' || role === 'security_contractor') return 'security';
   if (['admin', 'system_admin', 'executive director', 'adviser'].includes(role)) return 'director';
   if (['director', 'manager', 'coordinator', 'leader', 'staff', 'hr'].includes(role)) return 'staff';
   if (role === 'volunteer') return 'volunteer';
@@ -266,14 +271,39 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             color={watermarkColor}
           />
 
-          {/* Header — logo | status symbols + badge type icon */}
+          {/* Header — logo(s) | status symbols + badge type icon
+              For contracted security personnel we render the client (58:12)
+              logo AND the contractor's company logo side-by-side so the
+              badge clearly conveys "who this person works for". */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: isSmall ? '6px 10px' : '8px 14px',
             borderBottom: headerBorder,
             background: headerBg,
           }}>
-            <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: logoFilter }} crossOrigin="anonymous" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: isSmall ? '6px' : '8px' }}>
+              <img src={LOGO_URL} alt="58:12" style={{ height: isSmall ? '14px' : '18px', filter: logoFilter }} crossOrigin="anonymous" />
+              {type === 'security' && person.security_company_logo_url && (
+                <>
+                  <span style={{ color: subTextColor, fontSize: isSmall ? '10px' : '12px', opacity: 0.5 }}>|</span>
+                  <img
+                    src={person.security_company_logo_url}
+                    alt={person.security_company_name || 'Security'}
+                    style={{ height: isSmall ? '14px' : '18px', maxWidth: isSmall ? '52px' : '70px', objectFit: 'contain' }}
+                    crossOrigin="anonymous"
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                </>
+              )}
+              {type === 'security' && !person.security_company_logo_url && person.security_company_name && (
+                <>
+                  <span style={{ color: subTextColor, fontSize: isSmall ? '10px' : '12px', opacity: 0.5 }}>|</span>
+                  <span style={{ color: colors.accent, fontSize: isSmall ? '9px' : '11px', fontWeight: 700, letterSpacing: '0.5px' }}>
+                    {person.security_company_name}
+                  </span>
+                </>
+              )}
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
               {(isStaffType || type === 'child') && <NfcSymbol size={isSmall ? 9 : 11} color={colors.accent} />}
               {person.is_medical && <MedicalIcon size={isSmall ? 9 : 11} color="#ef4444" />}
@@ -303,8 +333,19 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: isSmall ? '15px' : '20px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
               {lastName && <div style={{ fontSize: isSmall ? '10px' : '12px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
-              <div style={{ fontSize: isSmall ? '7px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
-              {person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px' }}>{person.department}</div>}
+              {type === 'security' && person.security_rank ? (
+                <div style={{ fontSize: isSmall ? '9px' : '11px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.9px', fontWeight: 800, background: `${colors.accent}20`, display: 'inline-block', padding: '2px 6px', borderRadius: '4px' }}>
+                  {person.security_rank}
+                </div>
+              ) : (
+                <div style={{ fontSize: isSmall ? '7px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
+              )}
+              {type === 'security' && person.security_company_name && (
+                <div style={{ fontSize: isSmall ? '7px' : '9px', color: subTextColor, marginTop: '3px', fontWeight: 500 }}>
+                  {person.security_company_name}
+                </div>
+              )}
+              {type !== 'security' && person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px' }}>{person.department}</div>}
               {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
                 <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
               ))}
