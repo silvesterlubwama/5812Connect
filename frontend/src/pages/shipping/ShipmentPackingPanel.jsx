@@ -21,6 +21,7 @@ import { Badge } from '../../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { Plus, Trash2, Pencil, Plane, Ship, Sparkles, PackageOpen, Loader2, ExternalLink, Ticket, CheckCircle2, Box, Upload, RefreshCw, Search } from 'lucide-react';
 import api from '../../services/api';
+import { useShipDropZone } from './packingDnd';
 
 const CONTAINER_LENGTH_CM = 1203;
 const CONTAINER_WIDTH_CM = 235;
@@ -376,26 +377,21 @@ function FloorPlanSVG({ L, W, floorUnits, childrenOf, onSelect, sid, refresh }) 
 
 // ─── Single packing-unit card + its stacked children ─────────────
 function UnitCard({ unit, stackedChildren, onEdit, onDelete, onDropItem }) {
-  // iter230 — drop target for drag-drop item packing
-  const [dragOver, setDragOver] = useState(false);
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    const itemId = e.dataTransfer.getData('application/x-ship-item-id');
-    if (!itemId || !onDropItem) return;
+  // Drop target for drag-drop item packing. Uses react-dnd so it works on
+  // both desktop (HTML5) and touch devices (Touch backend) — see packingDnd.jsx.
+  const { dropRef, isOver } = useShipDropZone(async (itemId) => {
+    if (!onDropItem) return;
     try {
       await onDropItem(itemId, 'u', unit.id);
       toast.success(`Packed into ${unit.name}`);
     } catch { /* upstream toasts */ }
-  };
+  });
   return (
     <div
-      className={`rounded border-2 p-2 text-xs transition-all ${dragOver ? 'border-emerald-500 bg-emerald-50 shadow-md scale-[1.01]' : 'border-border'}`}
+      ref={dropRef}
+      className={`rounded border-2 p-2 text-xs transition-all ${isOver ? 'border-emerald-500 bg-emerald-50 shadow-md scale-[1.01]' : 'border-border'}`}
       style={{ borderLeftColor: unit.color || UNIT_COLORS[unit.type], borderLeftWidth: 4 }}
       data-testid={`unit-card-${unit.id}`}
-      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 flex-1 min-w-0">

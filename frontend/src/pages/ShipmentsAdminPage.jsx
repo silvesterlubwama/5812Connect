@@ -28,6 +28,21 @@ import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import ContainerVisualizer from '../components/ContainerVisualizer';
 import { ShipmentPackingPanel } from './shipping/ShipmentPackingPanel';
+import { PackingDndProvider, useShipItemDrag } from './shipping/packingDnd';
+
+// Small inline wrapper so we can use the react-dnd hook per-item without
+// having to hoist the entire Card into a separate component. Renders a
+// draggable Card via a `ref` from useDrag; children receive `isDragging`
+// through a render-prop pattern for optional styling.
+function DraggableItemCard({ itemId, className, testId, children, title }) {
+  const { dragRef, isDragging } = useShipItemDrag(itemId);
+  return (
+    <div ref={dragRef} className={`cursor-move ${isDragging ? 'opacity-50' : ''} ${className || ''}`}
+         data-testid={testId} title={title}>
+      {typeof children === 'function' ? children({ isDragging }) : children}
+    </div>
+  );
+}
 import Papa from 'papaparse';
 
 const PRIORITY_BADGE = {
@@ -595,6 +610,7 @@ export default function ShipmentsAdminPage() {
   const palletsById = Object.fromEntries((selected.pallets || []).map(p => [p.id, p]));
 
   return (
+    <PackingDndProvider>
     <div className="p-6 space-y-4 max-w-6xl" data-testid="ship-detail-page">
       <Button size="sm" variant="ghost" onClick={() => setSelectedId(null)} data-testid="ship-back-btn">
         <ArrowLeft size={13} className="mr-1" /> All shipments
@@ -878,20 +894,13 @@ export default function ShipmentsAdminPage() {
               const remaining = Math.max(0, (it.qty_needed || 0) - (it.qty_acquired || 0));
               const covered = remaining === 0;
               return (
-                <Card
+                <DraggableItemCard
                   key={it.id}
-                  className={`rounded-lg ${covered ? 'bg-emerald-50/50' : ''} cursor-move hover:shadow-md transition-shadow`}
-                  data-testid={`ship-item-${it.id}`}
-                  draggable
-                  onDragStart={(e) => {
-                    // iter230 — HTML5 drag: item card carries its id; drop target
-                    // decides which container field (`pallet_id` / `packing_unit_id`
-                    // / `suitcase_id`) receives the id.
-                    e.dataTransfer.setData('application/x-ship-item-id', it.id);
-                    e.dataTransfer.effectAllowed = 'move';
-                  }}
+                  itemId={it.id}
+                  testId={`ship-item-${it.id}`}
                   title="Drag me onto a pallet, box or suitcase to pack this item"
                 >
+                <Card className={`rounded-lg ${covered ? 'bg-emerald-50/50' : ''} hover:shadow-md transition-shadow`}>
                   <CardContent className="p-2.5 flex items-center gap-3 flex-wrap">
                     {/* Photo thumbnail + upload */}
                     <label className="relative w-12 h-12 rounded border bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-primary shrink-0" title="Click to upload photo">
@@ -1103,6 +1112,7 @@ export default function ShipmentsAdminPage() {
                     </Button>
                   </CardContent>
                 </Card>
+                </DraggableItemCard>
               );
             })}
           </div>
@@ -1810,6 +1820,7 @@ export default function ShipmentsAdminPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </PackingDndProvider>
   );
 }
 
