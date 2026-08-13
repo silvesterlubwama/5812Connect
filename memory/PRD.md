@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 236 (Feb 2026)
+**Badge redesign — QR left, large photo right (for faster security checks).**
+
+- Reworked `UnifiedBadge.jsx` body from `[name/info | QR-with-embedded-photo]` to a 3-column `[plain QR | name/info | LARGE photo]` layout.
+- QR is now plain (no embedded logo) so scanners get max contrast; sizes ~96×96 large / 72×72 small.
+- Photo is prominent (110×110 large / 78×78 small) with white background and accent-colored 2 px border, positioned on the right — the primary visual ID check for security personnel.
+- Fallback: when `photo_url` is missing or fails to load, the same `generateInitialsImage()` renders an initials square in place.
+- `crossOrigin="anonymous"` + `onError` reset kept intact so the download-to-PNG canvas path continues to work.
+- Verified on `/portal` badge preview.
+
+
 ## Recently Resolved — Iteration 235 (Feb 2026)
 **Cloudflare 524 on social-work scan upload.**
 

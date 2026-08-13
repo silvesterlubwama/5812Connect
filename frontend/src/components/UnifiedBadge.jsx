@@ -283,34 +283,53 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — left: name+info | right: QR with embedded photo */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1 }}>
+          {/* Body — left: plain QR | center: name+info | right: LARGE photo
+              Rearranged Feb 2026 so the photo is prominent for visual ID
+              checks by security and scanners can still hit the QR from the
+              edge without hunting past the portrait. */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1, alignItems: 'center' }}>
+            {/* QR code — plain (no embedded logo) so scanners get max contrast */}
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden', background: kioskMode ? '#fff' : 'transparent', padding: kioskMode ? '2px' : 0 }}>
+              <QRCodeLogo
+                value={qrData}
+                size={isSmall ? 72 : 96}
+                bgColor="transparent"
+                fgColor={qrFg}
+                ecLevel="H"
+                qrStyle="dots"
+              />
+            </div>
+            {/* Name + info */}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: isSmall ? '18px' : '24px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
-              {lastName && <div style={{ fontSize: isSmall ? '11px' : '13px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
-              <div style={{ fontSize: isSmall ? '8px' : '9px', color: colors.accent, marginTop: isSmall ? '4px' : '6px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
+              <div style={{ fontSize: isSmall ? '15px' : '20px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
+              {lastName && <div style={{ fontSize: isSmall ? '10px' : '12px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
+              <div style={{ fontSize: isSmall ? '7px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
               {person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px' }}>{person.department}</div>}
-              {/* Parent info for child badges */}
               {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
                 <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
               ))}
               {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
             </div>
-            {/* QR code with embedded profile photo or initials */}
-            <div style={{ flexShrink: 0, borderRadius: '10px', overflow: 'hidden' }}>
-              <QRCodeLogo
-                value={qrData}
-                size={isSmall ? 88 : 116}
-                bgColor="transparent"
-                fgColor={qrFg}
-                ecLevel="H"
-                logoImage={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e')}
-                logoWidth={isSmall ? 34 : 44}
-                logoHeight={isSmall ? 34 : 44}
-                logoPadding={3}
-                logoPaddingStyle="circle"
-                removeQrCodeBehindLogo={true}
-                qrStyle="dots"
+            {/* Large photo — the primary visual ID check for security personnel */}
+            <div style={{
+              flexShrink: 0,
+              width: isSmall ? '78px' : '110px',
+              height: isSmall ? '78px' : '110px',
+              borderRadius: '10px',
+              overflow: 'hidden',
+              background: '#fff',
+              border: `2px solid ${colors.accent}`,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <img
+                src={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220)}
+                alt={person.name || 'photo'}
+                crossOrigin="anonymous"
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                onError={(e) => { e.currentTarget.src = generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220); }}
               />
             </div>
           </div>
