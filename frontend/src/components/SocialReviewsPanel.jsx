@@ -307,8 +307,7 @@ export default function SocialReviewsPanel({ child, kind }) {
 
   const handleScanUpload = async (file) => {
     if (!file) return;
-    const isImage = file.type?.startsWith('image/');
-    const msg = toast.loading(isImage ? 'Uploading scan…' : 'Uploading scan…');
+    const msg = toast.loading('Uploading scan…');
     try {
       const r = await socialReviewsApi.uploadScan(child.id, file, kind);
       toast.dismiss(msg);

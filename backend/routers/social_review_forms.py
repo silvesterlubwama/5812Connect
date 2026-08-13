@@ -360,10 +360,29 @@ async def _ocr_review_form(file_bytes: bytes, mime: str, kind: str, user_id: str
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty scan")
 
-    # MIME normalization — Gemini wants jpeg/png/webp. PDFs aren't supported by this
-    # pipeline yet; first-page conversion via pdf2image would be the future step.
+    # MIME normalization — Gemini wants jpeg/png/webp. PDFs get converted to
+    # a PNG of the first page via pdf2image (poppler) so PDF scans also get
+    # OCR'd instead of falling straight into `draft_scan_only`.
     detected = mime.lower()
-    if detected not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
+    if detected == "application/pdf" or file_bytes[:4] == b"%PDF":
+        try:
+            from pdf2image import convert_from_bytes
+            # 200 DPI is the sweet spot: good enough for handwriting OCR
+            # without ballooning the image size Gemini has to process.
+            pages = convert_from_bytes(file_bytes, dpi=200, first_page=1, last_page=1, fmt="png")
+            if not pages:
+                raise HTTPException(status_code=415, detail="PDF has no pages")
+            import io as _io
+            buf = _io.BytesIO()
+            pages[0].save(buf, format="PNG")
+            file_bytes = buf.getvalue()
+            detected = "image/png"
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"PDF→PNG conversion failed: {e}")
+            raise HTTPException(status_code=415, detail=f"Could not convert PDF for OCR ({e})")
+    elif detected not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
         if file_bytes[:3] == b"\xff\xd8\xff":
             detected = "image/jpeg"
         elif file_bytes[:8] == b"\x89PNG\r\n\x1a\n":
@@ -371,7 +390,7 @@ async def _ocr_review_form(file_bytes: bytes, mime: str, kind: str, user_id: str
         elif file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP":
             detected = "image/webp"
         else:
-            raise HTTPException(status_code=415, detail="OCR only supports JPEG/PNG/WEBP scans (PDF coming soon)")
+            raise HTTPException(status_code=415, detail="OCR supports JPEG/PNG/WEBP images and PDF")
     api_key = os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
         raise HTTPException(status_code=503, detail="OCR not configured (no LLM key)")
@@ -440,6 +459,7 @@ _OCR_SYSTEM_PROMPTS = {
         "{\n"
         '  "review_date": "YYYY-MM-DD" or empty,\n'
         '  "fields": {\n'
+        '    "child_name": str, "dob": "YYYY-MM-DD"|"", "age": str,\n'
         '    "school": str, "class_grade": str, "term": str,\n'
         '    "academic_performance": {\n'
         '      "overall": {"rating": "Excellent"|"Good"|"Fair"|"Poor"|null, "comments": str},\n'
@@ -476,6 +496,7 @@ _OCR_SYSTEM_PROMPTS = {
         '  "review_date": "YYYY-MM-DD" or empty,\n'
         '  "next_visit_date": "YYYY-MM-DD" or empty,\n'
         '  "fields": {\n'
+        '    "child_name": str, "dob": "YYYY-MM-DD"|"", "age": str, "sex": "male"|"female"|"",\n'
         '    "caregiver_name": str, "caregiver_relationship": str,\n'
         '    "village_parish": str, "district": str,\n'
         '    "welfare_indicators": { "physical_health": {"rating":"Good"|"Fair"|"Poor"|null,"comments":str},\n'
@@ -650,7 +671,11 @@ async def upload_filled_scan(
         file_url = f"/api/uploads/social-review-scans/{unique}"
 
     # 2) Insert the draft review NOW so the frontend has something to poll
-    will_ocr = bool(run_ocr and file.content_type.startswith("image/"))
+    # PDFs are now OCR-able too — pdf2image converts the first page to PNG
+    # before we hand off to Gemini.
+    will_ocr = bool(run_ocr and (
+        file.content_type.startswith("image/") or file.content_type == "application/pdf"
+    ))
     rdate = (review_date or datetime.now(timezone.utc).date().isoformat())[:10]
     review_id = f"rev_{uuid.uuid4().hex[:10]}"
     rev = {
@@ -667,7 +692,7 @@ async def upload_filled_scan(
             "ran": False,
             "pending": will_ocr,   # Frontend keys off this to show "OCR running…" state
             "confidence": "",
-            "error": None if will_ocr else "OCR skipped (PDF or run_ocr=false)",
+            "error": None if will_ocr else "OCR skipped (run_ocr=false)",
             "raw_text": "",
             "completed_at": None,
         },
