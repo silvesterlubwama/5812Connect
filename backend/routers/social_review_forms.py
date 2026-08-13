@@ -718,6 +718,13 @@ async def upload_filled_scan(
 
     child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1, "name": 1, "location_id": 1, "family_id": 1})
     if not child:
+        # Social-work cases can also be opened against members (staff/adult
+        # subjects). Fall back to the members collection so their scan uploads
+        # don't 404 with "Child not found".
+        member = await db.members.find_one({"id": child_id}, {"_id": 0, "id": 1, "name": 1, "location_id": 1})
+        if member:
+            child = {"id": member["id"], "name": member.get("name", ""), "location_id": member.get("location_id"), "family_id": None}
+    if not child:
         raise HTTPException(status_code=404, detail="Child not found")
 
     # 1) Persist the raw scan (fast — no LLM in this path)

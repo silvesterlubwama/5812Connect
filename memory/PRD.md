@@ -3,6 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 233 (Feb 2026)
+**Fix: "Child not found" on welfare / school / medical scan uploads.**
+
+- Root cause: `CaseDetailDialog.editing` object (`{ education, medical, family, goals }`) was passed as `child={editing}` into `SocialReviewsPanel` and `ChildDocumentsPanel`. That object has no `id`/`name`, so scan uploads were hitting `POST /api/social-work/reviews/children/undefined/upload-scan` → 404.
+- Fix in `pages/SocialWorkPage.jsx`: introduced a memoized `subject` = `{ id, name, location_id, family_id, subject_kind }` derived from `caseDoc` and passed it to the three review panels + docs panel instead of `editing`.
+- Fix in `components/SocialReviewsPanel.jsx`: guard `handleScanUpload` — toast an error if `child?.id` is missing instead of firing a broken request.
+- Backend hardening in `routers/social_review_forms.py`: if `db.children` misses, fall back to `db.members` so member-subject social-work cases don't 404 either.
+- Verified end-to-end with the real welfare PDF (Home Visit Report — Gift Nabaterega): child-id upload → 201, member-id upload → 201, `undefined` still returns 404.
+
+
 ## Recently Resolved — Iteration 232 (Feb 2026)
 **UCM 6304 New API v2.0 integration for voicemail.**
 

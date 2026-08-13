@@ -329,6 +329,10 @@ export default function SocialReviewsPanel({ child, kind }) {
 
   const handleScanUpload = async (file) => {
     if (!file) return;
+    if (!child?.id) {
+      toast.error('No child selected — open a child case first, then upload the scan.');
+      return;
+    }
     const msg = toast.loading('Uploading scan…');
     try {
       const r = await socialReviewsApi.uploadScan(child.id, file, kind);

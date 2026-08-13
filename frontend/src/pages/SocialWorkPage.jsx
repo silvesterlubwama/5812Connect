@@ -10,7 +10,7 @@
  *     Goals, Payments, Notes)
  *   • Schools tab: school CRUD + portal-password issuance
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -537,6 +537,18 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
   // "link this account instead?" banner so org-wide identity stays unified.
   const [sponsorUserMatch, setSponsorUserMatch] = useState(null);
 
+  // Lightweight subject descriptor used by embedded panels (SocialReviewsPanel,
+  // ChildDocumentsPanel). We pass this instead of `editing` because `editing`
+  // only carries education/medical/family/goals — no `id`/`name` — which made
+  // review scan uploads 404 with "Child not found".
+  const subject = useMemo(() => (caseDoc ? {
+    id: caseDoc.subject_id,
+    name: caseDoc.subject_name,
+    location_id: caseDoc.location_id,
+    family_id: caseDoc.family_id,
+    subject_kind: caseDoc.subject_kind,
+  } : null), [caseDoc]);
+
   // Watch the manual-sponsor email and check the members directory for a match.
   // Debounced 400ms so we don't spam the API on every keystroke. Cleared when
   // the user dismisses, links, or switches sponsor modes.
@@ -971,7 +983,7 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                   child.medical.* — the summary above reads from the same fields. */}
               <div className="pt-2 border-t" data-testid="cd-medical-exams-section">
                 <p className="text-xs font-semibold mb-2">Medical Examinations</p>
-                <SocialReviewsPanel child={editing} kind="medical_exam" />
+                <SocialReviewsPanel child={subject} kind="medical_exam" />
               </div>
             </TabsContent>
 
@@ -1188,17 +1200,17 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
 
             {/* SCHOOL PROGRESS REVIEWS — termly review forms filled at school visits */}
             <TabsContent value="school_reviews" className="space-y-4 mt-4">
-              <SocialReviewsPanel child={editing} kind="school_progress" />
+              <SocialReviewsPanel child={subject} kind="school_progress" />
             </TabsContent>
 
             {/* WELFARE VISITS — home visits, protection assessment, household checks */}
             <TabsContent value="welfare_visits" className="space-y-4 mt-4">
-              <SocialReviewsPanel child={editing} kind="welfare_visit" />
+              <SocialReviewsPanel child={subject} kind="welfare_visit" />
             </TabsContent>
 
             {/* DOCUMENTS — typed file-checklist (LC1, guardian ID, school reports, etc.) + bundle download */}
             <TabsContent value="documents" className="space-y-4 mt-4">
-              <ChildDocumentsPanel child={editing} />
+              <ChildDocumentsPanel child={subject} />
             </TabsContent>
           </Tabs>
         )}
