@@ -8,11 +8,11 @@ Endpoints:
 Templates live in /app/backend/templates/social_reviews/{kind}.html so the HTML
 is editable without touching Python and the router stays focused.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import Response
 from deps import db, get_current_user, _audit, require_staff, logger
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 from pathlib import Path
 import uuid
 import os
@@ -540,9 +540,69 @@ _OCR_SYSTEM_PROMPTS = {
 }
 
 
+async def _ocr_background(review_id: str, child_id: str, kind: str,
+                          data: bytes, mime: str, user_snapshot: dict) -> None:
+    """Runs after the client's HTTP response has already returned. Executes
+    the Gemini OCR call (may take 20-40 s) and patches the review row with
+    structured fields + auto-syncs into the child profile. Never raises —
+    all failures are logged and stored on `review.ocr.error`.
+
+    This decouples the slow LLM call from the ingress-proxy timeout, which
+    used to bite users as generic "Upload failed" toasts."""
+    try:
+        payload = await _ocr_review_form(data, mime, kind, user_snapshot["id"])
+    except HTTPException as e:
+        payload = None
+        err = e.detail
+    except Exception as e:
+        payload = None
+        err = str(e)[:200]
+        logger.error(f"OCR background failure for review {review_id}: {e}")
+    else:
+        err = None
+
+    ocr_meta = {
+        "ran": bool(payload),
+        "pending": False,
+        "confidence": (payload or {}).get("ocr_confidence", ""),
+        "error": err,
+        "raw_text": (payload or {}).get("raw_text", "")[:500] if payload else "",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    update: Dict[str, Any] = {"ocr": ocr_meta}
+    if payload:
+        rdate = payload.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+        update.update({
+            "fields": payload.get("fields") or {},
+            "action_plan": payload.get("action_plan") or [],
+            "overall_assessment": payload.get("overall_assessment") or "",
+            "next_visit_date": payload.get("next_visit_date") or "",
+            "review_date": rdate[:10],
+            "status": "submitted",
+        })
+    await db.social_review_forms.update_one({"id": review_id}, {"$set": update})
+
+    # Auto-sync structured fields into the child profile — same as the original
+    # synchronous path. Failures here don't block the OCR write itself.
+    if payload:
+        try:
+            await _apply_review_to_child(child_id, kind, {
+                "review_date": update["review_date"],
+                "overall_assessment": update["overall_assessment"],
+                "next_visit_date": update["next_visit_date"],
+                "fields": update["fields"],
+            }, user_snapshot, review_id)
+            fresh = await db.social_review_forms.find_one({"id": review_id}, {"_id": 0})
+            if fresh:
+                await _append_timeline_note(child_id, kind, fresh, user_snapshot, review_id)
+        except Exception as e:
+            logger.warning(f"OCR auto-sync after background job failed: {e}")
+
+
 @router.post("/children/{child_id}/upload-scan")
 async def upload_filled_scan(
     child_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     kind: str = Form("welfare_visit"),
     review_date: Optional[str] = Form(None),
@@ -551,14 +611,19 @@ async def upload_filled_scan(
 ):
     """Upload a scanned-and-filled paper form.
 
-    Default (run_ocr=True): runs Gemini-3-flash OCR to auto-extract structured
-    fields, creates a `submitted` review with the parsed data + auto-syncs into
-    the child profile. Falls back to draft_scan_only if OCR fails.
+    v2 flow: saves the scan + creates a draft review IMMEDIATELY (< 1 s), then
+    kicks off Gemini OCR as a background task. The HTTP response comes back
+    fast so we never hit the ingress proxy timeout — even for handwriting-
+    heavy pages that take 30-40 s to OCR.
 
-    run_ocr=False: just attaches the scan as a draft for manual transcription.
+    Frontend behaviour:
+      • Response arrives with `ocr.pending: true` — show "OCR running…" toast
+      • Poll `GET /:review_id` every 5 s (or refresh the list) — OCR meta
+        flips to `ran: true` + `confidence: high|medium|low` when done
+      • If `ocr.error` set, user can transcribe manually via the row's dialog
     """
     if kind not in VALID_KINDS:
-        raise HTTPException(status_code=400, detail="kind must be school_progress or welfare_visit")
+        raise HTTPException(status_code=400, detail=f"kind must be one of: {', '.join(sorted(VALID_KINDS))}")
     if not file.content_type or not (file.content_type == "application/pdf" or file.content_type.startswith("image/")):
         raise HTTPException(status_code=400, detail="Scan must be a PDF or image")
     data = await file.read()
@@ -569,7 +634,7 @@ async def upload_filled_scan(
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
 
-    # 1) Persist the raw scan
+    # 1) Persist the raw scan (fast — no LLM in this path)
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "pdf"
     unique = f"{child_id}-{kind}-{uuid.uuid4().hex[:8]}.{ext}"
     file_url = None
@@ -584,21 +649,9 @@ async def upload_filled_scan(
             fh.write(data)
         file_url = f"/api/uploads/social-review-scans/{unique}"
 
-    # 2) Optional OCR — image-only for MVP, PDFs go straight to draft.
-    ocr_payload = None
-    ocr_error = None
-    if run_ocr and file.content_type.startswith("image/"):
-        try:
-            ocr_payload = await _ocr_review_form(data, file.content_type, kind, current_user["id"])
-        except HTTPException as e:
-            ocr_error = e.detail
-            logger.warning(f"OCR skipped for {child_id}: {e.detail}")
-        except Exception as e:
-            ocr_error = str(e)[:200]
-            logger.error(f"OCR exception for {child_id}: {e}")
-
-    # 3) Create the review row — submitted if OCR succeeded, draft_scan_only otherwise
-    rdate = (review_date or (ocr_payload or {}).get("review_date") or datetime.now(timezone.utc).date().isoformat())[:10]
+    # 2) Insert the draft review NOW so the frontend has something to poll
+    will_ocr = bool(run_ocr and file.content_type.startswith("image/"))
+    rdate = (review_date or datetime.now(timezone.utc).date().isoformat())[:10]
     review_id = f"rev_{uuid.uuid4().hex[:10]}"
     rev = {
         "id": review_id,
@@ -608,19 +661,17 @@ async def upload_filled_scan(
         "location_id": child.get("location_id"),
         "kind": kind,
         "review_date": rdate,
-        "fields": (ocr_payload or {}).get("fields") or {},
-        "action_plan": (ocr_payload or {}).get("action_plan") or [],
-        "overall_assessment": (ocr_payload or {}).get("overall_assessment") or "",
-        "next_visit_date": (ocr_payload or {}).get("next_visit_date") or "",
+        "fields": {}, "action_plan": [], "overall_assessment": "", "next_visit_date": "",
         "attached_scan_url": file_url,
         "ocr": {
-            "ran": bool(ocr_payload),
-            "confidence": (ocr_payload or {}).get("ocr_confidence", ""),
-            "error": ocr_error,
-            "raw_text": (ocr_payload or {}).get("raw_text", "")[:500] if ocr_payload else "",
-            "completed_at": datetime.now(timezone.utc).isoformat() if ocr_payload else None,
+            "ran": False,
+            "pending": will_ocr,   # Frontend keys off this to show "OCR running…" state
+            "confidence": "",
+            "error": None if will_ocr else "OCR skipped (PDF or run_ocr=false)",
+            "raw_text": "",
+            "completed_at": None,
         },
-        "status": "submitted" if ocr_payload else "draft_scan_only",
+        "status": "ocr_pending" if will_ocr else "draft_scan_only",
         "social_worker_id": current_user["id"],
         "social_worker_name": current_user.get("name", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -628,28 +679,26 @@ async def upload_filled_scan(
     await db.social_review_forms.insert_one(rev)
     rev.pop("_id", None)
 
-    # 4) Auto-sync into child profile if OCR succeeded
-    if ocr_payload:
-        sync_payload = {
-            "review_date": rdate,
-            "overall_assessment": rev["overall_assessment"],
-            "next_visit_date": rev["next_visit_date"],
-            "fields": rev["fields"],
+    # 3) Kick off OCR in the background (fire-and-forget). Snapshot the user
+    # so we don't hold a DB cursor open across the request boundary.
+    if will_ocr:
+        user_snap = {
+            "id": current_user["id"],
+            "name": current_user.get("name", ""),
+            "role": current_user.get("role", ""),
         }
-        try:
-            await _apply_review_to_child(child_id, kind, sync_payload, current_user, review_id)
-            await _append_timeline_note(child_id, kind, rev, current_user, review_id)
-        except Exception as e:
-            logger.warning(f"OCR auto-sync failed: {e}")
+        background_tasks.add_task(
+            _ocr_background, review_id, child_id, kind, data, file.content_type, user_snap,
+        )
 
-    # 5) Mirror into child_extras gallery for visual discovery
+    # 4) Mirror into child_extras gallery for visual discovery (fast)
     try:
         await db.child_extras.insert_one({
             "id": f"cex_{uuid.uuid4().hex[:10]}",
             "child_id": child_id,
             "child_name": child.get("name"),
             "kind": "report",
-            "caption": f"{'OCR-parsed' if ocr_payload else 'Filled (transcribe)'} {kind.replace('_', ' ')} ({rdate})",
+            "caption": f"{'OCR running…' if will_ocr else 'Filled (transcribe)'} {kind.replace('_', ' ')} ({rdate})",
             "file_url": file_url,
             "file_name": file.filename,
             "is_public_for_sponsor": False,
@@ -663,7 +712,7 @@ async def upload_filled_scan(
         logger.warning(f"child_extras mirror failed: {e}")
 
     await _audit(current_user["id"], "create", "social_review_scan", review_id,
-                 {"kind": kind, "child_id": child_id, "ocr_ran": bool(ocr_payload), "ocr_error": ocr_error})
+                 {"kind": kind, "child_id": child_id, "ocr_will_run": will_ocr})
     return rev
 
 

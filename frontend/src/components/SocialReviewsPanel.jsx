@@ -308,15 +308,38 @@ export default function SocialReviewsPanel({ child, kind }) {
   const handleScanUpload = async (file) => {
     if (!file) return;
     const isImage = file.type?.startsWith('image/');
-    const msg = toast.loading(isImage ? 'Uploading + running OCR (10–30s)…' : 'Uploading scan…');
+    const msg = toast.loading(isImage ? 'Uploading scan…' : 'Uploading scan…');
     try {
       const r = await socialReviewsApi.uploadScan(child.id, file, kind);
       toast.dismiss(msg);
       const res = r.data || {};
       const ocr = res.ocr || {};
-      if (ocr.ran) {
-        const conf = ocr.confidence || 'medium';
-        toast.success(`OCR complete (confidence: ${conf}) — review and edit if needed`);
+      if (ocr.pending) {
+        // v2 flow — OCR runs in background so we don't hit the ingress timeout
+        // when Gemini is slow. Frontend polls (via refresh) for results.
+        toast.info('Scan uploaded — OCR is processing in the background (10–40 s). Refresh to see the extracted fields.', { duration: 6000 });
+        // Poll every 5 s for up to 90 s so the panel updates itself when OCR finishes.
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts += 1;
+          try {
+            const check = await socialReviewsApi.get(res.id);
+            const o = check.data?.ocr || {};
+            if (o.ran) {
+              clearInterval(poll);
+              toast.success(`OCR complete (confidence: ${o.confidence || 'medium'})`);
+              await refresh();
+            } else if (o.error) {
+              clearInterval(poll);
+              toast.warning(`OCR skipped (${o.error}) — click the row to transcribe manually.`);
+              await refresh();
+            }
+          } catch { /* ignore transient */ }
+          if (attempts >= 18) clearInterval(poll);   // 18 × 5s = 90 s
+        }, 5000);
+      } else if (ocr.ran) {
+        // Legacy synchronous path (still returned in some cases)
+        toast.success(`OCR complete (confidence: ${ocr.confidence || 'medium'}) — review and edit if needed`);
       } else if (ocr.error) {
         toast.warning(`Scan uploaded — OCR skipped (${ocr.error}). Click the row to transcribe manually.`);
       } else {
