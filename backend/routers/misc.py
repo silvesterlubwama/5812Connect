@@ -498,3 +498,27 @@ async def serve_uploaded_photo(filename: str):
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'jpg'
     ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}.get(ext, 'image/jpeg')
     return FileResponse(filepath, media_type=ct)
+
+
+@router.get("/storage/{full_path:path}")
+async def serve_object_storage(full_path: str):
+    """Proxy through Emergent object storage.
+
+    Uploaders (profile photos, receipts, ID scans, shipment item photos,
+    social-work review scans) fall back to `/api/storage/{path}` when the
+    object-storage init call succeeded but didn't return a signed URL.
+    Without this endpoint every `<img src="/api/storage/…">` in the app
+    404s — which is why staff profile photos, printed ID badges, and
+    social-work photo galleries were showing blank tiles.
+
+    Public so <img>/print windows can load without auth headers; the
+    object keys are UUID-scoped and treated as unguessable capability
+    tokens (same pattern as `/api/uploads/photos/*` above).
+    """
+    try:
+        from storage import get_object
+        content, ct = get_object(full_path)
+    except Exception as e:
+        logger.warning(f"Object-storage fetch failed for {full_path}: {e}")
+        raise HTTPException(status_code=404, detail="Object not found")
+    return StreamingResponse(iter([content]), media_type=ct)

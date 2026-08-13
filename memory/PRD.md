@@ -3,6 +3,21 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 234 (Feb 2026)
+**Photo serving fix + Social-work OCR auto-population, risk scoring & rich case notes.**
+
+- **Photo bug root cause:** every profile-photo upload stored a URL like `/api/storage/profile-photos/{id}.png` (fallback when `put_object` returns no signed URL), but there was **no route serving `/api/storage/*`**. Every `<img>` on profiles + printed ID badges 404'd silently. Added `GET /api/storage/{path:path}` in `routers/misc.py` that proxies through Emergent object storage's `get_object()`. Verified with curl → 200 image bytes. This fix restores staff/child profile photos, printed ID badges, funds receipts, checkpoint IDs, shipment item photos, and social-review scan thumbnails — all shared the same broken URL pattern.
+- **OCR auto-population expanded** — `_apply_review_to_child` now writes `family.guardians / siblings / household_income / notes` in addition to the existing sub-doc fields.
+- **Risk scoring** — new `_compute_child_risk()` derives `child.risk = { level, factors[], score, updated_at, updated_by }` from the freshest review + persisted profile signals. Rules are transparent and stored verbatim (no ML): any active protection flag → **critical**, chronic condition + fair/poor nutrition → **high**, DOB mismatch or ≥3 fair welfare indicators → **medium**, otherwise **low**. The computed level is propagated to the active social case (escalate-only; never downgrades a manual override).
+- **Auto-goals from action plan** — every action-plan row Gemini extracts becomes an in-progress goal on the child (dedupe by lowercase text), so directors see follow-through directly.
+- **Rich case-note append** — `_append_timeline_note` now writes a structured multi-line note (overall, child's voice, protection concerns, strengths, challenges, diagnosis/recommendations, action plan bullets) with `source: "ocr_auto"`, replacing the previous one-liner.
+- **UI**
+  - `SocialReviewsPanel.jsx` — each OCR'd review row now shows an "Extracted from scan" collapsible with child's voice, protection details, strengths/challenges, diagnosis, recommendations, action plan, and confidence.
+  - `SocialWorkPage.jsx` — risk-level Select now includes **Critical** (red badge), and staff can expand "Why?" to see the auto-detected risk factors + source review id. High-risk stat includes critical.
+  - `RISK_LEVELS` set in backend accepts `critical`.
+- Verified end-to-end with a hand-crafted welfare review containing protection flags + action plan: risk correctly escalated to `critical`, case notes auto-posted with the full structured summary, and 2 goals auto-created.
+
+
 ## Recently Resolved — Iteration 233 (Feb 2026)
 **Fix: "Child not found" on welfare / school / medical scan uploads.**
 

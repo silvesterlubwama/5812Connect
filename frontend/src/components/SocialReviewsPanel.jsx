@@ -11,7 +11,7 @@
  * existing /api/members/{id}/profile-pdf report picks them up. No extra wiring.
  */
 import React, { useEffect, useState, useCallback } from 'react';
-import { Plus, Printer, Upload, ClipboardCheck, RefreshCw, Trash2, FileText, AlertTriangle, Pencil, Camera, X } from 'lucide-react';
+import { Plus, Printer, Upload, ClipboardCheck, RefreshCw, Trash2, FileText, AlertTriangle, Pencil, Camera, X, ChevronDown } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -499,6 +499,48 @@ export default function SocialReviewsPanel({ child, kind }) {
                     <a href={r.attached_scan_url} target="_blank" rel="noreferrer" className="text-[11px] text-primary inline-flex items-center gap-1 mt-1 hover:underline">
                       <FileText size={10} /> View attached scan
                     </a>
+                  )}
+                  {r.ocr?.ran && (r.fields && Object.keys(r.fields).length > 0 || (r.action_plan || []).length > 0) && (
+                    <details className="mt-2" data-testid={`review-extracted-${r.id}`}>
+                      <summary className="text-[11px] font-medium text-emerald-700 cursor-pointer inline-flex items-center gap-1 hover:underline">
+                        <ChevronDown size={11} /> Extracted from scan
+                        {r.ocr?.confidence && <span className="text-[10px] text-muted-foreground">· confidence: {r.ocr.confidence}</span>}
+                      </summary>
+                      <div className="mt-2 rounded-md bg-emerald-50/60 border border-emerald-100 p-2 space-y-1.5 text-[11px]">
+                        {r.overall_assessment && <p><span className="font-medium">Overall:</span> {r.overall_assessment}</p>}
+                        {r.fields?.child_voice && (r.fields.child_voice.going_well || r.fields.child_voice.challenges || r.fields.child_voice.support_wanted) && (
+                          <div>
+                            <p className="font-medium">Child&apos;s voice</p>
+                            {r.fields.child_voice.going_well && <p className="pl-2">• Going well: {r.fields.child_voice.going_well}</p>}
+                            {r.fields.child_voice.challenges && <p className="pl-2">• Challenges: {r.fields.child_voice.challenges}</p>}
+                            {r.fields.child_voice.support_wanted && <p className="pl-2">• Support wanted: {r.fields.child_voice.support_wanted}</p>}
+                          </div>
+                        )}
+                        {r.fields?.protection_details && <p><span className="font-medium">Protection details:</span> {r.fields.protection_details}</p>}
+                        {r.fields?.strengths && <p><span className="font-medium">Strengths:</span> {r.fields.strengths}</p>}
+                        {r.fields?.challenges && <p><span className="font-medium">Challenges:</span> {r.fields.challenges}</p>}
+                        {r.fields?.diagnosis && <p><span className="font-medium">Diagnosis:</span> {r.fields.diagnosis}</p>}
+                        {r.fields?.recommended_actions && <p><span className="font-medium">Recommendations:</span> {r.fields.recommended_actions}</p>}
+                        {(r.action_plan || []).length > 0 && (
+                          <div>
+                            <p className="font-medium">Action plan</p>
+                            <ol className="pl-4 list-decimal space-y-0.5">
+                              {(r.action_plan || []).map((row, i) => (
+                                <li key={i}>{row.action || row.concern || '—'}{row.responsible ? ` · ${row.responsible}` : ''}{row.timeline ? ` (by ${row.timeline})` : ''}</li>
+                              ))}
+                            </ol>
+                          </div>
+                        )}
+                        <p className="text-[10px] text-emerald-700/70 pt-1 border-t border-emerald-200/60">
+                          Auto-synced to the child profile · a rich note was added to the case timeline.
+                        </p>
+                      </div>
+                    </details>
+                  )}
+                  {r.ocr?.error && (
+                    <p className="text-[11px] text-amber-700 mt-1" data-testid={`review-ocr-error-${r.id}`}>
+                      OCR could not extract data: {r.ocr.error}. Click Edit to transcribe manually.
+                    </p>
                   )}
                 </div>
                 <div className="flex gap-1.5">

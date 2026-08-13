@@ -47,6 +47,7 @@ const RISK_COLORS = {
   low: 'bg-emerald-100 text-emerald-700',
   medium: 'bg-amber-100 text-amber-700',
   high: 'bg-red-100 text-red-700',
+  critical: 'bg-red-600 text-white',
 };
 const PAYMENT_KIND_LABELS = {
   tuition: 'School tuition',
@@ -142,7 +143,7 @@ export default function SocialWorkPage() {
     const total = cases.length;
     const byCat = {};
     cases.forEach(c => { byCat[c.category] = (byCat[c.category] || 0) + 1; });
-    const highRisk = cases.filter(c => c.risk_level === 'high').length;
+    const highRisk = cases.filter(c => c.risk_level === 'high' || c.risk_level === 'critical').length;
     return { total, byCat, highRisk };
   })();
 
@@ -226,6 +227,7 @@ export default function SocialWorkPage() {
                 <SelectItem value="low">Low</SelectItem>
                 <SelectItem value="medium">Medium</SelectItem>
                 <SelectItem value="high">High</SelectItem>
+                <SelectItem value="critical">Critical</SelectItem>
               </SelectContent>
             </Select>
             <div className="flex-1" />
@@ -753,8 +755,20 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
                       <SelectItem value="low">Low</SelectItem>
                       <SelectItem value="medium">Medium</SelectItem>
                       <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="critical">Critical</SelectItem>
                     </SelectContent>
                   </Select>
+                  {(caseDoc.risk_factors || []).length > 0 && (
+                    <details className="pt-1" data-testid="cd-risk-factors">
+                      <summary className="text-[10px] text-muted-foreground cursor-pointer hover:underline">
+                        Why? ({caseDoc.risk_factors.length} auto-detected factor{caseDoc.risk_factors.length === 1 ? '' : 's'})
+                      </summary>
+                      <ul className="text-[10px] mt-1 space-y-0.5 pl-3 list-disc text-muted-foreground">
+                        {caseDoc.risk_factors.map((f, i) => <li key={i}>{f}</li>)}
+                      </ul>
+                      {caseDoc.risk_source && <p className="text-[9px] text-muted-foreground/70 pt-1">source: {caseDoc.risk_source}</p>}
+                    </details>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Case status</Label>

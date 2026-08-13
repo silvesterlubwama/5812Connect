@@ -32,7 +32,7 @@ CASE_CATEGORIES = {"sponsored", "restricted_location", "welfare_support", "multi
 CASE_STATUSES = {"active", "on_hold", "discharged"}
 NOTE_KINDS = {"visit", "counseling", "safeguarding", "milestone", "school", "medical", "other"}
 PAYMENT_KINDS = {"tuition", "resource", "medical", "child_support"}
-RISK_LEVELS = {"low", "medium", "high"}
+RISK_LEVELS = {"low", "medium", "high", "critical"}
 
 
 # ============================================================
