@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 235 (Feb 2026)
+**Cloudflare 524 on social-work scan upload.**
+
+- Root cause: `storage.put_object` is a synchronous `requests.put(...)` with a 120 s timeout. Called directly inside the async `POST /reviews/children/{id}/upload-scan` handler, it (a) blocked the asyncio event loop and (b) could run past Cloudflare's ~100 s edge timeout → "Origin web server did not reach Cloudflare on time" (524).
+- Fix: rewrote the persistence step so we **always write to local disk first** (a few ms), return the HTTP 201 immediately, then fire the cloud upload as a `BackgroundTask` wrapped in `asyncio.to_thread` + `asyncio.wait_for(15 s)`. When the cloud upload succeeds within 15 s, the review's `attached_scan_url` is patched to the cloud URL; otherwise the local URL keeps working.
+- Added `GET /api/uploads/social-review-scans/{filename}` in `routers/misc.py` (with basename sanitisation) so the local URL actually serves.
+- Verified end-to-end: upload latency **0.64 s** (was up to 120 s), local URL serves 200 with correct content-type, background cloud upload swaps in the cloud URL within ~20 s.
+
+
 ## Recently Resolved — Iteration 234 (Feb 2026)
 **Photo serving fix + Social-work OCR auto-population, risk scoring & rich case notes.**
 

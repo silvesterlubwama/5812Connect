@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 import uuid
 import os
+import asyncio
 import tempfile
 import json
 
@@ -955,19 +956,34 @@ async def upload_filled_scan(
         raise HTTPException(status_code=404, detail="Child not found")
 
     # 1) Persist the raw scan (fast — no LLM in this path)
+    #
+    # We ALWAYS save to local disk first (a few ms) so the HTTP response
+    # returns quickly and Cloudflare never sees a 524 timeout. The cloud
+    # upload is then attempted with a tight 15 s wall-clock via a thread
+    # (blocking `requests` calls otherwise pin the asyncio event loop and
+    # can hang the entire worker for the full 120 s timeout).
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "pdf"
     unique = f"{child_id}-{kind}-{uuid.uuid4().hex[:8]}.{ext}"
-    file_url = None
-    try:
-        from storage import put_object
-        result = put_object(f"social-review-scans/{unique}", data, file.content_type)
-        file_url = result.get("url", f"/api/storage/social-review-scans/{unique}")
-    except Exception as e:
-        logger.warning(f"Cloud storage put failed, saving locally: {e}")
-        os.makedirs("/app/backend/uploads/social-review-scans", exist_ok=True)
-        with open(f"/app/backend/uploads/social-review-scans/{unique}", "wb") as fh:
-            fh.write(data)
-        file_url = f"/api/uploads/social-review-scans/{unique}"
+    os.makedirs("/app/backend/uploads/social-review-scans", exist_ok=True)
+    local_path = f"/app/backend/uploads/social-review-scans/{unique}"
+    with open(local_path, "wb") as fh:
+        fh.write(data)
+    file_url = f"/api/uploads/social-review-scans/{unique}"
+
+    async def _try_cloud_upload():
+        """Best-effort upload to object storage. If cloud responds within 15 s
+        we swap the review's `attached_scan_url` to the cloud URL; otherwise
+        the local URL keeps working."""
+        try:
+            from storage import put_object
+            result = await asyncio.wait_for(
+                asyncio.to_thread(put_object, f"social-review-scans/{unique}", data, file.content_type),
+                timeout=15.0,
+            )
+            cloud_url = result.get("url", f"/api/storage/social-review-scans/{unique}")
+            await db.social_review_forms.update_one({"id": review_id}, {"$set": {"attached_scan_url": cloud_url}})
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"Cloud storage upload skipped/failed (using local): {e}")
 
     # 2) Insert the draft review NOW so the frontend has something to poll
     # PDFs are now OCR-able too — pdf2image converts the first page to PNG
@@ -1002,6 +1018,9 @@ async def upload_filled_scan(
     }
     await db.social_review_forms.insert_one(rev)
     rev.pop("_id", None)
+
+    # Cloud upload runs in the background so the HTTP response returns fast.
+    background_tasks.add_task(_try_cloud_upload)
 
     # 3) Kick off OCR in the background (fire-and-forget). Snapshot the user
     # so we don't hold a DB cursor open across the request boundary.

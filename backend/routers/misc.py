@@ -500,6 +500,25 @@ async def serve_uploaded_photo(filename: str):
     return FileResponse(filepath, media_type=ct)
 
 
+@router.get("/uploads/social-review-scans/{filename}")
+async def serve_local_review_scan(filename: str):
+    """Serve locally saved social-work review scans.
+
+    We now save every uploaded scan to local disk FIRST (fast, no
+    Cloudflare timeout) and try to swap in the cloud URL later. This
+    endpoint keeps the local URL working even if the cloud upload is
+    still in flight or has failed permanently.
+    """
+    # Defence-in-depth: strip any path traversal attempts.
+    safe = os.path.basename(filename)
+    filepath = f"/app/backend/uploads/social-review-scans/{safe}"
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Scan not found")
+    ext = safe.rsplit('.', 1)[-1].lower() if '.' in safe else 'pdf'
+    ct = {'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}.get(ext, 'application/octet-stream')
+    return FileResponse(filepath, media_type=ct)
+
+
 @router.get("/storage/{full_path:path}")
 async def serve_object_storage(full_path: str):
     """Proxy through Emergent object storage.
