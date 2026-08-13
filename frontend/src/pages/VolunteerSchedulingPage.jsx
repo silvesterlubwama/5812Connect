@@ -69,14 +69,15 @@ export default function VolunteerSchedulingPage() {
         volunteerApi.myShifts(),
         locationsApi.list(),
         eventsApi.list({ status: 'upcoming' }),
-        adminApi.userDirectory(),
+        volunteerApi.availableStaff(),
       ]);
       const data = (i, fb = []) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fb) : fb;
       setShifts(data(0));
       setMyShifts(data(1));
       setLocations(data(2));
       setEvents(data(3));
-      // Directory returns campus-scoped staff only
+      // /volunteer/available-staff explicitly applies get_campus_filter so
+      // the picker never offers users outside the active campus.
       setMembers(data(4));
     } catch {
       toast.error('Failed to load shifts');

@@ -10,10 +10,14 @@ router = APIRouter(prefix="/api")
 
 @router.get("/volunteer/shifts")
 async def list_shifts(event_id: Optional[str] = None, location_id: Optional[str] = None, date: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    # Always scope by the caller's active campus so a regional director in one
+    # location doesn't see (or accidentally staff) shifts from another.
+    campus = await get_campus_filter(current_user) or {}
+    query = dict(campus)
     if event_id:
         query["event_id"] = event_id
     if location_id:
+        # Explicit filter narrows further — but only within the scoped campus.
         query["location_id"] = location_id
     if date:
         query["date"] = date
@@ -21,14 +25,36 @@ async def list_shifts(event_id: Optional[str] = None, location_id: Optional[str]
     return shifts
 
 
+@router.get("/volunteer/available-staff")
+async def available_staff(current_user: dict = Depends(get_current_user)):
+    """Return the pool of staff/volunteers assignable to a shift, scoped to
+    the caller's active campus. Used by the FE assign-volunteer picker so it
+    doesn't offer global (or out-of-scope) users."""
+    campus = await get_campus_filter(current_user) or {}
+    q: dict = {"status": {"$ne": "archived"}}
+    q.update(campus)
+    rows = []
+    async for u in db.users.find(q, {"_id": 0, "id": 1, "name": 1, "role": 1, "email": 1, "location_ids": 1}):
+        rows.append({
+            "id": u["id"], "name": u.get("name") or u.get("email"),
+            "role": u.get("role") or "",
+        })
+    rows.sort(key=lambda r: (r.get("name") or "").lower())
+    return rows
+
+
 @router.post("/volunteer/shifts")
 async def create_shift(data: dict, current_user: dict = Depends(get_current_user)):
     shift_id = f"shift_{str(uuid.uuid4())[:8]}"
+    # Default location to the caller's active campus so shifts created without
+    # one still fall inside the campus filter (previously null → invisible to
+    # non-admins even at their own campus).
+    location_id = data.get("location_id") or current_user.get("active_campus_id")
     doc = {
         "id": shift_id,
         "title": data.get("title", "Volunteer Shift"),
         "event_id": data.get("event_id"),
-        "location_id": data.get("location_id"),
+        "location_id": location_id,
         "date": data.get("date"),
         "start_time": data.get("start_time", "09:00"),
         "end_time": data.get("end_time", "17:00"),

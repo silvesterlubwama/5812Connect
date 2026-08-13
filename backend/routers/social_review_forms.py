@@ -361,20 +361,37 @@ async def _ocr_review_form(file_bytes: bytes, mime: str, kind: str, user_id: str
         raise HTTPException(status_code=400, detail="Empty scan")
 
     # MIME normalization — Gemini wants jpeg/png/webp. PDFs get converted to
-    # a PNG of the first page via pdf2image (poppler) so PDF scans also get
-    # OCR'd instead of falling straight into `draft_scan_only`.
+    # a PNG via pdf2image (poppler). Multi-page PDFs are stitched vertically
+    # into a single tall image so Gemini sees every page in one pass.
     detected = mime.lower()
     if detected == "application/pdf" or file_bytes[:4] == b"%PDF":
         try:
             from pdf2image import convert_from_bytes
-            # 200 DPI is the sweet spot: good enough for handwriting OCR
-            # without ballooning the image size Gemini has to process.
-            pages = convert_from_bytes(file_bytes, dpi=200, first_page=1, last_page=1, fmt="png")
+            from PIL import Image
+            import io as _io
+            pages = convert_from_bytes(file_bytes, dpi=200, fmt="png")
             if not pages:
                 raise HTTPException(status_code=415, detail="PDF has no pages")
-            import io as _io
+            if len(pages) == 1:
+                composite = pages[0]
+            else:
+                # Stitch pages vertically. Max height guard: Gemini has a
+                # ~20 MP practical ceiling; if we'd blow past ~15000 px total
+                # height we downscale each page proportionally.
+                width = max(p.width for p in pages)
+                total_h = sum(p.height for p in pages)
+                scale = min(1.0, 15000 / total_h)
+                if scale < 1.0:
+                    pages = [p.resize((int(p.width * scale), int(p.height * scale))) for p in pages]
+                    width = max(p.width for p in pages)
+                    total_h = sum(p.height for p in pages)
+                composite = Image.new("RGB", (width, total_h), "white")
+                y = 0
+                for p in pages:
+                    composite.paste(p, (0, y))
+                    y += p.height
             buf = _io.BytesIO()
-            pages[0].save(buf, format="PNG")
+            composite.save(buf, format="PNG", optimize=True)
             file_bytes = buf.getvalue()
             detected = "image/png"
         except HTTPException:
@@ -601,7 +618,55 @@ async def _ocr_background(review_id: str, child_id: str, kind: str,
             "review_date": rdate[:10],
             "status": "submitted",
         })
+
+        # ── DOB integrity check ────────────────────────────────
+        # If Gemini read a DOB off the form, compare it against what's on the
+        # child record. Mismatches probably mean the wrong child's form was
+        # uploaded or somebody typo'd a date — surface it so staff can review.
+        try:
+            extracted_dob = (payload.get("fields") or {}).get("dob") or ""
+            if extracted_dob and len(extracted_dob) >= 8:
+                child = await db.children.find_one(
+                    {"id": child_id},
+                    {"_id": 0, "dob": 1, "date_of_birth": 1, "name": 1},
+                ) or {}
+                on_file = (child.get("dob") or child.get("date_of_birth") or "")[:10]
+                if on_file and on_file != extracted_dob[:10]:
+                    update["data_flags"] = {
+                        "dob_mismatch": {
+                            "on_file": on_file,
+                            "on_form": extracted_dob[:10],
+                            "child_name": child.get("name") or "",
+                            "detected_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    }
+                    logger.warning(
+                        f"[social-work] DOB mismatch on review {review_id}: "
+                        f"on-file={on_file} vs on-form={extracted_dob[:10]}"
+                    )
+        except Exception as e:
+            logger.warning(f"DOB cross-check failed for review {review_id}: {e}")
+
     await db.social_review_forms.update_one({"id": review_id}, {"$set": update})
+
+    # ── Push notify the uploader that OCR finished ─────────────
+    # Replaces the frontend's 5-second polling loop. The panel already listens
+    # on the global WebSocket — we just tag the event so it knows which review
+    # to refresh.
+    try:
+        from routers.websocket import manager as _ws_manager
+        await _ws_manager.send_to_user(user_snapshot["id"], {
+            "type": "social_review_ocr_completed",
+            "review_id": review_id,
+            "child_id": child_id,
+            "kind": kind,
+            "ran": bool(payload),
+            "confidence": ocr_meta["confidence"],
+            "error": err,
+            "dob_mismatch": bool(update.get("data_flags", {}).get("dob_mismatch")),
+        })
+    except Exception as e:
+        logger.warning(f"WS push after OCR failed (non-fatal): {e}")
 
     # Auto-sync structured fields into the child profile — same as the original
     # synchronous path. Failures here don't block the OCR write itself.

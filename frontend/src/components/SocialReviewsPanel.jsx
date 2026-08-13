@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import api, { socialReviewsApi } from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from './EmptyState';
+import { useWebSocket } from '../context/WebSocketContext';
 
 // Field schemas mirror the .docx templates verbatim so what the social worker sees
 // in the dialog matches what they'd fill on paper.
@@ -217,6 +218,7 @@ export default function SocialReviewsPanel({ child, kind }) {
   }));
   const [saving, setSaving] = useState(false);
   const [scanFile, setScanFile] = useState(null);
+  const { addListener } = useWebSocket() || {};
 
   const refresh = useCallback(async () => {
     if (!child?.id) return;
@@ -229,6 +231,26 @@ export default function SocialReviewsPanel({ child, kind }) {
   }, [child?.id, kind]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Real-time: refresh the panel + notify when OCR completes on the server.
+  // Replaces the 5-second polling fallback — the polling still runs as a
+  // safety net (see handleScanUpload) but this fires within milliseconds.
+  useEffect(() => {
+    if (!addListener) return;
+    const remove = addListener('social_review_ocr_completed', (msg) => {
+      if (msg?.child_id && child?.id && msg.child_id !== child.id) return;
+      if (msg?.ran) {
+        toast.success(`OCR complete (confidence: ${msg.confidence || 'medium'})`);
+      } else if (msg?.error) {
+        toast.warning(`OCR skipped (${msg.error}) — transcribe manually.`);
+      }
+      if (msg?.dob_mismatch) {
+        toast.error("Date-of-birth on the form doesn't match the child's record — please review.");
+      }
+      refresh();
+    });
+    return typeof remove === 'function' ? remove : undefined;
+  }, [addListener, child?.id, refresh]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -453,8 +475,15 @@ export default function SocialReviewsPanel({ child, kind }) {
                     <p className="font-medium text-sm">{r.review_date}</p>
                     {r.overall_assessment && <Badge variant="outline" className="text-[10px]">{r.overall_assessment}</Badge>}
                     {r.status === 'draft_scan_only' && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Scan attached — transcribe</Badge>}
+                    {r.status === 'ocr_pending' && <Badge className="bg-sky-100 text-sky-700 text-[10px]">OCR processing…</Badge>}
                     {r.kind === 'welfare_visit' && Object.values(r.fields?.protection_concerns || {}).some(Boolean) && (
                       <Badge className="bg-rose-100 text-rose-700 text-[10px]"><AlertTriangle size={9} className="mr-1" /> Protection flag</Badge>
+                    )}
+                    {r.data_flags?.dob_mismatch && (
+                      <Badge className="bg-rose-100 text-rose-700 text-[10px]" title={`Form: ${r.data_flags.dob_mismatch.on_form} · On file: ${r.data_flags.dob_mismatch.on_file}`}
+                             data-testid={`review-dob-mismatch-${r.id}`}>
+                        <AlertTriangle size={9} className="mr-1" /> DOB mismatch
+                      </Badge>
                     )}
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
