@@ -313,11 +313,14 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — Feb 2026 v2 layout:
+          {/* Body — Feb 2026 v4 layout:
                Info column (name/rank/company) takes full left width so long
-               names no longer overflow into the photo. A smaller high-EC QR
-               anchors to the bottom-left corner near the photo so scanners
-               still hit it easily but it doesn't crowd the header. */}
+               names no longer overflow into the photo. Role/title wraps to
+               2 lines instead of truncating so full wording stays visible.
+               QR anchored at bottom-left, generously sized (~72 px large)
+               so warehouse scanners hit it reliably. Photo dominates the
+               right for at-a-glance visual ID but is scaled down a bit so
+               it no longer overpowers the layout. */}
           <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1 }}>
             {/* Info column — full-width vertical stack, QR pinned at its bottom */}
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -329,37 +332,53 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                     {person.security_rank}
                   </div>
                 ) : (
-                  <div style={{ fontSize: isSmall ? '8px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+                  <div style={{
+                    fontSize: isSmall ? '8px' : '9px',
+                    color: colors.accent,
+                    marginTop: isSmall ? '3px' : '5px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.6px',
+                    fontWeight: 700,
+                    lineHeight: 1.25,
+                    // Wrap onto up to 2 lines so long titles like
+                    // "Child Care Staff of 58:12 Uganda" stay fully readable.
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    wordBreak: 'break-word',
+                  }}>{title}</div>
                 )}
                 {type === 'security' && person.security_company_name && (
                   <div style={{ fontSize: isSmall ? '8px' : '10px', color: subTextColor, marginTop: '2px', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {person.security_company_name}
                   </div>
                 )}
-                {type !== 'security' && person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.department}</div>}
+                {type !== 'security' && person.department && <div style={{ fontSize: isSmall ? '8px' : '9px', color: kioskMode ? '#999' : '#a3a3a3', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.department}</div>}
                 {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
                   <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
                 ))}
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
-              {/* Small QR at the bottom of the info column — half its old size
-                  but keeps EC "H" for reliability at smaller sizes. */}
+              {/* QR at the bottom of the info column — bigger than v3 so
+                  warehouse/security scanners recognise it from a distance,
+                  while EC "H" keeps it robust to scuffs and reflections. */}
               <div style={{
                 flexShrink: 0,
                 borderRadius: '6px',
                 overflow: 'hidden',
                 background: kioskMode ? '#fff' : `${colors.accent}0f`,
-                padding: '3px',
-                width: isSmall ? '46px' : '58px',
-                height: isSmall ? '46px' : '58px',
+                padding: '4px',
+                width: isSmall ? '62px' : '82px',
+                height: isSmall ? '62px' : '82px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                marginTop: '4px',
+                marginTop: '6px',
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 40 : 52}
+                  size={isSmall ? 54 : 74}
                   bgColor="transparent"
                   fgColor={qrFg}
                   ecLevel="H"
@@ -367,11 +386,13 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 />
               </div>
             </div>
-            {/* Large photo — the primary visual ID check for security personnel */}
+            {/* Photo — scaled down from v3 (was 124×150 large) so the
+                info column has more breathing room while the portrait
+                stays clearly recognisable for visual ID. */}
             <div style={{
               flexShrink: 0,
-              width: isSmall ? '90px' : '124px',
-              height: isSmall ? '112px' : '150px',
+              width: isSmall ? '72px' : '96px',
+              height: isSmall ? '92px' : '116px',
               borderRadius: '10px',
               overflow: 'hidden',
               background: '#fff',

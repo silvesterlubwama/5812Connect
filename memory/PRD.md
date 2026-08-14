@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 240 (Feb 2026)
+**Badge v4 — QR upsized, photo scaled, role wraps to 2 lines.**
+
+- **QR bigger** (74 × 74 large / 54 × 54 small, up from 52/40) inside a 82 × 82 accent-tinted holder — scanners recognise it reliably again. EC "H" preserved.
+- **Photo scaled down** from 124 × 150 → 96 × 116 (large) and 90 × 112 → 72 × 92 (small) so it no longer overpowers the info column.
+- **Title/role wraps** with `-webkit-line-clamp: 2 + word-break: break-word` instead of `nowrap + ellipsis`. Long titles like "Child Care Staff of 58:12 Uganda" now show fully across two lines.
+- Verified in Admin → Print Badge dialog for "Admin" user: QR clearly visible, photo balanced, name and role fully readable.
+
+
 ## Recently Resolved — Iteration 239 (Feb 2026)
 **Smart auto-suggest on the "Unlinked case" banner.**
 
