@@ -694,43 +694,83 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
               <span className="text-muted-foreground">opened {caseDoc.opened_at?.slice(0, 10)} by {caseDoc.opened_by_name}</span>
             </div>
           )}
-          {caseDoc && !caseDoc.subject_id && (
-            <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 flex items-start gap-2" data-testid="cd-unlinked-banner">
-              <AlertTriangle size={14} className="text-red-600 mt-0.5 shrink-0" />
-              <div className="flex-1 text-xs">
-                <p className="font-medium text-red-800">This case isn&apos;t linked to a child record.</p>
-                <p className="text-red-700/80 mt-0.5">Scan upload, PDF report and profile auto-sync will fail until you link it. Pick the matching child below:</p>
-                <div className="mt-2 flex flex-wrap gap-2 items-center">
-                  <Select value="" onValueChange={async (childId) => {
-                    if (!childId) return;
-                    try {
+          {caseDoc && !caseDoc.subject_id && (() => {
+            // Score every child by token-set Jaccard similarity to the case's
+            // subject_name, then surface the top 3 as one-click chips. Names
+            // like "Gift Nabaterega" ↔ "Gift Nabaterega" → 1.0, minor typos
+            // still float to the top because we tokenize on whitespace.
+            const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+            const tokens = (s) => new Set(norm(s).split(/\s+/).filter(t => t.length > 1));
+            const caseToks = tokens(caseDoc.subject_name);
+            const scored = (childrenList || []).map(c => {
+              const kToks = tokens(c.name);
+              const inter = [...caseToks].filter(t => kToks.has(t)).length;
+              const union = new Set([...caseToks, ...kToks]).size || 1;
+              return { c, score: caseToks.size ? inter / union : 0 };
+            }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+            const suggestions = scored.slice(0, 3);
+            const linkTo = async (child) => {
+              try {
+                await api.put(`/social-work/cases/${caseId}`, {
+                  subject_id: child.id,
+                  subject_name: child.name,
+                  subject_kind: 'child',
+                  subject_dob: child.date_of_birth || caseDoc.subject_dob,
+                  subject_photo_url: child.photo_url || caseDoc.subject_photo_url,
+                });
+                toast.success(`Case linked to ${child.name} — Upload Scan and auto-sync now work.`);
+                reload();
+              } catch (err) {
+                toast.error(err.response?.data?.detail || 'Link failed');
+              }
+            };
+            return (
+              <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 flex items-start gap-2" data-testid="cd-unlinked-banner">
+                <AlertTriangle size={14} className="text-red-600 mt-0.5 shrink-0" />
+                <div className="flex-1 text-xs">
+                  <p className="font-medium text-red-800">This case isn&apos;t linked to a child record.</p>
+                  <p className="text-red-700/80 mt-0.5">Scan upload, PDF report and profile auto-sync will fail until you link it.{caseDoc.subject_name ? ` We searched for “${caseDoc.subject_name}” below.` : ''}</p>
+                  {suggestions.length > 0 && (
+                    <div className="mt-2 space-y-1" data-testid="cd-link-suggestions">
+                      <p className="text-[10px] uppercase tracking-wide text-red-800/70 font-semibold">Best matches</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {suggestions.map(({ c, score }) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => linkTo(c)}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-white px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 transition-colors"
+                            data-testid={`cd-link-suggest-${c.id}`}
+                          >
+                            {c.name}
+                            {c.date_of_birth && <span className="text-[9px] text-red-600/70">· {c.date_of_birth.slice(0, 10)}</span>}
+                            <span className="text-[9px] rounded bg-red-600/10 px-1 py-0.5 text-red-700">{Math.round(score * 100)}%</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-2 items-center">
+                    <span className="text-[10px] text-red-800/60 uppercase tracking-wide font-semibold">Or pick manually</span>
+                    <Select value="" onValueChange={async (childId) => {
+                      if (!childId) return;
                       const chosen = (childrenList || []).find(c => c.id === childId);
-                      await api.put(`/social-work/cases/${caseId}`, {
-                        subject_id: childId,
-                        subject_name: chosen?.name || caseDoc.subject_name,
-                        subject_kind: 'child',
-                        subject_dob: chosen?.date_of_birth || caseDoc.subject_dob,
-                        subject_photo_url: chosen?.photo_url || caseDoc.subject_photo_url,
-                      });
-                      toast.success('Case linked — Upload Scan and auto-sync now work.');
-                      reload();
-                    } catch (err) {
-                      toast.error(err.response?.data?.detail || 'Link failed');
-                    }
-                  }}>
-                    <SelectTrigger className="h-7 text-xs w-56 bg-white" data-testid="cd-link-child-select"><SelectValue placeholder="Pick child to link..." /></SelectTrigger>
-                    <SelectContent>
-                      {(childrenList || []).slice(0, 200).map(c => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}{c.date_of_birth ? ` (${c.date_of_birth.slice(0, 10)})` : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                      if (chosen) await linkTo(chosen);
+                    }}>
+                      <SelectTrigger className="h-7 text-xs w-56 bg-white" data-testid="cd-link-child-select"><SelectValue placeholder="Pick child to link..." /></SelectTrigger>
+                      <SelectContent>
+                        {(childrenList || []).slice(0, 200).map(c => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}{c.date_of_birth ? ` (${c.date_of_birth.slice(0, 10)})` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </DialogHeader>
 
         {loading || !caseDoc ? (

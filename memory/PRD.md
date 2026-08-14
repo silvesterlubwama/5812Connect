@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 239 (Feb 2026)
+**Smart auto-suggest on the "Unlinked case" banner.**
+
+- Case dialog now scores every child by token-set Jaccard similarity against `caseDoc.subject_name` and renders the **top 3 matches as one-click chips** (with % confidence) inside the red "Unlinked" banner.
+- Manual dropdown still available underneath ("Or pick manually") for edge cases.
+- Names like `Gift Nabaterega` ↔ `Gift Nabaterega` and `Nabaterega Gift` (reversed order) both score 100 %; siblings + partial matches (33-50 %) still appear so staff can spot near-misses; unrelated kids are filtered out completely.
+- Tokenizer strips punctuation and drops single-char tokens so initials don't dilute the score.
+
+
 ## Recently Resolved — Iteration 238 (Feb 2026)
 **Badge readability pass + social-work "unlinked case" repair.**
 
