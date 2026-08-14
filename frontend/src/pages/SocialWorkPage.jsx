@@ -465,6 +465,7 @@ export default function SocialWorkPage() {
         caseId={openCase?.id}
         schools={schools}
         members={members}
+        childrenList={children}
         onClose={() => { setOpenCase(null); reload(); }}
       />
     </div>
@@ -525,7 +526,7 @@ function SchoolPasswordsDialog({ school, onClose, onReload }) {
 // =================================================================
 // CASE DETAIL DIALOG — tabbed
 // =================================================================
-function CaseDetailDialog({ caseId, schools, members, onClose }) {
+function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
   const [caseDoc, setCaseDoc] = useState(null);
   const [notes, setNotes] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -680,7 +681,54 @@ function CaseDetailDialog({ caseId, schools, members, onClose }) {
               <Badge variant="outline" className={`text-[10px] ${CATEGORY_COLORS[caseDoc.category]}`}>{CATEGORY_LABELS[caseDoc.category]}</Badge>
               <Badge variant="outline" className={`text-[10px] ${RISK_COLORS[caseDoc.risk_level]}`}>{caseDoc.risk_level} risk</Badge>
               <Badge variant="secondary" className="text-[10px]">{caseDoc.status}</Badge>
+              {caseDoc.subject_dob && (() => {
+                const dob = new Date(caseDoc.subject_dob);
+                const y = (new Date() - dob) / (365.25 * 24 * 3600 * 1000);
+                return isNaN(y) ? null : <Badge variant="outline" className="text-[10px]" data-testid="cd-age-badge">Age {y.toFixed(1)}</Badge>;
+              })()}
+              {!caseDoc.subject_id && (
+                <Badge variant="outline" className="text-[10px] bg-red-100 text-red-700 border-red-300" data-testid="cd-unlinked-badge">
+                  ⚠ Unlinked (no subject_id)
+                </Badge>
+              )}
               <span className="text-muted-foreground">opened {caseDoc.opened_at?.slice(0, 10)} by {caseDoc.opened_by_name}</span>
+            </div>
+          )}
+          {caseDoc && !caseDoc.subject_id && (
+            <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 flex items-start gap-2" data-testid="cd-unlinked-banner">
+              <AlertTriangle size={14} className="text-red-600 mt-0.5 shrink-0" />
+              <div className="flex-1 text-xs">
+                <p className="font-medium text-red-800">This case isn&apos;t linked to a child record.</p>
+                <p className="text-red-700/80 mt-0.5">Scan upload, PDF report and profile auto-sync will fail until you link it. Pick the matching child below:</p>
+                <div className="mt-2 flex flex-wrap gap-2 items-center">
+                  <Select value="" onValueChange={async (childId) => {
+                    if (!childId) return;
+                    try {
+                      const chosen = (childrenList || []).find(c => c.id === childId);
+                      await api.put(`/social-work/cases/${caseId}`, {
+                        subject_id: childId,
+                        subject_name: chosen?.name || caseDoc.subject_name,
+                        subject_kind: 'child',
+                        subject_dob: chosen?.date_of_birth || caseDoc.subject_dob,
+                        subject_photo_url: chosen?.photo_url || caseDoc.subject_photo_url,
+                      });
+                      toast.success('Case linked — Upload Scan and auto-sync now work.');
+                      reload();
+                    } catch (err) {
+                      toast.error(err.response?.data?.detail || 'Link failed');
+                    }
+                  }}>
+                    <SelectTrigger className="h-7 text-xs w-56 bg-white" data-testid="cd-link-child-select"><SelectValue placeholder="Pick child to link..." /></SelectTrigger>
+                    <SelectContent>
+                      {(childrenList || []).slice(0, 200).map(c => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}{c.date_of_birth ? ` (${c.date_of_birth.slice(0, 10)})` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
           )}
         </DialogHeader>

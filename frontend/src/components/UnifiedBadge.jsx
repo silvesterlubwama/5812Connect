@@ -313,49 +313,65 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — left: plain QR | center: name+info | right: LARGE photo
-              Rearranged Feb 2026 so the photo is prominent for visual ID
-              checks by security and scanners can still hit the QR from the
-              edge without hunting past the portrait. */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px' : '10px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1, alignItems: 'center' }}>
-            {/* QR code — plain (no embedded logo) so scanners get max contrast */}
-            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden', background: kioskMode ? '#fff' : 'transparent', padding: kioskMode ? '2px' : 0 }}>
-              <QRCodeLogo
-                value={qrData}
-                size={isSmall ? 72 : 96}
-                bgColor="transparent"
-                fgColor={qrFg}
-                ecLevel="H"
-                qrStyle="dots"
-              />
-            </div>
-            {/* Name + info */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: isSmall ? '15px' : '20px', fontWeight: 800, lineHeight: 1.1, color: textColor }}>{firstName}</div>
-              {lastName && <div style={{ fontSize: isSmall ? '10px' : '12px', fontWeight: 400, color: subTextColor, marginTop: '2px' }}>{lastName}</div>}
-              {type === 'security' && person.security_rank ? (
-                <div style={{ fontSize: isSmall ? '9px' : '11px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.9px', fontWeight: 800, background: `${colors.accent}20`, display: 'inline-block', padding: '2px 6px', borderRadius: '4px' }}>
-                  {person.security_rank}
-                </div>
-              ) : (
-                <div style={{ fontSize: isSmall ? '7px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>{title}</div>
-              )}
-              {type === 'security' && person.security_company_name && (
-                <div style={{ fontSize: isSmall ? '7px' : '9px', color: subTextColor, marginTop: '3px', fontWeight: 500 }}>
-                  {person.security_company_name}
-                </div>
-              )}
-              {type !== 'security' && person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px' }}>{person.department}</div>}
-              {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
-                <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
-              ))}
-              {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
+          {/* Body — Feb 2026 v2 layout:
+               Info column (name/rank/company) takes full left width so long
+               names no longer overflow into the photo. A smaller high-EC QR
+               anchors to the bottom-left corner near the photo so scanners
+               still hit it easily but it doesn't crowd the header. */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1 }}>
+            {/* Info column — full-width vertical stack, QR pinned at its bottom */}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: isSmall ? '15px' : '20px', fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
+                {lastName && <div style={{ fontSize: isSmall ? '11px' : '13px', fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
+                {type === 'security' && person.security_rank ? (
+                  <div style={{ fontSize: isSmall ? '9px' : '11px', color: colors.accent, marginTop: isSmall ? '4px' : '6px', textTransform: 'uppercase', letterSpacing: '0.9px', fontWeight: 800, background: `${colors.accent}22`, display: 'inline-block', padding: '2px 7px', borderRadius: '4px' }}>
+                    {person.security_rank}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: isSmall ? '8px' : '9px', color: colors.accent, marginTop: isSmall ? '3px' : '5px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+                )}
+                {type === 'security' && person.security_company_name && (
+                  <div style={{ fontSize: isSmall ? '8px' : '10px', color: subTextColor, marginTop: '2px', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {person.security_company_name}
+                  </div>
+                )}
+                {type !== 'security' && person.department && <div style={{ fontSize: '8px', color: kioskMode ? '#999' : '#888', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.department}</div>}
+                {type === 'child' && (person.parents || []).length > 0 && (person.parents || []).slice(0, 2).map((p, i) => (
+                  <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}{p.phone ? ` (${p.phone})` : ''}</div>
+                ))}
+                {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
+              </div>
+              {/* Small QR at the bottom of the info column — half its old size
+                  but keeps EC "H" for reliability at smaller sizes. */}
+              <div style={{
+                flexShrink: 0,
+                borderRadius: '6px',
+                overflow: 'hidden',
+                background: kioskMode ? '#fff' : `${colors.accent}0f`,
+                padding: '3px',
+                width: isSmall ? '46px' : '58px',
+                height: isSmall ? '46px' : '58px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: '4px',
+              }}>
+                <QRCodeLogo
+                  value={qrData}
+                  size={isSmall ? 40 : 52}
+                  bgColor="transparent"
+                  fgColor={qrFg}
+                  ecLevel="H"
+                  qrStyle="dots"
+                />
+              </div>
             </div>
             {/* Large photo — the primary visual ID check for security personnel */}
             <div style={{
               flexShrink: 0,
-              width: isSmall ? '78px' : '110px',
-              height: isSmall ? '78px' : '110px',
+              width: isSmall ? '90px' : '124px',
+              height: isSmall ? '112px' : '150px',
               borderRadius: '10px',
               overflow: 'hidden',
               background: '#fff',
@@ -364,6 +380,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              alignSelf: 'center',
             }}>
               <img
                 src={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220)}

@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 238 (Feb 2026)
+**Badge readability pass + social-work "unlinked case" repair.**
+
+- **Badge (`UnifiedBadge.jsx`) v3 layout** — QR moved to the **bottom-left corner** at roughly half its previous size (52 px large / 40 px small) inside a soft-tinted holder. Name / rank / company sit in a full-width **left column** with `whiteSpace: nowrap + ellipsis` so long names no longer collide with the portrait. Photo grows to **124 × 150 large / 90 × 112 small** on the right, vertically centered, keeping it dominant for visual ID checks. QR keeps EC "H" so it remains scannable at the reduced size.
+- **"Unlinked case" repair path** — some legacy `social_cases` documents in production have `subject_id = null`. That's what triggers "Child not found" on scan upload.
+  - `SocialWorkPage` case dialog now renders a red **"Unlinked" banner** with a child picker when `subject_id` is missing. Selecting a child fires `PUT /social-work/cases/{id}` with `{ subject_id, subject_kind: 'child' }` and the case is repaired in place.
+  - Header shows an **Age badge** derived from `subject_dob` so staff can quickly sanity-check the linked child.
+  - Backend `PUT /social-work/cases/{id}` now accepts `subject_id / subject_kind / subject_name / subject_dob / subject_photo_url` (validated — target must exist in `db.children` or `db.members`; unknown IDs → 404). It auto-hydrates the denormalised fields (`subject_name`, `subject_dob`, `subject_photo_url`) from the child record so the case reflects the current profile.
+- **Note for production** — the "Child not found" the user is still seeing on prod is a data problem (some cases are orphaned). After redeploy the banner appears, and the fix is a one-click re-link inside the case dialog. No manual DB editing needed.
+
+
 ## Recently Resolved — Iteration 237 (Feb 2026)
 **Security contractor vendor management + dual-logo badge.**
 

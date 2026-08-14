@@ -734,7 +734,24 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
 @router.put("/cases/{case_id}")
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
-               "risk_level", "sponsor_member_id", "sponsor_manual", "sponsor_guest_id", "compliance"}
+               "risk_level", "sponsor_member_id", "sponsor_manual", "sponsor_guest_id", "compliance",
+               # Subject re-linking — legacy cases created before subject_id was
+               # populated can be repaired from the UI without a mongo shell.
+               "subject_id", "subject_kind", "subject_name", "subject_dob", "subject_photo_url"}
+    if "subject_kind" in data and data["subject_kind"] not in {"child", "member"}:
+        raise HTTPException(status_code=400, detail="subject_kind must be 'child' or 'member'")
+    # If the caller is re-linking (i.e. providing subject_id + subject_kind), verify the target exists
+    # so we don't silently persist another orphan reference.
+    if data.get("subject_id"):
+        kind = (data.get("subject_kind") or "child").lower()
+        coll = db.children if kind == "child" else db.members
+        exists = await coll.find_one({"id": data["subject_id"]}, {"_id": 0, "id": 1, "name": 1, "date_of_birth": 1, "photo_url": 1, "location_id": 1})
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"{kind} {data['subject_id']} not found")
+        # Auto-hydrate the denormalised fields so the case shows the fresh child data.
+        data.setdefault("subject_name", exists.get("name", ""))
+        data.setdefault("subject_dob", exists.get("date_of_birth"))
+        data.setdefault("subject_photo_url", exists.get("photo_url"))
     if "status" in data and data["status"] not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(CASE_STATUSES)}")
     if data.get("status") == "discharged" and not _can_manage_social_work(current_user):
