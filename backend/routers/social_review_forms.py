@@ -482,9 +482,20 @@ async def _append_timeline_note(child_id: str, kind: str, doc: dict, user: dict,
 
         if kind == "welfare_visit":
             cv = fields.get("child_voice") or {}
-            if cv.get("going_well"): lines.append(f"Going well: {cv['going_well']}")
-            if cv.get("challenges"): lines.append(f"Challenges: {cv['challenges']}")
-            if cv.get("support_wanted"): lines.append(f"Support wanted: {cv['support_wanted']}")
+            # Iteration 226 audit: render the "Child voice" heading and
+            # every key the OCR pulls (not just the fixed 3) so bespoke
+            # fields don't disappear from the timeline note.
+            cv_pairs = [(k, v) for k, v in cv.items() if v and isinstance(v, (str, int, float))]
+            if cv_pairs:
+                lines.append("Child's voice:")
+                pretty = {
+                    "going_well": "Going well",
+                    "challenges": "Challenges",
+                    "support_wanted": "Support wanted",
+                }
+                for k, v in cv_pairs:
+                    label = pretty.get(k, k.replace('_', ' ').capitalize())
+                    lines.append(f"  {label}: {v}")
             prot = fields.get("protection_concerns") or {}
             active_prot = [k.replace('_', ' ') for k, v in prot.items() if v]
             if active_prot:

@@ -102,6 +102,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
+
+def _decode_token(token: str) -> dict:
+    """Best-effort JWT decode used by middleware/guards that need the payload
+    without going through the full user-lookup. Returns {} if the token is
+    invalid so callers can fall through to normal request handling."""
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]) or {}
+    except JWTError:
+        return {}
+
 async def _audit(user_id: str, action: str, resource: str, resource_id: str = None, details: dict = None):
     try:
         # Snapshot the user's name at the time of the action so older audit log

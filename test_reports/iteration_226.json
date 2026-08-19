@@ -1,0 +1,44 @@
+{
+  "summary": "Backend-only end-to-end audit of iterations 233-241 work (social-work scan upload + risk pipeline, orphan case re-link, security companies CRUD, Security Contractor users, NFC auto-member, storage/upload serving routes, checkpoint auto-recognition, role guards). Created /app/backend/tests/test_iter226_audit.py with 54 pytest cases: 53 pass, 1 fails and exposes a real RBAC data leak for the Security Contractor role. All 11 requested scenarios were executed against the public URL (https://multi-tenant-scope.preview.emergentagent.com).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/members, /api/children, /api/reports/summary, /api/dashboard/stats, /api/tasks, /api/notifications, /api/locations",
+        "issue": "Security Contractor is NOT pinned to the kiosk at the API layer. Logged in as a freshly-created 'Security Contractor' (role level 3.5) the following all return 200: GET /api/members (full 53-record member directory incl. address, DOB, email, phone), GET /api/children, GET /api/dashboard/stats, GET /api/reports/summary (org-wide financials: total_income 347,087 / total_expenses 9,358,357 / net), GET /api/tasks (internal board), GET /api/notifications, GET /api/locations. Root cause: these endpoints only depend on get_current_user with no role-floor / module-access check, so the 'kiosk-only' restriction exists only in the frontend router. Correctly blocked: /api/admin/users (403), /api/social-work/* (403), POST /api/security-companies (403). Reproduce: pytest tests/test_iter226_audit.py::TestExtraEdgeCases::test_contractor_blocked_on_more_modules",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {"endpoint": "GET /api/children/{child_id}", "issue": "No such route — returns 405 Method Not Allowed (only PUT/DELETE and /full-profile exist). Any client fetching a single child by id will break; had to use /api/children/{id}/full-profile in tests."},
+      {"endpoint": "POST /api/admin/users", "issue": "Returns 200 instead of 201 for a resource creation (spec expected 201). Cosmetic REST inconsistency; POST /api/security-companies correctly returns 201."},
+      {"endpoint": "GET /api/security-companies", "issue": "Readable by ANY authenticated user including Security Contractor and Volunteer. The module docstring claims 'Security Contractors themselves have no access to these endpoints' — code and doc disagree. If read-for-badge is intentional, fix the docstring; otherwise scope it to own company."},
+      {"endpoint": "POST /api/social-work/reviews/children/{id} (case-note builder)", "issue": "The auto case note (source='ocr_auto') renders child-voice content as bare 'Going well:/Challenges:/Support wanted:' lines with no 'Child voice' heading, and only recognises the keys going_well|challenges|support_wanted — any other child_voice keys are silently dropped from the note and from the timeline."},
+      {"endpoint": "_apply_review_to_child auto-goals", "issue": "Goals are de-duplicated by lowercase goal text, so re-submitting/updating a review with the same action-plan wording never produces goals for the newer review_id. Acceptable, but means goal.source_review_id can point at a stale review."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter226_audit.py",
+    "/app/test_reports/pytest/iter226_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: add a role/module guard so Security Contractor cannot read /api/members, /api/children, /api/dashboard/stats, /api/reports/summary, /api/tasks, /api/notifications. A shared dependency (e.g. require_min_level(Volunteer) or a deny-list for 'Security Contractor') on those list endpoints is the smallest fix; frontend-only pinning is not sufficient.",
+    "Add GET /api/children/{child_id} (or confirm all callers use /full-profile) — currently 405.",
+    "Add an explicit 'Child voice' heading in _append_timeline_note and reconcile the security_companies docstring with its actual read permissions.",
+    "Return 201 from POST /api/admin/users for consistency."
+  ],
+  "critical_code_review_comments": [
+    "deps.ROLE_LEVELS places 'Security Contractor' at 3.5 with the comment 'so they can't reach any privileged data', but the majority of read endpoints (members/children/tasks/reports) use bare get_current_user, so the level is never consulted. The comment is misleading and the intent is unenforced.",
+    "routers/social_review_forms.py is 1371 lines — over the 700-line guideline; the OCR/risk/note helpers should be split into a submodule package like the members/ and security_checkpoint/ ones.",
+    "upload_filled_scan's _try_cloud_upload closes over `review_id` which is defined AFTER the closure body — it works only because the task is scheduled later. Fragile; move the closure below the review insert or pass review_id as an argument.",
+    "except (asyncio.TimeoutError, Exception) in _try_cloud_upload is redundant (Exception already covers it) and swallows everything including CancelledError-adjacent bugs; narrow it."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter226_audit.py"],
+  "success_rate": {"backend": "98% (53/54 pytest cases)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Transient only, all cleaned up: social case sc_qa_orphan / sc_qa_orphan2, TEST_Sentry* + TEST_Temp* + TEST_LogoCo* security companies, users qa.guard.*@5812.test (Security Contractor) and qa.vol.*@5812.test (Volunteer), a raw usr_qa_* user for the NFC auto-member path, welfare reviews + scans on child chd_a3b4e279 (review docs and uploaded scan files intentionally left in place as evidence).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin admin@5812uganda.org / Admin@5812 (identifier field). New users get Test@5812! — both verified working.",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_iter226_audit.py -p no:randomly -v` (order matters — TestZZCleanup must stay last). VERIFIED WORKING: (1) upload-scan returns in 0.07-0.08s for both run_ocr=false and run_ocr=true, ocr.pending=true, background OCR failure (LLM 'Unable to process input image') does NOT break the review; attached_scan_url starts as /api/uploads/social-review-scans/* then swaps to /api/storage/social-review-scans/* and BOTH resolve 200 with application/pdf; child_id='undefined' -> 404 'Child not found'; real member_id -> 200 (member fallback); '../server.py' traversal -> 404. (2) PUT /social-work/cases relink hydrates subject_name/dob/photo, bogus id -> 404, bad subject_kind -> 400. (3) Manual welfare review with protection_concerns.neglect -> child risk.level='critical' with human-readable factors, 2 auto-goals carrying source_review_id, social_cases.risk_level+risk_factors synced, case_notes doc with source='ocr_auto' containing protection concerns + action plan + child-voice text. (4) Security companies full CRUD incl. 409 dup, logo upload+fetch (image/png), hard-delete when unlinked, soft-delete {deactivated:true,linked_users:1} when a contractor is linked. (5) Contractor user creation + enrichment (security_company_name/logo_url/rank) on BOTH /api/admin/users?search= and /api/auth/me. (6) NFC by USER_ID: /nfc-payload returns member_id, /nfc-write 200; note POST /api/admin/users already creates a member row so auto_created_from_user only appears for raw users with no member (covered by test_autocreate_member_for_raw_user). (7) Checkpoint routes are prefixed /api/security (POST /api/security/checkpoints, /api/security/checkpoint/pair, /api/security/checkpoint/scan) — scanning a brand-new user's USER_ID resolves name+role with no restart; missing session -> 401. OPEN: the single failing test documents the Security Contractor RBAC leak — re-run test_contractor_blocked_on_more_modules after the fix.",
+  "rca_of_the_issue": "Security Contractor leak: routers/members/core.py list_members, routers/members/children.py list_children, dashboard/reports/tasks/notifications list endpoints all use Depends(get_current_user) only. deps.ROLE_LEVELS gives 'Security Contractor' 3.5 but nothing compares against it on those routes, so any authenticated contractor token reads the member directory, child list, org financial summary and internal task board. Kiosk pinning is implemented client-side (frontend route guard) which an attacker with the contractor's credentials trivially bypasses by calling the API directly."
+}

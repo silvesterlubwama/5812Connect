@@ -216,6 +216,17 @@ async def set_child_residency(child_id: str, data: dict, current_user: dict = De
     return {"message": "Residency updated"}
 
 
+@router.get("/children/{child_id}")
+async def get_child(child_id: str, current_user: dict = Depends(get_current_user)):
+    """Lightweight single-child fetch used by dialogs / breadcrumbs. Returns
+    the raw doc without the restricted-info hiding that `full-profile` does.
+    Callers that need role-scoped hiding should use `/full-profile` instead."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    return child
+
+
 @router.get("/children/{child_id}/full-profile")
 async def get_child_full_profile(child_id: str, current_user: dict = Depends(get_current_user)):
     """Get full child profile — restricted info hidden based on access level"""

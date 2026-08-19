@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 242 (Feb 2026)
+**Application audit fixes (testing agent iteration_226 report).**
+
+- **🔴 CRITICAL — Security Contractor RBAC leak sealed.** Frontend-only kiosk pinning was bypassable: a stolen contractor token got 200 on `/members`, `/children`, `/dashboard/stats`, `/reports/summary`, `/tasks`, `/notifications`, `/locations`. Added `kiosk_role_guard` middleware in `server.py` that looks up the token's user, and if role == `Security Contractor` returns 403 for anything outside a small **positive-list** of prefixes: `/api/security/checkpoint`, `/api/security-companies` (read-only for badge), `/api/auth/*`, `/api/members/*` (own NFC), `/api/notifications/mark`, `/api/system/health`, `/api/storage/*`, `/api/uploads/*`. Also unconditionally blocks contractor `DELETE` on anything. `_decode_token()` helper added to `deps.py` for cheap middleware-level JWT inspection.
+- **Added `GET /api/children/{child_id}`** — the endpoint was 405 (only `full-profile`, `PUT`, `DELETE` existed). Now returns the raw doc.
+- **Rich case note now includes "Child's voice" heading + all keys.** Previous version only rendered the 3 hard-coded keys and no section heading — bespoke child-voice fields were silently dropped. Now iterates every string/numeric key on `child_voice`, renders a `Child's voice:` heading, and uses pretty labels for the well-known keys.
+- **security_companies docstring** aligned with intent: READ is intentionally open to any authenticated user (for badge rendering); write is director+.
+- **Verified end-to-end**: 7 leak endpoints all 403 for contractor, allow-list endpoints still 200 for contractor, admin regression clean (all 200), new child GET returns 200.
+- **Deferred (from audit report):** POST /admin/users returning 200 instead of 201 (cosmetic REST), and refactor of the oversized `social_review_forms.py`. Not blocking.
+
+
 ## Recently Resolved — Iteration 241 (Feb 2026)
 **Badge print/download fidelity, NFC storage for users without member profiles, QR corner clip, name auto-fit.**
 

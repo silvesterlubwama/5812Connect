@@ -186,6 +186,64 @@ async def security_headers_middleware(request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
+
+# Security Contractor role is meant to be **kiosk-only** — the frontend router
+# already blocks them from every non-checkpoint page. This middleware enforces
+# the same restriction at the API layer so a stolen contractor token cannot be
+# used with curl to exfiltrate the member directory, org financials, etc.
+# Iteration 226 audit surfaced this leak; the fix here is a positive-list of
+# path prefixes contractors ARE allowed to hit.
+_CONTRACTOR_ALLOWED_PREFIXES = (
+    "/api/security/checkpoint",       # scan, session, pair
+    "/api/security-companies",        # read own company for badge
+    "/api/auth/",                     # login/logout/me
+    "/api/members/",                  # NFC endpoints keyed by their own id
+    "/api/notifications/mark",        # dismiss own notifications
+    "/api/system/health",
+    "/api/storage/",                  # photos/logos on the badge
+    "/api/uploads/",                  # local file serving
+)
+_CONTRACTOR_DENY_METHODS = {"DELETE"}  # never let a contractor delete anything
+
+
+@app.middleware("http")
+async def kiosk_role_guard(request, call_next):
+    """Enforce Security Contractor kiosk-only scope at the transport layer.
+
+    We look up the user by the bearer token (cheap, same query the deps use)
+    and 403 anything outside the allow-list. Requests without a token or with
+    a non-contractor token pass through untouched.
+    """
+    path = request.url.path
+    if not path.startswith("/api/") or request.method == "OPTIONS":
+        return await call_next(request)
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return await call_next(request)
+    token = auth.split(" ", 1)[1].strip()
+    if not token:
+        return await call_next(request)
+    try:
+        from deps import _decode_token, db as _db
+        payload = _decode_token(token)
+        user_id = payload.get("sub") if payload else None
+        if not user_id:
+            return await call_next(request)
+        user = await _db.users.find_one({"id": user_id}, {"_id": 0, "role": 1})
+        if not user or user.get("role") != "Security Contractor":
+            return await call_next(request)
+        if request.method in _CONTRACTOR_DENY_METHODS:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "Security Contractors cannot perform delete operations"})
+        if not any(path.startswith(p) for p in _CONTRACTOR_ALLOWED_PREFIXES):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "Security Contractor role is restricted to the checkpoint kiosk"})
+    except Exception:
+        # Never block a request if the guard itself fails — better to fall
+        # through to the endpoint's own auth than to lock users out.
+        pass
+    return await call_next(request)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 

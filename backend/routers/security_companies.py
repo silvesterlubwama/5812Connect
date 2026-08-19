@@ -6,8 +6,9 @@ Security Contractor users reference a company via `security_company_id`
 and carry a `security_rank` string on their user record.
 
 Only directors+ can manage companies (they represent operational
-relationships with external vendors). Security Contractors themselves
-have no access to these endpoints.
+relationships with external vendors). READ is intentionally open to any
+authenticated user so badges can render the contractor's logo without a
+privileged round-trip.
 """
 from __future__ import annotations
 
