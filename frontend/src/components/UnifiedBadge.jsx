@@ -113,6 +113,18 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const colors = BADGE_COLORS[type] || BADGE_COLORS.member;
   const firstName = (person.name || '').split(' ')[0] || '';
   const lastName = (person.name || '').split(' ').slice(1).join(' ') || '';
+  // Business-card-style auto-fit: shrink the first-name font a step for
+  // longer names so triple-barrelled / hyphenated names don't get chopped
+  // by the ellipsis. Buckets keep the cascade readable rather than fluidly
+  // scaling to unreadable extremes.
+  const nameLen = firstName.length;
+  const firstNameSize = isSmall
+    ? (nameLen > 12 ? '11px' : nameLen > 9 ? '13px' : '15px')
+    : (nameLen > 14 ? '15px' : nameLen > 11 ? '17px' : '20px');
+  const lastNameLen = lastName.length;
+  const lastNameSize = isSmall
+    ? (lastNameLen > 20 ? '9px' : '11px')
+    : (lastNameLen > 22 ? '11px' : '13px');
   const title = person.title || person.role || type;
   const qrData = person.id || person.name || '';
   const badgeId = (person.id || '').slice(-8).toUpperCase();
@@ -133,60 +145,60 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const headerBorder = kioskMode ? `2px solid ${colors.accent}` : `2px solid ${colors.accent}`;
   const logoFilter = kioskMode ? 'none' : 'brightness(0) invert(1)';
 
-  const printBadge = () => {
-    const html = badgeRef.current?.innerHTML;
-    if (!html) return;
-    const win = window.open('', '_blank', 'width=420,height=320');
-    if (!win) return;
-    const doc = win.document;
-    doc.open(); doc.write('<!DOCTYPE html>'); doc.close();
-    doc.head.innerHTML = DOMPurify.sanitize('<title>Badge</title><style>*{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;font-family:Arial,sans-serif}@media print{body{min-height:auto;background:#fff !important}}</style>', { FORCE_BODY: true });
-    const container = doc.createElement('div');
-    container.innerHTML = DOMPurify.sanitize(html);
-    doc.body.appendChild(container);
-    setTimeout(() => { win.focus(); win.print(); win.close(); }, 300);
+  // Rendering the badge to PNG relies on html-to-image so the QR canvas
+  // and the (possibly cross-origin) profile photo are baked into a single
+  // raster before we print or download. Previously downloadBadge was a
+  // hand-rolled canvas that drew text only — QR + photo were silently
+  // dropped, and print's innerHTML copy also lost QR canvas pixels once
+  // it hit a new window context.
+  const renderBadgePng = async () => {
+    const { toPng } = await import('html-to-image');
+    const el = badgeRef.current;
+    if (!el) throw new Error('badge not mounted');
+    return toPng(el, {
+      pixelRatio: 3,
+      cacheBust: true,
+      // Fetch cross-origin images (photos, company logos) as data URLs
+      // otherwise the canvas render leaves them blank.
+      fetchRequestInit: { mode: 'cors' },
+      style: { transform: 'none' },
+    });
+  };
+
+  const printBadge = async () => {
+    try {
+      const dataUrl = await renderBadgePng();
+      const win = window.open('', '_blank', 'width=420,height=320');
+      if (!win) { toast.error('Popup blocked — enable popups to print'); return; }
+      const doc = win.document;
+      doc.open(); doc.write('<!DOCTYPE html>'); doc.close();
+      doc.head.innerHTML = DOMPurify.sanitize(
+        '<title>Badge</title><style>*{margin:0;padding:0;box-sizing:border-box}body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;font-family:Arial,sans-serif}img{max-width:100%;height:auto}@media print{body{min-height:auto}@page{margin:0}}</style>',
+        { FORCE_BODY: true }
+      );
+      const img = doc.createElement('img');
+      img.src = dataUrl;
+      img.onload = () => { win.focus(); win.print(); setTimeout(() => win.close(), 500); };
+      doc.body.appendChild(img);
+    } catch (e) {
+      console.error(e);
+      toast.error('Could not print — try Download instead');
+    }
   };
 
   const downloadBadge = async () => {
     setDownloading(true);
     try {
-      const el = badgeRef.current;
-      if (!el) return;
-      const canvas = document.createElement('canvas');
-      const scale = 3;
-      canvas.width = 340 * scale;
-      canvas.height = 216 * scale;
-      const ctx = canvas.getContext('2d');
-      ctx.scale(scale, scale);
-      ctx.fillStyle = bgColor;
-      ctx.roundRect(0, 0, 340, 216, 12);
-      ctx.fill();
-      ctx.fillStyle = colors.accent;
-      ctx.font = 'bold 10px Arial';
-      ctx.fillText(colors.label, 16, 24);
-      ctx.fillStyle = textColor;
-      ctx.font = 'bold 28px Arial';
-      ctx.fillText(firstName, 16, 100);
-      ctx.font = '16px Arial';
-      ctx.fillText(lastName, 16, 122);
-      ctx.font = '12px Arial';
-      ctx.fillStyle = colors.accent;
-      ctx.fillText(title.toUpperCase(), 16, 145);
-      ctx.fillStyle = footerColor;
-      ctx.font = '10px Arial';
-      ctx.fillText(`ID: ${badgeId}`, 16, 195);
-      ctx.fillText('58:12 GLOBAL', 130, 208);
-      ctx.fillText('www.5812-Global.org', 110, 195);
-      canvas.toBlob(blob => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `badge-${firstName.toLowerCase()}-${type}.png`;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast.success('Badge downloaded!');
-      }, 'image/png');
-    } catch { toast.error('Download failed'); }
+      const dataUrl = await renderBadgePng();
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `badge-${firstName.toLowerCase()}-${type}.png`;
+      a.click();
+      toast.success('Badge downloaded!');
+    } catch (e) {
+      console.error(e);
+      toast.error('Download failed — check console');
+    }
     finally { setDownloading(false); }
   };
 
@@ -325,8 +337,8 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             {/* Info column — full-width vertical stack, QR pinned at its bottom */}
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: isSmall ? '15px' : '20px', fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
-                {lastName && <div style={{ fontSize: isSmall ? '11px' : '13px', fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
+                <div style={{ fontSize: firstNameSize, fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
+                {lastName && <div style={{ fontSize: lastNameSize, fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
                 {type === 'security' && person.security_rank ? (
                   <div style={{ fontSize: isSmall ? '9px' : '11px', color: colors.accent, marginTop: isSmall ? '4px' : '6px', textTransform: 'uppercase', letterSpacing: '0.9px', fontWeight: 800, background: `${colors.accent}22`, display: 'inline-block', padding: '2px 7px', borderRadius: '4px' }}>
                     {person.security_rank}
@@ -362,23 +374,26 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               </div>
               {/* QR at the bottom of the info column — bigger than v3 so
                   warehouse/security scanners recognise it from a distance,
-                  while EC "H" keeps it robust to scuffs and reflections. */}
+                  while EC "H" keeps it robust to scuffs and reflections.
+                  overflow:visible + a QR slightly smaller than the holder's
+                  usable area so rounded corners don't clip the outer marker
+                  dots (v4 users reported the bottom row was getting cut). */}
               <div style={{
                 flexShrink: 0,
                 borderRadius: '6px',
-                overflow: 'hidden',
                 background: kioskMode ? '#fff' : `${colors.accent}0f`,
-                padding: '4px',
+                padding: '5px',
                 width: isSmall ? '62px' : '82px',
                 height: isSmall ? '62px' : '82px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                marginTop: '6px',
+                marginTop: '4px',
+                boxSizing: 'border-box',
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 54 : 74}
+                  size={isSmall ? 50 : 70}
                   bgColor="transparent"
                   fgColor={qrFg}
                   ecLevel="H"

@@ -7,6 +7,41 @@ import uuid
 router = APIRouter(prefix="/api", tags=["members"])
 
 
+async def _resolve_member(person_id: str) -> dict:
+    """Return a member document for the given id, treating it as either a
+    member_id or a user_id. Auto-creates a minimal member row for users
+    who never had a member profile (e.g. Security Contractors created
+    directly from the admin dialog) so their NFC/QR data has somewhere to
+    live and the checkpoint kiosk can recognise them.
+    """
+    member = await db.members.find_one({"id": person_id}, {"_id": 0})
+    if member:
+        return member
+    # Fall back to treating it as a user id — auto-create linked member.
+    user = await db.users.find_one({"id": person_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Person not found")
+    member = await db.members.find_one({"user_id": user["id"]}, {"_id": 0})
+    if member:
+        return member
+    new_member = {
+        "id": f"mbr_{uuid.uuid4().hex[:10]}",
+        "user_id": user["id"],
+        "name": user.get("name", ""),
+        "email": user.get("email"),
+        "phone": user.get("phone"),
+        "role": user.get("role"),
+        "location_id": user.get("location_id"),
+        "photo_url": user.get("photo_url"),
+        "nfc_tags": [],
+        "status": user.get("status", "active"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "auto_created_from_user": True,
+    }
+    await db.members.insert_one(new_member)
+    return new_member
+
+
 @router.get("/members/{member_id}/nfc-tags")
 async def get_member_nfc_tags(member_id: str, current_user: dict = Depends(get_current_user)) -> list:
     """Get NFC tags associated with a member."""
@@ -66,13 +101,14 @@ async def remove_nfc_tag(member_id: str, tag_id: str, current_user: dict = Depen
 async def write_nfc_tag(member_id: str, data: dict, current_user: dict = Depends(require_director)) -> dict:
     """Record that an NFC tag was written with this member's data. Director+ only.
     Body: { serial_number, written_data?, label? }
-    This also adds the tag to the member's profile if not already present."""
+    This also adds the tag to the member's profile if not already present.
+    Accepts either a member_id or a user_id in the path — will auto-create a
+    linked member profile for a raw user so their NFC data has somewhere to live."""
     serial = (data.get("serial_number") or "").strip()
     if not serial:
         raise HTTPException(status_code=400, detail="NFC serial_number is required")
-    member = await db.members.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "user_id": 1, "nfc_tags": 1})
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+    member = await _resolve_member(member_id)
+    member_id = member["id"]
     # Check duplicate on other members
     existing = await db.members.find_one(
         {"nfc_tags.serial_number": serial, "id": {"$ne": member_id}},
@@ -120,13 +156,13 @@ async def write_nfc_tag(member_id: str, data: dict, current_user: dict = Depends
 @router.post("/members/{member_id}/nfc-payload")
 async def generate_nfc_payload(member_id: str, current_user: dict = Depends(require_director)) -> dict:
     """Generate a signed, encrypted NFC payload for writing to a tag.
-    The payload includes the member_id + HMAC signature so it can be verified on read."""
+    The payload includes the member_id + HMAC signature so it can be verified on read.
+    Accepts either member_id or user_id (auto-resolves)."""
     import hmac
     import hashlib
     import os
-    member = await db.members.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1})
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+    member = await _resolve_member(member_id)
+    member_id = member["id"]
     secret = os.environ.get("NFC_SECRET_KEY", "5812-global-nfc-secret-2026")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     payload = f"{member_id}|{timestamp}"

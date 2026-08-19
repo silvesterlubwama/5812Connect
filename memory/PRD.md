@@ -3,6 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 241 (Feb 2026)
+**Badge print/download fidelity, NFC storage for users without member profiles, QR corner clip, name auto-fit.**
+
+- **Print + Download were dropping the QR and photo entirely.** `downloadBadge` was a hand-rolled canvas that only drew text (no QR / no photo). `printBadge` did an `innerHTML` copy that lost the QR canvas pixels once it hit a new window. Rewrote both to call a shared `renderBadgePng()` helper backed by `html-to-image` (added as a dep) — cross-origin photos, dual company logos and the QR are now baked into a single PNG at 3× pixel ratio. Print pipes that PNG into a new window; Download saves it.
+- **NFC "not storing" for staff without a member profile.** `/members/{id}/nfc-payload` and `/members/{id}/nfc-write` required a member row. Fresh users (e.g. Security Contractors) have no member — the frontend fell back to `user.id`, backend 404'd, and the write log call in the outer try/catch was silently swallowed. Added `_resolve_member()` in `routers/members/nfc.py` that accepts EITHER a user_id or a member_id and **auto-creates a linked member row** on demand (flagged `auto_created_from_user=true`). Verified end-to-end via curl — payload returned, tag persisted, member surfaced with `nfc_tags[]` populated.
+- **Kiosk auto-updates on new user data.** Confirmed the checkpoint's `_resolve_subject` performs a fresh DB lookup on every scan across `users / members / children` — no client-side caching. New Security Contractor users are recognised the moment they exist, no kiosk restart needed. Auto-created member profiles now also give them a shape-able record when scanning by member id.
+- **QR bottom row clip fixed.** Removed `overflow:hidden` from the QR holder and shrank the QR by 4 px inside its 82 × 82 tinted holder so the outer marker dots aren't chopped by the rounded corners.
+- **Business-card name auto-fit.** First name shrinks in 3 buckets (20 → 17 → 15 px large; 15 → 13 → 11 px small) once it exceeds 11 / 14 chars, so triple-barrelled names stay legible instead of ellipsing. Last name shrinks similarly at 22+ chars.
+
+
 ## Recently Resolved — Iteration 240 (Feb 2026)
 **Badge v4 — QR upsized, photo scaled, role wraps to 2 lines.**
 
