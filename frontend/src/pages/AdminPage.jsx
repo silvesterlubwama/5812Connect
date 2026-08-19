@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download, Clock } from 'lucide-react';
+import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download, Clock, AlertTriangle } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi } from '../services/api';
+import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi, socialWorkOrphansApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';
@@ -350,6 +350,7 @@ export default function AdminPage() {
           <ModuleAccessManager />
           <SecurityCheckpointsManager />
           <SecurityCompaniesManager />
+          <OrphanCaseRepairCard />
           <KioskLinksManager />
           <BackupRestoreManager />
           <IntegrationsManager />
@@ -960,3 +961,87 @@ function SecurityCompaniesManager() {
     </>
   );
 }
+
+// ============== ORPHAN CASE REPAIR ==============
+// Legacy social-work cases whose subject_id is empty can't upload scans or
+// auto-populate the child profile. This card lists them with the top-3
+// similarity-matched child suggestions and offers a "Repair all ≥90%"
+// bulk action so directors can clear the backlog in one click.
+function OrphanCaseRepairCard() {
+  const [orphans, setOrphans] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [threshold, setThreshold] = useState(90);
+
+  const load = () => socialWorkOrphansApi.list().then(r => setOrphans(r.data || [])).catch(() => setOrphans([]));
+
+  const linkOne = async (caseId, childId) => {
+    try {
+      await api.put(`/social-work/cases/${caseId}`, { subject_id: childId, subject_kind: 'child' });
+      toast.success('Case linked');
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Link failed'); }
+  };
+  const autoRepair = async () => {
+    setBusy(true);
+    try {
+      const r = await socialWorkOrphansApi.autoRepair(threshold / 100);
+      toast.success(`Repaired ${r.data.repaired_count} · skipped ${r.data.skipped_count}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Auto-repair failed'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card className="mt-6"><CardContent className="pt-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-lg font-semibold flex items-center gap-2"><AlertTriangle size={18} className="text-red-500" /> Unlinked Social Cases</h2>
+          <p className="text-sm text-muted-foreground mt-1">Legacy cases without a linked child record. Click the best match to repair, or auto-repair everything above the confidence threshold.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={load} data-testid="load-orphans">{orphans === null ? 'Load' : `Refresh (${orphans.length})`}</Button>
+      </div>
+      {orphans !== null && orphans.length === 0 && <p className="text-sm text-emerald-700 py-3">✓ No orphaned cases — everything linked cleanly.</p>}
+      {orphans !== null && orphans.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 mb-3 p-2 bg-muted/40 rounded-lg">
+            <span className="text-xs">Auto-repair threshold:</span>
+            <Input type="number" min="50" max="100" step="5" value={threshold} onChange={e => setThreshold(+e.target.value || 90)} className="w-20 h-7 text-xs" data-testid="orphan-threshold" />
+            <span className="text-xs text-muted-foreground">%</span>
+            <Button size="sm" onClick={autoRepair} disabled={busy} className="ml-auto" data-testid="orphan-auto-repair">
+              {busy ? 'Repairing…' : `Repair All ≥${threshold}%`}
+            </Button>
+          </div>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {orphans.map(o => (
+              <div key={o.id} className="p-3 rounded-lg border flex items-start gap-3" data-testid={`orphan-row-${o.id}`}>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{o.subject_name || '(no name)'}</p>
+                  <p className="text-[10px] text-muted-foreground">Case {o.id} · opened {(o.opened_at || '').slice(0, 10)}</p>
+                  {(o.suggestions || []).length === 0 ? (
+                    <p className="text-xs text-red-600 mt-1">No name match found — link manually via the case dialog.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {(o.suggestions || []).map(s => (
+                        <button
+                          key={s.child_id}
+                          onClick={() => linkOne(o.id, s.child_id)}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-white px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-50"
+                          data-testid={`orphan-suggest-${o.id}-${s.child_id}`}
+                        >
+                          {s.name}
+                          {s.date_of_birth && <span className="text-[9px] text-red-600/70">· {s.date_of_birth.slice(0, 10)}</span>}
+                          <span className="text-[9px] rounded bg-red-600/10 px-1 py-0.5 text-red-700">{s.score}%</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </CardContent></Card>
+  );
+}
+

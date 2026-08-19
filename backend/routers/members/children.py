@@ -109,6 +109,49 @@ async def bulk_delete_children(data: dict, current_user: dict = Depends(get_curr
     return {"deleted": result.deleted_count}
 
 
+@router.post("/children/{child_id}/social-id")
+async def assign_social_id(child_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Assign a human-friendly social work ID to a child.
+
+    Social workers (staff+) issue these to any child that has an active
+    social-work case. If `social_id` is blank in the body, one is
+    auto-generated: ``5812-SW-{YYYY}-{padded#}`` using a Mongo atomic
+    counter so concurrent assignments never clash.
+    """
+    child = await db.children.find_one({"id": child_id}, {"_id": 0, "id": 1, "location_id": 1, "social_id": 1})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    custom = (data.get("social_id") or "").strip()
+    if custom:
+        # Enforce uniqueness so scanners never resolve to the wrong child.
+        clash = await db.children.find_one(
+            {"social_id": {"$regex": f"^{custom}$", "$options": "i"}, "id": {"$ne": child_id}},
+            {"_id": 0, "id": 1, "name": 1},
+        )
+        if clash:
+            raise HTTPException(status_code=409, detail=f"Social ID already used by {clash.get('name')}")
+        new_id = custom
+    else:
+        year = datetime.now(timezone.utc).year
+        try:
+            counter_doc = await db.counters.find_one_and_update(
+                {"_id": f"social_id:{year}"},
+                {"$inc": {"seq": 1}},
+                upsert=True,
+                return_document=True,
+            )
+            seq = (counter_doc or {}).get("seq") or 1
+        except Exception:
+            seq = 1
+        new_id = f"5812-SW-{year}-{seq:04d}"
+    await db.children.update_one(
+        {"id": child_id},
+        {"$set": {"social_id": new_id, "social_id_issued_at": datetime.now(timezone.utc).isoformat(), "social_id_issued_by": current_user["id"]}},
+    )
+    await _audit(current_user["id"], "assign", "child_social_id", child_id, {"social_id": new_id})
+    return {"social_id": new_id}
+
+
 @router.put("/children/{child_id}")
 async def update_child(child_id: str, data: ChildCreate, current_user: dict = Depends(get_current_user)):
     update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -447,6 +490,9 @@ CHILD_FILE_DOC_TYPES = [
     {"key": "medical_assessment", "label": "Medical Assessment Form (scan)"},
     {"key": "family_consent_letter", "label": "Family Consent Letter (58:12 policies)"},
     {"key": "welfare_review", "label": "58:12 Child Welfare Review & Visit Forms", "synthetic": True, "source": "social_reviews"},
+    # Auto-mirrored from social-work scan uploads so they surface in Documents.
+    {"key": "home_visit_report", "label": "Home Visit Report (auto)", "auto": True},
+    {"key": "medical_report", "label": "Medical Report (auto)", "auto": True},
     {"key": "school_document", "label": "Other School Documents (admission, transfer, etc.)"},
     {"key": "sponsor_letter_in", "label": "Letter from Sponsor"},
     {"key": "sponsor_letter_out", "label": "Letter to Sponsor"},

@@ -154,6 +154,32 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
             set_ops["education.school_name"] = fields["school"]
         if fields.get("term"):
             set_ops["education.current_term"] = fields["term"]
+        # Flatten common numeric/text signals onto education.* so the child's
+        # Education tab reflects the latest review without re-opening it.
+        ad = fields.get("attendance_discipline") or {}
+        if ad.get("attendance_pct") is not None:
+            try:
+                set_ops["education.attendance_pct"] = float(ad["attendance_pct"])
+            except (TypeError, ValueError):
+                pass
+        if ad.get("discipline"):
+            set_ops["education.discipline"] = ad["discipline"]
+        if ad.get("uniform_status"):
+            set_ops["education.uniform_status"] = ad["uniform_status"]
+        ap = fields.get("academic_performance") or {}
+        if ap.get("overall"):
+            set_ops["education.academic_performance"] = ap["overall"]
+        if ap.get("position_in_class"):
+            set_ops["education.class_position"] = ap["position_in_class"]
+        if fields.get("teacher_name"):
+            set_ops["education.class_teacher"] = fields["teacher_name"]
+        if fields.get("teacher_phone"):
+            set_ops["education.teacher_phone"] = fields["teacher_phone"]
+        # Compliance: a fresh school-progress review counts toward "termly
+        # school visit done" — stamp the date so the compliance dashboard
+        # doesn't need staff to double-log it.
+        set_ops["compliance.last_school_review_at"] = data.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+        set_ops["compliance.school_review_done_this_term"] = True
         set_ops["education.latest_review"] = {
             "review_id": review_id,
             "review_date": data.get("review_date") or "",
@@ -210,6 +236,9 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
         set_ops["protection.has_active_concern"] = any_flag
         set_ops["protection.flags"] = {k: bool(prot.get(k)) for k in flag_keys}
         set_ops["protection.last_assessed_at"] = data.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+        # Compliance: a welfare/home visit is the flagship compliance box.
+        set_ops["compliance.last_home_visit_at"] = data.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+        set_ops["compliance.home_visit_done_this_quarter"] = True
 
     elif kind == "medical_exam":
         # Sync medical-history flags + chronic conditions onto child.medical so the existing
@@ -286,6 +315,9 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
             "fields_snapshot": fields,
             "overall": data.get("overall_assessment") or "",
         }
+        # Compliance: annual medical exam stamped for the compliance dashboard.
+        set_ops["compliance.last_medical_exam_at"] = data.get("review_date") or datetime.now(timezone.utc).date().isoformat()
+        set_ops["compliance.medical_exam_done_this_year"] = True
 
     set_ops["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_ops["last_review_id"] = review_id
@@ -1046,22 +1078,57 @@ async def upload_filled_scan(
         )
 
     # 4) Mirror into child_extras gallery for visual discovery (fast)
+    # We insert TWO rows: kind='report' feeds the social-work reviews list and
+    # kind='file_doc' surfaces the scan inside the child's Documents tab so
+    # authorised staff have a single, searchable "official documents" view.
+    doc_type_key = {
+        "welfare_visit": "home_visit_report",
+        "school_progress": "school_report",
+        "medical_exam": "medical_report",
+    }.get(kind, "other")
+    doc_type_label = {
+        "welfare_visit": "Home Visit Report",
+        "school_progress": "School Progress Report",
+        "medical_exam": "Medical Report",
+    }.get(kind, "Social work document")
     try:
-        await db.child_extras.insert_one({
-            "id": f"cex_{uuid.uuid4().hex[:10]}",
-            "child_id": child_id,
-            "child_name": child.get("name"),
-            "kind": "report",
-            "caption": f"{'OCR running…' if will_ocr else 'Filled (transcribe)'} {kind.replace('_', ' ')} ({rdate})",
-            "file_url": file_url,
-            "file_name": file.filename,
-            "is_public_for_sponsor": False,
-            "location_id": child.get("location_id"),
-            "review_id": review_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "created_by": current_user["id"],
-            "created_by_name": current_user.get("name", ""),
-        })
+        await db.child_extras.insert_many([
+            {
+                "id": f"cex_{uuid.uuid4().hex[:10]}",
+                "child_id": child_id,
+                "child_name": child.get("name"),
+                "kind": "report",
+                "caption": f"{'OCR running…' if will_ocr else 'Filled (transcribe)'} {kind.replace('_', ' ')} ({rdate})",
+                "file_url": file_url,
+                "file_name": file.filename,
+                "is_public_for_sponsor": False,
+                "location_id": child.get("location_id"),
+                "review_id": review_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": current_user["id"],
+                "created_by_name": current_user.get("name", ""),
+            },
+            {
+                "id": f"cex_{uuid.uuid4().hex[:10]}",
+                "child_id": child_id,
+                "child_name": child.get("name"),
+                "kind": "file_doc",
+                "doc_type": doc_type_key,
+                "doc_label": doc_type_label,
+                "caption": f"{doc_type_label} — {rdate}",
+                "issued_date": rdate,
+                "file_url": file_url,
+                "file_name": file.filename,
+                "file_size": len(data),
+                "is_public_for_sponsor": False,
+                "location_id": child.get("location_id"),
+                "review_id": review_id,
+                "auto_mirrored_from_review": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": current_user["id"],
+                "created_by_name": current_user.get("name", ""),
+            },
+        ])
     except Exception as e:
         logger.warning(f"child_extras mirror failed: {e}")
 

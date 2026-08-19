@@ -3,6 +3,28 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 243 (Feb 2026)
+**Custom IDs + orphan bulk repair + auto-fill expansion + kiosk live indicator + profile quick-links.**
+
+- **Custom IDs**
+  - Users: new `badge_id` field (auto-generated via a Mongo atomic counter as `5812-{ROLE}-{4-digit#}` — e.g. `5812-STAFF-0042` — override-friendly). Editable in `UserEditDialog`. Rendered as `ID:` on the printed badge footer, replacing the truncated UUID slice.
+  - Children: new `POST /api/children/{child_id}/social-id` for staff+ to issue an ID (auto-format `5812-SW-{YYYY}-{4-digit#}` or accept a custom string with uniqueness enforcement). Surfaced as an `SW #` badge on the case dialog with a one-click "Issue social ID" chip when missing.
+- **Bulk Orphan Repair**
+  - `GET /api/social-work/cases/orphans` returns every case with `subject_id` empty and pre-scores the top-3 name-similarity child suggestions.
+  - `POST /api/social-work/cases/orphans/auto-repair` bulk-repairs every orphan above a configurable confidence threshold (default 0.9). Manager+ only. Stamps `auto_repaired_at`, `auto_repaired_by`, `auto_repair_score` for audit.
+  - New "Unlinked Social Cases" card on the Admin page listing every orphan with clickable suggestion chips + "Repair All ≥N%" bulk button (threshold input).
+- **Auto-fill expansion in `_apply_review_to_child`**
+  - **school_progress** now writes: `education.attendance_pct`, `education.discipline`, `education.uniform_status`, `education.academic_performance`, `education.class_position`, `education.class_teacher`, `education.teacher_phone`, plus compliance stamps (`compliance.last_school_review_at`, `compliance.school_review_done_this_term`).
+  - **welfare_visit** adds `compliance.last_home_visit_at` + `compliance.home_visit_done_this_quarter`.
+  - **medical_exam** adds `compliance.last_medical_exam_at` + `compliance.medical_exam_done_this_year`.
+  - **Documents mirror** — every uploaded scan is now also written to `child_extras` with `kind='file_doc'` and typed as `home_visit_report / school_report / medical_report` so it appears directly in the child's Documents tab.
+- **Profile quick-links (bidirectional)**
+  - Case dialog header shows an "**Full member profile**" link that jumps to `/people?open={subject_id}&kind=child`.
+  - Child edit dialog now shows a "**Social case**" link + `SW #` badge, jumping to `/social-work?subject_id={id}`.
+- **Kiosk live indicator** — checkpoint header now renders a colored pill (Live / Connecting / Offline) tied to the WebSocket status. Added auto-reconnect (5 s) so a flaky network doesn't leave a permanently-offline kiosk.
+- **Verified end-to-end (curl)**: orphan list returns suggestions, auto-repair links `sc_o1 → chd_a3b4e279` at 100%, badge_id auto-generates as `5812-STAFF-0001`, child social_id auto-generates as `5812-SW-2026-0001` with sequential increment, duplicate social_id → 409, all endpoints protected by kiosk_role_guard.
+
+
 ## Recently Resolved — Iteration 242 (Feb 2026)
 **Application audit fixes (testing agent iteration_226 report).**
 

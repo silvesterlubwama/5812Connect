@@ -20,7 +20,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe } from 'lucide-react';
+import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe, ExternalLink } from 'lucide-react';
 import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import ReviewsDueWidget from '../components/ReviewsDueWidget';
 import ExternalSponsorAutocomplete from '../components/ExternalSponsorAutocomplete';
@@ -672,6 +672,20 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
           <DialogTitle className="flex items-center gap-2 flex-wrap">
             {caseDoc?.subject_photo_url && <img src={caseDoc.subject_photo_url} alt="" className="h-8 w-8 rounded-full object-cover" />}
             <span>{caseDoc?.subject_name || 'Case'}</span>
+            {caseDoc?.subject_id && (
+              // Quick jump to the child's full member profile so social workers
+              // can see the wider context without navigating back to the People
+              // page.
+              <a
+                href={`/people?open=${caseDoc.subject_id}&kind=${caseDoc.subject_kind || 'child'}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-primary hover:underline inline-flex items-center gap-1"
+                data-testid="cd-open-member-profile"
+              >
+                <ExternalLink size={11} /> Full member profile
+              </a>
+            )}
             <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={downloadReport} disabled={!caseDoc} data-testid="cd-download-report-btn">
               <FileDown size={11} className="mr-1" />Download Profile Report
             </Button>
@@ -685,6 +699,27 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                 const dob = new Date(caseDoc.subject_dob);
                 const y = (new Date() - dob) / (365.25 * 24 * 3600 * 1000);
                 return isNaN(y) ? null : <Badge variant="outline" className="text-[10px]" data-testid="cd-age-badge">Age {y.toFixed(1)}</Badge>;
+              })()}
+              {/* Social work-issued ID + one-click assign */}
+              {caseDoc.subject_id && (() => {
+                const sid = (caseDoc.subject && caseDoc.subject.social_id) || caseDoc.social_id;
+                if (sid) return <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200" data-testid="cd-social-id-badge">SW #{sid}</Badge>;
+                return (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const r = await api.post(`/children/${caseDoc.subject_id}/social-id`, {});
+                        toast.success(`Issued ${r.data.social_id}`);
+                        reload();
+                      } catch (err) { toast.error(err.response?.data?.detail || 'Failed to issue ID'); }
+                    }}
+                    className="text-[10px] rounded border border-dashed border-indigo-300 text-indigo-700 px-2 py-0.5 hover:bg-indigo-50"
+                    data-testid="cd-issue-social-id"
+                  >
+                    + Issue social ID
+                  </button>
+                );
               })()}
               {!caseDoc.subject_id && (
                 <Badge variant="outline" className="text-[10px] bg-red-100 text-red-700 border-red-300" data-testid="cd-unlinked-badge">

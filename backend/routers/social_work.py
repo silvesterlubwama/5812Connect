@@ -238,6 +238,99 @@ async def _can_issue_portal_password(user: dict) -> bool:
 # CASES
 # ============================================================
 
+@router.get("/cases/orphans")
+async def list_orphan_cases(current_user: dict = Depends(require_staff)):
+    """Return every social case whose ``subject_id`` is missing/empty, each
+    paired with the top-3 name-similarity suggestions from the child roster.
+
+    Powers the admin **Data Repair** dashboard: staff see every broken case
+    in one table, click a suggestion, and the PUT /cases/{id} endpoint re-
+    links it. Kept as a single round-trip so a director can triage the
+    entire backlog without hopping pages.
+    """
+    orphans = await db.social_cases.find(
+        {"$or": [{"subject_id": None}, {"subject_id": ""}, {"subject_id": {"$exists": False}}]},
+        {"_id": 0},
+    ).sort("opened_at", 1).to_list(500)
+    if not orphans:
+        return []
+    children = await db.children.find({}, {"_id": 0, "id": 1, "name": 1, "date_of_birth": 1, "photo_url": 1, "location_id": 1}).to_list(5000)
+
+    def _norm(s: str) -> str:
+        import re
+        return re.sub(r"[^a-z0-9\s]", "", (s or "").lower()).strip()
+
+    def _toks(s: str) -> set[str]:
+        return {t for t in _norm(s).split() if len(t) > 1}
+
+    child_toks = [(c, _toks(c.get("name", ""))) for c in children]
+
+    for case in orphans:
+        case_toks = _toks(case.get("subject_name") or "")
+        scored = []
+        for c, kt in child_toks:
+            if not case_toks or not kt:
+                continue
+            inter = len(case_toks & kt)
+            if not inter:
+                continue
+            union = len(case_toks | kt) or 1
+            scored.append((inter / union, c))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        case["suggestions"] = [
+            {
+                "child_id": c["id"],
+                "name": c.get("name"),
+                "date_of_birth": c.get("date_of_birth"),
+                "photo_url": c.get("photo_url"),
+                "score": round(score * 100),
+            }
+            for score, c in scored[:3]
+        ]
+    return orphans
+
+
+@router.post("/cases/orphans/auto-repair")
+async def auto_repair_orphan_cases(data: dict, current_user: dict = Depends(require_manager)):
+    """Bulk one-click re-link every orphan case whose best suggestion beats
+    a confidence threshold. Body: ``{ threshold: 0.9 }`` (defaults to 0.9).
+    Manager+ only because it writes across many records at once.
+    """
+    threshold = float(data.get("threshold") or 0.9)
+    orphans_resp = await list_orphan_cases(current_user)  # reuse the scorer above
+    repaired = []
+    skipped = []
+    for case in orphans_resp:
+        suggestions = case.get("suggestions") or []
+        if not suggestions or suggestions[0]["score"] / 100.0 < threshold:
+            skipped.append({"case_id": case["id"], "reason": "no confident match"})
+            continue
+        best = suggestions[0]
+        child = await db.children.find_one(
+            {"id": best["child_id"]},
+            {"_id": 0, "id": 1, "name": 1, "date_of_birth": 1, "photo_url": 1, "location_id": 1},
+        )
+        if not child:
+            skipped.append({"case_id": case["id"], "reason": "child gone"})
+            continue
+        await db.social_cases.update_one(
+            {"id": case["id"]},
+            {"$set": {
+                "subject_id": child["id"],
+                "subject_kind": "child",
+                "subject_name": child.get("name", case.get("subject_name")),
+                "subject_dob": child.get("date_of_birth") or case.get("subject_dob"),
+                "subject_photo_url": child.get("photo_url") or case.get("subject_photo_url"),
+                "location_id": case.get("location_id") or child.get("location_id"),
+                "auto_repaired_at": datetime.now(timezone.utc).isoformat(),
+                "auto_repaired_by": current_user["id"],
+                "auto_repair_score": best["score"],
+            }},
+        )
+        repaired.append({"case_id": case["id"], "linked_to": child["id"], "score": best["score"]})
+    return {"repaired_count": len(repaired), "skipped_count": len(skipped), "repaired": repaired, "skipped": skipped}
+
+
 @router.get("/cases")
 async def list_cases(
     category: Optional[str] = None,

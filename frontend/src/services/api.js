@@ -207,6 +207,17 @@ export const securityCompaniesApi = {
   }),
 };
 
+// ---- Social-work case orphan repair ----
+export const socialWorkOrphansApi = {
+  list: () => api.get('/social-work/cases/orphans'),
+  autoRepair: (threshold = 0.9) => api.post('/social-work/cases/orphans/auto-repair', { threshold }),
+};
+
+// ---- Custom IDs (admin-assigned badge numbers, social-worker child IDs) ----
+export const childrenIdsApi = {
+  assignSocialId: (childId, socialId) => api.post(`/children/${childId}/social-id`, { social_id: socialId || '' }),
+};
+
 // ---- OCR (staff auth — same Gemini pipeline used by the security checkpoint) ----
 export const ocrApi = {
   id: (formData) => api.post('/ocr/id', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),

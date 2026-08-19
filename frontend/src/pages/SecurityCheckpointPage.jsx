@@ -260,30 +260,49 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
     return () => { alive = false; clearInterval(iv); };
   }, []);
 
+  // Live connection indicator: green = WebSocket open, amber = polling only,
+  // red = neither the WS nor the last poll succeeded. Guards can see at a
+  // glance whether the kiosk is talking to the backend.
+  const [wsStatus, setWsStatus] = useState('connecting'); // connecting | connected | disconnected
+
   // Real-time WebSocket push (instant) — falls back to polling above if it fails.
   useEffect(() => {
     const token = localStorage.getItem('checkpoint_session');
-    if (!token || typeof WebSocket === 'undefined') return;
+    if (!token || typeof WebSocket === 'undefined') { setWsStatus('disconnected'); return; }
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const base = process.env.REACT_APP_BACKEND_URL || window.location.origin;
     const wsUrl = `${base.replace(/^https?:/, proto)}/api/security/checkpoint/ws?session=${encodeURIComponent(token)}`;
     let ws;
-    try {
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === 'event' && msg.event) {
-            setCurrent(msg.event);
-            setServerNow(new Date().toISOString());
-          } else if (msg.type === 'clear') {
-            setCurrent(null);
-          }
-        } catch { /* ignore */ }
-      };
-      ws.onerror = () => { /* fall back to polling silently */ };
-    } catch { /* ignore */ }
-    return () => { try { ws?.close(); } catch { /* ignore */ } };
+    let reconnectTimer;
+    const connect = () => {
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => setWsStatus('connected');
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === 'event' && msg.event) {
+              setCurrent(msg.event);
+              setServerNow(new Date().toISOString());
+            } else if (msg.type === 'clear') {
+              setCurrent(null);
+            }
+          } catch { /* ignore */ }
+        };
+        ws.onerror = () => setWsStatus('disconnected');
+        ws.onclose = () => {
+          setWsStatus('disconnected');
+          // Auto-reconnect after 5s so a flaky network doesn't leave the
+          // kiosk permanently offline once it recovers.
+          reconnectTimer = setTimeout(connect, 5000);
+        };
+      } catch { setWsStatus('disconnected'); }
+    };
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      try { ws?.close(); } catch { /* ignore */ }
+    };
   }, []);
 
   // Keyboard-emulating barcode scanner: capture rapid keystrokes ending in Enter
@@ -363,6 +382,22 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
           <ShieldCheck size={18} className="text-emerald-400" />
           <span className="text-sm font-semibold">{checkpoint?.name}</span>
           <span className="text-[11px] text-slate-500">· {checkpoint?.location_name}</span>
+          <span
+            className={`inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide ml-3 px-2 py-0.5 rounded-full border ${
+              wsStatus === 'connected' ? 'text-emerald-400 border-emerald-800 bg-emerald-950/30'
+              : wsStatus === 'connecting' ? 'text-amber-400 border-amber-800 bg-amber-950/30'
+              : 'text-red-400 border-red-800 bg-red-950/30'
+            }`}
+            data-testid="cp-connection-indicator"
+            title={wsStatus === 'connected' ? 'Live-connected to backend' : wsStatus === 'connecting' ? 'Establishing connection…' : 'Not connected — running on polling only'}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              wsStatus === 'connected' ? 'bg-emerald-400 animate-pulse'
+              : wsStatus === 'connecting' ? 'bg-amber-400'
+              : 'bg-red-400'
+            }`} />
+            {wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting' : 'Offline'}
+          </span>
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" className="text-slate-300 hover:text-slate-100" onClick={onLock} data-testid="cp-lock-btn"><Lock size={14} /></Button>

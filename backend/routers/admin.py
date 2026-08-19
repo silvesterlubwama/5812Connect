@@ -131,11 +131,33 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         # Security contractor metadata — only used when role == 'Security Contractor'
         "security_company_id": data.get("security_company_id") or None,
         "security_rank": (data.get("security_rank") or "").strip() or None,
+        # Human-friendly badge number — auto-generated when the admin leaves
+        # the field blank. Format: {TENANT_PREFIX}-{ROLE_KEY}-{4-digit counter}
+        # e.g. "5812-STAFF-0042". Admins can override with any string.
+        "badge_id": (data.get("badge_id") or "").strip() or None,
         "password_hash": hash_password(password),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
     await db.users.insert_one(user)
+    # Auto-generate badge_id if the admin didn't supply one. Runs AFTER insert
+    # so we can use MongoDB's atomic counter (findAndModify) to get a unique
+    # sequential number even when multiple admins invite users concurrently.
+    if not user.get("badge_id"):
+        try:
+            role_key = (user.get("role") or "USER").upper().replace(" ", "")[:8]
+            counter_doc = await db.counters.find_one_and_update(
+                {"_id": f"badge_id:{role_key}"},
+                {"$inc": {"seq": 1}},
+                upsert=True,
+                return_document=True,  # returns updated doc
+            )
+            seq = (counter_doc or {}).get("seq") or 1
+            new_badge = f"5812-{role_key}-{seq:04d}"
+            await db.users.update_one({"id": user_id}, {"$set": {"badge_id": new_badge}})
+            user["badge_id"] = new_badge
+        except Exception as e:
+            logger.warning(f"badge_id auto-gen failed for {user_id}: {e}")
     user.pop("_id", None)
     user_out = {k: v for k, v in user.items() if k != "password_hash"}
     user_out["temp_password"] = password  # show once so admin can share
@@ -265,7 +287,9 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
                       "location_id", "location_ids", "title", "extension", "extension_pin", "forward_to",
                       "gender", "date_of_birth", "group", "program",
-                      "security_company_id", "security_rank"}
+                      "security_company_id", "security_rank",
+                      # Human-friendly badge number an admin can assign (unique within tenant).
+                      "badge_id"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()

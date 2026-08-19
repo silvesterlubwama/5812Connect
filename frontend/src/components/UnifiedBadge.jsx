@@ -127,7 +127,10 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     : (lastNameLen > 22 ? '11px' : '13px');
   const title = person.title || person.role || type;
   const qrData = person.id || person.name || '';
-  const badgeId = (person.id || '').slice(-8).toUpperCase();
+  // Prefer a human-friendly ID (admin-assigned badge_id or social-worker-issued
+  // social_id) over the raw internal UUID slice — those are the numbers
+  // security personnel actually verify against their register.
+  const badgeId = person.badge_id || person.social_id || (person.id || '').slice(-8).toUpperCase();
   const country = person.country || person.location_country || '';
   const countryCode = person.country_code || person.location_country_code || '';
   const isStaffType = STAFF_TYPES.has(type);

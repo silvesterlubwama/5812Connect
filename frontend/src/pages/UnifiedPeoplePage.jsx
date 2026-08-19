@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield, ExternalLink } from 'lucide-react';
 import ClickToCallButton from '../components/ClickToCallButton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -908,7 +908,28 @@ export default function UnifiedPeoplePage() {
       {/* EDIT CHILD DIALOG */}
       <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) { setEditChild(null); setParentSearch(''); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Edit Child: {editChild?.name}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 flex-wrap">
+              <span>Edit Child: {editChild?.name}</span>
+              {editChild?.id && (
+                // Quick jump to the child's social-work case — staff can hop
+                // between the operational (member) and the safeguarding
+                // (social-work) profile without hunting the sidebar.
+                <a
+                  href={`/social-work?subject_id=${editChild.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-primary hover:underline inline-flex items-center gap-1"
+                  data-testid="edit-child-open-social-case"
+                >
+                  <ExternalLink size={11} /> Social case
+                </a>
+              )}
+              {editChild?.social_id && (
+                <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">SW #{editChild.social_id}</Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             {/* Child Photo */}
             <div className="flex items-center gap-3">

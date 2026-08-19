@@ -374,6 +374,11 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               <Label>Title <span className="text-xs text-muted-foreground">(auto-suggested, editable)</span></Label>
               <Input data-testid="edit-title-input" value={editForm.title || ''} onChange={e => setEditForm({...editForm, title: e.target.value})} placeholder={`e.g. ${editForm.role || 'Staff'} of ${locations.find(l => l.id === (editForm.location_ids || [])[0])?.name || 'Location'}`} />
             </div>
+            <div className="space-y-2">
+              <Label>Badge ID <span className="text-xs text-muted-foreground">(auto-generated, editable)</span></Label>
+              <Input data-testid="edit-badge-id-input" value={editForm.badge_id || ''} onChange={e => setEditForm({...editForm, badge_id: e.target.value})} placeholder="e.g. 5812-STAFF-0042" />
+              <p className="text-[11px] text-muted-foreground">Shown on the printed badge. Leave blank to keep the auto-assigned number.</p>
+            </div>
             {isSecurityContractor && (
               <div className="p-3 rounded-lg border-2 border-dashed border-red-200 bg-red-50/40 space-y-3" data-testid="security-contractor-fields">
                 <p className="text-xs font-semibold text-red-700 uppercase tracking-wide">Security Contractor Details</p>
