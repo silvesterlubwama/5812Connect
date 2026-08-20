@@ -928,6 +928,31 @@ export default function UnifiedPeoplePage() {
               {editChild?.social_id && (
                 <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">SW #{editChild.social_id}</Badge>
               )}
+              {editChild?.id && (
+                // One-tap printable passport for offline home visits. Downloads
+                // a PDF that summarises photo, family, medical, goals + risk on
+                // a single sheet.
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto gap-1.5 text-[11px] h-7"
+                  data-testid="download-child-passport"
+                  onClick={async () => {
+                    try {
+                      const res = await api.get(`/children/${editChild.id}/passport-pdf`, { responseType: 'blob' });
+                      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `passport-${(editChild.name || 'child').replace(/\s/g, '_')}.pdf`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      toast.success('Passport PDF downloaded');
+                    } catch { toast.error('Passport download failed'); }
+                  }}
+                >
+                  <Download size={11} /> Passport
+                </Button>
+              )}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 mt-2">

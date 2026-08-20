@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 245 (Feb 2026)
+**Child Profile Passport — printable one-pager for offline home visits.**
+
+- New endpoint `GET /api/children/{child_id}/passport-pdf` (staff+) — WeasyPrint-rendered A4 one-page profile combining: photo + name + `SW#` + RISK pill, DOB/gender/campus, primary caregiver + village/district/siblings/household income, medical snapshot (chronic conditions, allergies, disability, nutritional + immunization status), active goals (max 6, only unfinished), risk factors (top 5), and compliance stamps. Falls back to HTML if WeasyPrint fails, same pattern as the member profile PDF.
+- Active protection concerns render as a red left-bordered warning banner at the top so field staff can't miss them on a laminated cheat-sheet.
+- Frontend: new "Passport" download button in the Edit Child dialog header (`data-testid="download-child-passport"`) — one tap fetches the PDF via authenticated axios and triggers a Blob download.
+- **Verified end-to-end (curl)**: 200 + `application/pdf` + 19 KB output on a seeded test child; 404 on nonexistent child. Lint clean.
+
 ## Recently Resolved — Iteration 244 (Feb 2026)
 **Refactor: `social_review_forms.py` (1,449 LOC) split into a package (deferred from iter 242).**
 

@@ -1,5 +1,6 @@
 """Children CRUD + education + residency + extras + photos + bulk + move-to-guest."""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
 from deps import (
     db, get_current_user, _audit, require_staff, require_manager,
     logger, is_system_admin, get_campus_filter,
@@ -700,3 +701,199 @@ async def download_profile_bundle(child_id: str, current_user: dict = Depends(re
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ========== CHILD PROFILE PASSPORT (offline one-pager) ==========
+
+def _fmt(v, dash="—"):
+    """Passport-safe field renderer — returns `dash` for None/empty and truncates
+    long strings to 120 chars so the one-pager stays a one-pager."""
+    if v is None:
+        return dash
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    s = str(v).strip()
+    if not s:
+        return dash
+    return s if len(s) <= 120 else s[:117] + "..."
+
+
+@router.get("/children/{child_id}/passport-pdf")
+async def download_child_passport(child_id: str, current_user: dict = Depends(require_staff)):
+    """Printable one-page 'child passport' for offline home visits.
+
+    Combines: photo + IDs, family/guardian, medical flags, active goals, and
+    the latest risk snapshot on a single sheet field staff can slip into a
+    clipboard when internet is unreliable in-village.
+
+    Data is READ-ONLY, no side effects. Renders with WeasyPrint (falls back to
+    HTML if that fails — same pattern as the member profile PDF).
+    """
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+
+    # Location + case name-map — one shot each, no per-field N+1
+    loc = None
+    if child.get("location_id"):
+        loc = await db.locations.find_one({"id": child["location_id"]}, {"_id": 0, "name": 1})
+    case = await db.social_cases.find_one(
+        {"subject_kind": "child", "subject_id": child_id, "status": "active"},
+        {"_id": 0, "id": 1, "category": 1, "risk_level": 1, "risk_factors": 1},
+    )
+
+    name = child.get("name") or "Unnamed child"
+    photo_url = child.get("photo_url") or ""
+    sw_id = child.get("social_id") or ""
+    dob = child.get("dob") or child.get("date_of_birth") or ""
+    gender = child.get("gender") or child.get("sex") or ""
+    family = child.get("family") or {}
+    medical = child.get("medical") or {}
+    protection = child.get("protection") or {}
+    risk = child.get("risk") or {}
+    goals = child.get("goals") or []
+    compliance = child.get("compliance") or {}
+
+    # Risk pill colour — matches the frontend risk badges (green/amber/orange/red)
+    level = (risk.get("level") or case.get("risk_level") if case else "low") or "low"
+    level_style = {
+        "low": ("#16a34a", "#dcfce7"),
+        "medium": ("#d97706", "#fef3c7"),
+        "high": ("#dc2626", "#fee2e2"),
+        "critical": ("#991b1b", "#fecaca"),
+    }.get(str(level).lower(), ("#475569", "#f1f5f9"))
+
+    conditions = medical.get("conditions") or []
+    allergies = medical.get("allergies") or ""
+    has_disability = medical.get("has_disability")
+    disability_other = medical.get("disability_other") or ""
+    nutrition = medical.get("nutritional_status") or ""
+    immun = medical.get("immunization_status") or ""
+
+    prot_flags = protection.get("flags") or {}
+    active_prot = [k.replace("_", " ").title() for k, v in prot_flags.items() if v]
+
+    # Only the still-open goals — closed ones would just add noise to a
+    # laminated cheat-sheet field staff carry into homes.
+    open_goals = [g for g in goals if isinstance(g, dict) and (g.get("progress_pct") or 0) < 100][:6]
+
+    factors = risk.get("factors") or (case.get("risk_factors") if case else []) or []
+
+    conditions_html = ", ".join(_fmt(c) for c in conditions) if conditions else "None recorded"
+    prot_html = ", ".join(active_prot) if active_prot else "None active"
+    factors_html = "".join(f"<li>{_fmt(f)}</li>" for f in factors[:5]) or "<li>No elevated risk signals recorded.</li>"
+    goals_html = "".join(
+        f"<li><strong>{_fmt(g.get('goal'))}</strong>"
+        + (f" <span class=\"muted\">({_fmt(g.get('progress_pct'), '0')}%)</span>" if g.get('progress_pct') is not None else "")
+        + (f" <span class=\"muted\">— due {_fmt(g.get('target_date'))}</span>" if g.get('target_date') else "")
+        + "</li>"
+        for g in open_goals
+    ) or "<li class=\"muted\">No open goals recorded.</li>"
+
+    photo_block = (
+        f'<img src="{photo_url}" alt="" class="photo">' if photo_url
+        else '<div class="photo photo-fallback">No photo</div>'
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Child Passport — {name}</title><style>
+@page {{ size: A4; margin: 14mm; }}
+body {{ font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; font-size: 11.5px; line-height: 1.35; margin: 0; }}
+h1 {{ font-size: 20px; margin: 0 0 2px; letter-spacing: -0.3px; }}
+h2 {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.9px; color: #64748b; margin: 14px 0 6px; border-bottom: 1px solid #e2e8f0; padding-bottom: 3px; }}
+.header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #fbbf24; padding-bottom: 8px; margin-bottom: 12px; }}
+.brand {{ font-size: 11px; color: #64748b; letter-spacing: 1.5px; }}
+.brand-gold {{ color: #ca8a04; font-weight: 700; }}
+.top {{ display: flex; gap: 16px; align-items: flex-start; }}
+.photo {{ width: 96px; height: 96px; border-radius: 8px; object-fit: cover; border: 2px solid #e2e8f0; }}
+.photo-fallback {{ display: flex; align-items: center; justify-content: center; background: #f1f5f9; color: #94a3b8; font-size: 10px; }}
+.head-meta {{ flex: 1; }}
+.meta-row {{ font-size: 11px; color: #475569; margin-top: 4px; }}
+.pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; margin-left: 6px; }}
+.risk-pill {{ background: {level_style[1]}; color: {level_style[0]}; text-transform: uppercase; letter-spacing: 0.5px; }}
+.sw-pill {{ background: #eef2ff; color: #4338ca; font-family: monospace; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }}
+.grid .k {{ color: #64748b; font-size: 10.5px; }}
+.grid .v {{ font-weight: 500; }}
+ul {{ margin: 0; padding-left: 18px; }}
+li {{ margin-bottom: 3px; }}
+.muted {{ color: #94a3b8; font-size: 10.5px; font-weight: 400; }}
+.warn {{ background: #fef2f2; border-left: 3px solid #dc2626; padding: 6px 10px; border-radius: 4px; margin-top: 4px; color: #991b1b; }}
+.footer {{ position: fixed; bottom: 8mm; left: 14mm; right: 14mm; text-align: center; font-size: 9px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 4px; }}
+</style></head><body>
+<div class="header">
+  <div>
+    <div class="brand"><span class="brand-gold">58:12</span> GLOBAL &middot; CHILD PROFILE PASSPORT</div>
+  </div>
+  <div class="brand" style="text-align:right">Printed {datetime.now(timezone.utc).strftime('%d %b %Y')} &middot; Not a legal document</div>
+</div>
+
+<div class="top">
+  {photo_block}
+  <div class="head-meta">
+    <h1>{_fmt(name)}
+      {f'<span class="pill sw-pill">SW #{sw_id}</span>' if sw_id else ''}
+      <span class="pill risk-pill">{_fmt(level).upper()} RISK</span>
+    </h1>
+    <div class="meta-row">
+      DOB: <strong>{_fmt(dob)}</strong> &nbsp;·&nbsp;
+      Gender: <strong>{_fmt(gender)}</strong> &nbsp;·&nbsp;
+      Campus: <strong>{_fmt(loc.get('name') if loc else child.get('location_id'))}</strong>
+    </div>
+    <div class="meta-row muted">Case category: {_fmt(case.get('category') if case else None)} · Last review: {_fmt((child.get('last_review_at') or '')[:10])}</div>
+  </div>
+</div>
+
+{f'<div class="warn"><strong>⚠ Active protection concern(s):</strong> {prot_html}</div>' if active_prot else ''}
+
+<h2>Family &amp; Guardians</h2>
+<div class="grid">
+  <div class="k">Primary caregiver</div><div class="v">{_fmt(family.get('primary_caregiver'))}</div>
+  <div class="k">Relationship</div><div class="v">{_fmt(family.get('caregiver_relationship'))}</div>
+  <div class="k">Village / Parish</div><div class="v">{_fmt(family.get('village_parish'))}</div>
+  <div class="k">District</div><div class="v">{_fmt(family.get('district'))}</div>
+  <div class="k">Siblings</div><div class="v">{_fmt(family.get('siblings'))}</div>
+  <div class="k">Household income</div><div class="v">{_fmt(family.get('household_income'))}</div>
+</div>
+
+<h2>Medical Snapshot</h2>
+<div class="grid">
+  <div class="k">Chronic conditions</div><div class="v">{conditions_html}</div>
+  <div class="k">Known allergies</div><div class="v">{_fmt(allergies)}</div>
+  <div class="k">Disability</div><div class="v">{_fmt(has_disability)}{f' — {_fmt(disability_other)}' if disability_other else ''}</div>
+  <div class="k">Nutritional status</div><div class="v">{_fmt(nutrition)}</div>
+  <div class="k">Immunization</div><div class="v">{_fmt(immun)}</div>
+  <div class="k">Current medication</div><div class="v">{_fmt(medical.get('current_medication'))}</div>
+</div>
+
+<h2>Active Goals</h2>
+<ul>{goals_html}</ul>
+
+<h2>Risk Factors</h2>
+<ul>{factors_html}</ul>
+
+<h2>Compliance</h2>
+<div class="grid">
+  <div class="k">Last home visit</div><div class="v">{_fmt(compliance.get('last_home_visit_at'))}</div>
+  <div class="k">Last school review</div><div class="v">{_fmt(compliance.get('last_school_review_at'))}</div>
+  <div class="k">Last medical exam</div><div class="v">{_fmt(compliance.get('last_medical_exam_at'))}</div>
+  <div class="k">Home visit done this quarter</div><div class="v">{_fmt(compliance.get('home_visit_done_this_quarter'))}</div>
+</div>
+
+<div class="footer">
+  58:12 Global &middot; Child ID: {child_id} &middot; Confidential — for authorised field staff only
+</div>
+</body></html>"""
+
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html).write_pdf()
+        safe = (name or "child").replace(" ", "_").replace("/", "_")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="passport-{safe}.pdf"'},
+        )
+    except Exception as e:
+        logger.warning(f"passport PDF generation failed, returning HTML: {e}")
+        return Response(content=html.encode(), media_type="text/html")
