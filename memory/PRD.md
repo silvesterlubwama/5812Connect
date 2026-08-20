@@ -3,6 +3,22 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 244 (Feb 2026)
+**Refactor: `social_review_forms.py` (1,449 LOC) split into a package (deferred from iter 242).**
+
+- New package at `/app/backend/routers/social_review_forms/` with 9 focused files:
+  - `_common.py` — shared constants (VALID_KINDS, TEMPLATES_DIR, FILE_DOC_TYPE_KEYS)
+  - `child_sync.py` (~290 LOC) — `_apply_review_to_child` + `_compute_child_risk`
+  - `timeline.py` (~95 LOC) — `_append_timeline_note` for case timelines
+  - `crud.py` (~120 LOC) — list/get/create/update/delete review endpoints
+  - `templates.py` (~50 LOC) — printable blank template PDF endpoint
+  - `ocr.py` (~330 LOC) — Gemini system prompts + `_ocr_review_form` + `_ocr_background`
+  - `scan_upload.py` (~200 LOC) — upload-scan endpoint with fast local save + background OCR
+  - `photos.py` (~100 LOC) — POST/DELETE `{review_id}/photos`
+  - `compliance.py` (~180 LOC) — `/compliance/due` + `/compliance/completeness`
+- `__init__.py` aggregates all sub-routers so `server.py`'s existing `from routers.social_review_forms import router` keeps working unchanged.
+- **Verified end-to-end (curl)**: all 8 endpoints registered in OpenAPI, `/compliance/due` + `/compliance/completeness` return correct empty aggregate, `/templates/welfare_visit.pdf` returns 126 KB PDF, dynamic `/{review_id}` correctly 404s on missing IDs, `/children/{nonexistent}` correctly 404s. Lint clean. No behaviour change — pure structural refactor.
+
 ## Recently Resolved — Iteration 243 (Feb 2026)
 **Custom IDs + orphan bulk repair + auto-fill expansion + kiosk live indicator + profile quick-links.**
 
