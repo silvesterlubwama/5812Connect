@@ -111,6 +111,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const [nfcWriting, setNfcWriting] = useState(false);
   const type = getBadgeType(person);
   const colors = BADGE_COLORS[type] || BADGE_COLORS.member;
+  const isSmall = size === 'small';
   const firstName = (person.name || '').split(' ')[0] || '';
   const lastName = (person.name || '').split(' ').slice(1).join(' ') || '';
   // Business-card-style auto-fit: shrink the first-name font a step for
@@ -134,7 +135,6 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const country = person.country || person.location_country || '';
   const countryCode = person.country_code || person.location_country_code || '';
   const isStaffType = STAFF_TYPES.has(type);
-  const isSmall = size === 'small';
 
   // Kiosk prints use white bg for ink saving
   const bgColor = kioskMode ? '#ffffff' : colors.bg;
