@@ -328,17 +328,16 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — Feb 2026 v4 layout:
-               Info column (name/rank/company) takes full left width so long
-               names no longer overflow into the photo. Role/title wraps to
-               2 lines instead of truncating so full wording stays visible.
-               QR anchored at bottom-left, generously sized (~72 px large)
-               so warehouse scanners hit it reliably. Photo dominates the
-               right for at-a-glance visual ID but is scaled down a bit so
-               it no longer overpowers the layout. */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1 }}>
-            {/* Info column — full-width vertical stack, QR pinned at its bottom */}
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          {/* Body — Feb 2026 v5 layout:
+               Three columns side-by-side: info | QR | photo. The QR moved out
+               of the info column's bottom (where dense case info pushed it off
+               the card in production) into its own middle column immediately
+               left of the photo, so both stay fully visible regardless of how
+               much text sits on the info side. */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '6px' : '10px', position: 'relative', zIndex: 1, alignItems: 'center' }}>
+            {/* Info column — vertical text stack. No longer holds the QR so
+                content can breathe without shoving the QR off-card. */}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: firstNameSize, fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
                 {lastName && <div style={{ fontSize: lastNameSize, fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
@@ -375,38 +374,33 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 ))}
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
-              {/* QR at the bottom of the info column — bigger than v3 so
-                  warehouse/security scanners recognise it from a distance,
-                  while EC "H" keeps it robust to scuffs and reflections.
-                  overflow:visible + a QR slightly smaller than the holder's
-                  usable area so rounded corners don't clip the outer marker
-                  dots (v4 users reported the bottom row was getting cut). */}
-              <div style={{
-                flexShrink: 0,
-                borderRadius: '6px',
-                background: kioskMode ? '#fff' : `${colors.accent}0f`,
-                padding: '5px',
-                width: isSmall ? '62px' : '82px',
-                height: isSmall ? '62px' : '82px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginTop: '4px',
-                boxSizing: 'border-box',
-              }}>
-                <QRCodeLogo
-                  value={qrData}
-                  size={isSmall ? 50 : 70}
-                  bgColor="transparent"
-                  fgColor={qrFg}
-                  ecLevel="H"
-                  qrStyle="dots"
-                />
-              </div>
             </div>
-            {/* Photo — scaled down from v3 (was 124×150 large) so the
-                info column has more breathing room while the portrait
-                stays clearly recognisable for visual ID. */}
+            {/* QR column — pinned to its own slot so no amount of text in the
+                info column can push it off the card. Sized larger than v4
+                (was 82 px) so warehouse scanners hit it from further away. */}
+            <div style={{
+              flexShrink: 0,
+              borderRadius: '6px',
+              background: kioskMode ? '#fff' : `${colors.accent}0f`,
+              padding: '5px',
+              width: isSmall ? '68px' : '88px',
+              height: isSmall ? '68px' : '88px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxSizing: 'border-box',
+            }}>
+              <QRCodeLogo
+                value={qrData}
+                size={isSmall ? 56 : 76}
+                bgColor="transparent"
+                fgColor={qrFg}
+                ecLevel="H"
+                qrStyle="dots"
+              />
+            </div>
+            {/* Photo column — rightmost, scaled down from v3 so the info
+                column and QR both have room. */}
             <div style={{
               flexShrink: 0,
               width: isSmall ? '72px' : '96px',
@@ -419,7 +413,6 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              alignSelf: 'center',
             }}>
               <img
                 src={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220)}
