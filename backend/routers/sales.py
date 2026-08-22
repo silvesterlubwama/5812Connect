@@ -364,67 +364,21 @@ async def _ensure_customer_account(sale: dict, current_user: dict):
 
 
 async def _auto_post_sale_journal_entry(sale: dict, current_user: dict):
-    """If a sales-kind journal exists at the sale's location, create+post a balanced JE:
-       - cash/AR debit (depending on payment method)
-       - revenue credit
-    Silently no-op if accounting isn't configured (zero accounts/journals yet)."""
-    loc_id = sale.get("location_id")
-    if not loc_id:
+    """iter 246 (finance reset): all sale postings now go through the ONE
+    balanced ledger in `routers.finance`. Only posts when the sale is
+    settled (payment_status == 'paid'); pending sales stay off the ledger
+    until they're actually collected.
+
+    Idempotent by sale.id so a payment_status toggle Paid→Pending→Paid
+    won't post twice."""
+    if (sale.get("payment_status") or "").lower() != "paid":
         return
-    journal = await db.accounting_journals.find_one({"location_id": loc_id, "kind": "sales", "active": True}, {"_id": 0})
-    if not journal:
-        return
-    # Pick debit account based on payment status
-    revenue_acc_id = journal.get("default_credit_account_id")
-    debit_acc_id = journal.get("default_debit_account_id")
-    if sale.get("payment_status") == "paid":
-        cash_acc = await db.accounting_accounts.find_one({"location_id": loc_id, "type": "asset_cash", "active": True}, {"_id": 0, "id": 1})
-        if cash_acc:
-            debit_acc_id = cash_acc["id"]
-    if not debit_acc_id:
-        ar = await db.accounting_accounts.find_one({"location_id": loc_id, "type": "asset_receivable", "active": True}, {"_id": 0, "id": 1})
-        debit_acc_id = (ar or {}).get("id")
-    if not revenue_acc_id:
-        rev = await db.accounting_accounts.find_one({"location_id": loc_id, "type": "income", "active": True}, {"_id": 0, "id": 1})
-        revenue_acc_id = (rev or {}).get("id")
-    if not debit_acc_id or not revenue_acc_id:
-        return  # CoA not set up enough yet
-    total = round(float(sale.get("total") or 0), 2)
-    if total <= 0:
-        return
-    # Build the entry directly
-    from routers.accounting import _next_entry_number
-    entry_id = f"je_{uuid.uuid4().hex[:10]}"
-    entry_number = await _next_entry_number(journal["id"])
-    now_iso = datetime.now(timezone.utc).isoformat()
-    entry = {
-        "id": entry_id,
-        "number": entry_number,
-        "journal_id": journal["id"],
-        "journal_code": journal.get("code"),
-        "date": (sale.get("created_at") or now_iso)[:10],
-        "ref": sale.get("receipt_number") or sale["id"],
-        "narration": f"Sale {sale.get('receipt_number')} - {sale.get('customer_name') or 'customer'}",
-        "total_debit": total, "total_credit": total,
-        "status": "posted",
-        "location_id": loc_id,
-        "currency": sale.get("currency") or "UGX",
-        "auto_generated_from": "sale",
-        "source_id": sale["id"],
-        "created_at": now_iso,
-        "posted_at": now_iso,
-        "posted_by": current_user["id"],
-    }
-    await db.accounting_entries.insert_one(entry)
-    lines = [
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": entry["date"], "location_id": loc_id, "status": "posted",
-         "account_id": debit_acc_id, "debit": total, "credit": 0, "description": entry["narration"]},
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": entry["date"], "location_id": loc_id, "status": "posted",
-         "account_id": revenue_acc_id, "debit": 0, "credit": total, "description": "Revenue"},
-    ]
-    await db.accounting_entry_lines.insert_many(lines)
+    from routers.finance.postings import post_sale
+    try:
+        await post_sale(sale, current_user)
+    except Exception as ex:
+        from deps import logger as _lg
+        _lg.error(f"[finance] sale JE post failed for {sale.get('id')}: {ex}")
 
 
 @router.put("/sales/{sale_id}/payment-status")

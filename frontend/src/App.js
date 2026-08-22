@@ -18,8 +18,7 @@ import MembersPage from './pages/MembersPage';
 // Lazy-load heavy pages — code-split per route so first load is small.
 const UnifiedPeoplePage = lazy(() => import('./pages/UnifiedPeoplePage'));
 const ProductsPage = lazy(() => import('./pages/ProductsPage'));
-const FinancialPage = lazy(() => import('./pages/FinancialPage'));
-const AccountingPage = lazy(() => import('./pages/AccountingPage'));
+const FinancePage = lazy(() => import('./pages/FinancePage'));
 const DonorsPage = lazy(() => import('./pages/DonorsPage'));
 const VendorsPage = lazy(() => import('./pages/VendorsPage'));
 const SocialWorkPage = lazy(() => import('./pages/SocialWorkPage'));
@@ -142,8 +141,10 @@ function AppRoutes() {
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="check-ins" element={<CheckInsPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="financial" element={<FinancialPage />} />
-        <Route path="accounting" element={<AccountingPage />} />
+        {/* iter 246 — one unified Finance page (ledger, chart of accounts, reports) */}
+        <Route path="finance" element={<FinancePage />} />
+        <Route path="financial" element={<FinancePage />} />
+        <Route path="accounting" element={<FinancePage />} />
         <Route path="donors" element={<DonorsPage />} />
         <Route path="vendors" element={<VendorsPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
@@ -154,10 +155,11 @@ function AppRoutes() {
         <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
-        <Route path="accounts-receivable" element={<AccountsReceivablePage />} />
+        {/* accounts-receivable, reconciliation, customer-statements now redirect to unified finance */}
+        <Route path="accounts-receivable" element={<FinancePage />} />
         <Route path="barcode-reissue" element={<BarcodeReissuePage />} />
-        <Route path="reconciliation" element={<ReconciliationReportsPage />} />
-        <Route path="customer-statements" element={<CustomerStatementsPage />} />
+        <Route path="reconciliation" element={<FinancePage />} />
+        <Route path="customer-statements" element={<FinancePage />} />
         <Route path="profile" element={<PortalProfile />} />
         <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
@@ -179,7 +181,8 @@ function AppRoutes() {
         <Route path="report-builder" element={<ReportBuilderPage />} />
         <Route path="volunteer-scheduling" element={<VolunteerSchedulingPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />
-        <Route path="financial-apis" element={<FinancialApisPage />} />
+        {/* financial-apis retired — finance is one page now */}
+        <Route path="financial-apis" element={<FinancePage />} />
         <Route path="hr" element={<HRPage />} />
         <Route path="gdpr" element={<GdprSettingsPage />} />
       </Route>

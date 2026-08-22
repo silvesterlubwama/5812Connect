@@ -572,8 +572,11 @@ try:
     from routers.portal import router as portal_router
     from routers.events import router as events_router
     from routers.tasks import router as tasks_router
-    from routers.financial import router as financial_router
-    from routers.chart_accounts import router as chart_accounts_router
+    # NEW single finance package (iter 246 — full reset). Old routers
+    # (financial, accounting, chart_accounts, invoices, statements) are
+    # deliberately NOT included so every money movement flows through the
+    # new balanced-ledger `finance` package.
+    from routers.finance import router as finance_router
     from routers.chat import router as chat_router
     from routers.admin import router as admin_router
     from routers.programmes import router as programmes_router
@@ -603,8 +606,7 @@ try:
     app.include_router(portal_router)
     app.include_router(events_router)
     app.include_router(tasks_router)
-    app.include_router(financial_router)
-    app.include_router(chart_accounts_router)
+    app.include_router(finance_router)
     app.include_router(chat_router)
     app.include_router(admin_router)
     app.include_router(programmes_router)
@@ -632,9 +634,8 @@ try:
     from routers.products import router as products_router
     from routers.sales import router as sales_router
     from routers.sheet_import import router as sheet_import_router
-    from routers.invoices import router as invoices_router
-    from routers.statements import router as statements_router
-    from routers.accounting import router as accounting_router
+    # Old invoices/statements/accounting routers deliberately dropped in the
+    # iter 246 finance reset — kept as files for reference but no HTTP surface.
     from routers.approvals import router as approvals_router
     from routers.social_work import router as social_work_router, portal_router as school_portal_router
     from routers.bank import router as bank_router
@@ -654,9 +655,6 @@ try:
     app.include_router(products_router)
     app.include_router(sales_router)
     app.include_router(sheet_import_router)
-    app.include_router(invoices_router)
-    app.include_router(statements_router)
-    app.include_router(accounting_router)
     app.include_router(approvals_router)
     app.include_router(social_work_router)
     app.include_router(school_portal_router)

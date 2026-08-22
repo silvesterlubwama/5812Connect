@@ -3,6 +3,23 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 246 (Feb 2026)
+**Full FINANCE MODULE RESET — new single-ledger architecture (user-requested full revamp; assumed broken).**
+
+- New package `/app/backend/routers/finance/` (7 files, ~900 LOC total) replaces `financial.py`, `accounting.py`, `chart_accounts.py`, `invoices.py`, `statements.py`:
+  - `_common.py` — `post_journal_entry(...)` (enforces Σdebits == Σcredits at insert), `reverse_journal_entry(...)`, seeded 19-account Chart of Accounts, `FINANCE_COLLECTIONS` constant.
+  - `chart_of_accounts.py` — CRUD (system accounts un-deletable, in-use accounts un-deletable).
+  - `journal.py` — read/list/manual-post/reverse endpoints.
+  - `transactions.py` — friendly `/expense`, `/income`, `/recent` (each posts one balanced JE under the hood).
+  - `reports.py` — Trial Balance, P&L, Balance Sheet (auto-includes current-year earnings), Cashflow — all pure aggregations on `finance_journal_entries`.
+  - `postings.py` — `post_payroll_payslip(...)` (idempotent by payslip.id) + `post_sale(...)` (idempotent by sale.id, paid-only).
+  - `admin.py` — `/status` + `/reset` (archive-then-wipe-then-seed with `RESET FINANCE` confirmation guard).
+- HR `_aggregate_payroll_expense` rewritten to call `post_payroll_payslip` — **fixes the P0 bug where paid payslips never hit the ledger**.
+- Sales `_auto_post_sale_journal_entry` rewritten to call `post_sale` — paid sales now post `Dr Cash / Cr Sales Revenue`.
+- Old routers (financial/accounting/chart_accounts/invoices/statements) still exist as files but are NO LONGER INCLUDED in `server.py`. Bank + social_work orphan imports still resolve (files present) but their target collections are now stale and disconnected from the live ledger — flagged as phase-2 rewire.
+- Frontend: new `/app/frontend/src/pages/FinancePage.jsx` with 4 tabs (Overview / Journal / Chart of Accounts / Reports) + a red admin-only Reset button. All old finance routes (`/financial`, `/accounting`, `/accounts-receivable`, `/reconciliation`, `/customer-statements`, `/financial-apis`) redirect to `/finance`.
+- **Verified end-to-end (curl + python)**: reset → seed → expense → income → payroll payslip → sale → all balanced, idempotency holds, P&L/TB/BS/Cashflow reconcile at every step. Final TB debit=credit=1,500,000 UGX.
+
 ## Recently Resolved — Iteration 245 (Feb 2026)
 **Child Profile Passport — printable one-pager for offline home visits.**
 
