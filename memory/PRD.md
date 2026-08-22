@@ -3,6 +3,16 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 247 (Feb 2026)
+**Finance module — 3 follow-up features shipped to complete the reset.**
+
+- **Payroll batch post** — `POST /api/finance/admin/backfill-payroll` (admin). Sweeps every paid payslip through `post_payroll_payslip`, idempotent by payslip.id. Verified: 58 paid payslips posted in one call. UI button `finance-backfill-payroll` in the Finance Overview (admin-only).
+- **Rewired social-work postings** — sponsorship gifts and expense payments (`tuition/medical/resource`) now post directly to the new finance ledger via `post_journal_entry` inside `routers/social_work.py`. Legacy `donations` / `expenses` collections are still written for the case timeline mirror but the AUTHORITATIVE money movement is now the JE.
+- **Rewired bank reconciliation** — `_post_bank_tx_to_ledger` rewritten to use the new ledger. Bank accounts' `linked_account_id` MUST reference `finance_chart_of_accounts.id` (users need to re-link after the reset — a one-time UI reconfig).
+- **Additional backfill endpoint** — `POST /api/finance/admin/backfill-social-payments` (admin) does the same sweep for existing `db.social_child_payments`. UI button `finance-backfill-social`.
+- **Journal Reverse action** — inline "Reverse" button on every non-reversed JE row for admin/director+ (`data-testid="journal-reverse-{je_id}"`). Requires a reason. Posts a mirror JE with debits/credits swapped (source=`reversal`); the original stays with `reversed: true, reversed_by_je, reversed_reason` so the audit trail is intact.
+- **Verified end-to-end**: reversal keeps the Trial Balance balanced (Dr=Cr=14,942,218 after reversing a 250,000 UGX JE).
+
 ## Recently Resolved — Iteration 246 (Feb 2026)
 **Full FINANCE MODULE RESET — new single-ledger architecture (user-requested full revamp; assumed broken).**
 

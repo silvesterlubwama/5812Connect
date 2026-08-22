@@ -1357,18 +1357,55 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
             await db.expenses.insert_one(mirror)
             payment["mirror_id"] = mirror["id"]
             payment["mirror_collection"] = "expenses"
-        # Re-use the financial→accounting auto-post helper if the location has a CoA.
-        try:
-            from routers.financial import _post_to_accounting
-            await _post_to_accounting(
-                "donation" if kind == "child_support" else "expense_approved",
-                mirror,
-                current_user,
-            )
-        except Exception as e:
-            logger.warning(f"Social-work payment ledger auto-post skipped: {e}")
     except Exception as e:
         logger.error(f"Social-work payment mirror failed: {e}")
+    # ── iter 246: post to the NEW single ledger ─────────────────
+    # child_support → income (Dr Bank / Cr Sponsorship Income)
+    # tuition/resource/medical → expense (Dr Programme Costs / Cr Cash)
+    # The mirror rows into legacy `donations` / `expenses` collections are
+    # kept intact ABOVE so the child's timeline still has a record, but the
+    # authoritative money movement is the new JE.
+    try:
+        from routers.finance._common import post_journal_entry, get_account_by_code
+        if kind == "child_support":
+            revenue = await get_account_by_code("4000")
+            bank = await get_account_by_code("1010")
+            if revenue and bank:
+                await post_journal_entry(
+                    date=payment["date"],
+                    description=f"Sponsorship gift — {case.get('subject_name') or ''}"[:280],
+                    lines=[
+                        {"account_id": bank["id"], "account_code": bank["code"], "account_name": bank["name"], "debit": amount, "credit": 0},
+                        {"account_id": revenue["id"], "account_code": revenue["code"], "account_name": revenue["name"], "debit": 0, "credit": amount},
+                    ],
+                    source="social_donation",
+                    reference=pay_id,
+                    location_id=case.get("location_id"),
+                    created_by=current_user["id"],
+                    created_by_name=current_user.get("name"),
+                    idempotency_key=f"social_payment:{pay_id}",
+                )
+        else:
+            expense_code = {"tuition": "5300", "medical": "5300", "resource": "5300"}.get(kind, "5900")
+            expense_acct = await get_account_by_code(expense_code)
+            cash = await get_account_by_code("1000")
+            if expense_acct and cash:
+                await post_journal_entry(
+                    date=payment["date"],
+                    description=f"{kind.title()} for {case.get('subject_name') or ''}"[:280],
+                    lines=[
+                        {"account_id": expense_acct["id"], "account_code": expense_acct["code"], "account_name": expense_acct["name"], "debit": amount, "credit": 0},
+                        {"account_id": cash["id"], "account_code": cash["code"], "account_name": cash["name"], "debit": 0, "credit": amount},
+                    ],
+                    source="social_expense",
+                    reference=pay_id,
+                    location_id=case.get("location_id"),
+                    created_by=current_user["id"],
+                    created_by_name=current_user.get("name"),
+                    idempotency_key=f"social_payment:{pay_id}",
+                )
+    except Exception as e:
+        logger.warning(f"Social-work payment new-ledger post skipped: {e}")
     await db.social_child_payments.insert_one(payment)
     payment.pop("_id", None)
     await _audit(current_user["id"], "create", "social_payment", pay_id, {"case": case_id, "kind": kind, "amount": amount})

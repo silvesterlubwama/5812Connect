@@ -594,63 +594,48 @@ async def delete_rule(rule_id: str, current_user: dict = Depends(require_finance
 # ============================================================
 
 async def _post_bank_tx_to_ledger(tx: dict, target_account_id: str, current_user: dict) -> str:
-    """Create + post a balanced JE for a bank-statement transaction.
-    Returns the entry_id."""
+    """iter 246: bank reconciliation now posts via the NEW single ledger.
+
+    `target_account_id` is expected to be a NEW `finance_chart_of_accounts.id`.
+    The bank account's `linked_account_id` should ALSO reference the new COA
+    (users need to re-link after the finance reset — a one-time reconfig).
+    Fallback: if the linked_account_id doesn't resolve in the new COA, log a
+    clear message so ops can fix the mapping."""
+    from routers.finance._common import post_journal_entry
     bank_acc = await db.bank_accounts.find_one({"id": tx["bank_account_id"]}, {"_id": 0})
     if not bank_acc:
         raise HTTPException(status_code=400, detail="Bank account missing")
-    if not bank_acc.get("linked_account_id"):
-        raise HTTPException(status_code=400, detail="Bank account has no linked CoA account — set linked_account_id first")
-    target = await db.accounting_accounts.find_one({"id": target_account_id}, {"_id": 0})
+    linked_id = bank_acc.get("linked_account_id")
+    if not linked_id:
+        raise HTTPException(status_code=400, detail="Bank account has no linked account — set linked_account_id first")
+    bank_ledger_acct = await db.finance_chart_of_accounts.find_one({"id": linked_id}, {"_id": 0})
+    if not bank_ledger_acct:
+        raise HTTPException(status_code=400, detail=f"Linked account {linked_id} not found in new ledger — re-link this bank account after the finance reset")
+    target = await db.finance_chart_of_accounts.find_one({"id": target_account_id}, {"_id": 0})
     if not target:
-        raise HTTPException(status_code=400, detail="target CoA account missing")
-    # Pick a misc journal at this location
-    journal = (await db.accounting_journals.find_one(
-        {"location_id": bank_acc.get("location_id"), "kind": "miscellaneous", "active": True}, {"_id": 0}
-    )) or (await db.accounting_journals.find_one(
-        {"location_id": bank_acc.get("location_id"), "active": True}, {"_id": 0}
-    ))
-    if not journal:
-        raise HTTPException(status_code=400, detail="No journal configured for this location")
+        raise HTTPException(status_code=400, detail=f"Target account {target_account_id} not found in new ledger")
     amount = abs(float(tx.get("amount") or 0))
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Transaction amount is zero")
-    # Inflow: Dr Bank / Cr Target. Outflow: Dr Target / Cr Bank.
-    if tx["amount"] > 0:
-        debit_acc = bank_acc["linked_account_id"]
-        credit_acc = target_account_id
-    else:
-        debit_acc = target_account_id
-        credit_acc = bank_acc["linked_account_id"]
-    from routers.accounting import _next_entry_number
-    entry_id = f"je_{uuid.uuid4().hex[:10]}"
-    entry_number = await _next_entry_number(journal["id"])
-    now_iso = datetime.now(timezone.utc).isoformat()
-    entry = {
-        "id": entry_id, "number": entry_number,
-        "journal_id": journal["id"], "journal_code": journal.get("code"),
-        "date": tx["date"], "ref": tx.get("reference") or tx["id"],
-        "narration": tx.get("description", "")[:200],
-        "total_debit": amount, "total_credit": amount,
-        "status": "posted",
-        "location_id": bank_acc.get("location_id"),
-        "currency": bank_acc.get("currency"),
-        "auto_generated_from": "bank_tx",
-        "source_id": tx["id"],
-        "created_at": now_iso, "posted_at": now_iso, "posted_by": current_user["id"],
-    }
-    await db.accounting_entries.insert_one(entry)
-    await db.accounting_entry_lines.insert_many([
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": tx["date"], "location_id": bank_acc.get("location_id"),
-         "status": "posted", "account_id": debit_acc, "debit": amount, "credit": 0,
-         "description": tx.get("description", "")[:200]},
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": tx["date"], "location_id": bank_acc.get("location_id"),
-         "status": "posted", "account_id": credit_acc, "debit": 0, "credit": amount,
-         "description": tx.get("description", "")[:200]},
-    ])
-    return entry_id
+    if tx["amount"] > 0:  # inflow to bank
+        debit_acct, credit_acct = bank_ledger_acct, target
+    else:                 # outflow from bank
+        debit_acct, credit_acct = target, bank_ledger_acct
+    je = await post_journal_entry(
+        date=tx["date"],
+        description=tx.get("description", "")[:200] or f"Bank tx {tx.get('reference') or tx['id']}",
+        lines=[
+            {"account_id": debit_acct["id"], "account_code": debit_acct["code"], "account_name": debit_acct["name"], "debit": amount, "credit": 0},
+            {"account_id": credit_acct["id"], "account_code": credit_acct["code"], "account_name": credit_acct["name"], "debit": 0, "credit": amount},
+        ],
+        source="bank_tx",
+        reference=tx["id"],
+        location_id=bank_acc.get("location_id"),
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"bank_tx:{tx['id']}",
+    )
+    return je["id"]
 
 
 @router.post("/transactions/{tx_id}/reconcile")

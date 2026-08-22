@@ -82,6 +82,7 @@ function OverviewPanel() {
       <div className="flex gap-2 flex-wrap">
         <Button onClick={() => setAddOpen('expense')} data-testid="finance-add-expense" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record expense</Button>
         <Button onClick={() => setAddOpen('income')} data-testid="finance-add-income" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record income</Button>
+        <BackfillButtons onDone={reload} />
       </div>
 
       <Card>
@@ -111,6 +112,37 @@ function OverviewPanel() {
 
       <QuickPostDialog mode={addOpen} onClose={() => setAddOpen(null)} onDone={() => { setAddOpen(null); reload(); }} />
     </div>
+  );
+}
+
+// ─── BACKFILL BUTTONS (admin-only) ───────────────────────────
+// Sweep any pre-reset payroll / social payments into the new ledger. Both
+// endpoints are idempotent so hitting either twice is safe.
+function BackfillButtons({ onDone }) {
+  const { user } = useAuth();
+  const isAdmin = ['admin', 'system_admin'].includes(user?.role || '');
+  const [busy, setBusy] = useState('');
+  if (!isAdmin) return null;
+  const run = async (kind) => {
+    setBusy(kind);
+    try {
+      const url = kind === 'payroll' ? '/finance/admin/backfill-payroll' : '/finance/admin/backfill-social-payments';
+      const r = await api.post(url);
+      const s = r.data || {};
+      toast.success(`${kind === 'payroll' ? 'Payroll' : 'Social payments'}: posted ${s.posted_or_replayed}, skipped ${s.skipped_no_amount ?? s.skipped ?? 0}, failed ${s.failed}`);
+      onDone?.();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Backfill failed'); }
+    setBusy('');
+  };
+  return (
+    <>
+      <Button size="sm" variant="outline" className="text-indigo-700 border-indigo-300 hover:bg-indigo-50" onClick={() => run('payroll')} disabled={!!busy} data-testid="finance-backfill-payroll">
+        {busy === 'payroll' ? 'Posting…' : 'Post all paid payslips'}
+      </Button>
+      <Button size="sm" variant="outline" className="text-indigo-700 border-indigo-300 hover:bg-indigo-50" onClick={() => run('social')} disabled={!!busy} data-testid="finance-backfill-social">
+        {busy === 'social' ? 'Posting…' : 'Post all social payments'}
+      </Button>
+    </>
   );
 }
 
@@ -196,30 +228,60 @@ function QuickPostDialog({ mode, onClose, onDone }) {
 
 // ─── JOURNAL ─────────────────────────────────────────────────
 function JournalPanel() {
+  const { user } = useAuth();
+  const canReverse = ['admin', 'system_admin', 'director'].includes(user?.role || '');
   const [entries, setEntries] = useState([]);
   const [expanded, setExpanded] = useState({});
-  useEffect(() => { api.get('/finance/journal?limit=200').then(r => setEntries(r.data || [])).catch(() => {}); }, []);
+  const [reversing, setReversing] = useState(null); // je object being reversed
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const reload = () => api.get('/finance/journal?limit=200&include_reversed=true').then(r => setEntries(r.data || []));
+  useEffect(() => { reload().catch(() => {}); }, []);
+
+  const submitReverse = async () => {
+    if (!reason.trim()) { toast.error('Please give a reason for the reversal'); return; }
+    setBusy(true);
+    try {
+      await api.post(`/finance/journal/${reversing.id}/reverse`, { reason });
+      toast.success('Journal entry reversed');
+      setReversing(null); setReason('');
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Reversal failed'); }
+    setBusy(false);
+  };
+
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">Journal — most recent 200</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">Journal — most recent 200 (reversed entries shown greyed out)</CardTitle></CardHeader>
       <CardContent>
         {entries.length === 0 ? <p className="text-sm text-muted-foreground">No journal entries.</p> : (
           <Table>
             <TableHeader><TableRow>
               <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Source</TableHead>
               <TableHead className="text-right">Total</TableHead>
+              {canReverse && <TableHead className="w-28"></TableHead>}
             </TableRow></TableHeader>
             <TableBody>
               {entries.map(je => (
                 <React.Fragment key={je.id}>
-                  <TableRow className="cursor-pointer hover:bg-muted/40" onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))}>
+                  <TableRow className={`cursor-pointer hover:bg-muted/40 ${je.reversed ? 'opacity-50 line-through' : ''}`} onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))} data-testid={`journal-row-${je.id}`}>
                     <TableCell className="font-mono text-xs">{je.date}</TableCell>
-                    <TableCell>{je.description}</TableCell>
+                    <TableCell>{je.description}{je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}</TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{je.source}</Badge></TableCell>
                     <TableCell className="text-right font-mono">{money(je.total)}</TableCell>
+                    {canReverse && (
+                      <TableCell className="text-right no-underline" onClick={(e) => e.stopPropagation()}>
+                        {!je.reversed && je.source !== 'reversal' && (
+                          <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>
+                            Reverse
+                          </Button>
+                        )}
+                      </TableCell>
+                    )}
                   </TableRow>
                   {expanded[je.id] && (
-                    <TableRow><TableCell colSpan={4} className="bg-muted/20 p-3">
+                    <TableRow><TableCell colSpan={canReverse ? 5 : 4} className="bg-muted/20 p-3">
                       <table className="w-full text-xs">
                         <thead><tr className="text-muted-foreground"><th className="text-left">Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead>
                         <tbody>
@@ -228,6 +290,7 @@ function JournalPanel() {
                           ))}
                         </tbody>
                       </table>
+                      {je.reversed_by_je && <p className="mt-2 text-[11px] text-red-700">Reversed by {je.reversed_by_je} ({je.reversed_reason || 'no reason'})</p>}
                     </TableCell></TableRow>
                   )}
                 </React.Fragment>
@@ -236,6 +299,25 @@ function JournalPanel() {
           </Table>
         )}
       </CardContent>
+      <Dialog open={!!reversing} onOpenChange={o => !o && setReversing(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Reverse journal entry</DialogTitle></DialogHeader>
+          <p className="text-sm">Posting a reversal doesn&apos;t delete the original — it adds a mirror JE with debits/credits swapped so the audit trail is intact.</p>
+          <div className="mt-3 space-y-3">
+            <div className="text-xs bg-muted/40 p-2 rounded font-mono">
+              {reversing?.date} · {reversing?.description} · {money(reversing?.total)}
+            </div>
+            <div>
+              <Label>Reason (required)</Label>
+              <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Wrong account picked" data-testid="reverse-reason-input" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReversing(null)} disabled={busy}>Cancel</Button>
+            <Button variant="destructive" onClick={submitReverse} disabled={busy || !reason.trim()} data-testid="reverse-submit">{busy ? 'Reversing…' : 'Post reversal'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
