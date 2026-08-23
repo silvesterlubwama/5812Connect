@@ -111,6 +111,12 @@ export default function ShipmentsAdminPage() {
 
   useEffect(() => { refreshList(); }, [refreshList]);
   useEffect(() => { refreshDetail(); }, [refreshDetail]);
+  // iter 254 — auto-refresh the shipment LIST card whenever the user
+  // returns to it from the detail view (their item edits should be
+  // immediately reflected in the count / weight / progress on the tile).
+  useEffect(() => {
+    if (selectedId === null) refreshList();
+  }, [selectedId, refreshList]);
 
   const createShipment = async () => {
     if (!createForm.name.trim()) { toast.error('Name required'); return; }
@@ -224,18 +230,32 @@ export default function ShipmentsAdminPage() {
     }
     if (!window.confirm(`Ask AI to derive 3D shapes for ${candidates.length} un-analysed item${candidates.length === 1 ? '' : 's'}? Costs one Gemini call per item.`)) return;
     setBulkShapeBusy(true);
-    const toastId = toast.loading(`Analysing ${candidates.length} item${candidates.length === 1 ? '' : 's'}…`);
+    let toastId = toast.loading(`Analysing 0 / ${candidates.length} item${candidates.length === 1 ? '' : 's'}…`);
     try {
       const r = await api.post(`/shipments/${selectedId}/items/derive-shapes-batch`);
-      toast.dismiss(toastId);
-      const { attempted, succeeded, failed, skipped_no_photo } = r.data;
-      const failedCount = (failed || []).length;
-      if (failedCount === 0) {
-        toast.success(`Derived shapes for ${succeeded}/${attempted} items${skipped_no_photo ? ` · ${skipped_no_photo} skipped (no photo)` : ''}`);
-      } else {
-        toast.warning(`${succeeded} ok · ${failedCount} failed${skipped_no_photo ? ` · ${skipped_no_photo} no photo` : ''}`);
+      // iter 254 — server returns immediately; job runs in background.
+      // Poll the shipment doc so item pills update live.
+      const targets = r.data?.targets ?? candidates.length;
+      if (targets === 0) {
+        toast.dismiss(toastId);
+        toast.info('Nothing to analyse.');
+        return;
       }
-      await refreshDetail();
+      const startAnalysed = items.filter(i => i.shape3d).length;
+      const deadline = Date.now() + 20 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 4000));
+        try {
+          const s = await api.get(`/shipments/${selectedId}`);
+          setSelected(s.data);
+          const nowAnalysed = (s.data.items || []).filter(i => i.shape3d).length;
+          const done = nowAnalysed - startAnalysed;
+          toast.loading(`Analysing ${Math.min(done, targets)} / ${targets} item${targets === 1 ? '' : 's'}…`, { id: toastId });
+          if (done >= targets) break;
+        } catch { /* keep polling */ }
+      }
+      toast.dismiss(toastId);
+      toast.success(`3D shape derivation finished`);
     } catch (e) {
       toast.dismiss(toastId);
       toast.error(e.response?.data?.detail || 'Batch shape derivation failed');
@@ -422,13 +442,43 @@ export default function ShipmentsAdminPage() {
     if (missing.length === 0 && !window.confirm('All items already have HS codes. Re-classify everything anyway?')) return;
     const force = missing.length === 0;
     setHsBusy(true);
+    let toastId;
     try {
       const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk`, { force });
-      const { classified, failed, skipped_existing, pvoc_flagged } = r.data || {};
-      toast.success(`AI classified ${classified} item${classified === 1 ? '' : 's'}${pvoc_flagged ? ` · ${pvoc_flagged} PVoC-flagged` : ''}${failed ? ` · ${failed} failed` : ''}${skipped_existing ? ` · ${skipped_existing} already had HS code` : ''}`);
-      await refreshDetail();
-    } catch (e) { toast.error(e.response?.data?.detail || 'HS classification failed'); }
-    finally { setHsBusy(false); }
+      // iter 254 — endpoint now returns immediately with {status:'started', targets, skipped_existing}
+      // and runs the loop server-side. Poll the shipment doc so item pills
+      // fill in live as each Gemini call completes.
+      const targets = r.data?.targets ?? 0;
+      const skipped = r.data?.skipped_existing ?? 0;
+      if (targets === 0) {
+        toast.info(`Nothing to classify${skipped ? ` — ${skipped} already had HS codes` : ''}`);
+        setHsBusy(false);
+        return;
+      }
+      toastId = toast.loading(`AI classifying 0 / ${targets} items…`);
+      const startCount = (selected?.items || []).filter(i => (i.hs_code || '').trim()).length;
+      const total = (selected?.items || []).length;
+      const deadline = Date.now() + 20 * 60 * 1000;   // 20-min cap
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 4000));
+        try {
+          const s = await api.get(`/shipments/${selectedId}`);
+          setSelected(s.data);
+          const withHs = (s.data.items || []).filter(i => (i.hs_code || '').trim()).length;
+          const done = withHs - startCount;
+          const remaining = targets - done;
+          toast.loading(`AI classifying ${Math.min(done, targets)} / ${targets} items…`, { id: toastId });
+          if (remaining <= 0 || withHs >= total) break;
+        } catch { /* keep polling on transient errors */ }
+      }
+      toast.dismiss(toastId);
+      toast.success(`AI classification finished`);
+    } catch (e) {
+      if (toastId) toast.dismiss(toastId);
+      toast.error(e.response?.data?.detail || 'HS classification failed');
+    } finally {
+      setHsBusy(false);
+    }
   };
 
   // ─── Toggle PVoC flag manually on a single item ────────────────
@@ -1284,6 +1334,25 @@ export default function ShipmentsAdminPage() {
               await api.put(url, body);
               await refreshDetail();
             } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
+          }}
+          onPalletRotate={async (pid, deg) => {
+            // iter 254 — double-click rotates the 2D shape (and the 3D
+            // mesh) 90° around the vertical axis. Persist via the same
+            // endpoint choice as onPalletMove above.
+            try {
+              const isPackingUnit = (selected.packing_units || []).some(u => u.id === pid);
+              let url;
+              const body = { rotation_deg: Number(deg) || 0 };
+              if (typeof pid === 'string' && pid.startsWith('_loose:')) {
+                url = `/shipments/${selectedId}/items/${pid.slice('_loose:'.length)}`;
+              } else if (isPackingUnit) {
+                url = `/shipments/${selectedId}/packing-units/${pid}`;
+              } else {
+                url = `/shipments/${selectedId}/pallets/${pid}`;
+              }
+              await api.put(url, body);
+              await refreshDetail();
+            } catch (e) { toast.error(e.response?.data?.detail || 'Rotate failed'); }
           }}
         />
         </div>

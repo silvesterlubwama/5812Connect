@@ -175,12 +175,13 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
         merged["merged"] = True
         merged["over_pledged"] = merged.get("qty_acquired", 0) > merged.get("qty_needed", 1)
         return merged
-    # Auto-placement BEFORE persistence:
-    # 1. If destined for a pallet but no specific pallet picked, pick the
-    #    lightest one so weight spreads evenly across the container.
-    # 2. If a pallet is set but no parent_id, stack on top of the heaviest
-    #    item already on that pallet (bigger/heavier goes at the bottom).
-    auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
+    # iter 254 — auto-placement DISABLED. Previously we auto-assigned an
+    # item to the lightest pallet and auto-stacked lighter items on top of
+    # heavier ones, but that "snapping" made it impossible for admins to
+    # place items exactly where they wanted. Items now land wherever the
+    # caller specifies (or unassigned/loose when nothing is picked), and
+    # stacking is 100% manual via drag-and-drop onto another item.
+    # auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
     # New row
     await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
     item["over_pledged"] = item.get("qty_acquired", 0) > item.get("qty_needed", 1)

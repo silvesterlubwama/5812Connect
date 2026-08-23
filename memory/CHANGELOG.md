@@ -1,5 +1,36 @@
 # 58:12 Connect — Changelog
 
+## Iteration 254b (Feb 2026) — Shipping visualizer: no auto-snap, full-screen edit, rotation, non-blocking bulk AI
+
+### 🔴 P0 — Fix Cloudflare 120s Proxy Read Timeout on bulk AI endpoints
+- Production hit `524 Origin Timeout` when clicking **AI HS + PVoC · Re-classify** on a 45-item shipment (~5-15s per Gemini call × 45 items = 3-11min blocking POST).
+- `POST /api/shipments/{id}/classify-hs-bulk` and `POST /api/shipments/{id}/items/derive-shapes-batch` now fire the Gemini loop as `asyncio.create_task(...)` and return immediately with `{status:"started", targets, ...}` well under 10s.
+- Frontend `bulkClassifyHs` and `bulkDeriveShapes` poll `/shipments/{id}` every 4s, refresh `selected` so item pills update live, and update the toast (`AI classifying 12 / 45 items…`). 20-min safety cap.
+
+### 🔴 P0 — Kill auto-snap everywhere (pallets, packing units, items)
+- `_add_or_merge_item` no longer calls `auto_place_on_pallet` — new items land wherever the caller specifies, or unassigned/loose. Manual pallet assignment + manual stacking.
+- `computeLayout` (`ContainerVisualizer`) dropped the greedy 120×100 grid for un-positioned pallets/units and the wall-clamping `Math.max(0, Math.min(...))` in the drag handler. Items land exactly where dropped.
+- Backend `PUT /pallets/{pid}` and `PUT /packing-units/{uid}` no longer floor-clamp `x_cm/y_cm/floor_x_cm/floor_y_cm` to `>= 0` or `<= container.length/width` — negative coords persist so items can sit past the walls.
+- `PUT /items/{id}` also allows negative `floor_x_cm/floor_y_cm`.
+
+### 🟢 Full-screen editable layout
+- New `Full screen` toggle in the visualizer toolbar (`data-testid="ship-viz-fullscreen-btn"`). Opens a fixed `z-50` overlay with a wider `viewBox` (~2× container length + 60% each side of vertical padding) so admins can stage / edit items past the container's physical footprint.
+- 3D canvas grows to `75vh` in full-screen.
+- Esc closes.
+
+### 🟢 Rotate items in 3D (and 2D)
+- New `rotation_deg` field on items, pallets, and packing units (degrees around the vertical axis, normalised 0-360). Persisted via existing PUT endpoints.
+- Double-click a pallet / item on the 2D floor plan → rotates 90°. Persists through `onPalletRotate` callback.
+- 3D scene applies `mesh.rotation.y` (and edge wireframe rotation) for boxes, cylinders, and compound (mixer) meshes so the rotation is visible from every angle.
+
+### 🟢 Fixed over-sized AI 3D shapes
+- `computeLayout` now prefers the item's stored `dims_cm` over `shape3d.primary` for L/W/H. AI-derived shape only overrides the **kind** (`cylinder | sphere | compound`), not the size. Blenders/mixers whose Gemini-estimated dims came back at ~60cm wide now render at their real dims.
+
+### 🟢 Auto-refresh shipment list card
+- New `useEffect` on `selectedId === null` re-fetches `/shipments` list so item edits done inside a detail view are immediately reflected in the count/weight/progress bar on the tile without a manual `RefreshCw` click.
+
+
+
 ## Iteration 254 (Feb 2026) — Shipping visualizer polish (no snapping, photo-textured faces, batch shape derivation)
 
 ### 🟢 Photo-textured box faces on the 3D container visualizer

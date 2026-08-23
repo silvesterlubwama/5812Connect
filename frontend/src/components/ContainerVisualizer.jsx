@@ -20,7 +20,7 @@ import * as THREE from 'three';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Box, RotateCw, Grid3x3 } from 'lucide-react';
+import { Box, RotateCw, Grid3x3, Maximize2, Minimize2 } from 'lucide-react';
 
 // 40' high-cube interior in cm — matches backend CONTAINER_40FT_HC. Default,
 // overridable per-shipment via the `container` prop on the visualizer.
@@ -93,8 +93,6 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   const sorted = Array.from(groups.values()).sort((a, b) => b.total_weight - a.total_weight);
   const boxes = [];
   const palletMeta = new Map(unifiedPallets.map(p => [p.id, p]));
-  let row = 0;
-  let col = 0;
   const totalVolume = sorted.reduce((s, g) => s + g.total_volume, 0);
   for (const g of sorted) {
     const looseItem = g.loose_item;
@@ -105,11 +103,16 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     // primary_color, and shape.kind flows into the box entry so the 3D
     // renderer picks the right geometry (cylinder / sphere / compound).
     const shape3d = looseItem && looseItem.shape3d;
+    // iter 254 — prefer the item's stored dims_cm (what the user actually
+    // measured) over shape3d.primary. The AI classifier over-estimated
+    // dimensions on some appliance photos (blender came back at 60cm
+    // wide), so we now only let shape3d override the *kind* (cylinder /
+    // sphere / compound), not the L/W/H. Real dims stay authoritative.
     const meta = looseItem ? {
       label: looseItem.name || 'Item',
-      length_cm: (shape3d && shape3d.primary?.L_cm) || (looseItem.dims_cm && looseItem.dims_cm.length) || 30,
-      width_cm: (shape3d && shape3d.primary?.W_cm) || (looseItem.dims_cm && looseItem.dims_cm.width) || 30,
-      height_cm: (shape3d && shape3d.primary?.H_cm) || (looseItem.dims_cm && looseItem.dims_cm.height) || 30,
+      length_cm: (looseItem.dims_cm && looseItem.dims_cm.length) || (shape3d && shape3d.primary?.L_cm) || 30,
+      width_cm: (looseItem.dims_cm && looseItem.dims_cm.width) || (shape3d && shape3d.primary?.W_cm) || 30,
+      height_cm: (looseItem.dims_cm && looseItem.dims_cm.height) || (shape3d && shape3d.primary?.H_cm) || 30,
       x_cm: looseItem.floor_x_cm,
       y_cm: looseItem.floor_y_cm,
       color: (shape3d && shape3d.primary_color) || '#94a3b8',
@@ -128,17 +131,12 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     const baseHeight = meta.height_cm ? Number(meta.height_cm) : (g.total_volume > 0
       ? Math.max(40, Math.min(220, (g.total_volume / Math.max(totalVolume, 1)) * 1200))
       : 40 + Math.min(120, g.items.length * 5));
-    // Use explicit x_cm/y_cm if admin positioned; otherwise greedy grid
-    let x, y;
-    if (meta.x_cm != null && meta.y_cm != null && (meta.x_cm || meta.y_cm || meta._loose_item_id)) {
-      x = Math.max(0, Math.min(CONT.length - L, Number(meta.x_cm) || 0));
-      y = Math.max(0, Math.min(CONT.width - W, Number(meta.y_cm) || 0));
-    } else {
-      x = row * PALLET_L;
-      y = col * PALLET_W;
-      col++;
-      if (col >= 2) { col = 0; row++; }
-    }
+    // iter 254 — NO auto-snap for anything (loose items, pallets, or
+    // packing units). Un-positioned units land at (0,0); admin can drag
+    // them wherever they want, including past the container walls in
+    // full-screen mode. No greedy grid, no wall clamping in layout.
+    const x = Number(meta.x_cm) || 0;
+    const y = Number(meta.y_cm) || 0;
     boxes.push({
       id: g.id,
       label: meta.label,
@@ -163,10 +161,12 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       diameter_cm: meta.diameter_cm || 0,
       shape3d: meta.shape3d || null,
       photo_url: meta.photo_url || null,
+      // iter 254 — rotation about the vertical axis (Y in 3D, Z in 2D).
+      // Applied at render time so packers can turn a long crate lengthwise.
+      rotation_deg: Number((looseItem && looseItem.rotation_deg) || (palletMeta.get(g.id) && palletMeta.get(g.id).rotation_deg) || 0),
     });
-    if (row >= 10 && !meta.x_cm) break;  // out of floor space — overflow indicator below
   }
-  const overflow = boxes.length < sorted.length;
+  const overflow = false;
   const totalVolumeM3 = totalVolume / 1e6;
   const containerVolumeM3 = (CONT.length * CONT.width * CONT.height) / 1e6;
   return {
@@ -192,17 +192,25 @@ function palletColor(id) {
 // ───────────────────────────────────────────────────────────────
 // 2D — top-down SVG floor plan (with optional drag-to-reposition pallets)
 // ───────────────────────────────────────────────────────────────
-function FloorPlan2D({ layout, editable, onPalletMove }) {
+function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscreen = false }) {
   const svgRef = React.useRef(null);
   const [draggingId, setDraggingId] = React.useState(null);
   const [dragGhost, setDragGhost] = React.useState(null);   // {id,x,y}
   if (!layout || layout.boxes.length === 0) return null;
   const { container, boxes } = layout;
   const PAD = 16;
-  const targetWidth = 700;
-  const scale = (targetWidth - PAD * 2) / container.length;
-  const w = container.length * scale + PAD * 2;
-  const h = container.width * scale + PAD * 2;
+  // iter 254 — full-screen mode extends the SVG canvas well beyond the
+  // container walls so items can be dragged / seen past the container's
+  // physical footprint. Compact mode stays tight around the container.
+  const targetWidth = fullscreen ? 1600 : 700;
+  const OVER_X = fullscreen ? container.length * 0.5 : 0;
+  const OVER_Y = fullscreen ? container.width * 0.6 : 0;
+  const scale = (targetWidth - PAD * 2) / (container.length + OVER_X * 2);
+  const w = (container.length + OVER_X * 2) * scale + PAD * 2;
+  const h = (container.width + OVER_Y * 2) * scale + PAD * 2;
+  // Origin offset so container walls sit at (OVER_X, OVER_Y) in cm-space.
+  const OX = OVER_X;
+  const OY = OVER_Y;
 
   const beginDrag = (e, b) => {
     if (!editable || !b.draggable) return;
@@ -217,11 +225,12 @@ function FloorPlan2D({ layout, editable, onPalletMove }) {
     const ctm = svgRef.current.getScreenCTM();
     if (!ctm) return;
     const loc = pt.matrixTransform(ctm.inverse());
-    const cx = (loc.x - PAD) / scale - (dragGhost?.length || 0) / 2;
-    const cy = (loc.y - PAD) / scale - (dragGhost?.width || 0) / 2;
-    const x = Math.max(0, Math.min(container.length - (dragGhost?.length || 0), cx));
-    const y = Math.max(0, Math.min(container.width - (dragGhost?.width || 0), cy));
-    setDragGhost(g => g ? { ...g, x, y } : g);
+    const cx = (loc.x - PAD) / scale - OX - (dragGhost?.length || 0) / 2;
+    const cy = (loc.y - PAD) / scale - OY - (dragGhost?.width || 0) / 2;
+    // iter 254 — NO wall clamping. Items can be positioned anywhere
+    // (including past the container walls) so admins can stage / overflow
+    // items while planning the layout.
+    setDragGhost(g => g ? { ...g, x: cx, y: cy } : g);
   };
   const endDrag = async () => {
     if (!draggingId || !dragGhost) { setDraggingId(null); return; }
@@ -243,45 +252,61 @@ function FloorPlan2D({ layout, editable, onPalletMove }) {
       style={{ cursor: draggingId ? 'grabbing' : 'default', userSelect: 'none', touchAction: 'none' }}
     >
       {/* Container outline */}
-      <rect x={PAD} y={PAD} width={container.length * scale} height={container.width * scale}
+      <rect x={PAD + OX * scale} y={PAD + OY * scale} width={container.length * scale} height={container.width * scale}
         fill="#f8fafc" stroke="#94a3b8" strokeWidth="2" />
       {/* Door side marker (right edge) */}
-      <text x={w - PAD - 4} y={PAD - 4} fontSize="9" fill="#64748b" textAnchor="end">← Doors (load last)</text>
-      <text x={PAD + 2} y={PAD - 4} fontSize="9" fill="#64748b">Back wall (heavy first) →</text>
+      <text x={PAD + (OX + container.length) * scale - 4} y={PAD + OY * scale - 4} fontSize="9" fill="#64748b" textAnchor="end">← Doors (load last)</text>
+      <text x={PAD + OX * scale + 2} y={PAD + OY * scale - 4} fontSize="9" fill="#64748b">Back wall (heavy first) →</text>
       {/* Pallets */}
       {boxes.map(b => {
         const isDragging = draggingId === b.id;
         const px = isDragging ? dragGhost.x : b.x;
         const py = isDragging ? dragGhost.y : b.y;
+        const rot = Number(b.rotation_deg) || 0;
+        // Rotate about the shape's own centre so it stays in place visually.
+        const cxScreen = PAD + (OX + px + b.length / 2) * scale;
+        const cyScreen = PAD + (OY + py + b.width / 2) * scale;
         return (
-          <g key={b.id} onPointerDown={(e) => beginDrag(e, b)} style={{ cursor: (editable && b.draggable) ? 'grab' : 'default' }} data-testid={`viz-pallet-${b.id}`}>
+          <g
+            key={b.id}
+            onPointerDown={(e) => beginDrag(e, b)}
+            onDoubleClick={(e) => {
+              if (!editable || !b.draggable || !onPalletRotate) return;
+              e.preventDefault();
+              const next = (rot + 90) % 360;
+              onPalletRotate(b.id, next);
+            }}
+            transform={rot ? `rotate(${rot} ${cxScreen} ${cyScreen})` : undefined}
+            style={{ cursor: (editable && b.draggable) ? 'grab' : 'default' }}
+            data-testid={`viz-pallet-${b.id}`}
+          >
             {(b.shape === 'cylinder' || b.shape === 'sphere' || b.shape === 'compound') ? (
               // iter 251/253 — top-down disc for any round shape (round bins,
               // AI-derived cylinders/spheres, and compound items like mixers
               // whose base is round anyway).
               <circle
-                cx={PAD + (px + b.length / 2) * scale}
-                cy={PAD + (py + b.width / 2) * scale}
+                cx={PAD + (OX + px + b.length / 2) * scale}
+                cy={PAD + (OY + py + b.width / 2) * scale}
                 r={(b.length / 2) * scale}
                 fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75}
                 stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
               />
             ) : (
               <rect
-                x={PAD + px * scale} y={PAD + py * scale}
+                x={PAD + (OX + px) * scale} y={PAD + (OY + py) * scale}
                 width={b.length * scale} height={b.width * scale}
                 fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75} stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
               />
             )}
             <text
-              x={PAD + (px + b.length / 2) * scale}
-              y={PAD + (py + b.width / 2) * scale}
+              x={PAD + (OX + px + b.length / 2) * scale}
+              y={PAD + (OY + py + b.width / 2) * scale}
               fontSize={Math.max(8, scale * 8)} fill="#fff" textAnchor="middle" dominantBaseline="middle"
               style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.35)', strokeWidth: 2 }}
             >{(b.label || '').length > 14 ? b.label.slice(0, 12) + '…' : b.label}</text>
             <text
-              x={PAD + (px + b.length / 2) * scale}
-              y={PAD + (py + b.width / 2) * scale + Math.max(10, scale * 9)}
+              x={PAD + (OX + px + b.length / 2) * scale}
+              y={PAD + (OY + py + b.width / 2) * scale + Math.max(10, scale * 9)}
               fontSize={Math.max(7, scale * 6)} fill="#fff" textAnchor="middle" opacity="0.9"
             >{b.weight_kg} kg</text>
           </g>
@@ -420,6 +445,10 @@ function useScene3DObjects(layout) {
         });
       }
 
+      // iter 254 — apply rotation about vertical axis (Y). Matches 2D SVG
+      // where the group is rotated about its centre.
+      const rotY = (Number(b.rotation_deg) || 0) * Math.PI / 180;
+
       if (isCompound) {
         // Base cylinder (60% height) + head (30% height, offset up). Keeps
         // the overall bounding box the same as the primary dims so packing
@@ -431,11 +460,13 @@ function useScene3DObjects(layout) {
         const baseGeo = new THREE.CylinderGeometry(baseR, baseR, baseH, 24);
         const baseMesh = new THREE.Mesh(baseGeo, mat);
         baseMesh.position.set(cx, cy - sy / 2 + baseH / 2, cz);
+        baseMesh.rotation.y = rotY;
         baseMesh.castShadow = true; baseMesh.receiveShadow = true;
         root.add(baseMesh);
         const headGeo = new THREE.CylinderGeometry(headR, headR, headH, 24);
         const headMesh = new THREE.Mesh(headGeo, mat.clone());
         headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz);
+        headMesh.rotation.y = rotY;
         headMesh.castShadow = true; headMesh.receiveShadow = true;
         root.add(headMesh);
         continue;   // skip the shared mesh add below
@@ -443,6 +474,7 @@ function useScene3DObjects(layout) {
 
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(cx, cy, cz);
+      mesh.rotation.y = rotY;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       root.add(mesh);
@@ -452,6 +484,7 @@ function useScene3DObjects(layout) {
       const lineMat = new THREE.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.45 });
       const wire = new THREE.LineSegments(edges, lineMat);
       wire.position.copy(mesh.position);
+      wire.rotation.y = rotY;
       root.add(wire);
     }
     return root;
@@ -464,24 +497,16 @@ const ThreeCanvas = React.lazy(async () => {
   const { Canvas } = await import('@react-three/fiber');
   const { OrbitControls } = await import('@react-three/drei');
   return {
-    default: function ThreeCanvasInner({ layout }) {
+    default: function ThreeCanvasInner({ layout, fullscreen = false }) {
       const c = layout?.container || CONTAINER;
       const sceneRoot = useScene3DObjects(layout);
       if (!sceneRoot) return null;
-      // NOTE: We use React.createElement (not JSX) for <primitive> and
-      // <OrbitControls> deliberately. The @emergentbase/visual-edits Babel
-      // plugin injects x-file-name / x-line-number / x-component props on
-      // every JSX element, and react-three-fiber's applyProps walker treats
-      // hyphenated prop names as Three.js property paths (e.g. "x-line-number"
-      // → tries to set mesh.x.line.number) and throws. createElement calls
-      // are NOT visited by the visual-edits transform, so the R3F children
-      // stay clean.
       return React.createElement(
         Canvas,
         {
           camera: { position: [c.length / 6, c.height / 5, c.width / 2], fov: 50 },
           shadows: true,
-          style: { width: '100%', height: 380, borderRadius: 8, background: 'linear-gradient(to bottom, #1e293b 0%, #475569 60%, #94a3b8 100%)' },
+          style: { width: '100%', height: fullscreen ? '75vh' : 380, borderRadius: 8, background: 'linear-gradient(to bottom, #1e293b 0%, #475569 60%, #94a3b8 100%)' },
         },
         React.createElement('primitive', { object: sceneRoot }),
         React.createElement(OrbitControls, { makeDefault: true, target: [c.length / 20, c.height / 30, c.width / 20] }),
@@ -493,9 +518,23 @@ const ThreeCanvas = React.lazy(async () => {
 // ───────────────────────────────────────────────────────────────
 // Public component
 // ───────────────────────────────────────────────────────────────
-export default function ContainerVisualizer({ items = [], pallets = [], packing_units = [], container, editable = false, onPalletMove, defaultMode = '2d' }) {
+export default function ContainerVisualizer({ items = [], pallets = [], packing_units = [], container, editable = false, onPalletMove, onPalletRotate, defaultMode = '2d' }) {
   const [mode, setMode] = useState(defaultMode);
+  const [fullscreen, setFullscreen] = useState(false);
   const layout = useMemo(() => computeLayout(items, pallets, container, packing_units), [items, pallets, container, packing_units]);
+
+  // iter 254 — Esc closes fullscreen; body scroll is locked while open.
+  React.useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [fullscreen]);
 
   if (!layout.boxes.length) {
     return (
@@ -505,9 +544,9 @@ export default function ContainerVisualizer({ items = [], pallets = [], packing_
     );
   }
 
-  return (
-    <Card className="rounded-xl" data-testid="ship-viz">
-      <CardContent className="p-3 space-y-3">
+  const shell = (
+    <Card className={`rounded-xl ${fullscreen ? 'h-full' : ''}`} data-testid="ship-viz">
+      <CardContent className={`p-3 space-y-3 ${fullscreen ? 'h-full flex flex-col' : ''}`}>
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold flex items-center gap-1.5">
@@ -519,36 +558,59 @@ export default function ContainerVisualizer({ items = [], pallets = [], packing_
             <Badge variant="outline" className="text-[10px]">
               vol ~{layout.total_volume_m3} / {layout.container_volume_m3} m³ ({layout.fill_pct}%)
             </Badge>
-            {layout.overflow && (
-              <Badge className="text-[10px] bg-rose-100 text-rose-700">+{layout.overflow_count} pallets beyond floor</Badge>
-            )}
           </div>
-          <div className="flex rounded border overflow-hidden text-[11px]">
-            <button
-              className={`px-2.5 py-1 ${mode === '2d' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
-              onClick={() => setMode('2d')}
-              data-testid="ship-viz-2d-btn"
-            ><Grid3x3 size={10} className="inline mr-1" />2D</button>
-            <button
-              className={`px-2.5 py-1 border-l ${mode === '3d' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
-              onClick={() => setMode('3d')}
-              data-testid="ship-viz-3d-btn"
-            ><RotateCw size={10} className="inline mr-1" />3D</button>
+          <div className="flex items-center gap-1.5">
+            <div className="flex rounded border overflow-hidden text-[11px]">
+              <button
+                className={`px-2.5 py-1 ${mode === '2d' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                onClick={() => setMode('2d')}
+                data-testid="ship-viz-2d-btn"
+              ><Grid3x3 size={10} className="inline mr-1" />2D</button>
+              <button
+                className={`px-2.5 py-1 border-l ${mode === '3d' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                onClick={() => setMode('3d')}
+                data-testid="ship-viz-3d-btn"
+              ><RotateCw size={10} className="inline mr-1" />3D</button>
+            </div>
+            {editable && (
+              <button
+                className="px-2 py-1 text-[11px] rounded border bg-background hover:bg-muted flex items-center gap-1"
+                onClick={() => setFullscreen(v => !v)}
+                data-testid="ship-viz-fullscreen-btn"
+                title={fullscreen ? 'Exit full screen (Esc)' : 'Edit in full screen — items can sit past container walls'}
+              >
+                {fullscreen ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+                {fullscreen ? 'Exit' : 'Full screen'}
+              </button>
+            )}
           </div>
         </div>
 
-        {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} />}
-        {mode === '2d' && editable && (
-          <p className="text-[10px] text-muted-foreground text-center -mt-1">Tip: click + drag pallets to reposition. Container floor is {layout.container.length} × {layout.container.width} cm.</p>
-        )}
+        <div className={fullscreen ? 'flex-1 overflow-auto' : ''}>
+          {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} onPalletRotate={onPalletRotate} fullscreen={fullscreen} />}
+          {mode === '2d' && editable && (
+            <p className="text-[10px] text-muted-foreground text-center mt-1">
+              {fullscreen
+                ? `Full-screen edit — drag to reposition, double-click an item to rotate 90°. Items can sit past the container walls. Container floor is ${layout.container.length} × ${layout.container.width} cm.`
+                : `Tip: click + drag to reposition, double-click to rotate 90°. Container floor is ${layout.container.length} × ${layout.container.width} cm.`}
+            </p>
+          )}
 
-        {mode === '3d' && (
-          <Suspense fallback={<div className="text-xs text-muted-foreground py-8 text-center">Loading 3D…</div>}>
-            <ThreeCanvas layout={layout} />
-            <p className="text-[10px] text-muted-foreground text-center">Click + drag to orbit · scroll to zoom · right-click + drag to pan</p>
-          </Suspense>
-        )}
+          {mode === '3d' && (
+            <Suspense fallback={<div className="text-xs text-muted-foreground py-8 text-center">Loading 3D…</div>}>
+              <ThreeCanvas layout={layout} fullscreen={fullscreen} />
+              <p className="text-[10px] text-muted-foreground text-center">Click + drag to orbit · scroll to zoom · right-click + drag to pan</p>
+            </Suspense>
+          )}
+        </div>
       </CardContent>
     </Card>
+  );
+
+  if (!fullscreen) return shell;
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm p-4 md:p-6 flex flex-col" data-testid="ship-viz-fullscreen">
+      <div className="flex-1 min-h-0">{shell}</div>
+    </div>
   );
 }

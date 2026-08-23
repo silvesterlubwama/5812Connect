@@ -4,6 +4,18 @@
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
 ## Recently Resolved — Iteration 254 (Feb 2026)
+**Shipments visualizer polish — photo-textured 3D boxes + batch shape derivation + no snap + fullscreen edit + rotation + non-blocking bulk AI.**
+
+- **Photo faces**: `ContainerVisualizer` maps each loose item's primary photo onto the door-facing (+X) face of its 3D block via a per-face material array on `BoxGeometry` — packers can identify items visually without hovering. Other faces stay a solid item color, cylinders/spheres/compounds are unchanged, pallets keep the wood texture. `TextureLoader` runs async with sRGB colorSpace + anisotropy 8; relative `/api/uploads` URLs are absolutised through `REACT_APP_BACKEND_URL`.
+- **Batch derive shapes** (non-blocking): `POST /api/shipments/{id}/items/derive-shapes-batch` now spawns an `asyncio.create_task` and returns `{status:"started", targets, ...}` within seconds — no more Cloudflare 120s timeout on 45-item shipments. Frontend polls `/shipments/{id}` every 4s to show live progress.
+- **Bulk HS classification** (non-blocking): same treatment applied to `POST /api/shipments/{id}/classify-hs-bulk`.
+- **No auto-snap anywhere**: `auto_place_on_pallet` disabled in `_add_or_merge_item`, greedy grid removed from `computeLayout`, wall-clamping removed from drag handler + backend PUT endpoints. Items/pallets/packing units land exactly where dropped and can be placed past container walls.
+- **Full-screen edit**: new `Full screen` button on the visualizer opens a `z-50` overlay with a wider viewBox so items can be dragged/seen past the container walls; Esc closes.
+- **Rotation**: new `rotation_deg` on items, pallets, and packing units. Double-click on the 2D floor plan rotates 90°. Applied via `mesh.rotation.y` in the 3D scene (boxes, cylinders, compound) and via SVG group `rotate()` transform in 2D.
+- **No more over-sized 3D shapes**: `computeLayout` prefers the item's stored `dims_cm` for L/W/H; AI-derived `shape3d` only overrides the *kind*, not the size.
+- **Auto-refresh list card**: shipment list re-fetches whenever the user returns to it from a detail view so counts/weight/progress reflect the latest edits.
+
+## Recently Resolved — Iteration 254 (Feb 2026)
 **Shipments visualizer polish — photo-textured 3D boxes + batch shape derivation + no snap.**
 
 - **Photo faces**: `ContainerVisualizer` maps each loose item's primary photo onto the door-facing (+X) face of its 3D block via a per-face material array on `BoxGeometry` — packers can identify items visually without hovering. Other faces stay a solid item color, cylinders/spheres/compounds are unchanged, pallets keep the wood texture. `TextureLoader` runs async with sRGB colorSpace + anisotropy 8; relative `/api/uploads` URLs are absolutised through `REACT_APP_BACKEND_URL`.

@@ -199,6 +199,8 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
                "x_cm", "y_cm", "z_cm",
                # iter 252 — position on the container floor for loose items
                "floor_x_cm", "floor_y_cm",
+               # iter 254 — rotation around vertical axis (degrees)
+               "rotation_deg",
                "hs_code", "hs_code_reason", "condition",
                "manifest_group_id", "requires_pvoc", "pvoc_reason",
                "packing_unit_id", "suitcase_id", "passenger_id"}
@@ -211,8 +213,16 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
             set_ops[f"items.$.{k}"] = max(1, int(v or 1))
         elif k in ("qty_acquired",):
             set_ops[f"items.$.{k}"] = max(0, int(v or 0))
-        elif k in ("weight_kg", "value_usd", "x_cm", "y_cm", "z_cm", "floor_x_cm", "floor_y_cm"):
+        elif k in ("weight_kg", "value_usd"):
             set_ops[f"items.$.{k}"] = max(0, float(v or 0))
+        elif k in ("x_cm", "y_cm", "z_cm", "floor_x_cm", "floor_y_cm"):
+            # iter 254 — allow negative floor coords so items can be
+            # positioned past container walls in full-screen edit mode.
+            set_ops[f"items.$.{k}"] = float(v or 0)
+        elif k in ("rotation_deg",):
+            # iter 254 — rotation around the vertical (Y) axis in degrees.
+            # Normalised to 0-360.
+            set_ops[f"items.$.{k}"] = float(v or 0) % 360
         elif k == "priority":
             p = (v or "normal").lower()
             set_ops[f"items.$.{k}"] = p if p in VALID_PRIORITIES else "normal"
@@ -933,8 +943,11 @@ async def derive_shapes_batch(
 ):
     """iter 254 — Batch-derive 3D shapes for every un-analysed item in the
     shipment that (a) has a photo and (b) doesn't already have `shape3d`.
-    Runs sequentially so we respect Gemini rate limits and can report a
-    per-item outcome. Returns a summary the UI can toast.
+
+    Runs the Gemini classifier loop as a detached asyncio task so long queues
+    (45+ items) don't blow past Cloudflare's 120s proxy read timeout.
+    Returns immediately with the count of targets — the frontend polls
+    `/shipments/{id}` to watch `shape3d` fill in per item.
     """
     ship = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
     if not ship:
@@ -948,28 +961,37 @@ async def derive_shapes_batch(
         )
     ]
 
-    succeeded = 0
-    failed: list[dict] = []
     skipped_no_photo = sum(
         1 for it in items
         if not it.get("shape3d") and not it.get("photo_url") and not (it.get("image_urls") or [])
     )
+    already_analysed = sum(1 for it in items if it.get("shape3d"))
+    user = current_user
 
-    for it in candidates:
+    async def _run():
+        for it in candidates:
+            try:
+                await _derive_shape3d_for_item(shipment_id, it, user)
+            except Exception as ex:
+                logger.warning(f"derive_shapes_batch item {it.get('id')} failed: {ex}")
         try:
-            await _derive_shape3d_for_item(shipment_id, it, current_user)
-            succeeded += 1
-        except HTTPException as e:
-            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e.detail)[:120]})
-        except Exception as e:
-            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e)[:120]})
+            await _audit(user["id"], "derive_shapes_batch_done", "shipment", shipment_id,
+                         {"attempted": len(candidates)})
+        except Exception:
+            pass
+
+    import asyncio
+    asyncio.create_task(_run())
 
     return {
-        "attempted": len(candidates),
-        "succeeded": succeeded,
-        "failed": failed,
+        "status": "started",
+        "targets": len(candidates),
         "skipped_no_photo": skipped_no_photo,
-        "already_analysed": sum(1 for it in items if it.get("shape3d")),
+        "already_analysed": already_analysed,
+        "message": (
+            f"3D shape derivation started for {len(candidates)} item(s) in the background. "
+            "Item pills will update as each one is classified."
+        ),
     }
 
 
@@ -1185,7 +1207,20 @@ async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = 
 @router.post("/shipments/{shipment_id}/classify-hs-bulk")
 async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: dict = Depends(require_admin)):
     """Classify HS codes + PVoC for every item in the shipment that doesn't have
-    one (or all items when `force=true`).  Returns per-item results + counters."""
+    one (or all items when `force=true`).
+
+    iter 254 — This endpoint used to run the entire loop inline, which for
+    large shipments (45+ items × ~5-15s Gemini call each) blew past
+    Cloudflare's 120s proxy read timeout in production. It now:
+
+      1. Counts targets synchronously,
+      2. Fires the classification loop as a detached asyncio task,
+      3. Returns immediately with `{status:"started", targets:N}`.
+
+    The frontend polls `/shipments/{id}` and watches `hs_code` presence to
+    know when the run finishes. Progress is visible per-item as each Mongo
+    update lands.
+    """
     force = bool((data or {}).get("force"))
     s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
     if not s:
@@ -1193,41 +1228,46 @@ async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: di
     items = s.get("items") or []
     dest_country = s.get("dest_country", "") or ""
     targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
-    results = []
     skipped = len(items) - len(targets)
-    for it in targets:
+    user_id = current_user["id"]
+
+    async def _run():
+        for it in targets:
+            try:
+                r = await _classify_hs_with_ai(
+                    it.get("name", ""), it.get("category", ""),
+                    it.get("condition", "used"), dest_country,
+                )
+                await db.shipments.update_one(
+                    {"id": shipment_id, "items.id": it["id"]},
+                    {"$set": {
+                        "items.$.hs_code": r["hs_code"],
+                        "items.$.hs_code_reason": r["reason"],
+                        "items.$.requires_pvoc": r["requires_pvoc"],
+                        "items.$.pvoc_reason": r["pvoc_reason"],
+                        "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+            except Exception as ex:
+                logger.warning(f"bulk_classify_hs item {it.get('id')} failed: {ex}")
         try:
-            r = await _classify_hs_with_ai(
-                it.get("name", ""), it.get("category", ""),
-                it.get("condition", "used"), dest_country,
-            )
-            await db.shipments.update_one(
-                {"id": shipment_id, "items.id": it["id"]},
-                {"$set": {
-                    "items.$.hs_code": r["hs_code"],
-                    "items.$.hs_code_reason": r["reason"],
-                    "items.$.requires_pvoc": r["requires_pvoc"],
-                    "items.$.pvoc_reason": r["pvoc_reason"],
-                    "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-            results.append({
-                "item_id": it["id"], "name": it["name"],
-                "hs_code": r["hs_code"], "reason": r["reason"],
-                "requires_pvoc": r["requires_pvoc"], "pvoc_reason": r["pvoc_reason"],
-                "ok": True,
-            })
-        except HTTPException as ex:
-            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": ex.detail})
-        except Exception as ex:  # pragma: no cover
-            results.append({"item_id": it["id"], "name": it["name"], "ok": False, "error": str(ex)[:120]})
+            await _audit(user_id, "bulk_classify_hs_done", "shipment", shipment_id,
+                         {"attempted": len(targets), "skipped_existing": skipped})
+        except Exception:
+            pass
+
+    import asyncio
+    asyncio.create_task(_run())
+
     return {
+        "status": "started",
         "shipment_id": shipment_id,
-        "classified": sum(1 for r in results if r.get("ok")),
-        "failed": sum(1 for r in results if not r.get("ok")),
+        "targets": len(targets),
         "skipped_existing": skipped,
-        "pvoc_flagged": sum(1 for r in results if r.get("requires_pvoc")),
-        "results": results,
+        "message": (
+            f"AI classification started for {len(targets)} item(s) in the background. "
+            "Watch the item list — HS codes will appear as they're classified."
+        ),
     }
 
 

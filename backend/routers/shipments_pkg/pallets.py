@@ -28,7 +28,7 @@ async def add_pallet(shipment_id: str, data: dict, current_user: dict = Depends(
 
 @router.put("/shipments/{shipment_id}/pallets/{pallet_id}")
 async def update_pallet(shipment_id: str, pallet_id: str, data: dict, current_user: dict = Depends(require_admin)):
-    allowed = {"label", "notes", "length_cm", "width_cm", "height_cm", "x_cm", "y_cm", "color"}
+    allowed = {"label", "notes", "length_cm", "width_cm", "height_cm", "x_cm", "y_cm", "color", "rotation_deg"}
     set_ops = {}
     for k, v in data.items():
         if k not in allowed:
@@ -36,7 +36,11 @@ async def update_pallet(shipment_id: str, pallet_id: str, data: dict, current_us
         if k in ("length_cm", "width_cm", "height_cm"):
             set_ops[f"pallets.$.{k}"] = max(5, float(v or 0))
         elif k in ("x_cm", "y_cm"):
-            set_ops[f"pallets.$.{k}"] = max(0, float(v or 0))
+            # iter 254 — allow negative floor positions (items/pallets can be
+            # placed past the container walls in full-screen edit mode).
+            set_ops[f"pallets.$.{k}"] = float(v or 0)
+        elif k == "rotation_deg":
+            set_ops[f"pallets.$.{k}"] = float(v or 0) % 360
         else:
             set_ops[f"pallets.$.{k}"] = v
     if not set_ops:
@@ -200,7 +204,7 @@ async def add_packing_unit(shipment_id: str, data: dict, current_user: dict = De
 @router.put("/shipments/{shipment_id}/packing-units/{unit_id}")
 async def update_packing_unit(shipment_id: str, unit_id: str, data: dict, current_user: dict = Depends(require_admin)):
     allowed = {"name", "L_cm", "W_cm", "H_cm", "weight_capacity_kg", "color",
-               "parent_id", "floor_x_cm", "floor_y_cm", "notes"}
+               "parent_id", "floor_x_cm", "floor_y_cm", "notes", "rotation_deg"}
     # Load shipment to clamp floor coords to the container's floor
     # (drag-drop from the UI would otherwise persist off-container positions).
     s = await db.shipments.find_one(
@@ -220,11 +224,15 @@ async def update_packing_unit(shipment_id: str, unit_id: str, data: dict, curren
         if k not in allowed:
             continue
         if k == "floor_x_cm":
-            set_ops[f"packing_units.$.{k}"] = max(0.0, min(max(0.0, max_x - unit_L), float(v or 0)))
+            # iter 254 — no wall clamping so units can sit past container walls in full-screen edit.
+            set_ops[f"packing_units.$.{k}"] = float(v or 0)
         elif k == "floor_y_cm":
-            set_ops[f"packing_units.$.{k}"] = max(0.0, min(max(0.0, max_y - unit_W), float(v or 0)))
+            set_ops[f"packing_units.$.{k}"] = float(v or 0)
         elif k in ("L_cm", "W_cm", "H_cm", "weight_capacity_kg"):
             set_ops[f"packing_units.$.{k}"] = max(0, float(v or 0))
+        elif k == "rotation_deg":
+            # iter 254 — rotation about vertical axis, normalised to 0-360.
+            set_ops[f"packing_units.$.{k}"] = float(v or 0) % 360
         elif k == "parent_id":
             set_ops[f"packing_units.$.{k}"] = v or None
         else:
