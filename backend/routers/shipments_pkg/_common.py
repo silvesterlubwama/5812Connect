@@ -472,12 +472,19 @@ PACKING_PRESETS = {
     "plastic_tote": {"L_cm": 70,  "W_cm": 45,  "H_cm": 40,   "cap_kg": 40,   "label": "Plastic tote (54L)"},
     "crate_wood":   {"L_cm": 100, "W_cm": 60,  "H_cm": 60,   "cap_kg": 200,  "label": "Wooden crate"},
     "banana_box":   {"L_cm": 50,  "W_cm": 40,  "H_cm": 25,   "cap_kg": 18,   "label": "Banana box"},
+    # iter 251 — round bin. 24" diameter ≈ 61 cm. Height a common 30" (≈76 cm)
+    # heavy-duty utility bin. We still expose L/W (both = diameter) so the
+    # existing rectangular packing solver keeps working; the visualiser reads
+    # the `shape:"cylinder"` metadata to draw a cylinder in 3D instead.
+    "round_bin_24": {"L_cm": 61,  "W_cm": 61,  "H_cm": 76,   "cap_kg": 45,   "label": "Round bin (24\" ø)", "shape": "cylinder", "diameter_cm": 61},
     "suitcase_lg":  {"L_cm": 76,  "W_cm": 51,  "H_cm": 31,   "cap_kg": 23,   "label": "Large suitcase (28\")"},
     "suitcase_md":  {"L_cm": 66,  "W_cm": 46,  "H_cm": 27,   "cap_kg": 23,   "label": "Medium suitcase (24\")"},
     "carry_on":     {"L_cm": 55,  "W_cm": 40,  "H_cm": 22,   "cap_kg": 10,   "label": "Carry-on (22\")"},
     "duffel":       {"L_cm": 76,  "W_cm": 36,  "H_cm": 36,   "cap_kg": 20,   "label": "Duffel bag"},
 }
 
-VALID_UNIT_TYPES = {"pallet", "box", "tote", "crate", "suitcase", "carry_on", "duffel"}
+# `bin` is a new type — round/cylindrical. Solver treats it as a bounding
+# box; visualiser renders as a cylinder using preset.shape or unit.shape.
+VALID_UNIT_TYPES = {"pallet", "box", "tote", "crate", "bin", "suitcase", "carry_on", "duffel"}
 VALID_MODES = {"container", "airport"}
 

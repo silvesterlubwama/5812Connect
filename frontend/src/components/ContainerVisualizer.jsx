@@ -51,6 +51,10 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       y_cm: u.y_cm,
       color: u.color || null,
       _packing_unit_type: u.type,
+      // iter 251 — surface the shape (box|cylinder) + diameter so the 3D
+      // renderer can pick the right geometry for round bins.
+      shape: u.shape || (u.type === 'bin' ? 'cylinder' : 'box'),
+      diameter_cm: u.diameter_cm || 0,
     }))),
   ];
   // Group items by pallet_id OR packing_unit_id (both supported)
@@ -117,6 +121,10 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       item_count: g.items.length,
       color: meta.color || (g.id === '_loose' ? '#94a3b8' : palletColor(g.id)),
       draggable: g.id !== '_loose',  // loose group isn't a real pallet
+      // iter 251 — round-bin support: cylinder shape uses L as diameter so
+      // 2D + 3D both render a disc/cylinder instead of a rectangle.
+      shape: meta.shape || 'box',
+      diameter_cm: meta.diameter_cm || 0,
     });
     if (row >= 10 && !meta.x_cm) break;  // out of floor space — overflow indicator below
   }
@@ -209,11 +217,22 @@ function FloorPlan2D({ layout, editable, onPalletMove }) {
         const py = isDragging ? dragGhost.y : b.y;
         return (
           <g key={b.id} onPointerDown={(e) => beginDrag(e, b)} style={{ cursor: (editable && b.draggable) ? 'grab' : 'default' }} data-testid={`viz-pallet-${b.id}`}>
-            <rect
-              x={PAD + px * scale} y={PAD + py * scale}
-              width={b.length * scale} height={b.width * scale}
-              fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75} stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
-            />
+            {b.shape === 'cylinder' ? (
+              // iter 251 — 24" round bins draw as a top-down disc
+              <circle
+                cx={PAD + (px + b.length / 2) * scale}
+                cy={PAD + (py + b.width / 2) * scale}
+                r={(b.length / 2) * scale}
+                fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75}
+                stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
+              />
+            ) : (
+              <rect
+                x={PAD + px * scale} y={PAD + py * scale}
+                width={b.length * scale} height={b.width * scale}
+                fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75} stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
+              />
+            )}
             <text
               x={PAD + (px + b.length / 2) * scale}
               y={PAD + (py + b.width / 2) * scale}
@@ -297,7 +316,12 @@ function useScene3DObjects(layout) {
       const cx = (b.x + b.length / 2) / 10;
       const cy = ((b.z || 0) + b.height / 2) / 10;   // honor z-offset for stacking
       const cz = (b.y + b.width / 2) / 10;
-      const geo = new THREE.BoxGeometry(sx, sy, sz);
+      // iter 251 — cylinder for round bins. L already equals diameter (both
+      // set to the same value on the packing_unit), so radius = sx / 2.
+      const isCylinder = b.shape === 'cylinder';
+      const geo = isCylinder
+        ? new THREE.CylinderGeometry(sx / 2, sx / 2, sy, 32, 1, false)
+        : new THREE.BoxGeometry(sx, sy, sz);
       const isPallet = b.kind === 'pallet';
       const mat = isPallet ? palletWood.clone() : new THREE.MeshStandardMaterial({
         color: new THREE.Color(b.color || 0xb45309),

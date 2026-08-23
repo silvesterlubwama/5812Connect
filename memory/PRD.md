@@ -3,6 +3,25 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 251 (Feb 2026)
+**Shipments — cylindrical 24" round bin as a first-class container type.**
+
+- New packing-unit **type "bin"** (added to `VALID_UNIT_TYPES`) and new preset **`round_bin_24`** (61×61×76 cm, 45 kg cap, `shape: cylinder`, `diameter_cm: 61`).
+- Backend `add_packing_unit` derives `shape` from the preset (or `type === "bin"`) and stores it on the unit. Rectangular packing solver keeps working because the unit still has L×W dims (both = diameter).
+- ContainerVisualizer now renders **cylinders in 3D** (`THREE.CylinderGeometry`) and **circles in 2D** (SVG `<circle>`) for any unit with `shape: cylinder`. Every other unit (pallet/box/tote/crate) unchanged — pure additive change.
+- Frontend picker: added **"Round bin"** to the Type dropdown in `ShipmentPackingPanel` + 🪣 icon in the placement select on `ShipmentsAdminPage`.
+- Verified end-to-end: creating a `type=bin, preset_key=round_bin_24` unit via `POST /api/shipments/{id}/packing-units` returns `{shape: "cylinder", diameter_cm: 61.0, L_cm: 61.0, W_cm: 61.0, H_cm: 76.0, name: "Round bin (24\" ø)"}`.
+
+## Recently Resolved — Iteration 250 (Feb 2026)
+**Shipments — scan_run_id + Undo Last Scan + Multi-Photo Box Merge + Box Photo Gallery.**
+
+- Every scanned photo tagged with a common `scan_run_id`; both created items and packing_units carry it. A `db.shipment_scan_runs` row records `created_item_ids`, `created_unit_ids`, and `linked_item_updates` (per-item qty deltas + prior packing_unit_id) so the whole batch can be reverted in one call.
+- **New endpoints**: `GET /api/shipments/{id}/scan-runs` (list, newest first, capped at 20) + `POST /api/shipments/{id}/scan-runs/{run_id}/revert` (pulls created items/units, undoes qty bumps, restores prior packing_unit_id, marks run reverted).
+- **Multi-photo box merge**: when the same `box_number` appears in multiple photos of a batch, the 2nd+ photo appends to the SAME `packing_unit.photos[]` instead of creating duplicate units. `boxes_matched` counter only bumps on first match.
+- **Box Photo Gallery** on the shipment detail: `UnitCard` renders up to 6 thumbnails from `packing_unit.photos[]` (fallback to `photo_url` for pre-iter250 units). Click → full photo in new tab.
+- **Undo button** inside the Box Scan result dialog (`box-scan-undo`). Confirms with an inline prompt, calls revert, refreshes.
+- **Container Map Export** (JSON + PNG) — two small buttons above ContainerVisualizer. JSON dumps the whole layout doc; PNG snapshots the visualiser wrapper via `html-to-image` at 2× pixel density.
+
 ## Recently Resolved — Iteration 249 (Feb 2026)
 **Shipments — batch box-photo scanner + manifest wording refresh.**
 

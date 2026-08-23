@@ -31,6 +31,7 @@ const UNIT_COLORS = {
   box: '#f59e0b',
   tote: '#06b6d4',
   crate: '#84cc16',
+  bin: '#0ea5e9',        // iter 251 — round bins render sky-blue
   suitcase: '#334155',
   carry_on: '#6366f1',
   duffel: '#ec4899',
@@ -419,6 +420,24 @@ function UnitCard({ unit, stackedChildren, onEdit, onDelete, onDropItem }) {
           ))}
         </div>
       )}
+      {/* iter 250 — Box Photo Gallery. Every photo the batch-scanner uploaded
+          for this unit lands in `photos[]` (also mirrored to `photo_url` for
+          back-compat). Packers use this to visually verify a scan matched the
+          right physical box before printing labels. */}
+      {(() => {
+        const photos = (unit.photos && unit.photos.length > 0) ? unit.photos : (unit.photo_url ? [unit.photo_url] : []);
+        if (photos.length === 0) return null;
+        return (
+          <div className="mt-2 flex gap-1.5 flex-wrap" data-testid={`unit-photos-${unit.id}`}>
+            {photos.slice(0, 6).map((url, i) => (
+              <a key={i} href={url} target="_blank" rel="noreferrer" className="block relative group">
+                <img src={url} alt={`box ${i + 1}`} className="w-12 h-12 rounded object-cover border border-slate-300 hover:border-primary transition" />
+              </a>
+            ))}
+            {photos.length > 6 && <span className="text-[10px] text-muted-foreground self-center">+{photos.length - 6}</span>}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -661,6 +680,7 @@ function PackingUnitDialog({ sid, presets, shipment, unit, onClose, onSaved }) {
                   <SelectItem value="box">Box</SelectItem>
                   <SelectItem value="tote">Tote</SelectItem>
                   <SelectItem value="crate">Crate</SelectItem>
+                  <SelectItem value="bin">Round bin</SelectItem>
                 </SelectContent>
               </Select>
             </div>

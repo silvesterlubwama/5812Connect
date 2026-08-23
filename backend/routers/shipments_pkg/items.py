@@ -309,18 +309,15 @@ async def scan_boxes(
 ):
     """Scan one or more full-box photos and auto-populate the shipment.
 
-    Returns:
-        {
-          "photos_processed": int,
-          "boxes_created":    int,   # new packing_units added
-          "boxes_matched":    int,   # existing packing_units linked
-          "items_added":      int,   # brand-new items
-          "items_linked":     int,   # existing items updated with packing_unit
-          "errors":           [{photo_index, error}],
-          "results":          [   # per-photo breakdown for the UI
-            {photo_index, box_number, is_personal, matched_box_id, items:[...]}
-          ]
-        }
+    All items + packing_units created (or updated) here are tagged with the
+    same `scan_run_id`, so the whole batch can be reverted in one call via
+    `POST .../scan-runs/{run_id}/revert`. A summary of the run is persisted
+    in `db.shipment_scan_runs` for the "recent scans" UI + undo button.
+
+    When the SAME box_number shows up in multiple photos of the batch (front,
+    side, list — a very common volunteer flow), they auto-collapse onto ONE
+    packing_unit, so 3 photos of "Box 12" don't produce 3 boxes. Every photo's
+    URL still lands in `packing_unit.photos[]` for the gallery UI.
     """
     if not images:
         raise HTTPException(status_code=400, detail="Upload at least one photo")
@@ -340,9 +337,13 @@ async def scan_boxes(
     import tempfile
     import json as _json
 
+    scan_run_id = f"scn_{uuid.uuid4().hex[:10]}"
     boxes_created = boxes_matched = items_added = items_linked = 0
     errors: list = []
     results: list = []
+    created_item_ids: list = []           # for undo — pull these
+    created_unit_ids: list = []           # for undo — pull these
+    linked_item_updates: list = []        # for undo — reverse packing_unit_id + qty_acquired
 
     # A stable lookup for existing packing units by name — case-insensitive
     # substring match so "Box 12" written in marker matches "Box 12 – Kitchen".
@@ -483,12 +484,30 @@ async def scan_boxes(
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "created_by": current_user["id"],
                     "photo_url": photo_url,
+                    # iter 250 — every scan-scoped box carries the run id + a
+                    # multi-photo gallery so the "Box Photo Gallery" UI can
+                    # render every angle a volunteer uploaded.
+                    "photos": [photo_url] if photo_url else [],
+                    "scan_run_id": scan_run_id,
+                    "auto_scanned": True,
                 }
                 await db.shipments.update_one({"id": shipment_id}, {"$push": {"packing_units": new_unit}})
                 target_unit = new_unit
                 boxes_created += 1
+                created_unit_ids.append(new_unit["id"])
             else:
-                boxes_matched += 1
+                # iter 250 — same box photographed multiple times in this batch
+                # (front / side / list). Append the new photo to the existing
+                # unit's gallery instead of creating a duplicate packing_unit.
+                if photo_url:
+                    await db.shipments.update_one(
+                        {"id": shipment_id, "packing_units.id": target_unit["id"]},
+                        {"$addToSet": {"packing_units.$.photos": photo_url}},
+                    )
+                # Only counts as a "matched box" the FIRST time in this run.
+                # Repeat photos of a box already-merged-this-run are silent.
+                if target_unit["id"] not in created_unit_ids:
+                    boxes_matched += 1
 
         # ── Parse the items from the AI response ─────────────────────
         photo_result_items = []
@@ -510,8 +529,11 @@ async def scan_boxes(
 
             existing = _match_item(item_name, cur_items)
             if existing:
-                # Link to the box + bump qty_acquired
+                # Link to the box + bump qty_acquired. Track the delta so a
+                # subsequent /revert can undo it precisely (subtract qty back
+                # off + null the packing_unit_id we set here).
                 set_ops = {"items.$.updated_at": datetime.now(timezone.utc).isoformat()}
+                prior_unit = existing.get("packing_unit_id")
                 if target_unit:
                     set_ops["items.$.packing_unit_id"] = target_unit["id"]
                 await db.shipments.update_one(
@@ -519,6 +541,12 @@ async def scan_boxes(
                     {"$set": set_ops, "$inc": {"items.$.qty_acquired": qty}},
                 )
                 items_linked += 1
+                linked_item_updates.append({
+                    "item_id": existing["id"],
+                    "qty_delta": qty,
+                    "prior_packing_unit_id": prior_unit,
+                    "new_packing_unit_id": target_unit["id"] if target_unit else None,
+                })
                 photo_result_items.append({
                     "item_id": existing["id"], "name": existing.get("name"),
                     "action": "linked", "qty": qty, "value_usd": value,
@@ -536,8 +564,11 @@ async def scan_boxes(
                     "scanned_at": datetime.now(timezone.utc).isoformat(),
                     "notes": f"Auto-added from box photo{' ' + box_number if box_number else ''}",
                 })
+                # iter 250 — tag the item with the run id for surgical undo.
+                new_item["scan_run_id"] = scan_run_id
                 await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": new_item}})
                 items_added += 1
+                created_item_ids.append(new_item["id"])
                 photo_result_items.append({
                     "item_id": new_item["id"], "name": new_item["name"],
                     "action": "added", "qty": qty, "value_usd": value,
@@ -558,8 +589,36 @@ async def scan_boxes(
 
     await _audit(current_user["id"], "scan_boxes", "shipment", shipment_id,
                  {"photos": len(images), "items_added": items_added,
-                  "items_linked": items_linked, "boxes_created": boxes_created})
+                  "items_linked": items_linked, "boxes_created": boxes_created,
+                  "scan_run_id": scan_run_id})
+
+    # iter 250 — persist the scan run so the "recent scans" list + undo button
+    # have everything they need. Small footprint: just the ids we touched.
+    run_doc = {
+        "id": scan_run_id,
+        "shipment_id": shipment_id,
+        "photos_processed": len(images),
+        "boxes_created": boxes_created,
+        "boxes_matched": boxes_matched,
+        "items_added": items_added,
+        "items_linked": items_linked,
+        "errors": errors,
+        "created_item_ids": created_item_ids,
+        "created_unit_ids": created_unit_ids,
+        "linked_item_updates": linked_item_updates,
+        "reverted": False,
+        "results_summary": [{"photo_index": r["photo_index"], "box_number": r.get("box_number"),
+                             "is_personal": r.get("is_personal"), "confidence": r.get("confidence"),
+                             "matched_box_id": r.get("matched_box_id"),
+                             "item_count": len(r.get("items") or [])} for r in results],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name"),
+    }
+    await db.shipment_scan_runs.insert_one(run_doc)
+
     return {
+        "scan_run_id": scan_run_id,
         "photos_processed": len(images),
         "boxes_created": boxes_created,
         "boxes_matched": boxes_matched,
@@ -568,6 +627,74 @@ async def scan_boxes(
         "errors": errors,
         "results": results,
     }
+
+
+@router.get("/shipments/{shipment_id}/scan-runs")
+async def list_scan_runs(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """Recent scan runs for a shipment (newest first, capped at 20). Feeds the
+    "recent scans" list on the shipment detail + the Undo button."""
+    rows = await db.shipment_scan_runs.find(
+        {"shipment_id": shipment_id}, {"_id": 0},
+    ).sort("created_at", -1).limit(20).to_list(20)
+    return rows
+
+
+@router.post("/shipments/{shipment_id}/scan-runs/{run_id}/revert")
+async def revert_scan_run(shipment_id: str, run_id: str, current_user: dict = Depends(require_admin)):
+    """Reverse a scan run:
+      • Pull every item created by this run
+      • Pull every packing_unit created by this run
+      • For items that were LINKED (not added), subtract the qty delta this
+        run added, and restore the prior packing_unit_id
+    Marks the run `reverted: true` so it can't be reverted twice.
+    """
+    run = await db.shipment_scan_runs.find_one({"id": run_id, "shipment_id": shipment_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    if run.get("reverted"):
+        raise HTTPException(status_code=400, detail="This run has already been reverted")
+
+    # 1) Reverse the "linked" updates — undo qty bumps + packing_unit_id sets.
+    #    Prior packing_unit_id is restored (may be None, which unsets the field
+    #    in practice — Mongo stores null which the visualiser reads as "loose").
+    for upd in run.get("linked_item_updates") or []:
+        set_ops = {"items.$.packing_unit_id": upd.get("prior_packing_unit_id")}
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": upd["item_id"]},
+            {"$set": set_ops, "$inc": {"items.$.qty_acquired": -int(upd.get("qty_delta") or 0)}},
+        )
+
+    # 2) Pull the items + units the run created outright.
+    if run.get("created_item_ids"):
+        await db.shipments.update_one(
+            {"id": shipment_id},
+            {"$pull": {"items": {"id": {"$in": run["created_item_ids"]}}}},
+        )
+    if run.get("created_unit_ids"):
+        await db.shipments.update_one(
+            {"id": shipment_id},
+            {"$pull": {"packing_units": {"id": {"$in": run["created_unit_ids"]}}}},
+        )
+        # Any items that were placed INTO a now-deleted box need their
+        # packing_unit_id cleared so they don't dangle. Cheap loop — usually
+        # < 50 items per run.
+        for uid in run["created_unit_ids"]:
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.packing_unit_id": uid},
+                {"$set": {"items.$[e].packing_unit_id": None}},
+                array_filters=[{"e.packing_unit_id": uid}],
+            )
+
+    await db.shipment_scan_runs.update_one(
+        {"id": run_id},
+        {"$set": {"reverted": True, "reverted_at": datetime.now(timezone.utc).isoformat(),
+                  "reverted_by": current_user["id"]}},
+    )
+    await _audit(current_user["id"], "revert_scan", "shipment", shipment_id, {"scan_run_id": run_id})
+    return {"reverted": True, "scan_run_id": run_id,
+            "items_removed": len(run.get("created_item_ids") or []),
+            "boxes_removed": len(run.get("created_unit_ids") or []),
+            "items_unlinked": len(run.get("linked_item_updates") or [])}
 
 
 

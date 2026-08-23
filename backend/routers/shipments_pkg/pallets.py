@@ -168,6 +168,10 @@ async def add_packing_unit(shipment_id: str, data: dict, current_user: dict = De
     if utype not in VALID_UNIT_TYPES:
         raise HTTPException(status_code=400, detail=f"type must be one of {sorted(VALID_UNIT_TYPES)}")
     preset = PACKING_PRESETS.get(data.get("preset_key") or "", {})
+    # iter 251 — cylindrical bins carry a `shape` flag so the visualiser can
+    # render a cylinder. Falls back to "box" (the rectangular default) for
+    # every other preset so back-compat holds.
+    default_shape = "cylinder" if (utype == "bin" or preset.get("shape") == "cylinder") else "box"
     unit = {
         "id": f"pku_{uuid.uuid4().hex[:8]}",
         "type": utype,
@@ -181,6 +185,8 @@ async def add_packing_unit(shipment_id: str, data: dict, current_user: dict = De
         "parent_id": data.get("parent_id") or None,  # for stacking
         "floor_x_cm": float(data.get("floor_x_cm") or 0),  # position on container floor
         "floor_y_cm": float(data.get("floor_y_cm") or 0),
+        "shape": (data.get("shape") or default_shape).lower(),  # box | cylinder
+        "diameter_cm": float(data.get("diameter_cm") or preset.get("diameter_cm") or 0),
         "notes": (data.get("notes") or "")[:300],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],

@@ -1072,7 +1072,7 @@ export default function ShipmentsAdminPage() {
                               <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground">Packing units</div>
                             )}
                             {packingUnits.map(u => {
-                              const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : '🟫';
+                              const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : u.type === 'bin' ? '🪣' : '🟫';
                               return (
                                 <SelectItem key={u.id} value={`u:${u.id}`}>{icon} {u.name || u.preset_key || u.type}</SelectItem>
                               );
@@ -1132,6 +1132,56 @@ export default function ShipmentsAdminPage() {
           iter228: now receives both legacy `pallets` AND new `packing_units` so
           the single visualizer shows the unified layout — no duplicate views. */}
       {(selected.mode || 'container') !== 'airport' && (
+        <>
+        <div className="flex justify-end gap-2 -mb-2">
+          {/* iter 250 — one-tap map export. JSON for downstream tools (e.g.
+              feeding a 3rd-party loader); PNG for sharing / whiteboards.
+              PNG grabs the visualiser wrapper via html-to-image. */}
+          <Button
+            size="sm" variant="outline" data-testid="ship-export-map-json"
+            onClick={() => {
+              const map = {
+                shipment_id: selectedId,
+                shipment_name: selected.name,
+                container: selected.container_dims_cm,
+                packing_units: selected.packing_units || [],
+                pallets: selected.pallets || [],
+                items: (selected.items || []).map(i => ({
+                  id: i.id, name: i.name, qty_acquired: i.qty_acquired,
+                  weight_kg: i.weight_kg, dims_cm: i.dims_cm,
+                  packing_unit_id: i.packing_unit_id, pallet_id: i.pallet_id,
+                  suitcase_id: i.suitcase_id, x_cm: i.x_cm, y_cm: i.y_cm, z_cm: i.z_cm,
+                })),
+                exported_at: new Date().toISOString(),
+              };
+              const blob = new Blob([JSON.stringify(map, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `container-map-${(selected.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+              toast.success('Container map JSON downloaded');
+            }}
+          ><Download size={11} className="mr-1" />JSON</Button>
+          <Button
+            size="sm" variant="outline" data-testid="ship-export-map-png"
+            onClick={async () => {
+              try {
+                const el = document.getElementById('ship-container-visualizer');
+                if (!el) { toast.error('Visualiser not found'); return; }
+                const { toPng } = await import('html-to-image');
+                const dataUrl = await toPng(el, { cacheBust: true, pixelRatio: 2, backgroundColor: '#ffffff' });
+                const a = document.createElement('a');
+                a.href = dataUrl;
+                a.download = `container-map-${(selected.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.png`;
+                a.click();
+                toast.success('Container map PNG downloaded');
+              } catch (e) { toast.error('PNG export failed'); }
+            }}
+          ><ImageIcon size={11} className="mr-1" />PNG</Button>
+        </div>
+        <div id="ship-container-visualizer">
         <ContainerVisualizer
           items={selected.items || []}
           pallets={selected.pallets || []}
@@ -1150,6 +1200,8 @@ export default function ShipmentsAdminPage() {
             } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
           }}
         />
+        </div>
+        </>
       )}
 
       {/* AI Packing scenario */}
@@ -1282,7 +1334,7 @@ export default function ShipmentsAdminPage() {
                         <SelectItem value="none">— Loose (no container) —</SelectItem>
                         {legacyPallets.map(p => <SelectItem key={p.id} value={`p:${p.id}`}>🟫 {p.label}</SelectItem>)}
                         {packingUnits.map(u => {
-                          const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : '🟫';
+                          const icon = u.type === 'box' ? '📦' : u.type === 'tote' ? '🗑️' : u.type === 'crate' ? '🪵' : u.type === 'bin' ? '🪣' : '🟫';
                           return <SelectItem key={u.id} value={`u:${u.id}`}>{icon} {u.name || u.preset_key || u.type}</SelectItem>;
                         })}
                         {suitcases.map(sc => <SelectItem key={sc.id} value={`s:${sc.id}`}>🧳 {sc.name || 'Suitcase'}</SelectItem>)}
@@ -1857,6 +1909,26 @@ export default function ShipmentsAdminPage() {
                 ))}
               </div>
               <div className="flex gap-2">
+                {boxScanResult.scan_run_id && (
+                  // iter 250 — undo the entire run in one tap. Server rolls back
+                  // added items + boxes and reverses qty bumps on linked items.
+                  <Button
+                    variant="outline"
+                    className="text-rose-700 border-rose-300 hover:bg-rose-50"
+                    onClick={async () => {
+                      if (!window.confirm('Revert the whole scan? Every item and box created here will be removed and any qty bumps undone.')) return;
+                      try {
+                        const r = await api.post(`/shipments/${selectedId}/scan-runs/${boxScanResult.scan_run_id}/revert`);
+                        toast.success(`Reverted: ${r.data.items_removed} items, ${r.data.boxes_removed} boxes, ${r.data.items_unlinked} unlinked`);
+                        setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null);
+                        await refreshDetail();
+                      } catch (e) { toast.error(e.response?.data?.detail || 'Revert failed'); }
+                    }}
+                    data-testid="box-scan-undo"
+                  >
+                    Undo this scan
+                  </Button>
+                )}
                 <Button variant="outline" className="flex-1" onClick={() => { setBoxScanResult(null); setBoxScanImages([]); }} data-testid="box-scan-again">Scan more</Button>
                 <Button className="flex-1" onClick={() => { setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null); }} data-testid="box-scan-done">Done</Button>
               </div>
