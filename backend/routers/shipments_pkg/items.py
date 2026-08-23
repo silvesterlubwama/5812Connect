@@ -780,38 +780,12 @@ async def upload_item_photo(
     return {"photo_url": file_url}
 
 
-@router.post("/shipments/{shipment_id}/items/{item_id}/derive-shape")
-async def derive_item_shape3d(
-    shipment_id: str, item_id: str,
-    current_user: dict = Depends(require_admin),
-):
-    """iter 253 — Ask Gemini to classify the item's photo into a 3D shape
-    primitive so the packing layout renders a rough visual instead of a plain
-    block. Cheap alternative to real photogrammetry — surprisingly good for
-    consumer appliances (mixers/blenders/lamps/stools) because Gemini reads
-    silhouette + aspect ratios reliably.
-
-    Reads the FIRST photo on the item (photo_url) or an `image_urls[0]` if
-    the item has a gallery. Returns/persists an `item.shape3d` doc:
-
-        {
-          "kind":     "box" | "cylinder" | "sphere" | "compound",
-          "primary":  {"L_cm": float, "W_cm": float, "H_cm": float},
-          # for compound: a smaller "head" cylinder stacked on top of a base
-          "secondary": {"L_cm": float, "W_cm": float, "H_cm": float,
-                        "y_offset_cm": float, "shape": "cylinder"} | null,
-          "primary_color": "#hex",
-          "confidence": "high"|"medium"|"low",
-          "derived_at": iso, "derived_by": user_id,
-        }
+async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: dict) -> dict:
+    """Core Gemini classification for a single item. Returns the persisted
+    shape3d dict. Raises HTTPException on missing photo / AI failure so both
+    the single-item and batch endpoints can surface a consistent error.
     """
-    ship = await db.shipments.find_one(
-        {"id": shipment_id, "items.id": item_id},
-        {"_id": 0, "items.$": 1},
-    )
-    if not ship or not ship.get("items"):
-        raise HTTPException(status_code=404, detail="Item not found")
-    item = ship["items"][0]
+    item_id = item["id"]
     photo_url = item.get("photo_url") or ((item.get("image_urls") or [None])[0])
     if not photo_url:
         raise HTTPException(status_code=400, detail="Item has no photo yet")
@@ -928,7 +902,75 @@ async def derive_item_shape3d(
     )
     await _audit(current_user["id"], "derive_shape3d", "shipment_item", item_id,
                  {"kind": kind, "confidence": shape3d["confidence"]})
+    return shape3d
+
+
+@router.post("/shipments/{shipment_id}/items/{item_id}/derive-shape")
+async def derive_item_shape3d(
+    shipment_id: str, item_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    """iter 253 — Ask Gemini to classify the item's photo into a 3D shape
+    primitive so the packing layout renders a rough visual instead of a plain
+    block. Cheap alternative to real photogrammetry — surprisingly good for
+    consumer appliances (mixers/blenders/lamps/stools) because Gemini reads
+    silhouette + aspect ratios reliably.
+    """
+    ship = await db.shipments.find_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    if not ship or not ship.get("items"):
+        raise HTTPException(status_code=404, detail="Item not found")
+    shape3d = await _derive_shape3d_for_item(shipment_id, ship["items"][0], current_user)
     return {"shape3d": shape3d}
+
+
+@router.post("/shipments/{shipment_id}/items/derive-shapes-batch")
+async def derive_shapes_batch(
+    shipment_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    """iter 254 — Batch-derive 3D shapes for every un-analysed item in the
+    shipment that (a) has a photo and (b) doesn't already have `shape3d`.
+    Runs sequentially so we respect Gemini rate limits and can report a
+    per-item outcome. Returns a summary the UI can toast.
+    """
+    ship = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    items = ship.get("items") or []
+
+    candidates = [
+        it for it in items
+        if not it.get("shape3d") and (
+            it.get("photo_url") or (it.get("image_urls") and it["image_urls"][0])
+        )
+    ]
+
+    succeeded = 0
+    failed: list[dict] = []
+    skipped_no_photo = sum(
+        1 for it in items
+        if not it.get("shape3d") and not it.get("photo_url") and not (it.get("image_urls") or [])
+    )
+
+    for it in candidates:
+        try:
+            await _derive_shape3d_for_item(shipment_id, it, current_user)
+            succeeded += 1
+        except HTTPException as e:
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e.detail)[:120]})
+        except Exception as e:
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e)[:120]})
+
+    return {
+        "attempted": len(candidates),
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped_no_photo": skipped_no_photo,
+        "already_analysed": sum(1 for it in items if it.get("shape3d")),
+    }
 
 
 

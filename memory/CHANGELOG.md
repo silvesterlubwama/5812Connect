@@ -1,5 +1,25 @@
 # 58:12 Connect — Changelog
 
+## Iteration 254 (Feb 2026) — Shipping visualizer polish (no snapping, photo-textured faces, batch shape derivation)
+
+### 🟢 Photo-textured box faces on the 3D container visualizer
+- `ContainerVisualizer.jsx` now maps each loose item's primary photo onto the door-facing (+X) face of its 3D block, so packers can identify items visually without hovering for the label.
+- BoxGeometry material array `[+X, -X, +Y, -Y, +Z, -Z]` — photo lives on +X (the door end per the 2D floor labels); other faces stay a solid item color.
+- Skipped for cylinders, spheres, compound meshes (shape itself conveys identity), pallets (wood texture retained), and items with no photo.
+- Textures loaded via `THREE.TextureLoader` with `crossOrigin` + sRGB colorSpace; relative `/api/uploads/*` URLs are prefixed with `REACT_APP_BACKEND_URL` so it works in both preview and prod.
+- Photo materials are opaque (transparency dropped) so the photo reads clearly at any orbit angle.
+
+### 🟢 One-tap "Derive shapes for every un-analysed item"
+- New endpoint `POST /api/shipments/{shipment_id}/items/derive-shapes-batch` (admin-only) walks every item that has a photo but no `shape3d` and runs the existing Gemini classifier on each. Returns `{attempted, succeeded, failed:[{item_id,name,error}], skipped_no_photo, already_analysed}` so the UI can toast a single summary.
+- Refactored the single-item classifier into a shared helper `_derive_shape3d_for_item(...)` so both endpoints call the exact same Gemini prompt + persistence path.
+- Runs sequentially (respects Gemini rate limits, and if the browser tab closes the server still finishes cleanly).
+- New toolbar button `Derive shapes (N)` on `ShipmentsAdminPage.jsx` — only shown when N > 0. Confirms before running (one Gemini call per item), shows a `Loader2` spinner while working, and refreshes the detail so new shape pills appear on each item card.
+
+### 🟢 No snap on 2D/3D
+- Confirmed no snap-to-neighbours logic exists on either the SVG floor plan or the 3D visualizer. Items land exactly where dropped; only wall-clamping (`Math.max/min` against container bounds) is applied. No changes were needed — snapping is now explicitly excluded from the roadmap.
+
+
+
 ## Iteration 228 (Feb 2026) — Shipping consolidation + AI-scan bug fix
 
 ### 🔴 P0 — Fixed "Scan failed" on the donor-page AI item scanner

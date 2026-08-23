@@ -210,6 +210,40 @@ export default function ShipmentsAdminPage() {
     else toast.warning(`Linked ${ok} · ${failed} failed`);
   };
 
+  // iter 254 — one-tap AI 3D-shape derivation for every un-analysed item.
+  // Skips items without a photo (there's nothing to analyse) and items whose
+  // shape3d has already been derived. Runs server-side so the tab can close
+  // without cancelling and the user sees a single summary toast.
+  const [bulkShapeBusy, setBulkShapeBusy] = useState(false);
+  const bulkDeriveShapes = async () => {
+    const items = (selected?.items || []);
+    const candidates = items.filter(i => !i.shape3d && (i.photo_url || (i.image_urls && i.image_urls[0])));
+    if (candidates.length === 0) {
+      toast.info('Nothing to analyse — every item with a photo already has a 3D shape.');
+      return;
+    }
+    if (!window.confirm(`Ask AI to derive 3D shapes for ${candidates.length} un-analysed item${candidates.length === 1 ? '' : 's'}? Costs one Gemini call per item.`)) return;
+    setBulkShapeBusy(true);
+    const toastId = toast.loading(`Analysing ${candidates.length} item${candidates.length === 1 ? '' : 's'}…`);
+    try {
+      const r = await api.post(`/shipments/${selectedId}/items/derive-shapes-batch`);
+      toast.dismiss(toastId);
+      const { attempted, succeeded, failed, skipped_no_photo } = r.data;
+      const failedCount = (failed || []).length;
+      if (failedCount === 0) {
+        toast.success(`Derived shapes for ${succeeded}/${attempted} items${skipped_no_photo ? ` · ${skipped_no_photo} skipped (no photo)` : ''}`);
+      } else {
+        toast.warning(`${succeeded} ok · ${failedCount} failed${skipped_no_photo ? ` · ${skipped_no_photo} no photo` : ''}`);
+      }
+      await refreshDetail();
+    } catch (e) {
+      toast.dismiss(toastId);
+      toast.error(e.response?.data?.detail || 'Batch shape derivation failed');
+    } finally {
+      setBulkShapeBusy(false);
+    }
+  };
+
   // ─── CSV import (Papaparse client-side → bulk-import endpoint) ─
   const parseCsvFile = (file) => {
     Papa.parse(file, {
@@ -873,6 +907,15 @@ export default function ShipmentsAdminPage() {
             <Button size="sm" variant="outline" onClick={() => setShowBoxScan(true)} className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" data-testid="ship-box-scan-btn">
               <Boxes size={11} className="mr-1" /> Scan Boxes
             </Button>
+            {(() => {
+              const pending = (selected.items || []).filter(i => !i.shape3d && (i.photo_url || (i.image_urls && i.image_urls[0]))).length;
+              if (pending === 0) return null;
+              return (
+                <Button size="sm" variant="outline" onClick={bulkDeriveShapes} disabled={bulkShapeBusy} className="text-indigo-700 border-indigo-300 hover:bg-indigo-50" data-testid="ship-bulk-shape3d-btn" title={`Have Gemini derive 3D shapes for ${pending} un-analysed item${pending === 1 ? '' : 's'} that already have a photo`}>
+                  {bulkShapeBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Analysing…</> : <><Box size={11} className="mr-1" /> Derive shapes ({pending})</>}
+                </Button>
+              );
+            })()}
             <Button size="sm" onClick={() => setShowAddItem(true)} data-testid="ship-add-item"><Plus size={11} className="mr-1" /> Item</Button>
           </div>
         </div>

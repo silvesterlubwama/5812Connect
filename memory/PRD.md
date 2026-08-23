@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 254 (Feb 2026)
+**Shipments visualizer polish — photo-textured 3D boxes + batch shape derivation + no snap.**
+
+- **Photo faces**: `ContainerVisualizer` maps each loose item's primary photo onto the door-facing (+X) face of its 3D block via a per-face material array on `BoxGeometry` — packers can identify items visually without hovering. Other faces stay a solid item color, cylinders/spheres/compounds are unchanged, pallets keep the wood texture. `TextureLoader` runs async with sRGB colorSpace + anisotropy 8; relative `/api/uploads` URLs are absolutised through `REACT_APP_BACKEND_URL`.
+- **Batch derive shapes**: new admin-only endpoint `POST /api/shipments/{shipment_id}/items/derive-shapes-batch` walks every item that has a photo but no `shape3d`, runs the existing Gemini classifier on each sequentially (rate-limit safe), and returns `{attempted, succeeded, failed:[...], skipped_no_photo, already_analysed}`. Single-item + batch endpoints now share one helper `_derive_shape3d_for_item(...)` for identical prompt + persistence. New toolbar button `Derive shapes (N)` on `ShipmentsAdminPage` — shown only when N > 0, confirms before running, spinner while working, refresh + summary toast at the end.
+- **No snap**: confirmed no snap-to-neighbours logic exists on the 2D floor plan or 3D visualizer. Items land exactly where dropped (walls-only clamping via `Math.max/min`). Explicitly excluded from the roadmap.
+
+
 ## Recently Resolved — Iteration 253 (Feb 2026)
 **Shipments — AI-derived 3D shapes from item photos.**
 

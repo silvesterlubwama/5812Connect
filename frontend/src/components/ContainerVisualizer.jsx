@@ -116,6 +116,10 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       _loose_item_id: looseItem.id,
       shape: shape3d ? (shape3d.kind === 'sphere' ? 'sphere' : shape3d.kind === 'cylinder' ? 'cylinder' : shape3d.kind === 'compound' ? 'compound' : 'box') : 'box',
       shape3d,
+      // iter 254 — plumb the item's primary photo through so the 3D
+      // renderer can map it onto the front (door-facing) face of the
+      // block, giving packers a visual ID without hovering for the label.
+      photo_url: looseItem.photo_url || (looseItem.image_urls && looseItem.image_urls[0]) || null,
     } : (palletMeta.get(g.id) || { label: g.id });
     // Use explicit pallet dims when admin set them, otherwise estimate
     const L = Number(meta.length_cm) || PALLET_L;
@@ -158,6 +162,7 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       shape: meta.shape || 'box',
       diameter_cm: meta.diameter_cm || 0,
       shape3d: meta.shape3d || null,
+      photo_url: meta.photo_url || null,
     });
     if (row >= 10 && !meta.x_cm) break;  // out of floor space — overflow indicator below
   }
@@ -371,13 +376,49 @@ function useScene3DObjects(layout) {
         geo = new THREE.BoxGeometry(sx, sy, sz);
       }
       const isPallet = b.kind === 'pallet';
-      const mat = isPallet ? palletWood.clone() : new THREE.MeshStandardMaterial({
-        color: new THREE.Color(b.color || 0xb45309),
-        roughness: 0.78,
-        metalness: 0.04,
-        transparent: !isPallet,
-        opacity: isPallet ? 1 : 0.92,
-      });
+      // iter 254 — photo-textured box faces. When an item has a photo, load
+      // it as a texture and put it on the door-facing (+X) face so packers
+      // can visually identify items without hovering for the label. Only
+      // applies to plain box geometry (cylinders/spheres/compounds wrap
+      // textures poorly and their shape already conveys identity).
+      const wantPhotoFaces = !isPallet && !isCylinder && !isSphere && !isCompound && !!b.photo_url;
+      let mat;
+      if (isPallet) {
+        mat = palletWood.clone();
+      } else if (wantPhotoFaces) {
+        const baseColor = new THREE.Color(b.color || 0xb45309);
+        const solid = () => new THREE.MeshStandardMaterial({
+          color: baseColor, roughness: 0.85, metalness: 0.04,
+        });
+        const photoMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff, roughness: 0.72, metalness: 0.02,
+        });
+        // Absolute-ify relative /api URLs so THREE's fetch resolves correctly
+        // (works in both dev and prod because REACT_APP_BACKEND_URL is set).
+        const url = /^https?:/i.test(b.photo_url)
+          ? b.photo_url
+          : `${process.env.REACT_APP_BACKEND_URL || ''}${b.photo_url}`;
+        const loader = new THREE.TextureLoader();
+        loader.setCrossOrigin('anonymous');
+        loader.load(url, (tex) => {
+          if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+          tex.anisotropy = 8;
+          photoMat.map = tex;
+          photoMat.needsUpdate = true;
+        }, undefined, () => { /* keep white fallback on load error */ });
+        // BoxGeometry face order: [+X, -X, +Y, -Y, +Z, -Z]. Doors are at
+        // the +X end of the container in our layout (see 2D floor plan
+        // labels), so put the photo on +X.
+        mat = [photoMat, solid(), solid(), solid(), solid(), solid()];
+      } else {
+        mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(b.color || 0xb45309),
+          roughness: 0.78,
+          metalness: 0.04,
+          transparent: true,
+          opacity: 0.92,
+        });
+      }
 
       if (isCompound) {
         // Base cylinder (60% height) + head (30% height, offset up). Keeps
