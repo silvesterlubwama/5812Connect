@@ -345,7 +345,7 @@ async def ai_suggest_packing(shipment_id: str, current_user: dict = Depends(requ
         for k, p in PACKING_PRESETS.items() if k not in ("suitcase_lg","suitcase_md","carry_on","duffel")
     ])
     sys_msg = (
-        "You are a container packing expert.  Given a list of donation items "
+        "You are a container packing expert.  Given a list of shipment items "
         "and a menu of packing presets, propose an efficient breakdown into "
         "pallets/boxes/totes.  Output STRICT JSON only:\n"
         '{"units": [{"type":"pallet|box|tote|crate", "preset_key":"...", '

@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 249 (Feb 2026)
+**Shipments — batch box-photo scanner + manifest wording refresh.**
+
+- **New endpoint** `POST /api/shipments/{id}/scan-boxes` (admin, multipart, up to 20 photos, 10 MB each). For each photo, Gemini 3 Flash reads: (a) the box number written in marker, (b) any secondary label like "Kitchen" / "Books", (c) whether the box is marked "Personal Items" / "Household Personal Effects", (d) the list of items on the box + qty + a low-average USD estimate.
+- **Auto-associate logic**: box number matched case-insensitive against existing `packing_units.name` (falls back to bare-number match). Existing box → items are linked to that `packing_unit_id` and `qty_acquired` incremented. New box number → a `medium_box` packing_unit is auto-created. Items fuzzy-match against `shipment.items[].name` (both-way substring) — hit → link + bump qty, miss → new item added via `_normalise_item`.
+- **Personal Items collapse**: any photo the AI flags as `is_personal=true` replaces its item list with a single `{name: "Household Personal Item", qty: 1, category: personal, value_usd: 5}` row per user's exact requirement.
+- **Value fallback**: `_estimate_value_usd()` maps category+name to conservative low-average USD (clothing $4, books $3, toys $5, kitchen $6, electronics $15 …). AI-supplied value wins if > 0; otherwise the low-average kicks in; ultimate fallback $5 so no line ever exports with $0 value.
+- **Donation wording purged from the manifest & commercial invoice PDFs**: "USED — humanitarian donation" → "USED", "Terms: Donation (non-commercial)" → "Terms: Non-commercial personal effects unless marked NEW". Internal AI prompts also switched from "donation-bound" / "donation items" → "shipment-bound" / "shipment items" for consistency.
+- **Frontend**: new emerald "Scan Boxes" button (`data-testid="ship-box-scan-btn"`) next to "AI Scan" in each shipment's toolbar. Dialog supports up to 20 photos, live thumbnails, remove-per-photo, 4-tile result summary (New boxes / Matched / Items added / Items linked) plus per-photo breakdown with box#, personal-flag, confidence pill, and item action log (➕ added / 🔗 linked).
+- **Verified** end-to-end: endpoint returns 422 without images (validation), 200 with correctly-sized payload, lint clean on both files.
+
 ## Recently Resolved — Iteration 248 (Feb 2026)
 **Finance UX pass — journal search, location-scoped reports, CSV export + bank re-linking.**
 

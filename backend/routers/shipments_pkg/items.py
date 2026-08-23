@@ -241,6 +241,336 @@ async def delete_item(shipment_id: str, item_id: str, current_user: dict = Depen
     return {"deleted": True}
 
 
+# ============================================================
+# iter 249 — Batch box-photo scanning. Different UX from
+# /scan-item: this endpoint takes photos of ENTIRE labeled
+# boxes (with box numbers + item lists written in marker)
+# and:
+#   1. reads the box number + items from each photo
+#   2. matches box_number to existing packing_units by name
+#      (case-insensitive substring), or creates a new one
+#   3. for each item on the box, either links an existing
+#      shipment item to that packing_unit (fuzzy name match)
+#      or adds a fresh item
+#   4. boxes marked "Personal Items" collapse into ONE
+#      "Household Personal Item" line
+#   5. estimates a conservative low-average USD value when
+#      the AI can't pull an on-item price
+# ============================================================
+
+# Low-average USD fallback prices for the common categories a
+# 40' humanitarian container carries. Deliberately conservative
+# (bottom of the range) so a customs manifest never over-values.
+_LOW_AVG_VALUE_USD = {
+    "clothing": 4.0,
+    "shoes": 6.0,
+    "book": 3.0,
+    "books": 3.0,
+    "toy": 5.0,
+    "toys": 5.0,
+    "medical": 8.0,
+    "kitchen": 6.0,
+    "household": 5.0,
+    "electronics": 15.0,
+    "personal": 5.0,
+    "school": 4.0,
+    "food": 3.0,
+    "furniture": 30.0,
+    "sport": 8.0,
+    "sports": 8.0,
+    "tool": 12.0,
+    "tools": 12.0,
+    "linen": 5.0,
+    "linens": 5.0,
+    "bedding": 8.0,
+    "baby": 5.0,
+    "other": 5.0,
+}
+
+
+def _estimate_value_usd(name: str, category: str, provided: Optional[float]) -> float:
+    """Use the AI-supplied value if any, otherwise map to `_LOW_AVG_VALUE_USD`
+    on the coarsest bucket that matches the item's name or category. Falls
+    back to a very safe $5.00 so no line ever ships with $0 value."""
+    if provided and provided > 0:
+        return round(float(provided), 2)
+    key = ((category or "") + " " + (name or "")).lower()
+    for k, v in _LOW_AVG_VALUE_USD.items():
+        if k in key:
+            return v
+    return 5.0
+
+
+@router.post("/shipments/{shipment_id}/scan-boxes")
+async def scan_boxes(
+    shipment_id: str,
+    images: List[UploadFile] = File(...),
+    current_user: dict = Depends(require_admin),
+):
+    """Scan one or more full-box photos and auto-populate the shipment.
+
+    Returns:
+        {
+          "photos_processed": int,
+          "boxes_created":    int,   # new packing_units added
+          "boxes_matched":    int,   # existing packing_units linked
+          "items_added":      int,   # brand-new items
+          "items_linked":     int,   # existing items updated with packing_unit
+          "errors":           [{photo_index, error}],
+          "results":          [   # per-photo breakdown for the UI
+            {photo_index, box_number, is_personal, matched_box_id, items:[...]}
+          ]
+        }
+    """
+    if not images:
+        raise HTTPException(status_code=400, detail="Upload at least one photo")
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "id": 1, "items": 1, "packing_units": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI scan unavailable (no LLM key)")
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI scan unavailable: {e}")
+
+    import tempfile
+    import json as _json
+
+    boxes_created = boxes_matched = items_added = items_linked = 0
+    errors: list = []
+    results: list = []
+
+    # A stable lookup for existing packing units by name — case-insensitive
+    # substring match so "Box 12" written in marker matches "Box 12 – Kitchen".
+    def _match_box(name_or_number: str, current_units: list) -> Optional[dict]:
+        if not name_or_number:
+            return None
+        needle = name_or_number.strip().lower()
+        for u in current_units:
+            nm = (u.get("name") or "").lower()
+            if needle == nm:
+                return u
+            # If the label from the photo is a bare number (e.g. "12"), match
+            # any unit whose name contains that token.
+            if needle.isdigit() and (f" {needle}" in f" {nm} " or nm.endswith(f" {needle}") or nm == needle):
+                return u
+        return None
+
+    # Fuzzy shipment-item lookup — same-category-agnostic. Case-insensitive
+    # substring both ways so "T-shirts (mens)" matches "mens t shirts".
+    def _match_item(name: str, current_items: list) -> Optional[dict]:
+        if not name:
+            return None
+        n = name.strip().lower()
+        for it in current_items:
+            existing = (it.get("name") or "").strip().lower()
+            if not existing:
+                continue
+            if existing == n or (len(n) >= 4 and (n in existing or existing in n)):
+                return it
+        return None
+
+    # Prompt Gemini to be strict about what it returns. One JSON object per photo.
+    SYS_PROMPT = (
+        "You are cataloguing photos of labeled cardboard boxes packed for a shipping container. "
+        "Each photo shows one box (occasionally more) with either:\n"
+        "  • A box number and a list of items written in marker (e.g. 'Box 12: shoes, kids clothes')\n"
+        "  • A 'Personal Items' / 'Household' / 'Personal Effects' label\n"
+        "  • Loose items visible with no box\n\n"
+        "Return STRICT JSON — no markdown, no prose:\n"
+        "{\n"
+        '  "box_number": "12" | null,        // exact string on the box, digits+letters as written\n'
+        '  "box_label":  "Kitchen" | null,   // any additional label (Kitchen, Books, etc.)\n'
+        '  "is_personal": true|false,        // true iff the box is marked personal / household / personal effects\n'
+        '  "items": [\n'
+        '    {"name":"Kids shoes","qty":1,"category":"shoes","estimated_value_usd":6}\n'
+        "  ],\n"
+        '  "confidence": "high"|"medium"|"low",\n'
+        '  "notes": "anything worth flagging"\n'
+        "}\n"
+        "Rules:\n"
+        "- Read handwriting carefully; if unsure, still return best guess but drop confidence to 'low'.\n"
+        "- If the box is personal, `items` MUST be a single row: [{'name':'Household Personal Item','qty':1,'category':'personal','estimated_value_usd':5}]\n"
+        "- For qty, use the count written on the box; default 1 if none.\n"
+        "- estimated_value_usd should be a conservative LOW-AVERAGE US retail price for that category, or null.\n"
+        "- If no box number is visible, set box_number=null."
+    )
+
+    for idx, img in enumerate(images[:20]):  # cap so a rogue upload can't hammer the LLM
+        data = await img.read()
+        if not data:
+            errors.append({"photo_index": idx, "error": "Empty upload"})
+            continue
+        if len(data) > 10_000_000:
+            errors.append({"photo_index": idx, "error": "Photo > 10 MB"})
+            continue
+        mime = (img.content_type or "image/jpeg").lower()
+        if not mime.startswith("image/"):
+            errors.append({"photo_index": idx, "error": "Not an image"})
+            continue
+
+        photo_url = None
+        try:
+            photo_url = await _persist_shipment_image(shipment_id, data, mime)
+        except Exception:
+            pass
+
+        # Send to Gemini
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".jpg")
+            with _os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            chat = LlmChat(
+                api_key=api_key,
+                session_id=f"box_scan_{shipment_id}_{uuid.uuid4().hex[:6]}",
+                system_message=SYS_PROMPT,
+            ).with_model("gemini", "gemini-3-flash-preview")
+            msg = UserMessage(
+                text="Identify the box + items in this photo. Return strict JSON per the schema.",
+                file_contents=[FileContentWithMimeType(file_path=tmp, mime_type=mime)],
+            )
+            raw = await chat.send_message(msg)
+            try:
+                _os.remove(tmp)
+            except Exception:
+                pass
+            s_text = (raw or "").strip().strip("`")
+            if s_text.lower().startswith("json"):
+                s_text = s_text[4:].strip()
+            first, last = s_text.find("{"), s_text.rfind("}")
+            if first >= 0 and last > first:
+                s_text = s_text[first:last + 1]
+            parsed = _json.loads(s_text)
+        except Exception as e:
+            errors.append({"photo_index": idx, "error": f"AI parse failed: {str(e)[:120]}"})
+            continue
+
+        # ── Reload current shipment state so we see units/items added during
+        # earlier photos in this SAME batch. Cheap — one round-trip per photo.
+        s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "id": 1, "items": 1, "packing_units": 1})
+        cur_units = s.get("packing_units") or []
+        cur_items = s.get("items") or []
+
+        box_number = (parsed.get("box_number") or "").strip() or None
+        box_label = (parsed.get("box_label") or "").strip() or None
+        is_personal = bool(parsed.get("is_personal"))
+
+        # ── Resolve / create the packing unit for this photo ──────────
+        target_unit = None
+        if box_number:
+            target_unit = _match_box(box_number, cur_units)
+            if not target_unit:
+                # New box — use a standard mid-size cardboard preset. Name it
+                # after what's on the box so future scans match.
+                name_parts = [f"Box {box_number}"]
+                if box_label:
+                    name_parts.append(box_label)
+                new_unit = {
+                    "id": f"pku_{uuid.uuid4().hex[:8]}",
+                    "type": "box",
+                    "name": " – ".join(name_parts)[:80],
+                    "preset_key": "medium_box",
+                    "L_cm": 60.0, "W_cm": 40.0, "H_cm": 40.0,
+                    "weight_capacity_kg": 20.0,
+                    "color": "#94a3b8",
+                    "parent_id": None,
+                    "floor_x_cm": 0.0, "floor_y_cm": 0.0,
+                    "notes": f"Auto-created from box-photo scan on {datetime.now(timezone.utc).date().isoformat()}",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_by": current_user["id"],
+                    "photo_url": photo_url,
+                }
+                await db.shipments.update_one({"id": shipment_id}, {"$push": {"packing_units": new_unit}})
+                target_unit = new_unit
+                boxes_created += 1
+            else:
+                boxes_matched += 1
+
+        # ── Parse the items from the AI response ─────────────────────
+        photo_result_items = []
+        raw_items = parsed.get("items") or []
+        # Personal boxes: replace whatever the AI returned with the fixed line
+        if is_personal:
+            raw_items = [{"name": "Household Personal Item", "qty": 1,
+                          "category": "personal", "estimated_value_usd": 5}]
+
+        for row in raw_items:
+            if not isinstance(row, dict):
+                continue
+            item_name = (row.get("name") or "").strip()
+            if not item_name:
+                continue
+            qty = max(1, int(row.get("qty") or 1))
+            category = (row.get("category") or "Other").strip()[:60]
+            value = _estimate_value_usd(item_name, category, row.get("estimated_value_usd"))
+
+            existing = _match_item(item_name, cur_items)
+            if existing:
+                # Link to the box + bump qty_acquired
+                set_ops = {"items.$.updated_at": datetime.now(timezone.utc).isoformat()}
+                if target_unit:
+                    set_ops["items.$.packing_unit_id"] = target_unit["id"]
+                await db.shipments.update_one(
+                    {"id": shipment_id, "items.id": existing["id"]},
+                    {"$set": set_ops, "$inc": {"items.$.qty_acquired": qty}},
+                )
+                items_linked += 1
+                photo_result_items.append({
+                    "item_id": existing["id"], "name": existing.get("name"),
+                    "action": "linked", "qty": qty, "value_usd": value,
+                })
+            else:
+                new_item = _normalise_item({
+                    "name": item_name[:120],
+                    "category": category,
+                    "qty_needed": qty,
+                    "qty_acquired": qty,
+                    "priority": "normal",
+                    "packing_unit_id": target_unit["id"] if target_unit else None,
+                    "value_usd": value,
+                    "ai_identified": True,
+                    "scanned_at": datetime.now(timezone.utc).isoformat(),
+                    "notes": f"Auto-added from box photo{' ' + box_number if box_number else ''}",
+                })
+                await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": new_item}})
+                items_added += 1
+                photo_result_items.append({
+                    "item_id": new_item["id"], "name": new_item["name"],
+                    "action": "added", "qty": qty, "value_usd": value,
+                })
+
+        results.append({
+            "photo_index": idx,
+            "photo_url": photo_url,
+            "box_number": box_number,
+            "box_label": box_label,
+            "is_personal": is_personal,
+            "matched_box_id": target_unit["id"] if target_unit else None,
+            "matched_box_name": target_unit["name"] if target_unit else None,
+            "confidence": parsed.get("confidence") or "medium",
+            "notes": (parsed.get("notes") or "")[:200],
+            "items": photo_result_items,
+        })
+
+    await _audit(current_user["id"], "scan_boxes", "shipment", shipment_id,
+                 {"photos": len(images), "items_added": items_added,
+                  "items_linked": items_linked, "boxes_created": boxes_created})
+    return {
+        "photos_processed": len(images),
+        "boxes_created": boxes_created,
+        "boxes_matched": boxes_matched,
+        "items_added": items_added,
+        "items_linked": items_linked,
+        "errors": errors,
+        "results": results,
+    }
+
+
+
 @router.post("/shipments/{shipment_id}/prune-over-pledged")
 async def prune_over_pledged(shipment_id: str, current_user: dict = Depends(require_admin)):
     """Trim every item's `qty_acquired` down to its `qty_needed` cap. Surplus
@@ -354,7 +684,7 @@ async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict 
         raise HTTPException(status_code=503, detail=f"AI client unavailable: {e}")
 
     sys_msg = (
-        "You pick the best retailer to buy a donation-bound item and return a "
+        "You pick the best retailer to buy a shipment-bound item and return a "
         "SEARCH URL (never a deep ASIN/SKU — those rot). Retailers to choose "
         "from, by category fit:\n"
         "  Books / educational           → amazon, abebooks, betterworldbooks\n"
@@ -703,7 +1033,7 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
         grand_total += line_total
         pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
         row_class = "pvoc-row" if it.get("requires_pvoc") else ""
-        origin = "USED — humanitarian donation" if it.get("condition") == "used" else (it.get("condition") or "used").upper()
+        origin = "USED" if it.get("condition") == "used" else (it.get("condition") or "used").upper()
         rows_html += (
             f"<tr class='{row_class}'>"
             f"<td class='n'>{i}</td>"
@@ -730,7 +1060,7 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
     <div>
       <h1>Commercial Invoice — {heading}</h1>
       <p class='meta'>Invoice #: CI-{shipment_id[:8].upper()}{'-' + group[:6].upper() if group and group != 'unassigned' else ''} · Destination: {s.get('dest_country', '—')} · Target ship: {s.get('target_ship_date', '—')}</p>
-      <p class='meta'>Currency: USD · Terms: Donation (non-commercial) unless marked NEW · Incoterms: as agreed</p>
+      <p class='meta'>Currency: USD · Terms: Non-commercial personal effects unless marked NEW · Incoterms: as agreed</p>
     </div>
     <div style='text-align:right'>
       <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>

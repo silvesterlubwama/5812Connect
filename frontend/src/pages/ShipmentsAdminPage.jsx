@@ -65,6 +65,12 @@ export default function ShipmentsAdminPage() {
   const [adminScanImages, setAdminScanImages] = useState([]);
   const [adminScanBusy, setAdminScanBusy] = useState(false);
   const [adminScanResult, setAdminScanResult] = useState(null);
+  // iter 249 — batch box-photo scan. Uploads N photos of labeled cardboard
+  // boxes; AI reads the box number + items and auto-populates the shipment.
+  const [showBoxScan, setShowBoxScan] = useState(false);
+  const [boxScanImages, setBoxScanImages] = useState([]);
+  const [boxScanBusy, setBoxScanBusy] = useState(false);
+  const [boxScanResult, setBoxScanResult] = useState(null);
   // iter229 — hide items that have been packed into a box/pallet/packing-unit/suitcase
   // (they still appear on the manifest & PDFs — just cleaner working view).
   const [hidePacked, setHidePacked] = useState(true);
@@ -861,6 +867,9 @@ export default function ShipmentsAdminPage() {
             </Button>
             <Button size="sm" variant="outline" onClick={() => setShowAdminScan(true)} className="text-purple-700 border-purple-300 hover:bg-purple-50" data-testid="ship-ai-scan-btn">
               <Sparkles size={11} className="mr-1" /> AI Scan
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowBoxScan(true)} className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" data-testid="ship-box-scan-btn">
+              <Boxes size={11} className="mr-1" /> Scan Boxes
             </Button>
             <Button size="sm" onClick={() => setShowAddItem(true)} data-testid="ship-add-item"><Plus size={11} className="mr-1" /> Item</Button>
           </div>
@@ -1741,6 +1750,121 @@ export default function ShipmentsAdminPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* iter 249 — BOX SCAN DIALOG: batch upload photos of labeled boxes.
+          Different from AI Scan (single item) — this one reads the whole
+          box: box number + item list, auto-creates boxes + items, and
+          collapses "Personal Items" boxes into one Household Personal Item row. */}
+      <Dialog open={showBoxScan} onOpenChange={(o) => { if (!o) { setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null); } }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="box-scan-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Boxes size={18} className="text-emerald-600" /> Scan Boxes</DialogTitle>
+            <DialogDescription>
+              Upload photos of your labeled shipping boxes. AI reads the box number and item list written in marker,
+              matches them to your shipment, and adds anything missing. Boxes marked &quot;Personal Items&quot; become a single
+              &quot;Household Personal Item&quot; row. Values default to a conservative low-average estimate if none is on the box.
+            </DialogDescription>
+          </DialogHeader>
+
+          {!boxScanResult ? (
+            <div className="space-y-3">
+              <div className="border-2 border-dashed rounded-lg p-4 text-center">
+                <input
+                  id="box-scan-file"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  data-testid="box-scan-file"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []).slice(0, 20 - boxScanImages.length);
+                    setBoxScanImages([...boxScanImages, ...files]);
+                  }}
+                />
+                <label htmlFor="box-scan-file" className="cursor-pointer inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                  <ImageIcon size={16} /> Tap to add photos ({boxScanImages.length}/20)
+                </label>
+              </div>
+              {boxScanImages.length > 0 && (
+                <div className="grid grid-cols-4 gap-2">
+                  {boxScanImages.map((f, i) => (
+                    <div key={i} className="relative">
+                      <img src={URL.createObjectURL(f)} alt={`box ${i}`} className="rounded aspect-square object-cover w-full" />
+                      <button className="absolute -top-1.5 -right-1.5 rounded-full bg-rose-500 text-white p-0.5" onClick={() => setBoxScanImages(boxScanImages.filter((_, j) => j !== i))} data-testid={`box-scan-remove-${i}`}>
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Button
+                className="w-full"
+                disabled={boxScanBusy || boxScanImages.length === 0}
+                data-testid="box-scan-submit"
+                onClick={async () => {
+                  setBoxScanBusy(true);
+                  try {
+                    const fd = new FormData();
+                    boxScanImages.forEach(f => fd.append('images', f));
+                    const res = await api.post(`/shipments/${selectedId}/scan-boxes`, fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 });
+                    setBoxScanResult(res.data);
+                    await refreshDetail();
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Scan failed'); }
+                  setBoxScanBusy(false);
+                }}
+              >
+                {boxScanBusy ? <><Loader2 size={14} className="animate-spin mr-2" />Scanning… (10–40s per photo)</> : <><Sparkles size={14} className="mr-2" />Scan {boxScanImages.length} photo{boxScanImages.length !== 1 ? 's' : ''}</>}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3" data-testid="box-scan-result">
+              <div className="grid grid-cols-4 gap-2 text-center text-sm">
+                <div className="bg-emerald-50 rounded p-2"><div className="font-bold text-emerald-700">{boxScanResult.boxes_created}</div><div className="text-[10px] uppercase text-muted-foreground">New boxes</div></div>
+                <div className="bg-blue-50 rounded p-2"><div className="font-bold text-blue-700">{boxScanResult.boxes_matched}</div><div className="text-[10px] uppercase text-muted-foreground">Matched boxes</div></div>
+                <div className="bg-purple-50 rounded p-2"><div className="font-bold text-purple-700">{boxScanResult.items_added}</div><div className="text-[10px] uppercase text-muted-foreground">Items added</div></div>
+                <div className="bg-amber-50 rounded p-2"><div className="font-bold text-amber-700">{boxScanResult.items_linked}</div><div className="text-[10px] uppercase text-muted-foreground">Items linked</div></div>
+              </div>
+              {(boxScanResult.errors || []).length > 0 && (
+                <div className="bg-rose-50 border border-rose-200 rounded p-2 text-xs">
+                  <div className="font-semibold text-rose-700 mb-1">{boxScanResult.errors.length} photo(s) failed:</div>
+                  {boxScanResult.errors.map((e, i) => <div key={i} className="text-rose-600">Photo {e.photo_index + 1}: {e.error}</div>)}
+                </div>
+              )}
+              <div className="max-h-64 overflow-y-auto border rounded divide-y">
+                {(boxScanResult.results || []).map((r, i) => (
+                  <div key={i} className="p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="font-semibold flex items-center gap-2">
+                        Photo {r.photo_index + 1}
+                        {r.box_number && <Badge variant="outline" className="text-[10px]">Box {r.box_number}</Badge>}
+                        {r.is_personal && <Badge className="bg-purple-100 text-purple-700 text-[10px]">Personal</Badge>}
+                        <Badge variant="outline" className={`text-[10px] ${r.confidence === 'high' ? 'text-emerald-700 border-emerald-300' : r.confidence === 'low' ? 'text-amber-700 border-amber-300' : ''}`}>{r.confidence}</Badge>
+                      </div>
+                      {r.matched_box_name && <span className="text-muted-foreground truncate">{r.matched_box_name}</span>}
+                    </div>
+                    {r.items.length > 0 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {r.items.map((it, j) => (
+                          <li key={j} className="flex items-center justify-between gap-2">
+                            <span>{it.action === 'added' ? '➕' : '🔗'} {it.name} <span className="text-muted-foreground">× {it.qty}</span></span>
+                            <span className="text-muted-foreground">${it.value_usd}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {r.notes && <div className="text-muted-foreground italic mt-1">{r.notes}</div>}
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => { setBoxScanResult(null); setBoxScanImages([]); }} data-testid="box-scan-again">Scan more</Button>
+                <Button className="flex-1" onClick={() => { setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null); }} data-testid="box-scan-done">Done</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
 
       {/* URL estimate dialog */}
       <Dialog open={!!linkUrlFor} onOpenChange={(o) => { if (!o) setLinkUrlFor(null); }}>
