@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 248 (Feb 2026)
+**Finance UX pass — journal search, location-scoped reports, CSV export + bank re-linking.**
+
+- **Journal search & filter** — `FinancePage → Journal` tab now has a search box (client-side across description + account code/name + memo + reference), a Source dropdown (all 10 sources), From/To date pickers, and an "Include reversed" toggle. Active filter count shown in the header; one-tap Clear button. Same 200-row endpoint, filtered server-side for date/source and client-side for text.
+- **Location-scoped reports** — `FinancePage → Reports` tab picks up `/api/locations` and passes `location_id` to the P&L / Balance Sheet / Trial Balance / Cashflow endpoints. Verified: `?location_id=loc_001` returns 9.59M UGX expenses for that campus alone.
+- **CSV export** — client-side download button on both Journal (`journal-YYYY-MM-DD.csv` — one row per line-item so debits/credits are directly analysable) and Reports (`pnl / balance-sheet / trial-balance / cashflow-YYYY-MM-DD.csv`) tabs. Zero backend load — the JSON already on screen is flattened to CSV in the browser.
+- **Bank Account Re-linking** — `BankPage` now fetches from the new `/api/finance/chart-of-accounts` (the old `/api/accounting/accounts` was retired in the finance reset). The type-filters (`asset + is_cash`, `expense`) also updated for the new COA shape. Admins can now re-link every bank account's `linked_account_id` via the existing per-row selects — no separate UI needed since the picker was already there but was silently empty pre-fix.
+
 ## Recently Resolved — Iteration 247 (Feb 2026)
 **Finance module — 3 follow-up features shipped to complete the reset.**
 

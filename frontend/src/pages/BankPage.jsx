@@ -63,7 +63,9 @@ export default function BankPage() {
     try {
       const [aR, cR, vR, bR, rR, ruR] = await Promise.all([
         api.get('/bank/accounts').catch(() => ({ data: [] })),
-        api.get('/accounting/accounts', { params: { location_id: user?.active_campus_id } }).catch(() => ({ data: [] })),
+        // iter 246+: use the new single-ledger Chart of Accounts. The old
+        // `/api/accounting/accounts` endpoint was retired in the finance reset.
+        api.get('/finance/chart-of-accounts').catch(() => ({ data: [] })),
         api.get('/bank/vendors').catch(() => ({ data: [] })),
         api.get('/bank/bills').catch(() => ({ data: [] })),
         api.get('/bank/recurring').catch(() => ({ data: [] })),
@@ -245,7 +247,8 @@ export default function BankPage() {
     return <div className="p-6 space-y-2">{[1,2,3].map(i => <div key={i} className="h-20 bg-muted animate-pulse rounded-xl" />)}</div>;
   }
 
-  const cashAccs = coaAccounts.filter(a => a.type?.startsWith('asset_'));
+  // iter 246+: new COA uses type='asset' + is_cash=true (not the old `asset_cash`).
+  const cashAccs = coaAccounts.filter(a => a.type === 'asset' && a.is_cash);
   const selectedAcct = accounts.find(a => a.id === selectedBankId);
 
   return (
@@ -661,7 +664,7 @@ export default function BankPage() {
                   <Input className="col-span-2 h-8 text-xs text-right" type="number" step="0.01" value={it.unit_price} onChange={e => updateBillItem(i, 'unit_price', e.target.value)} />
                   <Select value={it.account_id} onValueChange={v => updateBillItem(i, 'account_id', v)}>
                     <SelectTrigger className="col-span-3 h-8 text-xs"><SelectValue placeholder="Account" /></SelectTrigger>
-                    <SelectContent>{coaAccounts.filter(a => a.type?.startsWith('expense_') || a.type === 'expense' || a.type === 'asset_inventory').map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
+                    <SelectContent>{coaAccounts.filter(a => a.type === 'expense' || (a.type === 'asset' && !a.is_cash)).map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
                   </Select>
                   <Input className="col-span-1 h-8 text-xs text-right" type="number" step="0.1" value={it.tax_rate} onChange={e => updateBillItem(i, 'tax_rate', e.target.value)} />
                   <Button size="sm" variant="ghost" className="col-span-1 h-8 text-destructive" disabled={billItems.length <= 1} onClick={() => removeBillItem(i)}>×</Button>
@@ -759,7 +762,7 @@ export default function BankPage() {
                   <Input className="col-span-2 h-8 text-xs text-right" type="number" step="0.01" value={it.unit_price} onChange={e => updateRecItem(i, 'unit_price', e.target.value)} placeholder="Price" />
                   <Select value={it.account_id} onValueChange={v => updateRecItem(i, 'account_id', v)}>
                     <SelectTrigger className="col-span-2 h-8 text-xs"><SelectValue placeholder="Acct" /></SelectTrigger>
-                    <SelectContent>{coaAccounts.filter(a => a.type?.startsWith('expense_') || a.type === 'expense').map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
+                    <SelectContent>{coaAccounts.filter(a => a.type === 'expense').map(a => <SelectItem key={a.id} value={a.id}>{a.code} {a.name}</SelectItem>)}</SelectContent>
                   </Select>
                   <Button size="sm" variant="ghost" className="col-span-1 h-8 text-destructive" disabled={recForm.template_items.length <= 1} onClick={() => removeRecItem(i)}>×</Button>
                 </div>

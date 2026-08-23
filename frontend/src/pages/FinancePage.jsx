@@ -10,12 +10,29 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthAgoIso = () => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); };
+
+// CSV export helper — client-side so a director tapping "Export" gets a file
+// instantly without waiting on the server to render a spreadsheet.
+function downloadCsv(filename, rows) {
+  if (!rows.length) { toast.error('Nothing to export'); return; }
+  const escape = v => {
+    if (v == null) return '';
+    const s = String(v).replace(/"/g, '""');
+    return /[",\n]/.test(s) ? `"${s}"` : s;
+  };
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(','), ...rows.map(r => headers.map(h => escape(r[h])).join(','))].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function FinancePage() {
   const { user } = useAuth();
@@ -235,9 +252,58 @@ function JournalPanel() {
   const [reversing, setReversing] = useState(null); // je object being reversed
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // Filters — kept in the URL query string on submit so the exact list can be shared
+  const [filters, setFilters] = useState({
+    date_from: '',
+    date_to: '',
+    source: 'all',
+    search: '',
+    include_reversed: true,
+  });
 
-  const reload = () => api.get('/finance/journal?limit=200&include_reversed=true').then(r => setEntries(r.data || []));
-  useEffect(() => { reload().catch(() => {}); }, []);
+  const reload = async () => {
+    const params = new URLSearchParams();
+    params.set('limit', '200');
+    params.set('include_reversed', String(filters.include_reversed));
+    if (filters.date_from) params.set('date_from', filters.date_from);
+    if (filters.date_to) params.set('date_to', filters.date_to);
+    if (filters.source && filters.source !== 'all') params.set('source', filters.source);
+    const r = await api.get(`/finance/journal?${params}`);
+    setEntries(r.data || []);
+  };
+  useEffect(() => { reload().catch(() => {}); }, [filters.date_from, filters.date_to, filters.source, filters.include_reversed]);
+
+  // Text search is client-side across description + line account names/codes
+  // — cheap on 200 rows and lets staff type freeform without waiting for the
+  // API on every keystroke.
+  const filteredEntries = useMemo(() => {
+    const q = filters.search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(je => {
+      if ((je.description || '').toLowerCase().includes(q)) return true;
+      if ((je.reference || '').toLowerCase().includes(q)) return true;
+      if ((je.source || '').toLowerCase().includes(q)) return true;
+      return (je.lines || []).some(ln =>
+        (ln.account_name || '').toLowerCase().includes(q) ||
+        (ln.account_code || '').toLowerCase().includes(q) ||
+        (ln.memo || '').toLowerCase().includes(q));
+    });
+  }, [entries, filters.search]);
+
+  const clearFilters = () => setFilters({ date_from: '', date_to: '', source: 'all', search: '', include_reversed: true });
+  const activeFilterCount = ['date_from', 'date_to'].filter(k => filters[k]).length + (filters.source !== 'all' ? 1 : 0) + (filters.search ? 1 : 0);
+
+  const exportJournal = () => {
+    const rows = filteredEntries.flatMap(je =>
+      (je.lines || []).map(ln => ({
+        date: je.date, description: je.description, source: je.source, reference: je.reference || '',
+        account_code: ln.account_code, account_name: ln.account_name,
+        debit: ln.debit || '', credit: ln.credit || '',
+        reversed: je.reversed ? 'YES' : '',
+      })),
+    );
+    downloadCsv(`journal-${todayIso()}.csv`, rows);
+  };
 
   const submitReverse = async () => {
     if (!reason.trim()) { toast.error('Please give a reason for the reversal'); return; }
@@ -253,9 +319,41 @@ function JournalPanel() {
 
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">Journal — most recent 200 (reversed entries shown greyed out)</CardTitle></CardHeader>
+      <CardHeader className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">Journal — most recent 200 {activeFilterCount > 0 && <Badge variant="outline" className="ml-2 text-[10px]">{activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''}</Badge>}</CardTitle>
+          <Button size="sm" variant="outline" onClick={exportJournal} disabled={filteredEntries.length === 0} data-testid="journal-export"><Download size={13} className="mr-1" />Export CSV</Button>
+        </div>
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="relative">
+            <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} placeholder="Search description or account…" className="pl-7 w-64" data-testid="journal-search" />
+          </div>
+          <div><Label className="text-xs">Source</Label>
+            <Select value={filters.source} onValueChange={v => setFilters({ ...filters, source: v })}>
+              <SelectTrigger className="w-40" data-testid="journal-filter-source"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sources</SelectItem>
+                <SelectItem value="expense">Expense</SelectItem>
+                <SelectItem value="income">Income</SelectItem>
+                <SelectItem value="payroll">Payroll</SelectItem>
+                <SelectItem value="sale">Sale</SelectItem>
+                <SelectItem value="bank_tx">Bank</SelectItem>
+                <SelectItem value="social_donation">Sponsorship</SelectItem>
+                <SelectItem value="social_expense">Social expense</SelectItem>
+                <SelectItem value="reversal">Reversal</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div><Label className="text-xs">From</Label><Input type="date" value={filters.date_from} onChange={e => setFilters({ ...filters, date_from: e.target.value })} className="w-36" data-testid="journal-filter-from" /></div>
+          <div><Label className="text-xs">To</Label><Input type="date" value={filters.date_to} onChange={e => setFilters({ ...filters, date_to: e.target.value })} className="w-36" data-testid="journal-filter-to" /></div>
+          <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" checked={filters.include_reversed} onChange={e => setFilters({ ...filters, include_reversed: e.target.checked })} /> Include reversed</label>
+          {activeFilterCount > 0 && <Button size="sm" variant="ghost" onClick={clearFilters} data-testid="journal-clear-filters"><X size={13} className="mr-1" />Clear</Button>}
+        </div>
+      </CardHeader>
       <CardContent>
-        {entries.length === 0 ? <p className="text-sm text-muted-foreground">No journal entries.</p> : (
+        {filteredEntries.length === 0 ? <p className="text-sm text-muted-foreground">No journal entries match.</p> : (
           <Table>
             <TableHeader><TableRow>
               <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Source</TableHead>
@@ -263,7 +361,7 @@ function JournalPanel() {
               {canReverse && <TableHead className="w-28"></TableHead>}
             </TableRow></TableHeader>
             <TableBody>
-              {entries.map(je => (
+              {filteredEntries.map(je => (
                 <React.Fragment key={je.id}>
                   <TableRow className={`cursor-pointer hover:bg-muted/40 ${je.reversed ? 'opacity-50 line-through' : ''}`} onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))} data-testid={`journal-row-${je.id}`}>
                     <TableCell className="font-mono text-xs">{je.date}</TableCell>
@@ -385,25 +483,70 @@ function ReportsPanel() {
   const [kind, setKind] = useState('pnl');
   const [dateFrom, setDateFrom] = useState(monthAgoIso());
   const [dateTo, setDateTo] = useState(todayIso());
+  const [locationId, setLocationId] = useState('all');
+  const [locations, setLocations] = useState([]);
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api.get('/locations').then(r => setLocations(r.data || [])).catch(() => {}); }, []);
 
   const run = async () => {
     setBusy(true);
     try {
       const path = { pnl: 'pnl', bs: 'balance-sheet', tb: 'trial-balance', cf: 'cashflow' }[kind];
-      const url = kind === 'bs' ? `/finance/reports/${path}?as_of=${dateTo}` : `/finance/reports/${path}?date_from=${dateFrom}&date_to=${dateTo}`;
-      const r = await api.get(url);
+      const params = new URLSearchParams();
+      if (kind === 'bs') { params.set('as_of', dateTo); }
+      else { params.set('date_from', dateFrom); params.set('date_to', dateTo); }
+      if (locationId && locationId !== 'all') params.set('location_id', locationId);
+      const r = await api.get(`/finance/reports/${path}?${params}`);
       setData(r.data);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Report failed'); }
     setBusy(false);
   };
-  useEffect(() => { run(); }, [kind]);
+  useEffect(() => { run(); }, [kind, locationId]);
+
+  // Flatten whichever report is on screen into CSV rows. Each report has its
+  // own row shape so the export matches what the user sees.
+  const exportReport = () => {
+    if (!data) return;
+    const stamp = `${todayIso()}`;
+    if (kind === 'pnl') {
+      const rows = [
+        ...data.revenue.map(r => ({ section: 'Revenue', code: r.code, name: r.name, amount: r.amount })),
+        { section: 'Revenue', code: '', name: 'Total Revenue', amount: data.total_revenue },
+        ...data.expenses.map(r => ({ section: 'Expense', code: r.code, name: r.name, amount: r.amount })),
+        { section: 'Expense', code: '', name: 'Total Expenses', amount: data.total_expenses },
+        { section: 'Summary', code: '', name: 'Net Income', amount: data.net_income },
+      ];
+      downloadCsv(`pnl-${stamp}.csv`, rows);
+    } else if (kind === 'bs') {
+      const rows = [
+        ...data.assets.map(r => ({ section: 'Asset', code: r.code, name: r.name, amount: r.amount })),
+        { section: 'Asset', code: '', name: 'Total Assets', amount: data.total_assets },
+        ...data.liabilities.map(r => ({ section: 'Liability', code: r.code, name: r.name, amount: r.amount })),
+        { section: 'Liability', code: '', name: 'Total Liabilities', amount: data.total_liabilities },
+        ...data.equity.map(r => ({ section: 'Equity', code: r.code, name: r.name, amount: r.amount })),
+        { section: 'Equity', code: '', name: 'Total Equity', amount: data.total_equity },
+      ];
+      downloadCsv(`balance-sheet-${stamp}.csv`, rows);
+    } else if (kind === 'tb') {
+      downloadCsv(`trial-balance-${stamp}.csv`, (data.rows || []).map(r => ({
+        code: r.code, name: r.name, type: r.type, debit: r.debit, credit: r.credit,
+      })));
+    } else if (kind === 'cf') {
+      downloadCsv(`cashflow-${stamp}.csv`, (data.lines || []).map(r => ({
+        code: r.code, name: r.name, source: r.source, inflow: r.inflow, outflow: r.outflow, net: r.net,
+      })));
+    }
+  };
 
   return (
     <Card>
       <CardHeader className="space-y-3">
-        <CardTitle className="text-base">Reports</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">Reports</CardTitle>
+          <Button size="sm" variant="outline" onClick={exportReport} disabled={!data} data-testid="reports-export"><Download size={13} className="mr-1" />Export CSV</Button>
+        </div>
         <div className="flex flex-wrap gap-2 items-end">
           <div><Label className="text-xs">Report</Label>
             <Select value={kind} onValueChange={setKind}>
@@ -413,6 +556,15 @@ function ReportsPanel() {
                 <SelectItem value="bs">Balance Sheet</SelectItem>
                 <SelectItem value="tb">Trial Balance</SelectItem>
                 <SelectItem value="cf">Cashflow</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div><Label className="text-xs">Campus</Label>
+            <Select value={locationId} onValueChange={setLocationId}>
+              <SelectTrigger className="w-52" data-testid="reports-location"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All campuses</SelectItem>
+                {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
