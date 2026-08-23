@@ -780,6 +780,158 @@ async def upload_item_photo(
     return {"photo_url": file_url}
 
 
+@router.post("/shipments/{shipment_id}/items/{item_id}/derive-shape")
+async def derive_item_shape3d(
+    shipment_id: str, item_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    """iter 253 — Ask Gemini to classify the item's photo into a 3D shape
+    primitive so the packing layout renders a rough visual instead of a plain
+    block. Cheap alternative to real photogrammetry — surprisingly good for
+    consumer appliances (mixers/blenders/lamps/stools) because Gemini reads
+    silhouette + aspect ratios reliably.
+
+    Reads the FIRST photo on the item (photo_url) or an `image_urls[0]` if
+    the item has a gallery. Returns/persists an `item.shape3d` doc:
+
+        {
+          "kind":     "box" | "cylinder" | "sphere" | "compound",
+          "primary":  {"L_cm": float, "W_cm": float, "H_cm": float},
+          # for compound: a smaller "head" cylinder stacked on top of a base
+          "secondary": {"L_cm": float, "W_cm": float, "H_cm": float,
+                        "y_offset_cm": float, "shape": "cylinder"} | null,
+          "primary_color": "#hex",
+          "confidence": "high"|"medium"|"low",
+          "derived_at": iso, "derived_by": user_id,
+        }
+    """
+    ship = await db.shipments.find_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"_id": 0, "items.$": 1},
+    )
+    if not ship or not ship.get("items"):
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = ship["items"][0]
+    photo_url = item.get("photo_url") or ((item.get("image_urls") or [None])[0])
+    if not photo_url:
+        raise HTTPException(status_code=400, detail="Item has no photo yet")
+
+    # Fetch the image bytes. Support both local (/api/uploads/*) and cloud URLs.
+    try:
+        if photo_url.startswith("/api/uploads/"):
+            local_path = "/app/backend" + photo_url[4:]  # strip /api → /uploads/…
+            with open(local_path, "rb") as fh:
+                data = fh.read()
+            mime = "image/jpeg"
+        else:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as hc:
+                resp = await hc.get(photo_url)
+                resp.raise_for_status()
+                data = resp.content
+                mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch item photo: {str(e)[:100]}")
+
+    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key)")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"AI unavailable: {e}")
+
+    import tempfile
+    import json as _json
+
+    fd, tmp = tempfile.mkstemp(suffix=".jpg")
+    with _os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+
+    dims = item.get("dims_cm") or {}
+    fallback_L = float(dims.get("length") or 30)
+    fallback_W = float(dims.get("width") or 30)
+    fallback_H = float(dims.get("height") or 30)
+
+    SYS = (
+        "You classify a household / appliance item photo into a rough 3D shape primitive "
+        "so a container packing app can draw something better than a plain box. Output STRICT JSON:\n"
+        "{\n"
+        '  "kind": "box" | "cylinder" | "sphere" | "compound",  // compound = base + head like a mixer\n'
+        '  "primary": {"L_cm": float, "W_cm": float, "H_cm": float},  // rough bounding box in centimetres\n'
+        '  "secondary": {"L_cm": float, "W_cm": float, "H_cm": float, "y_offset_cm": float, "shape": "cylinder"|"box"} | null,\n'
+        '  "primary_color": "#RRGGBB",     // dominant colour, lowercase hex\n'
+        '  "confidence": "high" | "medium" | "low"\n'
+        "}\n"
+        "Rules:\n"
+        "- Prefer `box` for boxy items (books, boxes, monitors flat), `cylinder` for round/tubular (cans, lamps, stools, mixing bowls), `sphere` for balls / round bulbs.\n"
+        "- Use `compound` for items with a distinct base + narrower head (kitchen mixer, blender, table lamp with base+shade). The `secondary` block describes the head with y_offset_cm = distance from the base's TOP to where the head starts.\n"
+        f"- If you can't estimate real cm, use the given fallback dims: L={fallback_L}, W={fallback_W}, H={fallback_H} and scale the primary/secondary proportions from that.\n"
+        "- primary_color must match the dominant visible colour of the item."
+    )
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"shape3d_{item_id}_{uuid.uuid4().hex[:6]}",
+            system_message=SYS,
+        ).with_model("gemini", "gemini-3-flash-preview")
+        raw = await chat.send_message(UserMessage(
+            text="Return the JSON per the schema. One item, best fit.",
+            file_contents=[FileContentWithMimeType(file_path=tmp, mime_type=mime)],
+        ))
+    finally:
+        try: _os.remove(tmp)
+        except Exception: pass
+
+    s_text = (raw or "").strip().strip("`")
+    if s_text.lower().startswith("json"):
+        s_text = s_text[4:].strip()
+    first, last = s_text.find("{"), s_text.rfind("}")
+    if first >= 0 and last > first:
+        s_text = s_text[first:last + 1]
+    try:
+        parsed = _json.loads(s_text)
+    except Exception:
+        raise HTTPException(status_code=502, detail="AI returned unparseable JSON")
+
+    kind = (parsed.get("kind") or "box").lower()
+    if kind not in {"box", "cylinder", "sphere", "compound"}:
+        kind = "box"
+    primary = parsed.get("primary") or {}
+    shape3d = {
+        "kind": kind,
+        "primary": {
+            "L_cm": float(primary.get("L_cm") or fallback_L),
+            "W_cm": float(primary.get("W_cm") or fallback_W),
+            "H_cm": float(primary.get("H_cm") or fallback_H),
+        },
+        "secondary": None,
+        "primary_color": (parsed.get("primary_color") or "#94a3b8")[:16],
+        "confidence": (parsed.get("confidence") or "medium").lower(),
+        "derived_at": datetime.now(timezone.utc).isoformat(),
+        "derived_by": current_user["id"],
+        "source_photo_url": photo_url,
+    }
+    sec = parsed.get("secondary")
+    if kind == "compound" and isinstance(sec, dict):
+        shape3d["secondary"] = {
+            "L_cm": float(sec.get("L_cm") or 0),
+            "W_cm": float(sec.get("W_cm") or 0),
+            "H_cm": float(sec.get("H_cm") or 0),
+            "y_offset_cm": float(sec.get("y_offset_cm") or 0),
+            "shape": (sec.get("shape") or "cylinder").lower(),
+        }
+
+    await db.shipments.update_one(
+        {"id": shipment_id, "items.id": item_id},
+        {"$set": {"items.$.shape3d": shape3d}},
+    )
+    await _audit(current_user["id"], "derive_shape3d", "shipment_item", item_id,
+                 {"kind": kind, "confidence": shape3d["confidence"]})
+    return {"shape3d": shape3d}
+
+
+
 @router.post("/shipments/{shipment_id}/items/{item_id}/find-link")
 async def find_link_for_item(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
     """Given an item that has no `source_url` yet, ask Gemini to pick the

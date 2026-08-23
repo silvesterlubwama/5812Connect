@@ -3,6 +3,26 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 253 (Feb 2026)
+**Shipments — AI-derived 3D shapes from item photos.**
+
+Real photogrammetry is out of scope for a single pass, but Gemini 3 Flash reads a single-shot item photo well enough to pick the right shape primitive + rough proportions. That alone dramatically improves how mixers, blenders, lamps, and round appliances look on the packing layout.
+
+- **New backend endpoint** `POST /api/shipments/{shipment_id}/items/{item_id}/derive-shape` — reads the item's `photo_url` (local `/api/uploads` or cloud), sends it to `gemini-3-flash-preview` with a strict-JSON schema, and stores the result on `item.shape3d`:
+  - `kind` — one of `box`, `cylinder`, `sphere`, `compound` (compound = base + head, like a stand mixer)
+  - `primary: {L_cm, W_cm, H_cm}` — bounding box overriding stored `dims_cm` when set
+  - `secondary` (only for compound) — smaller upper stack with `y_offset_cm`
+  - `primary_color` — dominant hex colour (auto-populates the visualiser)
+  - `confidence` — `high|medium|low` for the pill label
+- **ContainerVisualizer** now renders:
+  - `cylinder` → `THREE.CylinderGeometry` (already had this for round bins, now used for AI-classified appliances too)
+  - `sphere` → `THREE.SphereGeometry` sized to smallest axis so the ball fits its bounding volume
+  - `compound` → two stacked cylinder meshes (base 60% + head 35%) — mixers/blenders render properly
+  - 2D SVG top-down draws a **disc** for all three round kinds
+- **UI**: new small pill next to each item's PVoC button showing `[3D?]` when no shape is derived, or `[cylinder]`/`[compound]` etc. when set. Click → fires derivation, toast on success. Confirm-then-redo when re-deriving.
+- Loose items (iter 252) automatically pick up shape3d overrides — the AI-derived colour and dims flow into the box entry so the floor plan reads the visual straight from the photo.
+- Verified: endpoint 200s with a photo, 400s with "Item has no photo yet" when none; frontend/backend both lint clean.
+
 ## Recently Resolved — Iteration 252 (Feb 2026)
 **Shipments — Recent Scans sidebar + Loose Item individual drag.**
 

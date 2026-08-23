@@ -20,7 +20,7 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { formatDimCm, formatWeightKg, parseDimToCm, parseWeightToKg, dimPlaceholder, weightPlaceholder } from '../services/shipmentUnits';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Scissors, Loader2, ShieldAlert, Users, ChevronDown, FileText, MoreVertical, X } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Box, Scissors, Loader2, ShieldAlert, Users, ChevronDown, FileText, MoreVertical, X } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '../components/ui/dropdown-menu';
 import { Checkbox } from '../components/ui/checkbox';
 import api from '../services/api';
@@ -936,6 +936,34 @@ export default function ShipmentsAdminPage() {
                         >
                           <ShieldAlert size={10} /> PVoC{it.requires_pvoc ? '' : '?'}
                         </button>
+                        {/* iter 253 — AI-derived 3D shape. If already derived,
+                            show a compact pill with the shape kind; else a
+                            "3D?" button that fires Gemini analysis on the
+                            item's photo. Silent when there's no photo yet. */}
+                        {it.photo_url && (
+                          <button
+                            onClick={async () => {
+                              if (it.shape3d) {
+                                if (!window.confirm(`Re-derive 3D shape for "${it.name}"?`)) return;
+                              }
+                              const toastId = toast.loading('Analysing photo…');
+                              try {
+                                const r = await api.post(`/shipments/${selectedId}/items/${it.id}/derive-shape`);
+                                toast.dismiss(toastId);
+                                toast.success(`3D shape: ${r.data.shape3d.kind} (${r.data.shape3d.confidence})`);
+                                await refreshDetail();
+                              } catch (e) {
+                                toast.dismiss(toastId);
+                                toast.error(e.response?.data?.detail || 'Shape derivation failed');
+                              }
+                            }}
+                            className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-semibold transition-colors ${it.shape3d ? 'bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200' : 'bg-slate-50 text-slate-500 border border-dashed border-slate-300 hover:bg-slate-100'}`}
+                            title={it.shape3d ? `AI-derived 3D shape: ${it.shape3d.kind}${it.shape3d.confidence ? ` (${it.shape3d.confidence})` : ''} — click to re-derive` : 'Click to have AI classify this item into a 3D shape from its photo'}
+                            data-testid={`ship-item-shape3d-${it.id}`}
+                          >
+                            <Box size={10} /> {it.shape3d ? it.shape3d.kind : '3D?'}
+                          </button>
+                        )}
                         {(selected.manifest_groups || []).length > 0 && (() => {
                           const g = (selected.manifest_groups || []).find(x => x.id === it.manifest_group_id);
                           return (

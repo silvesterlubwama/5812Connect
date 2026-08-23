@@ -100,15 +100,22 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     const looseItem = g.loose_item;
     // Loose-item render uses the item's own name + dims + persisted floor
     // position. Falls back to compact 30×30 for items without dims_cm.
+    // iter 253 — an item.shape3d (AI-derived from photo) overrides the
+    // plain box: L/W/H come from shape3d.primary, colour from
+    // primary_color, and shape.kind flows into the box entry so the 3D
+    // renderer picks the right geometry (cylinder / sphere / compound).
+    const shape3d = looseItem && looseItem.shape3d;
     const meta = looseItem ? {
       label: looseItem.name || 'Item',
-      length_cm: (looseItem.dims_cm && looseItem.dims_cm.length) || 30,
-      width_cm: (looseItem.dims_cm && looseItem.dims_cm.width) || 30,
-      height_cm: (looseItem.dims_cm && looseItem.dims_cm.height) || 30,
+      length_cm: (shape3d && shape3d.primary?.L_cm) || (looseItem.dims_cm && looseItem.dims_cm.length) || 30,
+      width_cm: (shape3d && shape3d.primary?.W_cm) || (looseItem.dims_cm && looseItem.dims_cm.width) || 30,
+      height_cm: (shape3d && shape3d.primary?.H_cm) || (looseItem.dims_cm && looseItem.dims_cm.height) || 30,
       x_cm: looseItem.floor_x_cm,
       y_cm: looseItem.floor_y_cm,
-      color: '#94a3b8',
+      color: (shape3d && shape3d.primary_color) || '#94a3b8',
       _loose_item_id: looseItem.id,
+      shape: shape3d ? (shape3d.kind === 'sphere' ? 'sphere' : shape3d.kind === 'cylinder' ? 'cylinder' : shape3d.kind === 'compound' ? 'compound' : 'box') : 'box',
+      shape3d,
     } : (palletMeta.get(g.id) || { label: g.id });
     // Use explicit pallet dims when admin set them, otherwise estimate
     const L = Number(meta.length_cm) || PALLET_L;
@@ -146,8 +153,11 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       loose_item_id: meta._loose_item_id || null,
       // iter 251 — round-bin support: cylinder shape uses L as diameter so
       // 2D + 3D both render a disc/cylinder instead of a rectangle.
+      // iter 253 — extended to also support sphere + compound (AI-derived
+      // from photos) so mixers/blenders/lamps render properly.
       shape: meta.shape || 'box',
       diameter_cm: meta.diameter_cm || 0,
+      shape3d: meta.shape3d || null,
     });
     if (row >= 10 && !meta.x_cm) break;  // out of floor space — overflow indicator below
   }
@@ -240,8 +250,10 @@ function FloorPlan2D({ layout, editable, onPalletMove }) {
         const py = isDragging ? dragGhost.y : b.y;
         return (
           <g key={b.id} onPointerDown={(e) => beginDrag(e, b)} style={{ cursor: (editable && b.draggable) ? 'grab' : 'default' }} data-testid={`viz-pallet-${b.id}`}>
-            {b.shape === 'cylinder' ? (
-              // iter 251 — 24" round bins draw as a top-down disc
+            {(b.shape === 'cylinder' || b.shape === 'sphere' || b.shape === 'compound') ? (
+              // iter 251/253 — top-down disc for any round shape (round bins,
+              // AI-derived cylinders/spheres, and compound items like mixers
+              // whose base is round anyway).
               <circle
                 cx={PAD + (px + b.length / 2) * scale}
                 cy={PAD + (py + b.width / 2) * scale}
@@ -339,12 +351,25 @@ function useScene3DObjects(layout) {
       const cx = (b.x + b.length / 2) / 10;
       const cy = ((b.z || 0) + b.height / 2) / 10;   // honor z-offset for stacking
       const cz = (b.y + b.width / 2) / 10;
-      // iter 251 — cylinder for round bins. L already equals diameter (both
-      // set to the same value on the packing_unit), so radius = sx / 2.
+      // iter 251/253 — geometry per shape. box (default), cylinder (round
+      // bins / round appliances), sphere (round objects like balls/lamps),
+      // compound (mixer-style base+head — two stacked cylinders).
       const isCylinder = b.shape === 'cylinder';
-      const geo = isCylinder
-        ? new THREE.CylinderGeometry(sx / 2, sx / 2, sy, 32, 1, false)
-        : new THREE.BoxGeometry(sx, sy, sz);
+      const isSphere = b.shape === 'sphere';
+      const isCompound = b.shape === 'compound';
+      let geo;
+      if (isCylinder) {
+        geo = new THREE.CylinderGeometry(sx / 2, sx / 2, sy, 32, 1, false);
+      } else if (isSphere) {
+        // Use the smallest axis as radius so the ball fits its bounding box
+        const r = Math.min(sx, sy, sz) / 2;
+        geo = new THREE.SphereGeometry(r, 24, 16);
+      } else if (isCompound) {
+        // Base cylinder = 60% of total height; head cylinder = 30% stacked on top
+        geo = null; // rendered as two meshes below
+      } else {
+        geo = new THREE.BoxGeometry(sx, sy, sz);
+      }
       const isPallet = b.kind === 'pallet';
       const mat = isPallet ? palletWood.clone() : new THREE.MeshStandardMaterial({
         color: new THREE.Color(b.color || 0xb45309),
@@ -353,6 +378,28 @@ function useScene3DObjects(layout) {
         transparent: !isPallet,
         opacity: isPallet ? 1 : 0.92,
       });
+
+      if (isCompound) {
+        // Base cylinder (60% height) + head (30% height, offset up). Keeps
+        // the overall bounding box the same as the primary dims so packing
+        // stays consistent.
+        const baseH = sy * 0.6;
+        const headH = sy * 0.35;
+        const baseR = sx / 2;
+        const headR = sx / 2.8;
+        const baseGeo = new THREE.CylinderGeometry(baseR, baseR, baseH, 24);
+        const baseMesh = new THREE.Mesh(baseGeo, mat);
+        baseMesh.position.set(cx, cy - sy / 2 + baseH / 2, cz);
+        baseMesh.castShadow = true; baseMesh.receiveShadow = true;
+        root.add(baseMesh);
+        const headGeo = new THREE.CylinderGeometry(headR, headR, headH, 24);
+        const headMesh = new THREE.Mesh(headGeo, mat.clone());
+        headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz);
+        headMesh.castShadow = true; headMesh.receiveShadow = true;
+        root.add(headMesh);
+        continue;   // skip the shared mesh add below
+      }
+
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(cx, cy, cz);
       mesh.castShadow = true;
