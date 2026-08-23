@@ -729,6 +729,8 @@ export default function ShipmentsAdminPage() {
         }}
       />
 
+      <RecentScans shipmentId={selectedId} refreshDetail={refreshDetail} />
+
       {/* Manifest Groups (sub-consignments) */}
       <div className="mb-3" data-testid="ship-manifest-groups">
         <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
@@ -1192,10 +1194,23 @@ export default function ShipmentsAdminPage() {
             try {
               // iter228 — decide which collection this ID belongs to
               const isPackingUnit = (selected.packing_units || []).some(u => u.id === pid);
-              const url = isPackingUnit
-                ? `/shipments/${selectedId}/packing-units/${pid}`
-                : `/shipments/${selectedId}/pallets/${pid}`;
-              await api.put(url, { x_cm: Math.round(x), y_cm: Math.round(y) });
+              // iter 252 — loose items are individually draggable now. Their
+              // group id is prefixed with `_loose:<item_id>` so we route the
+              // floor position to the item update endpoint.
+              let url;
+              let body;
+              if (typeof pid === 'string' && pid.startsWith('_loose:')) {
+                const itemId = pid.slice('_loose:'.length);
+                url = `/shipments/${selectedId}/items/${itemId}`;
+                body = { floor_x_cm: Math.round(x), floor_y_cm: Math.round(y) };
+              } else if (isPackingUnit) {
+                url = `/shipments/${selectedId}/packing-units/${pid}`;
+                body = { x_cm: Math.round(x), y_cm: Math.round(y) };
+              } else {
+                url = `/shipments/${selectedId}/pallets/${pid}`;
+                body = { x_cm: Math.round(x), y_cm: Math.round(y) };
+              }
+              await api.put(url, body);
               await refreshDetail();
             } catch (e) { toast.error(e.response?.data?.detail || 'Move failed'); }
           }}
@@ -2027,4 +2042,76 @@ function emptyItem() {
     dims_cm: { length: 0, width: 0, height: 0 },
     notes: '', photo_url: '', condition: 'used',
   };
+}
+
+
+// iter 252 — Recent Scans sidebar. Lists the last N scan-runs on a shipment
+// with a per-row Revert button so a mis-scan from 20 minutes ago is one tap
+// to fix. Silent (returns null) when there's nothing to show, so the
+// shipment detail stays clean on brand-new shipments.
+function RecentScans({ shipmentId, refreshDetail }) {
+  const [runs, setRuns] = React.useState([]);
+
+  const reload = React.useCallback(async () => {
+    if (!shipmentId) return;
+    try {
+      const r = await api.get(`/shipments/${shipmentId}/scan-runs`);
+      setRuns(r.data || []);
+    } catch {
+      setRuns([]);
+    }
+  }, [shipmentId]);
+
+  React.useEffect(() => { reload(); }, [reload]);
+
+  const revert = async (runId) => {
+    if (!window.confirm('Revert this scan? Items and boxes it created will be removed and any qty bumps undone.')) return;
+    try {
+      const r = await api.post(`/shipments/${shipmentId}/scan-runs/${runId}/revert`);
+      toast.success(`Reverted: ${r.data.items_removed} items, ${r.data.boxes_removed} boxes`);
+      await Promise.all([reload(), refreshDetail?.()]);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Revert failed');
+    }
+  };
+
+  if (!runs.length) return null;
+
+  return (
+    <div className="mb-3" data-testid="ship-recent-scans">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Sparkles size={12} className="text-emerald-600" />
+        <p className="text-xs font-semibold">Recent Scans ({runs.length})</p>
+        <span className="text-[10px] text-muted-foreground">— revert an entire batch in one click</span>
+      </div>
+      <div className="divide-y border rounded-md">
+        {runs.slice(0, 6).map(r => {
+          const when = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
+          const reverted = !!r.reverted;
+          return (
+            <div key={r.id} className={`px-3 py-2 flex items-center gap-2 text-xs flex-wrap ${reverted ? 'opacity-50 line-through' : ''}`} data-testid={`recent-scan-${r.id}`}>
+              <span className="font-mono text-[10px] text-muted-foreground">{r.id.slice(-8)}</span>
+              <span>{when}</span>
+              <span className="text-muted-foreground">by {r.created_by_name || '—'}</span>
+              <Badge variant="outline" className="text-[10px]">{r.photos_processed || 0} photo{r.photos_processed === 1 ? '' : 's'}</Badge>
+              <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300">+{r.boxes_created || 0} box{r.boxes_created === 1 ? '' : 'es'}</Badge>
+              <Badge variant="outline" className="text-[10px] text-purple-700 border-purple-300">+{r.items_added || 0} items</Badge>
+              {r.items_linked > 0 && <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">🔗 {r.items_linked} linked</Badge>}
+              {reverted && <Badge variant="outline" className="text-[10px] text-rose-700 border-rose-300 no-underline">REVERTED</Badge>}
+              {!reverted && (
+                <Button
+                  size="sm" variant="ghost"
+                  className="ml-auto h-6 text-[10px] text-rose-700 hover:bg-rose-50 no-underline"
+                  onClick={() => revert(r.id)}
+                  data-testid={`recent-scan-revert-${r.id}`}
+                >
+                  Revert
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

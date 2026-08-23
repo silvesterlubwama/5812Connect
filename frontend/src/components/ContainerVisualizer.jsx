@@ -62,9 +62,14 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   items.forEach(it => {
     const acquired = Number(it.qty_acquired || 0);
     if (acquired <= 0) return;
-    const key = it.pallet_id || it.packing_unit_id || '_loose';
+    // iter 252 — loose items (no pallet/packing_unit) render individually so
+    // each one is draggable on the floor plan. Every loose item becomes its
+    // own group keyed by `_loose:<item_id>` — this also lets us honor a
+    // per-item `floor_x_cm/floor_y_cm` so packers can lay them out anywhere
+    // on the container floor.
+    const key = it.pallet_id || it.packing_unit_id || `_loose:${it.id}`;
     if (!groups.has(key)) {
-      groups.set(key, { id: key, items: [], total_weight: 0, total_volume: 0 });
+      groups.set(key, { id: key, items: [], total_weight: 0, total_volume: 0, loose_item: null });
     }
     const g = groups.get(key);
     g.items.push(it);
@@ -72,6 +77,7 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     const d = it.dims_cm || {};
     const vol = (Number(d.length) || 0) * (Number(d.width) || 0) * (Number(d.height) || 0) * acquired;
     g.total_volume += vol;
+    if (key.startsWith('_loose:')) g.loose_item = it;
   });
   // Ensure every explicit pallet/unit appears even if empty (so users see them
   // on the floor plan before assigning items)
@@ -91,7 +97,19 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   let col = 0;
   const totalVolume = sorted.reduce((s, g) => s + g.total_volume, 0);
   for (const g of sorted) {
-    const meta = palletMeta.get(g.id) || { label: g.id === '_loose' ? 'Loose items' : g.id };
+    const looseItem = g.loose_item;
+    // Loose-item render uses the item's own name + dims + persisted floor
+    // position. Falls back to compact 30×30 for items without dims_cm.
+    const meta = looseItem ? {
+      label: looseItem.name || 'Item',
+      length_cm: (looseItem.dims_cm && looseItem.dims_cm.length) || 30,
+      width_cm: (looseItem.dims_cm && looseItem.dims_cm.width) || 30,
+      height_cm: (looseItem.dims_cm && looseItem.dims_cm.height) || 30,
+      x_cm: looseItem.floor_x_cm,
+      y_cm: looseItem.floor_y_cm,
+      color: '#94a3b8',
+      _loose_item_id: looseItem.id,
+    } : (palletMeta.get(g.id) || { label: g.id });
     // Use explicit pallet dims when admin set them, otherwise estimate
     const L = Number(meta.length_cm) || PALLET_L;
     const W = Number(meta.width_cm) || PALLET_W;
@@ -101,7 +119,7 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       : 40 + Math.min(120, g.items.length * 5));
     // Use explicit x_cm/y_cm if admin positioned; otherwise greedy grid
     let x, y;
-    if (meta.x_cm != null && meta.y_cm != null && (meta.x_cm || meta.y_cm || meta.id === '_loose')) {
+    if (meta.x_cm != null && meta.y_cm != null && (meta.x_cm || meta.y_cm || meta._loose_item_id)) {
       x = Math.max(0, Math.min(CONT.length - L, Number(meta.x_cm) || 0));
       y = Math.max(0, Math.min(CONT.width - W, Number(meta.y_cm) || 0));
     } else {
@@ -119,8 +137,13 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       height: baseHeight,
       weight_kg: Math.round(g.total_weight),
       item_count: g.items.length,
-      color: meta.color || (g.id === '_loose' ? '#94a3b8' : palletColor(g.id)),
-      draggable: g.id !== '_loose',  // loose group isn't a real pallet
+      color: meta.color || (looseItem ? '#94a3b8' : palletColor(g.id)),
+      // iter 252 — loose items are now individually draggable. The move
+      // handler downstream detects the "_loose:" prefix and PUTs to the
+      // /items/{id} endpoint with floor_x_cm/floor_y_cm rather than the
+      // /pallets endpoint.
+      draggable: true,
+      loose_item_id: meta._loose_item_id || null,
       // iter 251 — round-bin support: cylinder shape uses L as diameter so
       // 2D + 3D both render a disc/cylinder instead of a rectangle.
       shape: meta.shape || 'box',

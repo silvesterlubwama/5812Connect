@@ -197,6 +197,8 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
                "pallet_id", "parent_id", "container_type", "isbn", "upc",
                "author", "publisher", "ai_identified",
                "x_cm", "y_cm", "z_cm",
+               # iter 252 — position on the container floor for loose items
+               "floor_x_cm", "floor_y_cm",
                "hs_code", "hs_code_reason", "condition",
                "manifest_group_id", "requires_pvoc", "pvoc_reason",
                "packing_unit_id", "suitcase_id", "passenger_id"}
@@ -209,7 +211,7 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
             set_ops[f"items.$.{k}"] = max(1, int(v or 1))
         elif k in ("qty_acquired",):
             set_ops[f"items.$.{k}"] = max(0, int(v or 0))
-        elif k in ("weight_kg", "value_usd", "x_cm", "y_cm", "z_cm"):
+        elif k in ("weight_kg", "value_usd", "x_cm", "y_cm", "z_cm", "floor_x_cm", "floor_y_cm"):
             set_ops[f"items.$.{k}"] = max(0, float(v or 0))
         elif k == "priority":
             p = (v or "normal").lower()

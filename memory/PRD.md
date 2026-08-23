@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 252 (Feb 2026)
+**Shipments — Recent Scans sidebar + Loose Item individual drag.**
+
+- **Recent Scans widget** on `ShipmentsAdminPage` (renders between Packing panel and Manifest Groups). Fetches `GET /api/shipments/{id}/scan-runs` (already-shipped in iter 250); shows up to 6 runs newest first with photo count, boxes-created, items-added, items-linked badges + a per-row **Revert** button that calls the existing `POST .../scan-runs/{run_id}/revert`. Silent (returns `null`) when there are no scans. Reverted runs render greyed + line-through with a REVERTED pill so the audit trail is intact.
+- **Loose item individual drag** — every item with no `packing_unit_id` / `pallet_id` is now its own draggable box on the 2D floor plan (was: all collapsed into one immovable "Loose" group). Grouping key changed from `_loose` → `_loose:<item_id>`; box render honours the item's `floor_x_cm/floor_y_cm`, its `dims_cm` sets the L/W/H, and the label is the item's own name.
+- **Backend**: PUT `/api/shipments/{id}/items/{item_id}` accepts new `floor_x_cm` / `floor_y_cm` fields (clamped ≥ 0 like other numeric position fields). Verified: PUT stores 400/150, GET reads it back.
+- **Move handler**: `ContainerVisualizer.onPalletMove` receives the group id; when it starts with `_loose:` we route the update to `/items/{id}` instead of `/packing-units/{id}` — no other move-flow changes.
+- Zero regressions on pallet/box/tote/crate/bin move — same handler, same endpoint, same solver, just an extra branch for loose items.
+
 ## Recently Resolved — Iteration 251 (Feb 2026)
 **Shipments — cylindrical 24" round bin as a first-class container type.**
 
