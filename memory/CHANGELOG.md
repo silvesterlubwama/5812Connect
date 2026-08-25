@@ -1,5 +1,18 @@
 # 58:12 Connect — Changelog
 
+## Iteration 255c (Feb 2026) — Scan-draft autosave + single-photo-per-box
+
+### 🟢 Scan-draft autosave (survives refresh / signal loss)
+- `POST /api/shipments/{id}/scan-boxes` now persists the full result set on the shipment as `scan_draft` (scan_run_id, counters, per-photo `results[]` with item_ids, errors, timestamps).
+- New `DELETE /api/shipments/{id}/scan-draft` endpoint clears the draft; called on the frontend by the **Done**, **Scan more**, and **Undo this scan** buttons.
+- Frontend has a `useEffect` that re-hydrates `boxScanResult` from `selected.scan_draft` whenever a shipment loads without a live result, and re-opens the dialog automatically. Refreshing the page, switching tabs, or losing signal in the middle of a 20-photo review no longer wipes it — the review is exactly where the packer left it.
+
+### 🟢 Single photo per matched box (unless photos are genuinely different)
+- When the same box is photographed multiple times in one scan run (front / side / list), only the **first** photo is retained; subsequent uploads for the same matched box are discarded (file removed from `/api/uploads/`, no `$addToSet` on `packing_units.photos`).
+- Different boxes still each get their own photo — dedup is scoped by box match, not by scan run. Packers can still attach multiple angles manually via the per-box gallery if they need them.
+
+
+
 ## Iteration 255b (Feb 2026) — Box scan dialog UX: persistent results + inline edits
 
 ### 🟢 Scan results persist until explicit "Done"

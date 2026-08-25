@@ -554,14 +554,18 @@ async def scan_boxes(
                 boxes_created += 1
                 created_unit_ids.append(new_unit["id"])
             else:
-                # iter 250 — same box photographed multiple times in this batch
-                # (front / side / list). Append the new photo to the existing
-                # unit's gallery instead of creating a duplicate packing_unit.
-                if photo_url:
-                    await db.shipments.update_one(
-                        {"id": shipment_id, "packing_units.id": target_unit["id"]},
-                        {"$addToSet": {"packing_units.$.photos": photo_url}},
-                    )
+                # iter 255c — user rule: only keep ONE photo per matched box
+                # per scan run (packers often upload the same box from
+                # multiple angles). Delete the just-uploaded file we don't
+                # need and skip the $addToSet so `packing_units.photos`
+                # doesn't balloon. If the user wants multiple angles, they
+                # can attach them manually via the per-box gallery.
+                if photo_url and photo_url.startswith("/api/uploads/"):
+                    try:
+                        import os as __os
+                        __os.remove("/app/backend" + photo_url[4:])
+                    except Exception:
+                        pass
                 # Only counts as a "matched box" the FIRST time in this run.
                 # Repeat photos of a box already-merged-this-run are silent.
                 if target_unit["id"] not in created_unit_ids:
@@ -689,6 +693,23 @@ async def scan_boxes(
     }
     await db.shipment_scan_runs.insert_one(run_doc)
 
+    # iter 255c — Persist the last unsaved scan result on the shipment as
+    # `scan_draft` so a refresh, tab switch, or network blip doesn't wipe a
+    # 20-photo review. Frontend re-hydrates the box-scan dialog from this on
+    # load. Cleared by DELETE /shipments/{id}/scan-draft when user hits Done.
+    draft = {
+        "scan_run_id": scan_run_id,
+        "boxes_created": boxes_created,
+        "boxes_matched": boxes_matched,
+        "items_added": items_added,
+        "items_linked": items_linked,
+        "errors": errors,
+        "results": results,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+    }
+    await db.shipments.update_one({"id": shipment_id}, {"$set": {"scan_draft": draft}})
+
     return {
         "scan_run_id": scan_run_id,
         "photos_processed": len(images),
@@ -699,6 +720,16 @@ async def scan_boxes(
         "errors": errors,
         "results": results,
     }
+
+
+@router.delete("/shipments/{shipment_id}/scan-draft")
+async def clear_scan_draft(shipment_id: str, current_user: dict = Depends(require_admin)):
+    """iter 255c — Frontend calls this when the user hits Done on the box-scan
+    dialog, so subsequent shipment loads don't re-open a stale draft."""
+    await db.shipments.update_one(
+        {"id": shipment_id}, {"$unset": {"scan_draft": ""}},
+    )
+    return {"cleared": True}
 
 
 @router.get("/shipments/{shipment_id}/scan-runs")

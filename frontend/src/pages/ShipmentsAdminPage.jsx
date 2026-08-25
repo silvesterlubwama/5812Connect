@@ -112,6 +112,15 @@ export default function ShipmentsAdminPage() {
 
   useEffect(() => { refreshList(); }, [refreshList]);
   useEffect(() => { refreshDetail(); }, [refreshDetail]);
+  // iter 255c — auto-resume unfinished box-scan reviews. When a shipment
+  // loads with a persisted `scan_draft` and we don't already have a live
+  // result in memory, re-hydrate the dialog so the review isn't lost.
+  useEffect(() => {
+    if (selected?.scan_draft && !boxScanResult) {
+      setBoxScanResult(selected.scan_draft);
+      setShowBoxScan(true);
+    }
+  }, [selected?.id, selected?.scan_draft?.scan_run_id, boxScanResult]);
   // iter 254 — auto-refresh the shipment LIST card whenever the user
   // returns to it from the detail view (their item edits should be
   // immediately reflected in the count / weight / progress on the tile).
@@ -2189,6 +2198,8 @@ export default function ShipmentsAdminPage() {
                       try {
                         const r = await api.post(`/shipments/${selectedId}/scan-runs/${boxScanResult.scan_run_id}/revert`);
                         toast.success(`Reverted: ${r.data.items_removed} items, ${r.data.boxes_removed} boxes, ${r.data.items_unlinked} unlinked`);
+                        // iter 255c — clear the persisted draft after undo too.
+                        try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
                         setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null);
                         await refreshDetail();
                       } catch (e) { toast.error(e.response?.data?.detail || 'Revert failed'); }
@@ -2198,8 +2209,19 @@ export default function ShipmentsAdminPage() {
                     Undo this scan
                   </Button>
                 )}
-                <Button variant="outline" className="flex-1" onClick={() => { setBoxScanResult(null); setBoxScanImages([]); }} data-testid="box-scan-again">Scan more</Button>
-                <Button className="flex-1" onClick={() => { setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null); }} data-testid="box-scan-done">Done</Button>
+                <Button variant="outline" className="flex-1" onClick={async () => {
+                  // Clear the persisted draft on the server so the "Scan more"
+                  // flow starts fresh instead of re-hydrating the old one.
+                  try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
+                  setBoxScanResult(null); setBoxScanImages([]);
+                }} data-testid="box-scan-again">Scan more</Button>
+                <Button className="flex-1" onClick={async () => {
+                  // iter 255c — mark the review complete on the server so
+                  // future loads don't re-open the dialog.
+                  try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
+                  setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null);
+                  await refreshDetail();
+                }} data-testid="box-scan-done">Done</Button>
               </div>
             </div>
           )}
