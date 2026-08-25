@@ -1,5 +1,20 @@
 # 58:12 Connect — Changelog
 
+## Iteration 255b (Feb 2026) — Box scan dialog UX: persistent results + inline edits
+
+### 🟢 Scan results persist until explicit "Done"
+- Outside-click and Esc-key no longer discard the box-scan result panel. `DialogContent` now stops those events (`onPointerDownOutside` + `onEscapeKeyDown`) when `boxScanResult` is set. Only the header X, the "Done" button, and the "Scan more" / "Undo this scan" buttons close the results.
+- Fixes the "scan 20 photos, tap outside, lose everything" regression the user was hitting.
+
+### 🟢 Per-item Remove and Qty edit inline in the results
+- Each scanned line now has:
+  - Editable `qty` input — persists the delta immediately via `PUT /items/{item_id}` so the dialog stays authoritative.
+  - Rose-red X button — for `added` lines, deletes the item this scan created; for `linked` lines, subtracts the qty this scan added from the pre-existing item's `qty_acquired`. Confirmation prompt before any destructive action.
+  - Optimistic local state update + `refreshDetail()` after each mutation so counters, packing totals, and the item list stay consistent.
+- Test IDs `box-scan-qty-<i>-<j>` and `box-scan-remove-item-<i>-<j>` for automated coverage.
+
+
+
 ## Iteration 255 (Feb 2026) — Box scanning: individual items + weight estimates + manifest/invoice sort
 
 ### 🟢 Box scan lists every item individually (even for "Personal" boxes)

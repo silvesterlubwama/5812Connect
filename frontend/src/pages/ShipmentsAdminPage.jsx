@@ -1995,14 +1995,29 @@ export default function ShipmentsAdminPage() {
           Different from AI Scan (single item) — this one reads the whole
           box: box number + item list, auto-creates boxes + items, and
           collapses "Personal Items" boxes into one Household Personal Item row. */}
-      <Dialog open={showBoxScan} onOpenChange={(o) => { if (!o) { setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null); } }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="box-scan-dialog">
+      <Dialog
+        open={showBoxScan}
+        onOpenChange={(o) => {
+          if (o) return;
+          // iter 255b — don't lose the scan result on outside-click / Esc.
+          // Force an explicit "Done" (or the X in the header) once a result
+          // exists so 20-photo runs aren't accidentally discarded.
+          if (boxScanResult) return;
+          setShowBoxScan(false); setBoxScanImages([]);
+        }}
+      >
+        <DialogContent
+          className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="box-scan-dialog"
+          onPointerDownOutside={(e) => { if (boxScanResult) e.preventDefault(); }}
+          onEscapeKeyDown={(e) => { if (boxScanResult) e.preventDefault(); }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Boxes size={18} className="text-emerald-600" /> Scan Boxes</DialogTitle>
             <DialogDescription>
               Upload photos of your labeled shipping boxes. AI reads the box number and item list written in marker,
-              matches them to your shipment, and adds anything missing. Boxes marked &quot;Personal Items&quot; become a single
-              &quot;Household Personal Item&quot; row. Values default to a conservative low-average estimate if none is on the box.
+              matches them to your shipment, and adds anything missing. Every item — including personal / household
+              boxes — is listed individually with an AI-estimated per-unit weight + value. Adjust or remove any line
+              below before hitting Done.
             </DialogDescription>
           </DialogHeader>
 
@@ -2083,11 +2098,77 @@ export default function ShipmentsAdminPage() {
                       {r.matched_box_name && <span className="text-muted-foreground truncate">{r.matched_box_name}</span>}
                     </div>
                     {r.items.length > 0 && (
-                      <ul className="mt-1 space-y-0.5">
+                      <ul className="mt-1 space-y-0.5" data-testid={`box-scan-photo-${i}-items`}>
                         {r.items.map((it, j) => (
-                          <li key={j} className="flex items-center justify-between gap-2">
-                            <span>{it.action === 'added' ? '➕' : '🔗'} {it.name} <span className="text-muted-foreground">× {it.qty}</span></span>
-                            <span className="text-muted-foreground">${it.value_usd}</span>
+                          <li key={j} className="flex items-center justify-between gap-2 py-0.5">
+                            <span className="flex-1 truncate">
+                              {it.action === 'added' ? '➕' : '🔗'} {it.name}
+                            </span>
+                            <input
+                              type="number" min="0" step="1"
+                              className="w-14 text-xs border rounded px-1 py-0.5 text-right"
+                              value={it.qty}
+                              disabled={!it.item_id}
+                              onChange={async (e) => {
+                                // iter 255b — Let the packer adjust qty per line
+                                // before hitting Done. Persist delta immediately so the
+                                // dialog stays authoritative even after a refresh.
+                                const newQty = Math.max(0, parseInt(e.target.value || '0', 10));
+                                const oldQty = it.qty;
+                                if (newQty === oldQty) return;
+                                setBoxScanResult(prev => {
+                                  const next = { ...prev, results: prev.results.map((rr, ri) => ri !== i ? rr : { ...rr, items: rr.items.map((ii, ij) => ij !== j ? ii : { ...ii, qty: newQty }) }) };
+                                  next.items_added = (prev.items_added || 0) + (it.action === 'added' ? (newQty - oldQty) : 0);
+                                  return next;
+                                });
+                                try {
+                                  const cur = (selected.items || []).find(x => x.id === it.item_id);
+                                  const currentQty = Number(cur?.qty_acquired || 0);
+                                  const delta = newQty - oldQty;
+                                  await api.put(`/shipments/${selectedId}/items/${it.item_id}`, {
+                                    qty_acquired: Math.max(0, currentQty + delta),
+                                  });
+                                  await refreshDetail();
+                                } catch (err) {
+                                  toast.error(err.response?.data?.detail || 'Qty update failed');
+                                }
+                              }}
+                              data-testid={`box-scan-qty-${i}-${j}`}
+                            />
+                            <span className="text-muted-foreground w-14 text-right">${(Number(it.value_usd) || 0).toFixed(2)}</span>
+                            <button
+                              type="button"
+                              className="text-rose-600 hover:text-rose-700 disabled:text-slate-300"
+                              disabled={!it.item_id || it.qty <= 0}
+                              title={it.action === 'added' ? 'Remove this scanned item' : 'Undo the qty this scan added to the linked item'}
+                              onClick={async () => {
+                                if (!window.confirm(`Remove "${it.name}" from this scan?`)) return;
+                                try {
+                                  if (it.action === 'added') {
+                                    // Fully delete the item this scan created.
+                                    await api.delete(`/shipments/${selectedId}/items/${it.item_id}`);
+                                  } else {
+                                    // Linked: subtract the qty this scan added from the pre-existing item.
+                                    const cur = (selected.items || []).find(x => x.id === it.item_id);
+                                    const currentQty = Number(cur?.qty_acquired || 0);
+                                    const restored = Math.max(0, currentQty - it.qty);
+                                    await api.put(`/shipments/${selectedId}/items/${it.item_id}`, { qty_acquired: restored });
+                                  }
+                                  setBoxScanResult(prev => {
+                                    const next = { ...prev, results: prev.results.map((rr, ri) => ri !== i ? rr : { ...rr, items: rr.items.filter((_, ij) => ij !== j) }) };
+                                    if (it.action === 'added') next.items_added = Math.max(0, (prev.items_added || 0) - 1);
+                                    else next.items_linked = Math.max(0, (prev.items_linked || 0) - 1);
+                                    return next;
+                                  });
+                                  await refreshDetail();
+                                } catch (err) {
+                                  toast.error(err.response?.data?.detail || 'Remove failed');
+                                }
+                              }}
+                              data-testid={`box-scan-remove-item-${i}-${j}`}
+                            >
+                              <X size={12} />
+                            </button>
                           </li>
                         ))}
                       </ul>
