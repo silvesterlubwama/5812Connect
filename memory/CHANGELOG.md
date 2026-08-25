@@ -1,5 +1,16 @@
 # 58:12 Connect — Changelog
 
+## Iteration 254d (Feb 2026) — Retry Failed Shapes
+
+### 🟢 Per-item "Retry" pill for failed shape derivations
+- **Backend**: `_derive_shape3d_for_item` now `$unset`s `shape3d_error` on success. Both the single (`POST /items/{id}/derive-shape`) and batch (`derive-shapes-batch`) endpoints catch failures and persist the error message onto `items.$.shape3d_error` (140-char cap). So the failure survives page reloads.
+- **Frontend**: `ShipmentsAdminPage` item card pill now has three states based on `it.shape3d`/`it.shape3d_error`:
+  - **Derived** → indigo pill showing shape kind (`box`/`cylinder`/`sphere`/`compound`), click to re-derive.
+  - **Failed** → 🔴 rose "Retry" pill with tooltip showing the exact error, click to retry just this one item.
+  - **Not yet derived** → grey dashed "3D?" pill.
+- Test: forcing a failure on a photo-less item persists `shape3d_error: "Item has no photo yet"` on the record, ready to render the Retry pill on next page load.
+
+
 ## Iteration 254c (Feb 2026) — Production hardening: chunked bulk AI, file picker fixes, donor page crash protection
 
 ### 🔴 P0 — Chunked bulk AI (removes the untracked-background-task footgun)

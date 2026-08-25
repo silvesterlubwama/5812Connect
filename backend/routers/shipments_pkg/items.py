@@ -908,7 +908,9 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
 
     await db.shipments.update_one(
         {"id": shipment_id, "items.id": item_id},
-        {"$set": {"items.$.shape3d": shape3d}},
+        # iter 254d — clear any prior shape3d_error on success so the
+        # "Retry" pill on the item card goes away automatically.
+        {"$set": {"items.$.shape3d": shape3d}, "$unset": {"items.$.shape3d_error": ""}},
     )
     await _audit(current_user["id"], "derive_shape3d", "shipment_item", item_id,
                  {"kind": kind, "confidence": shape3d["confidence"]})
@@ -932,7 +934,22 @@ async def derive_item_shape3d(
     )
     if not ship or not ship.get("items"):
         raise HTTPException(status_code=404, detail="Item not found")
-    shape3d = await _derive_shape3d_for_item(shipment_id, ship["items"][0], current_user)
+    try:
+        shape3d = await _derive_shape3d_for_item(shipment_id, ship["items"][0], current_user)
+    except HTTPException as e:
+        # iter 254d — persist the error onto the item so the item card can
+        # show a "Retry" pill next to the failed one.
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": item_id},
+            {"$set": {"items.$.shape3d_error": str(e.detail)[:140]}},
+        )
+        raise
+    except Exception as e:
+        await db.shipments.update_one(
+            {"id": shipment_id, "items.id": item_id},
+            {"$set": {"items.$.shape3d_error": str(e)[:140]}},
+        )
+        raise HTTPException(status_code=500, detail=str(e)[:140])
     return {"shape3d": shape3d}
 
 
@@ -970,9 +987,21 @@ async def derive_shapes_batch(
             await _derive_shape3d_for_item(shipment_id, it, current_user)
             succeeded += 1
         except HTTPException as e:
-            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e.detail)[:120]})
+            msg = str(e.detail)[:140]
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": msg})
+            # iter 254d — persist per-item error so the frontend can show a
+            # small Retry pill exactly on the items that need a re-try.
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.id": it["id"]},
+                {"$set": {"items.$.shape3d_error": msg}},
+            )
         except Exception as e:
-            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e)[:120]})
+            msg = str(e)[:140]
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": msg})
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.id": it["id"]},
+                {"$set": {"items.$.shape3d_error": msg}},
+            )
 
     return {
         "succeeded": succeeded,
