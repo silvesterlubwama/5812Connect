@@ -16,6 +16,14 @@ export class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      // iter 254c — optional inline fallback for wrapping small widgets
+      // (e.g., the 3D container visualiser). Prevents a texture-load or
+      // WebGL init failure from taking down an entire page.
+      if (this.props.fallback) {
+        return typeof this.props.fallback === 'function'
+          ? this.props.fallback(this.state.error, () => this.setState({ hasError: false, error: null }))
+          : this.props.fallback;
+      }
       return (
         <div className="min-h-screen flex items-center justify-center bg-background p-6" data-testid="error-boundary">
           <div className="max-w-md text-center space-y-4">

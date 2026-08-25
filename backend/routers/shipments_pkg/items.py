@@ -939,59 +939,51 @@ async def derive_item_shape3d(
 @router.post("/shipments/{shipment_id}/items/derive-shapes-batch")
 async def derive_shapes_batch(
     shipment_id: str,
+    limit: int = 3,
     current_user: dict = Depends(require_admin),
 ):
-    """iter 254 — Batch-derive 3D shapes for every un-analysed item in the
-    shipment that (a) has a photo and (b) doesn't already have `shape3d`.
-
-    Runs the Gemini classifier loop as a detached asyncio task so long queues
-    (45+ items) don't blow past Cloudflare's 120s proxy read timeout.
-    Returns immediately with the count of targets — the frontend polls
-    `/shipments/{id}` to watch `shape3d` fill in per item.
+    """iter 254c — Chunked derive. Processes up to `limit` items that have a
+    photo but no `shape3d` yet, then returns. The frontend loops until
+    `remaining == 0`. Small chunks (default 3) keep every HTTP call well
+    under the 120s proxy timeout and make progress visible after each
+    batch — even on production where a worker recycle would kill an
+    untracked background task.
     """
+    limit = max(1, min(int(limit or 3), 5))
     ship = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
     if not ship:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items = ship.get("items") or []
 
-    candidates = [
+    all_candidates = [
         it for it in items
         if not it.get("shape3d") and (
             it.get("photo_url") or (it.get("image_urls") and it["image_urls"][0])
         )
     ]
+    chunk = all_candidates[:limit]
 
-    skipped_no_photo = sum(
-        1 for it in items
-        if not it.get("shape3d") and not it.get("photo_url") and not (it.get("image_urls") or [])
-    )
-    already_analysed = sum(1 for it in items if it.get("shape3d"))
-    user = current_user
-
-    async def _run():
-        for it in candidates:
-            try:
-                await _derive_shape3d_for_item(shipment_id, it, user)
-            except Exception as ex:
-                logger.warning(f"derive_shapes_batch item {it.get('id')} failed: {ex}")
+    succeeded = 0
+    failed: list[dict] = []
+    for it in chunk:
         try:
-            await _audit(user["id"], "derive_shapes_batch_done", "shipment", shipment_id,
-                         {"attempted": len(candidates)})
-        except Exception:
-            pass
-
-    import asyncio
-    asyncio.create_task(_run())
+            await _derive_shape3d_for_item(shipment_id, it, current_user)
+            succeeded += 1
+        except HTTPException as e:
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e.detail)[:120]})
+        except Exception as e:
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(e)[:120]})
 
     return {
-        "status": "started",
-        "targets": len(candidates),
-        "skipped_no_photo": skipped_no_photo,
-        "already_analysed": already_analysed,
-        "message": (
-            f"3D shape derivation started for {len(candidates)} item(s) in the background. "
-            "Item pills will update as each one is classified."
+        "succeeded": succeeded,
+        "failed": failed,
+        "remaining": max(0, len(all_candidates) - len(chunk)),
+        "total_untagged": len(all_candidates),
+        "skipped_no_photo": sum(
+            1 for it in items
+            if not it.get("shape3d") and not it.get("photo_url") and not (it.get("image_urls") or [])
         ),
+        "already_analysed": sum(1 for it in items if it.get("shape3d")),
     }
 
 
@@ -1205,69 +1197,74 @@ async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = 
 
 
 @router.post("/shipments/{shipment_id}/classify-hs-bulk")
-async def bulk_classify_hs(shipment_id: str, data: dict = None, current_user: dict = Depends(require_admin)):
-    """Classify HS codes + PVoC for every item in the shipment that doesn't have
-    one (or all items when `force=true`).
+async def bulk_classify_hs(
+    shipment_id: str,
+    data: dict = None,
+    limit: int = 5,
+    current_user: dict = Depends(require_admin),
+):
+    """Classify HS codes + PVoC for up to `limit` items in the shipment that
+    don't yet have one (or all items when `force=true`).
 
-    iter 254 — This endpoint used to run the entire loop inline, which for
-    large shipments (45+ items × ~5-15s Gemini call each) blew past
-    Cloudflare's 120s proxy read timeout in production. It now:
+    iter 254c — Removed the fire-and-forget asyncio.create_task approach
+    (untracked background tasks die when a worker recycles, so progress
+    silently stalls on production). This endpoint now processes a small
+    chunk synchronously and returns:
 
-      1. Counts targets synchronously,
-      2. Fires the classification loop as a detached asyncio task,
-      3. Returns immediately with `{status:"started", targets:N}`.
+        {
+          "classified": N,           # successfully classified this call
+          "failed": [...],           # per-item error blobs
+          "remaining": N,            # items still needing classification
+          "total_untagged": N,       # total that don't have hs_code yet
+          "pvoc_flagged": N,         # PVoC-required flags added this call
+        }
 
-    The frontend polls `/shipments/{id}` and watches `hs_code` presence to
-    know when the run finishes. Progress is visible per-item as each Mongo
-    update lands.
+    The frontend loops until `remaining == 0`. Each call is fast (5 items ×
+    ~5-10s each = ~30-50s per HTTP request, well within Cloudflare's 120s
+    proxy read timeout) and progress is visible after every batch — even
+    if the tab is closed the previously-persisted classifications remain.
     """
     force = bool((data or {}).get("force"))
+    limit = max(1, min(int(limit or 5), 10))
     s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items = s.get("items") or []
     dest_country = s.get("dest_country", "") or ""
-    targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
-    skipped = len(items) - len(targets)
-    user_id = current_user["id"]
+    all_targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
+    chunk = all_targets[:limit]
 
-    async def _run():
-        for it in targets:
-            try:
-                r = await _classify_hs_with_ai(
-                    it.get("name", ""), it.get("category", ""),
-                    it.get("condition", "used"), dest_country,
-                )
-                await db.shipments.update_one(
-                    {"id": shipment_id, "items.id": it["id"]},
-                    {"$set": {
-                        "items.$.hs_code": r["hs_code"],
-                        "items.$.hs_code_reason": r["reason"],
-                        "items.$.requires_pvoc": r["requires_pvoc"],
-                        "items.$.pvoc_reason": r["pvoc_reason"],
-                        "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-            except Exception as ex:
-                logger.warning(f"bulk_classify_hs item {it.get('id')} failed: {ex}")
+    classified = 0
+    failed: list[dict] = []
+    pvoc_flagged = 0
+    for it in chunk:
         try:
-            await _audit(user_id, "bulk_classify_hs_done", "shipment", shipment_id,
-                         {"attempted": len(targets), "skipped_existing": skipped})
-        except Exception:
-            pass
-
-    import asyncio
-    asyncio.create_task(_run())
+            r = await _classify_hs_with_ai(
+                it.get("name", ""), it.get("category", ""),
+                it.get("condition", "used"), dest_country,
+            )
+            await db.shipments.update_one(
+                {"id": shipment_id, "items.id": it["id"]},
+                {"$set": {
+                    "items.$.hs_code": r["hs_code"],
+                    "items.$.hs_code_reason": r["reason"],
+                    "items.$.requires_pvoc": r["requires_pvoc"],
+                    "items.$.pvoc_reason": r["pvoc_reason"],
+                    "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            classified += 1
+            if r.get("requires_pvoc"):
+                pvoc_flagged += 1
+        except Exception as ex:
+            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(ex)[:120]})
 
     return {
-        "status": "started",
-        "shipment_id": shipment_id,
-        "targets": len(targets),
-        "skipped_existing": skipped,
-        "message": (
-            f"AI classification started for {len(targets)} item(s) in the background. "
-            "Watch the item list — HS codes will appear as they're classified."
-        ),
+        "classified": classified,
+        "failed": failed,
+        "remaining": max(0, len(all_targets) - len(chunk)),
+        "total_untagged": len(all_targets),
+        "pvoc_flagged": pvoc_flagged,
     }
 
 

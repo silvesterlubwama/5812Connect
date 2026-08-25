@@ -27,6 +27,7 @@ import api from '../services/api';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import ContainerVisualizer from '../components/ContainerVisualizer';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ShipmentPackingPanel } from './shipping/ShipmentPackingPanel';
 import { PackingDndProvider, useShipItemDrag } from './shipping/packingDnd';
 
@@ -231,31 +232,30 @@ export default function ShipmentsAdminPage() {
     if (!window.confirm(`Ask AI to derive 3D shapes for ${candidates.length} un-analysed item${candidates.length === 1 ? '' : 's'}? Costs one Gemini call per item.`)) return;
     setBulkShapeBusy(true);
     let toastId = toast.loading(`Analysing 0 / ${candidates.length} item${candidates.length === 1 ? '' : 's'}…`);
+    let totalDone = 0;
+    let totalFailed = 0;
     try {
-      const r = await api.post(`/shipments/${selectedId}/items/derive-shapes-batch`);
-      // iter 254 — server returns immediately; job runs in background.
-      // Poll the shipment doc so item pills update live.
-      const targets = r.data?.targets ?? candidates.length;
-      if (targets === 0) {
-        toast.dismiss(toastId);
-        toast.info('Nothing to analyse.');
-        return;
-      }
-      const startAnalysed = items.filter(i => i.shape3d).length;
-      const deadline = Date.now() + 20 * 60 * 1000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 4000));
+      // iter 254c — chunked. Each call handles 3 items (~15-25s Gemini) then
+      // returns. Loop until `remaining === 0`. No background tasks that
+      // could die on production worker recycles.
+      for (let i = 0; i < 60; i++) {   // safety cap: 60 × 3 = 180 items
+        const r = await api.post(`/shipments/${selectedId}/items/derive-shapes-batch?limit=3`);
+        const { succeeded = 0, failed = [], remaining = 0, total_untagged = 0 } = r.data || {};
+        totalDone += succeeded;
+        totalFailed += failed.length;
+        toast.loading(`Analysing ${totalDone} / ${totalDone + total_untagged} item${(totalDone + total_untagged) === 1 ? '' : 's'}…`, { id: toastId });
         try {
           const s = await api.get(`/shipments/${selectedId}`);
           setSelected(s.data);
-          const nowAnalysed = (s.data.items || []).filter(i => i.shape3d).length;
-          const done = nowAnalysed - startAnalysed;
-          toast.loading(`Analysing ${Math.min(done, targets)} / ${targets} item${targets === 1 ? '' : 's'}…`, { id: toastId });
-          if (done >= targets) break;
-        } catch { /* keep polling */ }
+        } catch { /* keep looping */ }
+        if (remaining === 0) break;
       }
       toast.dismiss(toastId);
-      toast.success(`3D shape derivation finished`);
+      if (totalFailed === 0) {
+        toast.success(`Derived shapes for ${totalDone} item${totalDone === 1 ? '' : 's'}`);
+      } else {
+        toast.warning(`${totalDone} ok · ${totalFailed} failed`);
+      }
     } catch (e) {
       toast.dismiss(toastId);
       toast.error(e.response?.data?.detail || 'Batch shape derivation failed');
@@ -443,36 +443,43 @@ export default function ShipmentsAdminPage() {
     const force = missing.length === 0;
     setHsBusy(true);
     let toastId;
+    let totalDone = 0;
+    let totalFailed = 0;
+    let totalPvoc = 0;
     try {
-      const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk`, { force });
-      // iter 254 — endpoint now returns immediately with {status:'started', targets, skipped_existing}
-      // and runs the loop server-side. Poll the shipment doc so item pills
-      // fill in live as each Gemini call completes.
-      const targets = r.data?.targets ?? 0;
-      const skipped = r.data?.skipped_existing ?? 0;
-      if (targets === 0) {
-        toast.info(`Nothing to classify${skipped ? ` — ${skipped} already had HS codes` : ''}`);
-        setHsBusy(false);
-        return;
-      }
-      toastId = toast.loading(`AI classifying 0 / ${targets} items…`);
-      const startCount = (selected?.items || []).filter(i => (i.hs_code || '').trim()).length;
-      const total = (selected?.items || []).length;
-      const deadline = Date.now() + 20 * 60 * 1000;   // 20-min cap
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 4000));
+      // iter 254c — chunked HS classification. Each call handles 5 items
+      // (~30-50s of Gemini) and returns fresh counts. Loop until
+      // `remaining === 0`. Progress is visible after every chunk and
+      // there is no background task to lose on a worker recycle.
+      let firstRun = true;
+      // Safety cap: 40 chunks × 5 = 200 items max in one session.
+      for (let i = 0; i < 40; i++) {
+        const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk?limit=5`, { force: firstRun ? force : false });
+        firstRun = false;
+        const { classified = 0, failed = [], remaining = 0, total_untagged = 0, pvoc_flagged = 0 } = r.data || {};
+        totalDone += classified;
+        totalFailed += failed.length;
+        totalPvoc += pvoc_flagged;
+        if (!toastId) {
+          const grandTotal = classified + remaining;
+          if (grandTotal === 0) {
+            toast.info('Nothing to classify.');
+            setHsBusy(false);
+            return;
+          }
+          toastId = toast.loading(`AI classifying ${classified} / ${grandTotal} items…`);
+        } else {
+          toast.loading(`AI classifying ${totalDone} / ${total_untagged + totalDone} items…`, { id: toastId });
+        }
+        // Refresh local state so item pills update per chunk.
         try {
           const s = await api.get(`/shipments/${selectedId}`);
           setSelected(s.data);
-          const withHs = (s.data.items || []).filter(i => (i.hs_code || '').trim()).length;
-          const done = withHs - startCount;
-          const remaining = targets - done;
-          toast.loading(`AI classifying ${Math.min(done, targets)} / ${targets} items…`, { id: toastId });
-          if (remaining <= 0 || withHs >= total) break;
-        } catch { /* keep polling on transient errors */ }
+        } catch { /* keep going */ }
+        if (remaining === 0) break;
       }
       toast.dismiss(toastId);
-      toast.success(`AI classification finished`);
+      toast.success(`AI classified ${totalDone} item${totalDone === 1 ? '' : 's'}${totalPvoc ? ` · ${totalPvoc} PVoC-flagged` : ''}${totalFailed ? ` · ${totalFailed} failed` : ''}`);
     } catch (e) {
       if (toastId) toast.dismiss(toastId);
       toast.error(e.response?.data?.detail || 'HS classification failed');
@@ -1305,6 +1312,11 @@ export default function ShipmentsAdminPage() {
           ><ImageIcon size={11} className="mr-1" />PNG</Button>
         </div>
         <div id="ship-container-visualizer">
+        <ErrorBoundary fallback={
+          <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground" data-testid="ship-viz-error">
+            Visualiser failed to load. Refresh the page to try again — the rest of this shipment is unaffected.
+          </div>
+        }>
         <ContainerVisualizer
           items={selected.items || []}
           pallets={selected.pallets || []}
@@ -1355,6 +1367,7 @@ export default function ShipmentsAdminPage() {
             } catch (e) { toast.error(e.response?.data?.detail || 'Rotate failed'); }
           }}
         />
+        </ErrorBoundary>
         </div>
         </>
       )}
@@ -1856,7 +1869,6 @@ export default function ShipmentsAdminPage() {
                   type="file"
                   accept="image/*"
                   multiple
-                  capture="environment"
                   className="hidden"
                   data-testid="admin-scan-file"
                   onChange={e => {

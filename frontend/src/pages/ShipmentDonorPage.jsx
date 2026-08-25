@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
 import { useBranding } from '../context/BrandingContext';
 import ContainerVisualizer from '../components/ContainerVisualizer';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
@@ -541,15 +542,21 @@ export default function ShipmentDonorPage() {
             progress bar so they can pick items to donate without being
             overwhelmed by pallets, 3D or already-donated items. */}
         {isEditor && ((data.already_acquired || []).length > 0 || (data.still_needed || []).length > 0) && (
-          <ContainerVisualizer
-            items={[...(data.already_acquired || []), ...(data.still_needed || [])]}
-            pallets={data.pallets || []}
-            packing_units={data.packing_units || []}
-            container={data.container_dims_cm}
-            defaultMode="3d"
-            editable={isEditor}
-            onPalletMove={movePallet}
-          />
+          <ErrorBoundary fallback={
+            <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground" data-testid="ship-donor-viz-error">
+              3D preview couldn&apos;t load — refresh the page. The rest of the donor page is unaffected.
+            </div>
+          }>
+            <ContainerVisualizer
+              items={[...(data.already_acquired || []), ...(data.still_needed || [])]}
+              pallets={data.pallets || []}
+              packing_units={data.packing_units || []}
+              container={data.container_dims_cm}
+              defaultMode="2d"
+              editable={isEditor}
+              onPalletMove={movePallet}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Still needed */}

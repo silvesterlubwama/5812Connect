@@ -1,5 +1,23 @@
 # 58:12 Connect — Changelog
 
+## Iteration 254c (Feb 2026) — Production hardening: chunked bulk AI, file picker fixes, donor page crash protection
+
+### 🔴 P0 — Chunked bulk AI (removes the untracked-background-task footgun)
+- Production symptom: users saw the batch AI kick off but progress silently stalled — the previous `asyncio.create_task(...)` pattern loses work when a worker recycles. Cloudflare 524s were also reported.
+- `POST /api/shipments/{id}/classify-hs-bulk?limit=5` and `POST /api/shipments/{id}/items/derive-shapes-batch?limit=3` now process a small chunk **synchronously** and return `{classified/succeeded, failed:[...], remaining, total_untagged, ...}`. No background tasks.
+- Frontend `bulkClassifyHs` and `bulkDeriveShapes` loop the endpoint until `remaining === 0`, refreshing state and updating the progress toast after every chunk. Each call finishes in ~30-50s well under the 120s proxy timeout.
+
+### 🔴 P0 — Donor page crash protection
+- The public `/donate/shipment/<token>` page was blowing up on 3D texture-load failures. Wrapped the `ContainerVisualizer` in an `ErrorBoundary` with an inline fallback (small muted-grey box + refresh hint) so a WebGL / texture problem no longer takes down the entire donor page. Same protection added inside `ShipmentsAdminPage`.
+- Donor page now defaults `ContainerVisualizer` to `2d` mode (was `3d`) so we don't render textures + WebGL for anonymous visitors before they've even asked for it.
+- `ErrorBoundary` extended with an optional `fallback` prop (element or function) so small widgets can be wrapped without the full-page fallback.
+
+### 🟢 Photo picker across all shipment scan flows
+- `capture="environment"` removed from the **Admin AI Scan** dialog — was forcing camera-only on mobile. Users can now pick from library OR camera on both desktop and mobile.
+- Confirmed **Box Scan** (`ship-box-scan-btn`) and the **Donor Scan** already allow multi-select from gallery.
+
+
+
 ## Iteration 254b (Feb 2026) — Shipping visualizer: no auto-snap, full-screen edit, rotation, non-blocking bulk AI
 
 ### 🔴 P0 — Fix Cloudflare 120s Proxy Read Timeout on bulk AI endpoints
