@@ -1,5 +1,26 @@
 # 58:12 Connect — Changelog
 
+## Iteration 255 (Feb 2026) — Box scanning: individual items + weight estimates + manifest/invoice sort
+
+### 🟢 Box scan lists every item individually (even for "Personal" boxes)
+- Removed the collapse-into-one-`Household Personal Item`-row logic from `POST /api/shipments/{id}/scan-boxes`. Personal / household boxes now list every item they contain (shampoo, towels, plates, ...) exactly like a regular box so the customs manifest + commercial invoice show real line items.
+- `SYS_PROMPT` updated to explicitly forbid the collapse and to ask for `estimated_weight_kg` alongside `estimated_value_usd` for each item.
+- Fallback: if the AI returns zero items for a personal box (rare), we still add one `Household Personal Item` line so the box isn't lost.
+
+### 🟢 AI weight estimation for scanned items
+- New `_estimate_weight_kg(name, category, provided)` helper mirroring `_estimate_value_usd`. Uses the AI-supplied weight when present, otherwise falls back to a category preset (0.4 kg clothing, 0.6 kg book, 1.5 kg kitchen appliance, ...) with a safe 0.8 kg default. Container weight totals now include scanned items instead of showing zero.
+
+### 🟢 Manifest sorted by box number
+- New `_sort_items_by_box(items, packing_units)` in `_common.py` — natural-order sort ("Box 2" < "Box 10" < "Box 12A") with un-boxed items pushed to the end.
+- `GET /api/shipments/{id}/manifest.pdf` now sorts by box → packers can walk down the container ticking off a full box at a time.
+- `_loc_str` extended to accept `packing_units` so the "Loc" column shows the human-readable box name ("Box 12 – Kitchen") instead of just a pallet-id fragment.
+
+### 🟢 Invoice sorted by value then box
+- New `_sort_items_for_invoice(items, packing_units)` — highest line-value first (unit_value × qty), then by box number, then item name.
+- `GET /api/shipments/{id}/commercial-invoice.pdf` uses the new sort — the customs officer sees the biggest-value lines up top.
+
+
+
 ## Iteration 254d (Feb 2026) — Retry Failed Shapes
 
 ### 🟢 Per-item "Retry" pill for failed shape derivations

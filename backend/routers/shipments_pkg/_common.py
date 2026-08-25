@@ -287,8 +287,69 @@ def _sort_items_for_manifest(items: list) -> list:
     return sorted(items, key=key)
 
 
-def _loc_str(it: dict) -> str:
+def _box_sort_key(name: str) -> tuple:
+    """iter 255 — human-friendly box-number sort. Splits the packing unit
+    name into (digit-run, alpha-run) tuples so "Box 2" < "Box 10" < "Box 12A"
+    exactly the way a warehouse worker would read them.
+    """
+    import re as _re
+    tokens = _re.findall(r"\d+|\D+", (name or "").lower())
+    key = []
+    for t in tokens:
+        if t.isdigit():
+            key.append((0, int(t)))
+        else:
+            key.append((1, t.strip()))
+    return tuple(key) if key else ((1, ""),)
+
+
+def _sort_items_by_box(items: list, packing_units: list) -> list:
+    """iter 255 — Ship-manifest sort: items grouped by the box they're in,
+    boxes ordered by the number written on them (Box 1 → Box 2 → Box 10),
+    and un-boxed items pushed to the end.
+    """
+    unit_by_id = {u["id"]: u for u in (packing_units or []) if u.get("id")}
+
+    def key(it):
+        uid = it.get("packing_unit_id")
+        if not uid or uid not in unit_by_id:
+            return ((2,), (it.get("name") or "").lower())
+        unit = unit_by_id[uid]
+        return ((1,) + _box_sort_key(unit.get("name") or unit["id"]),
+                (it.get("name") or "").lower())
+    return sorted(items, key=key)
+
+
+def _sort_items_for_invoice(items: list, packing_units: list) -> list:
+    """iter 255 — Commercial invoice sort: highest line-value first, then by
+    box-number. Puts the biggest customs-attention items at the top so a
+    reviewer scans them first, then continues in the packer's box order.
+    """
+    unit_by_id = {u["id"]: u for u in (packing_units or []) if u.get("id")}
+
+    def key(it):
+        qty = int(it.get("qty_acquired") or 0)
+        line_val = float(it.get("value_usd") or 0) * qty
+        uid = it.get("packing_unit_id")
+        if not uid or uid not in unit_by_id:
+            box_key = ((2,),)
+        else:
+            unit = unit_by_id[uid]
+            box_key = ((1,) + _box_sort_key(unit.get("name") or unit["id"]),)
+        # Negative line_val → highest first. Then box order. Then item name.
+        return (-line_val,) + box_key + ((it.get("name") or "").lower(),)
+    return sorted(items, key=key)
+
+
+def _loc_str(it: dict, packing_units: Optional[list] = None) -> str:
     parts = []
+    # iter 255 — prefer the human-readable box name so the manifest shows
+    # "Box 12 – Kitchen" instead of an opaque pallet id fragment.
+    uid = it.get("packing_unit_id")
+    if uid and packing_units:
+        u = next((u for u in packing_units if u.get("id") == uid), None)
+        if u and u.get("name"):
+            parts.append(str(u["name"])[:40])
     if it.get("pallet_id"):
         parts.append(f"Pallet {it['pallet_id'][-4:]}")
     for k, label in (("x_cm", "X"), ("y_cm", "Y"), ("z_cm", "Z")):

@@ -13,6 +13,8 @@ from ._common import (
     _persist_shipment_image,
     _classify_hs_with_ai,
     _sort_items_for_manifest,
+    _sort_items_by_box,
+    _sort_items_for_invoice,
     _loc_str,
     _resolve_group,
     _PDF_STYLES,
@@ -300,6 +302,36 @@ _LOW_AVG_VALUE_USD = {
 }
 
 
+# iter 255 — Typical per-unit weight (kg) for common household categories.
+# Kept conservative so we don't inflate container-weight totals. Used only
+# when neither the on-box label nor the AI vision output provides a weight.
+_LOW_AVG_WEIGHT_KG = {
+    "clothing": 0.4,
+    "shoes": 0.7,
+    "book": 0.6,
+    "books": 0.6,
+    "toy": 0.5,
+    "toys": 0.5,
+    "medical": 0.3,
+    "kitchen": 1.5,
+    "household": 1.0,
+    "electronics": 2.5,
+    "personal": 0.5,
+    "school": 0.5,
+    "food": 0.8,
+    "furniture": 15.0,
+    "sport": 1.5,
+    "sports": 1.5,
+    "tool": 1.8,
+    "tools": 1.8,
+    "linen": 0.7,
+    "linens": 0.7,
+    "bedding": 2.5,
+    "baby": 0.4,
+    "other": 0.8,
+}
+
+
 def _estimate_value_usd(name: str, category: str, provided: Optional[float]) -> float:
     """Use the AI-supplied value if any, otherwise map to `_LOW_AVG_VALUE_USD`
     on the coarsest bucket that matches the item's name or category. Falls
@@ -311,6 +343,19 @@ def _estimate_value_usd(name: str, category: str, provided: Optional[float]) -> 
         if k in key:
             return v
     return 5.0
+
+
+def _estimate_weight_kg(name: str, category: str, provided: Optional[float]) -> float:
+    """iter 255 — mirror of `_estimate_value_usd` for line weight. Uses the
+    AI-supplied weight if any, otherwise the low-average bucket. Fallback
+    of 0.8 kg keeps the manifest realistic without inflating totals."""
+    if provided and provided > 0:
+        return round(float(provided), 3)
+    key = ((category or "") + " " + (name or "")).lower()
+    for k, v in _LOW_AVG_WEIGHT_KG.items():
+        if k in key:
+            return v
+    return 0.8
 
 
 @router.post("/shipments/{shipment_id}/scan-boxes")
@@ -400,16 +445,17 @@ async def scan_boxes(
         '  "box_label":  "Kitchen" | null,   // any additional label (Kitchen, Books, etc.)\n'
         '  "is_personal": true|false,        // true iff the box is marked personal / household / personal effects\n'
         '  "items": [\n'
-        '    {"name":"Kids shoes","qty":1,"category":"shoes","estimated_value_usd":6}\n'
+        '    {"name":"Kids shoes","qty":1,"category":"shoes","estimated_value_usd":6,"estimated_weight_kg":0.6}\n'
         "  ],\n"
         '  "confidence": "high"|"medium"|"low",\n'
         '  "notes": "anything worth flagging"\n'
         "}\n"
         "Rules:\n"
         "- Read handwriting carefully; if unsure, still return best guess but drop confidence to 'low'.\n"
-        "- If the box is personal, `items` MUST be a single row: [{'name':'Household Personal Item','qty':1,'category':'personal','estimated_value_usd':5}]\n"
+        "- iter 255 — Personal / household boxes MUST still list every item individually (shampoo, towels, plates, ...). Do NOT collapse into one 'Personal Item' row. The customs manifest needs the individual lines.\n"
         "- For qty, use the count written on the box; default 1 if none.\n"
         "- estimated_value_usd should be a conservative LOW-AVERAGE US retail price for that category, or null.\n"
+        "- estimated_weight_kg is the typical per-unit weight in kilograms for that item (e.g. 0.4 for a t-shirt, 0.6 for a book, 1.5 for a kitchen appliance), or null.\n"
         "- If no box number is visible, set box_number=null."
     )
 
@@ -524,10 +570,18 @@ async def scan_boxes(
         # ── Parse the items from the AI response ─────────────────────
         photo_result_items = []
         raw_items = parsed.get("items") or []
-        # Personal boxes: replace whatever the AI returned with the fixed line
-        if is_personal:
+        # iter 255 — Personal boxes are no longer collapsed into a single
+        # "Household Personal Item" row. The AI now lists every item and
+        # each one is either matched or added individually so the customs
+        # manifest and invoice show real line items with per-item weights.
+        # If the AI failed to return any items for a personal box, fall back
+        # to the single "Household Personal Item" line so we don't lose the
+        # box entirely.
+        if is_personal and not raw_items:
             raw_items = [{"name": "Household Personal Item", "qty": 1,
-                          "category": "personal", "estimated_value_usd": 5}]
+                          "category": "personal",
+                          "estimated_value_usd": 5,
+                          "estimated_weight_kg": 0.5}]
 
         for row in raw_items:
             if not isinstance(row, dict):
@@ -538,6 +592,7 @@ async def scan_boxes(
             qty = max(1, int(row.get("qty") or 1))
             category = (row.get("category") or "Other").strip()[:60]
             value = _estimate_value_usd(item_name, category, row.get("estimated_value_usd"))
+            weight = _estimate_weight_kg(item_name, category, row.get("estimated_weight_kg"))
 
             existing = _match_item(item_name, cur_items)
             if existing:
@@ -572,6 +627,11 @@ async def scan_boxes(
                     "priority": "normal",
                     "packing_unit_id": target_unit["id"] if target_unit else None,
                     "value_usd": value,
+                    # iter 255 — carry an AI/preset-based per-unit weight so
+                    # the customs manifest & container-weight totals aren't
+                    # zero for scan-added items. `_estimate_weight_kg` uses
+                    # the AI hint if provided, otherwise the category preset.
+                    "weight_kg": weight,
                     "ai_identified": True,
                     "scanned_at": datetime.now(timezone.utc).isoformat(),
                     "notes": f"Auto-added from box photo{' ' + box_number if box_number else ''}",
@@ -1306,14 +1366,18 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
     sub-consignment (e.g. "Lubwama Household Relocation").  Use `group=unassigned`
     for items not tagged with any group.  No `group` = the whole container.
 
-    Items are sorted PVoC-required first, then highest value, then heaviest —
-    the natural review order for customs officers.
+    Items are sorted by box number (Box 1 → Box 10 → un-boxed) so packers
+    can walk down the container and check off one full box at a time.
     """
     s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items, group_meta = _resolve_group(s, group)
-    items = _sort_items_for_manifest(items)
+    # iter 255 — manifest sorted by box number (Box 1 → Box 2 → Box 10 → …
+    # then un-boxed) so packers can walk down the container and check off
+    # a full box at a time.
+    items = _sort_items_by_box(items, s.get("packing_units") or [])
+    packing_units = s.get("packing_units") or []
     shipment_title = s.get("name", "")
     heading = shipment_title
     if group_meta:
@@ -1327,7 +1391,7 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
             f"<td class='n'>{i}</td>"
             f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
             f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
-            f"<td class='loc'>{_loc_str(it)}</td>"
+            f"<td class='loc'>{_loc_str(it, packing_units)}</td>"
             f"<td class='c'><span class='cond {it.get('condition','used')}'>{(it.get('condition') or 'used').upper()}</span></td>"
             f"<td class='n'>{it.get('qty_acquired', 0)}</td>"
             f"</tr>"
@@ -1367,7 +1431,7 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
     </div>
     <div style='text-align:right'>
       <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
-      <p class='meta'>Customs manifest · HS-6 · Sorted PVoC ▸ value ▸ weight</p>
+      <p class='meta'>Customs manifest · HS-6 · Sorted by box number</p>
     </div>
   </div>
   {consignee_html}
@@ -1406,7 +1470,11 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items, group_meta = _resolve_group(s, group)
-    items = _sort_items_for_manifest(items)
+    # iter 255 — invoice sorted by declared line value (highest first) and
+    # then by box number, so the highest-value / most-scrutinised lines
+    # land at the top of every page for a customs officer.
+    items = _sort_items_for_invoice(items, s.get("packing_units") or [])
+    packing_units = s.get("packing_units") or []
     shipment_title = s.get("name", "")
     heading = shipment_title
     if group_meta:
@@ -1453,7 +1521,7 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
     </div>
     <div style='text-align:right'>
       <p class='meta'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
-      <p class='meta'>HS-6 · Sorted PVoC ▸ value ▸ weight</p>
+      <p class='meta'>HS-6 · Sorted value ▸ box</p>
     </div>
   </div>
   {consignee_html}
