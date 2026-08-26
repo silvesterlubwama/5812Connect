@@ -1,5 +1,30 @@
 # 58:12 Connect — Changelog
 
+## Iteration 256 (Feb 2026) — HS-only classifier + Prune removal + Cloudflare 520 hardening
+
+### 🔴 P0 — HS-only classification (PVoC removed)
+- `_classify_hs_with_ai` slimmed down to return just `{hs_code, reason}`. PVoC rules + `requires_pvoc` / `pvoc_reason` output removed. Halves the tokens Gemini has to reason over per call.
+- Added a **35s hard timeout** (`asyncio.wait_for`) around the Gemini call — if the LLM stalls we return a retryable 504 instead of hanging the worker past 120s.
+- `POST /api/shipments/{id}/classify-hs-bulk` chunk default reduced from 5 → 3, cap 10. Every branch now returns a valid JSON body (even unexpected exceptions wrap into `{classified:0, failed:[...]}`) so Cloudflare never surfaces "could not parse origin response".
+- Single-item `POST /items/{id}/classify-hs` returns the trimmed payload.
+
+### 🔴 Removed "Prune over-pledged" feature
+- Deleted `POST /api/shipments/{id}/prune-over-pledged` (backend) and the toolbar button + `pruneOverPledged` handler (frontend). Legacy Scissors icon still imported elsewhere; harmless.
+
+### 🟢 UI cleanup — PVoC removed from admin surface
+- Per-item PVoC pill removed, `togglePvoc` handler deleted, `requires_pvoc`/`pvoc_reason` no longer sent from the edit dialog PUT.
+- Manifest PDF drops the "PVoC required: N" total, the `pvoc_footnote`, and the per-row PVoC badge.
+- Invoice PDF drops the PVoC signature-block footnote and per-row PVoC badge.
+- AI HS button label + tooltips updated ("AI HS codes" instead of "AI HS + PVoC").
+- Item list on admin page now sorts **by box name → line value → weight** (was PVoC → value → weight). Consistent with the manifest/invoice sort.
+
+### Verified
+- `classify-hs-bulk` returns `{"classified":3,"failed":[],"remaining":0,"total_untagged":3}` · HTTP 200 with no PVoC field · lint clean.
+- `POST /prune-over-pledged` → 404 (endpoint gone).
+- Manifest 16 KB · Invoice 17 KB · HTTP 200.
+
+
+
 ## Iteration 255c (Feb 2026) — Scan-draft autosave + single-photo-per-box
 
 ### 🟢 Scan-draft autosave (survives refresh / signal loss)

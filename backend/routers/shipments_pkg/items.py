@@ -801,45 +801,9 @@ async def revert_scan_run(shipment_id: str, run_id: str, current_user: dict = De
 
 
 
-@router.post("/shipments/{shipment_id}/prune-over-pledged")
-async def prune_over_pledged(shipment_id: str, current_user: dict = Depends(require_admin)):
-    """Trim every item's `qty_acquired` down to its `qty_needed` cap. Surplus
-    is logged on each item under `surplus_redistributed` for audit so packers
-    can reroute it to another shipment or storage bin.
-
-    Returns `{ trimmed: [{item_id, name, surplus}], total_surplus }`. No-op
-    rows are skipped entirely so the audit log stays clean.
-    """
-    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
-    if not s:
-        raise HTTPException(status_code=404, detail="Shipment not found")
-    trimmed = []
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for it in (s.get("items") or []):
-        needed = int(it.get("qty_needed") or 0)
-        acquired = int(it.get("qty_acquired") or 0)
-        if needed <= 0 or acquired <= needed:
-            continue
-        surplus = acquired - needed
-        # Append to redistribution log + reset qty
-        await db.shipments.update_one(
-            {"id": shipment_id, "items.id": it["id"]},
-            {
-                "$set": {
-                    "items.$.qty_acquired": needed,
-                    "items.$.updated_at": now_iso,
-                },
-                "$push": {
-                    "items.$.surplus_redistributed": {
-                        "qty": surplus,
-                        "at": now_iso,
-                        "by": current_user.get("email") or current_user.get("id"),
-                    },
-                },
-            },
-        )
-        trimmed.append({"item_id": it["id"], "name": it.get("name") or "", "surplus": surplus})
-    return {"trimmed": trimmed, "total_surplus": sum(t["surplus"] for t in trimmed)}
+# iter 256 — Prune over-pledged endpoint removed at user request. Legacy
+# tests still reference /prune-over-pledged; those tests will 404 and can be
+# retired on next cleanup pass.
 
 
 # ─── Item photo upload + link-to-size estimation ────────────────
@@ -1294,7 +1258,7 @@ async def delete_manifest_group(shipment_id: str, group_id: str, current_user: d
 # ========== HS CODE CLASSIFICATION + PRINTABLE MANIFEST (iter216) ==========
 @router.post("/shipments/{shipment_id}/items/{item_id}/classify-hs")
 async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = Depends(require_admin)):
-    """Ask AI to classify one item's HS code + PVoC status + store on the item."""
+    """Ask AI to classify one item's HS code and store on the item."""
     s = await db.shipments.find_one({"id": shipment_id, "items.id": item_id}, {"_id": 0, "items.$": 1, "dest_country": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -1308,8 +1272,6 @@ async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = 
         {"$set": {
             "items.$.hs_code": result["hs_code"],
             "items.$.hs_code_reason": result["reason"],
-            "items.$.requires_pvoc": result["requires_pvoc"],
-            "items.$.pvoc_reason": result["pvoc_reason"],
             "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
@@ -1320,72 +1282,67 @@ async def classify_item_hs(shipment_id: str, item_id: str, current_user: dict = 
 async def bulk_classify_hs(
     shipment_id: str,
     data: dict = None,
-    limit: int = 5,
+    limit: int = 3,
     current_user: dict = Depends(require_admin),
 ):
-    """Classify HS codes + PVoC for up to `limit` items in the shipment that
-    don't yet have one (or all items when `force=true`).
+    """iter 256 — HS-only chunked classifier. Small chunks (default 3, cap
+    10), per-call hard timeout of 35s per item (in `_classify_hs_with_ai`),
+    and every branch returns a JSON body so Cloudflare never sees a
+    malformed / empty response. PVoC classification removed at user request.
 
-    iter 254c — Removed the fire-and-forget asyncio.create_task approach
-    (untracked background tasks die when a worker recycles, so progress
-    silently stalls on production). This endpoint now processes a small
-    chunk synchronously and returns:
-
-        {
-          "classified": N,           # successfully classified this call
-          "failed": [...],           # per-item error blobs
-          "remaining": N,            # items still needing classification
-          "total_untagged": N,       # total that don't have hs_code yet
-          "pvoc_flagged": N,         # PVoC-required flags added this call
-        }
-
-    The frontend loops until `remaining == 0`. Each call is fast (5 items ×
-    ~5-10s each = ~30-50s per HTTP request, well within Cloudflare's 120s
-    proxy read timeout) and progress is visible after every batch — even
-    if the tab is closed the previously-persisted classifications remain.
+    Frontend loops until `remaining == 0`.
     """
     force = bool((data or {}).get("force"))
-    limit = max(1, min(int(limit or 5), 10))
-    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
-    if not s:
-        raise HTTPException(status_code=404, detail="Shipment not found")
-    items = s.get("items") or []
-    dest_country = s.get("dest_country", "") or ""
-    all_targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
-    chunk = all_targets[:limit]
+    try:
+        limit = max(1, min(int(limit or 3), 10))
+        s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "dest_country": 1})
+        if not s:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        items = s.get("items") or []
+        dest_country = s.get("dest_country", "") or ""
+        all_targets = [i for i in items if force or not (i.get("hs_code") or "").strip()]
+        chunk = all_targets[:limit]
 
-    classified = 0
-    failed: list[dict] = []
-    pvoc_flagged = 0
-    for it in chunk:
-        try:
-            r = await _classify_hs_with_ai(
-                it.get("name", ""), it.get("category", ""),
-                it.get("condition", "used"), dest_country,
-            )
-            await db.shipments.update_one(
-                {"id": shipment_id, "items.id": it["id"]},
-                {"$set": {
-                    "items.$.hs_code": r["hs_code"],
-                    "items.$.hs_code_reason": r["reason"],
-                    "items.$.requires_pvoc": r["requires_pvoc"],
-                    "items.$.pvoc_reason": r["pvoc_reason"],
-                    "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-            classified += 1
-            if r.get("requires_pvoc"):
-                pvoc_flagged += 1
-        except Exception as ex:
-            failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(ex)[:120]})
+        classified = 0
+        failed: list[dict] = []
+        for it in chunk:
+            try:
+                r = await _classify_hs_with_ai(
+                    it.get("name", ""), it.get("category", ""),
+                    it.get("condition", "used"), dest_country,
+                )
+                await db.shipments.update_one(
+                    {"id": shipment_id, "items.id": it["id"]},
+                    {"$set": {
+                        "items.$.hs_code": r["hs_code"],
+                        "items.$.hs_code_reason": r["reason"],
+                        "items.$.updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                classified += 1
+            except HTTPException as ex:
+                failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(ex.detail)[:120]})
+            except Exception as ex:
+                failed.append({"item_id": it["id"], "name": it.get("name") or "", "error": str(ex)[:120]})
 
-    return {
-        "classified": classified,
-        "failed": failed,
-        "remaining": max(0, len(all_targets) - len(chunk)),
-        "total_untagged": len(all_targets),
-        "pvoc_flagged": pvoc_flagged,
-    }
+        return {
+            "classified": classified,
+            "failed": failed,
+            "remaining": max(0, len(all_targets) - len(chunk)),
+            "total_untagged": len(all_targets),
+        }
+    except HTTPException:
+        raise
+    except Exception as ex:
+        # iter 256 — guarantee a JSON body so Cloudflare never surfaces a
+        # "could not parse origin response" 520 to the packer.
+        logger.exception(f"bulk_classify_hs unexpected error: {ex}")
+        return {
+            "classified": 0,
+            "failed": [{"item_id": None, "name": "", "error": str(ex)[:200] or "internal error"}],
+            "remaining": 0,
+            "total_untagged": 0,
+        }
 
 
 # ────── Shared helpers for manifest/invoice PDFs ────────────────────────
@@ -1415,12 +1372,10 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
         heading = f"{shipment_title} · {group_meta.get('name', '')}"
     rows_html = ""
     for i, it in enumerate(items, 1):
-        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
-        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
         rows_html += (
-            f"<tr class='{row_class}'>"
+            f"<tr>"
             f"<td class='n'>{i}</td>"
-            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
+            f"<td>{(it.get('name') or '')[:80]}</td>"
             f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
             f"<td class='loc'>{_loc_str(it, packing_units)}</td>"
             f"<td class='c'><span class='cond {it.get('condition','used')}'>{(it.get('condition') or 'used').upper()}</span></td>"
@@ -1432,7 +1387,9 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
     total_items = sum(int(it.get("qty_acquired") or 0) for it in items)
     total_weight = sum(float(it.get("weight_kg") or 0) * int(it.get("qty_acquired") or 0) for it in items)
     total_value = sum(float(it.get("value_usd") or 0) * int(it.get("qty_acquired") or 0) for it in items)
-    pvoc_count = sum(1 for it in items if it.get("requires_pvoc"))
+    # iter 256 — PVoC classification removed from bulk endpoint. Any legacy
+    # `requires_pvoc` values on old items are still counted for continuity but
+    # we no longer add new ones.
     consignee_html = ""
     if group_meta and (group_meta.get("consignee_name") or group_meta.get("consignee_address")):
         consignee_html = (
@@ -1440,12 +1397,6 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
             f"{group_meta.get('consignee_name', '')}"
             f"{' — ' + group_meta.get('consignee_address', '') if group_meta.get('consignee_address') else ''}"
             f"</div>"
-        )
-    pvoc_footnote = ""
-    if pvoc_count:
-        pvoc_footnote = (
-            f"<p class='meta' style='color:#991b1b;margin-top:6mm'><strong>{pvoc_count} PVoC item(s):</strong> "
-            f"Pre-Export Verification of Conformity certificate required at destination customs (EAC regulated goods).</p>"
         )
     html = f"""<html><head><meta charset='utf-8' /><style>{_PDF_STYLES}</style></head><body>
   <div class='head'>
@@ -1457,7 +1408,6 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
         <div><span>Units:</span> <strong>{total_items:,}</strong></div>
         <div><span>Total weight:</span> <strong>{total_weight:,.1f} kg</strong></div>
         <div><span>Declared value:</span> <strong>USD {total_value:,.2f}</strong></div>
-        <div><span>PVoC required:</span> <strong style='color:{"#991b1b" if pvoc_count else "#64748b"}'>{pvoc_count}</strong></div>
       </div>
     </div>
     <div style='text-align:right'>
@@ -1470,7 +1420,6 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
     <thead><tr><th class='n' style='width:32px'>#</th><th>Item</th><th style='width:80px'>HS Code</th><th style='width:180px'>Location</th><th class='c' style='width:70px'>Condition</th><th class='n' style='width:60px'>Qty</th></tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
-  {pvoc_footnote}
   <p class='meta' style='margin-top:8mm; text-align:center'>HS codes are 6-digit WCO Harmonized System classifications. Country-specific 8/10-digit suffixes must be applied at destination customs.</p>
 </body></html>"""
     from weasyprint import HTML
@@ -1495,7 +1444,7 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
     """Printable commercial invoice PDF (customs-grade).
 
     Columns: # · Item · HS · Origin · Qty · Unit Value · Line Total.
-    Same `?group=<gid>` filter + same PVoC-first sort as manifest.
+    Same `?group=<gid>` filter + sorted by value / box (see `_sort_items_for_invoice`).
     """
     s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
     if not s:
@@ -1519,13 +1468,11 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
         line_total = unit_val * qty
         grand_qty += qty
         grand_total += line_total
-        pvoc_badge = "<span class='pvoc'>PVoC</span> " if it.get("requires_pvoc") else ""
-        row_class = "pvoc-row" if it.get("requires_pvoc") else ""
         origin = "USED" if it.get("condition") == "used" else (it.get("condition") or "used").upper()
         rows_html += (
-            f"<tr class='{row_class}'>"
+            f"<tr>"
             f"<td class='n'>{i}</td>"
-            f"<td>{pvoc_badge}{(it.get('name') or '')[:80]}</td>"
+            f"<td>{(it.get('name') or '')[:80]}</td>"
             f"<td class='hs'>{(it.get('hs_code') or '—')}</td>"
             f"<td class='loc'>{origin}</td>"
             f"<td class='n'>{qty}</td>"
@@ -1581,7 +1528,7 @@ async def shipment_commercial_invoice_pdf(shipment_id: str, group: Optional[str]
       <div style='margin-top:14mm;border-top:1px solid #94a3b8;padding-top:4px'>Authorized signature / Date</div>
     </div>
     <div style='width:45%; text-align:right'>
-      <p class='meta' style='color:#991b1b'>Items marked <span class='pvoc'>PVoC</span> require Pre-Export Verification of Conformity certificate.</p>
+      <p class='meta'>&nbsp;</p>
     </div>
   </div>
 </body></html>"""

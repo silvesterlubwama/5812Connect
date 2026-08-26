@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException  # noqa: F401 — re-exported
 from typing import Optional  # noqa: F401
 import os as _os  # noqa: F401
 import os  # noqa: F401
+import asyncio
 import uuid
 import hmac  # noqa: F401
 import hashlib  # noqa: F401
@@ -197,13 +198,14 @@ def _auto_place_on_pallet(item: dict, existing_items: list, pallets: list) -> No
 
 
 async def _classify_hs_with_ai(name: str, category: str, condition: str = "used", dest_country: str = "") -> dict:
-    """Call Gemini-3-flash to pick a 6-digit HS code + PVoC status for a single item.
-    Returns {hs_code, reason, requires_pvoc, pvoc_reason}.  Raises HTTPException if AI unavailable.
+    """iter 256 — Simplified. Returns just `{hs_code, reason}` for a single item.
+    PVoC classification removed at user request — it was too expensive per call
+    and pushed the batch endpoint past Cloudflare's 120s wall. HS codes still
+    populated for every item; downstream code that still reads `requires_pvoc`
+    falls back to False.
 
-    PVoC = Pre-Export Verification of Conformity (mandatory for Kenya/Uganda/Tanzania
-    /Rwanda on regulated goods — electricals, cosmetics, food, chemicals, textiles,
-    building materials, toys, vehicles).  Used clothing, personal effects, printed
-    books, most medical supplies, and second-hand household goods are typically EXEMPT.
+    Timeout-bound (35s max per call) so a slow LLM response can never hang the
+    request past the proxy timeout window.
     """
     api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
@@ -215,10 +217,8 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
     dest_hint = dest_country.strip().upper() or "UGANDA"
     sys_msg = (
         "You are a customs classification assistant for East African Community "
-        "shipments (Uganda, Kenya, Tanzania, Rwanda).  For each item, return "
-        "STRICT JSON:\n"
-        '  {"hs_code": "XXXX.XX", "reason": "<=100 chars", '
-        '"requires_pvoc": true|false, "pvoc_reason": "<=100 chars"}\n'
+        "shipments (Uganda, Kenya, Tanzania, Rwanda). For each item, return "
+        'STRICT JSON: {"hs_code": "XXXX.XX", "reason": "<=100 chars"}\n'
         "HS RULES:\n"
         "- ALWAYS 6 digits formatted as XXXX.XX (e.g. 4901.99 for printed books).\n"
         "- Used clothing / worn textiles → 6309.00.\n"
@@ -226,19 +226,6 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
         "- Toys → 9503.00.\n"
         "- Medical supplies (bandages, first-aid) → 3005.90.\n"
         "- Consumer electronics with radio/wifi → 8517.62.\n"
-        "PVoC RULES (EAC Pre-Export Verification):\n"
-        "- NEW electricals, electronics, batteries, appliances → requires_pvoc=true\n"
-        "- NEW cosmetics, soaps, cleaning products → requires_pvoc=true\n"
-        "- NEW food, beverages, edible oils → requires_pvoc=true\n"
-        "- NEW chemicals, paints, fertilisers, pharmaceuticals → requires_pvoc=true\n"
-        "- NEW building materials (cement, tiles, steel, cables) → requires_pvoc=true\n"
-        "- NEW clothing/footwear/textiles (NOT used donations) → requires_pvoc=true\n"
-        "- NEW toys → requires_pvoc=true\n"
-        "- NEW motor vehicles / spare parts → requires_pvoc=true\n"
-        "- USED clothing (HS 6309.00), used personal effects, used household goods → false\n"
-        "- Printed books, magazines, educational materials → false\n"
-        "- Most medical supplies for humanitarian/donation use → false\n"
-        "- If condition is 'used' or 'refurbished' AND item is a personal/donation good → false\n"
         f"Destination country: {dest_hint}\n"
         "No commentary, no markdown fences — JSON only."
     )
@@ -248,7 +235,15 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
         session_id=f"shipment_hs_{uuid.uuid4().hex[:8]}",
         system_message=sys_msg,
     ).with_model("gemini", "gemini-3-flash-preview")
-    raw = await chat.send_message(UserMessage(text=user_text))
+    # iter 256 — hard 35s per call. If Gemini stalls, we surface a retryable
+    # timeout instead of dragging the whole batch past 120s.
+    try:
+        raw = await asyncio.wait_for(
+            chat.send_message(UserMessage(text=user_text)),
+            timeout=35.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI HS classification timed out (>35s)")
     text = (raw or "").strip()
     # Strip markdown fences if the model added any
     if text.startswith("```"):
@@ -267,8 +262,6 @@ async def _classify_hs_with_ai(name: str, category: str, condition: str = "used"
     return {
         "hs_code": hs_code,
         "reason": (parsed.get("reason") or "")[:200],
-        "requires_pvoc": bool(parsed.get("requires_pvoc", False)),
-        "pvoc_reason": (parsed.get("pvoc_reason") or "")[:200],
     }
 
 

@@ -434,8 +434,6 @@ export default function ShipmentsAdminPage() {
         notes: editingItem.notes || '',
         condition: editingItem.condition || 'used',
         hs_code: (editingItem.hs_code || '').trim(),
-        requires_pvoc: !!editingItem.requires_pvoc,
-        pvoc_reason: editingItem.pvoc_reason || '',
         manifest_group_id: editingItem.manifest_group_id || null,
       });
       toast.success('Item updated');
@@ -454,21 +452,18 @@ export default function ShipmentsAdminPage() {
     let toastId;
     let totalDone = 0;
     let totalFailed = 0;
-    let totalPvoc = 0;
     try {
-      // iter 254c — chunked HS classification. Each call handles 5 items
-      // (~30-50s of Gemini) and returns fresh counts. Loop until
-      // `remaining === 0`. Progress is visible after every chunk and
-      // there is no background task to lose on a worker recycle.
+      // iter 256 — chunked HS-only classification. Chunks of 3 items each
+      // (~15-30s per call) so every request lands well under Cloudflare's
+      // 120s wall. PVoC removed. Loop until `remaining === 0`.
       let firstRun = true;
-      // Safety cap: 40 chunks × 5 = 200 items max in one session.
-      for (let i = 0; i < 40; i++) {
-        const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk?limit=5`, { force: firstRun ? force : false });
+      // Safety cap: 100 chunks × 3 = 300 items max in one session.
+      for (let i = 0; i < 100; i++) {
+        const r = await api.post(`/shipments/${selectedId}/classify-hs-bulk?limit=3`, { force: firstRun ? force : false });
         firstRun = false;
-        const { classified = 0, failed = [], remaining = 0, total_untagged = 0, pvoc_flagged = 0 } = r.data || {};
+        const { classified = 0, failed = [], remaining = 0, total_untagged = 0 } = r.data || {};
         totalDone += classified;
         totalFailed += failed.length;
-        totalPvoc += pvoc_flagged;
         if (!toastId) {
           const grandTotal = classified + remaining;
           if (grandTotal === 0) {
@@ -488,7 +483,7 @@ export default function ShipmentsAdminPage() {
         if (remaining === 0) break;
       }
       toast.dismiss(toastId);
-      toast.success(`AI classified ${totalDone} item${totalDone === 1 ? '' : 's'}${totalPvoc ? ` · ${totalPvoc} PVoC-flagged` : ''}${totalFailed ? ` · ${totalFailed} failed` : ''}`);
+      toast.success(`AI classified ${totalDone} item${totalDone === 1 ? '' : 's'}${totalFailed ? ` · ${totalFailed} failed` : ''}`);
     } catch (e) {
       if (toastId) toast.dismiss(toastId);
       toast.error(e.response?.data?.detail || 'HS classification failed');
@@ -497,16 +492,7 @@ export default function ShipmentsAdminPage() {
     }
   };
 
-  // ─── Toggle PVoC flag manually on a single item ────────────────
-  const togglePvoc = async (item) => {
-    try {
-      await api.put(`/shipments/${selectedId}/items/${item.id}`, {
-        requires_pvoc: !item.requires_pvoc,
-        pvoc_reason: item.requires_pvoc ? '' : (item.pvoc_reason || 'Manually flagged'),
-      });
-      await refreshDetail();
-    } catch (e) { toast.error(e.response?.data?.detail || 'PVoC toggle failed'); }
-  };
+  // iter 256 — PVoC toggle removed at user request.
 
   // ─── Assign an item to a manifest group ────────────────────────
   const setItemGroup = async (item, gid) => {
@@ -609,18 +595,7 @@ export default function ShipmentsAdminPage() {
     };
   }, [selected]);
 
-  const pruneOverPledged = async () => {
-    if (!selected) return;
-    if (!window.confirm(`Trim ${totals?.overPledged || 0} over-pledged item(s) back to pledged qty? Surplus is logged for audit but qty_acquired will drop.`)) return;
-    try {
-      const r = await api.post(`/shipments/${selected.id}/prune-over-pledged`);
-      const { trimmed, total_surplus } = r.data || {};
-      toast.success(`Trimmed ${trimmed?.length || 0} item(s) — ${total_surplus || 0} surplus units logged`);
-      await refreshDetail();
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Prune failed');
-    }
-  };
+  // iter 256 — Prune over-pledged feature removed at user request.
 
   // ─── LIST view ────────────────────────────────────────────────
   if (!selectedId) {
@@ -876,7 +851,7 @@ export default function ShipmentsAdminPage() {
                 <p className="text-xs font-semibold">
                   Items ({visible}
                   {hidePacked && packed > 0 && <span className="text-slate-500 font-normal"> of {items.length}, {packed} packed hidden</span>})
-                  <span className="text-[10px] font-normal text-muted-foreground ml-1">— sorted PVoC ▸ value ▸ weight</span>
+                  <span className="text-[10px] font-normal text-muted-foreground ml-1">— sorted by box then value</span>
                 </p>
                 {/* iter230 — drag-drop hint (auto-hides once any item is packed) */}
                 {items.length > 0 && packed === 0 && (
@@ -897,8 +872,8 @@ export default function ShipmentsAdminPage() {
             {(() => {
               const missingHs = (selected.items || []).filter(i => !(i.hs_code || '').trim()).length;
               return (
-                <Button size="sm" variant="outline" className="text-teal-700 border-teal-300 hover:bg-teal-50" onClick={bulkClassifyHs} disabled={hsBusy || (selected.items || []).length === 0} data-testid="ship-bulk-hs-btn" title="Ask AI to assign customs HS-6 codes + PVoC flags to every item without one">
-                  {hsBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Classifying…</> : <>🏷️ AI HS + PVoC{missingHs > 0 ? ` (${missingHs})` : ' · Re-classify'}</>}
+                <Button size="sm" variant="outline" className="text-teal-700 border-teal-300 hover:bg-teal-50" onClick={bulkClassifyHs} disabled={hsBusy || (selected.items || []).length === 0} data-testid="ship-bulk-hs-btn" title="Ask AI to assign customs HS-6 codes to every item without one">
+                  {hsBusy ? <><Loader2 size={11} className="mr-1 animate-spin" /> Classifying…</> : <>🏷️ AI HS codes{missingHs > 0 ? ` (${missingHs})` : ' · Re-classify'}</>}
                 </Button>
               );
             })()}
@@ -928,7 +903,7 @@ export default function ShipmentsAdminPage() {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" disabled={(selected.items || []).length === 0} data-testid="ship-invoice-btn" title="Download commercial invoice PDF (declared values, HS codes, PVoC-first sort)">
+                <Button size="sm" variant="outline" className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" disabled={(selected.items || []).length === 0} data-testid="ship-invoice-btn" title="Download commercial invoice PDF (declared values, HS codes, sorted by value then box)">
                   <FileText size={11} className="mr-1" /> Invoice <ChevronDown size={10} className="ml-1" />
                 </Button>
               </DropdownMenuTrigger>
@@ -959,11 +934,7 @@ export default function ShipmentsAdminPage() {
                 </Button>
               );
             })()}
-            {(totals?.overPledged || 0) > 0 && (
-              <Button size="sm" variant="outline" className="text-amber-700 border-amber-300 hover:bg-amber-50" onClick={pruneOverPledged} data-testid="ship-prune-overpledged-btn" title="Trim over-pledged items back to their pledged quantity. Surplus is logged for redistribution.">
-                <Scissors size={11} className="mr-1" /> Prune over-pledged ({totals.overPledged})
-              </Button>
-            )}
+            {/* iter 256 — Prune over-pledged button removed at user request. */}
             <Button size="sm" variant="outline" onClick={() => setShowCsvImport(true)} data-testid="ship-csv-import-btn">
               <FileSpreadsheet size={11} className="mr-1" /> Import CSV
             </Button>
@@ -992,16 +963,37 @@ export default function ShipmentsAdminPage() {
         ) : (
           <div className="space-y-1.5" data-testid="ship-items">
             {(() => {
-              // Sort same as PDFs: PVoC-required first, then highest value, then heaviest.
+              // iter 256 — sort by box name, then highest value, then heaviest.
               // iter229 — optionally hide items already assigned to a box/pallet/suitcase
               // (they're still on manifests & PDFs — cleaner working view).
               const source = hidePacked
                 ? (selected.items || []).filter(i => !(i.pallet_id || i.packing_unit_id || i.suitcase_id))
                 : (selected.items || []);
+              const unitById = Object.fromEntries((selected.packing_units || []).map(u => [u.id, u]));
+              const boxKey = (name) => {
+                const tokens = (name || '').toLowerCase().match(/\d+|\D+/g) || [''];
+                return tokens.map(t => /^\d+$/.test(t) ? [0, parseInt(t, 10)] : [1, t.trim()]);
+              };
+              const cmp = (a, b) => {
+                for (let i = 0; i < Math.min(a.length, b.length); i++) {
+                  if (a[i][0] !== b[i][0]) return a[i][0] - b[i][0];
+                  if (a[i][1] < b[i][1]) return -1;
+                  if (a[i][1] > b[i][1]) return 1;
+                }
+                return a.length - b.length;
+              };
               const sorted = [...source].sort((a, b) => {
-                const pvocA = a.requires_pvoc ? 0 : 1;
-                const pvocB = b.requires_pvoc ? 0 : 1;
-                if (pvocA !== pvocB) return pvocA - pvocB;
+                const uidA = a.packing_unit_id;
+                const uidB = b.packing_unit_id;
+                const nameA = uidA && unitById[uidA]?.name;
+                const nameB = uidB && unitById[uidB]?.name;
+                const rankA = nameA ? 1 : 2; // boxed first
+                const rankB = nameB ? 1 : 2;
+                if (rankA !== rankB) return rankA - rankB;
+                if (nameA && nameB) {
+                  const bc = cmp(boxKey(nameA), boxKey(nameB));
+                  if (bc !== 0) return bc;
+                }
                 const valA = (a.value_usd || 0) * (a.qty_acquired || 0);
                 const valB = (b.value_usd || 0) * (b.qty_acquired || 0);
                 if (valA !== valB) return valB - valA;
@@ -1037,14 +1029,7 @@ export default function ShipmentsAdminPage() {
                         {it.category && <Badge variant="outline" className="text-[10px]">{it.category}</Badge>}
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
-                        <button
-                          onClick={() => togglePvoc(it)}
-                          className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-semibold transition-colors ${it.requires_pvoc ? 'bg-rose-100 text-rose-800 border border-rose-300 hover:bg-rose-200' : 'bg-slate-50 text-slate-400 border border-slate-200 hover:bg-slate-100 hover:text-slate-600'}`}
-                          title={it.requires_pvoc ? `PVoC required: ${it.pvoc_reason || 'flagged manually'} — click to un-flag` : 'Click to flag as PVoC-required'}
-                          data-testid={`ship-item-pvoc-${it.id}`}
-                        >
-                          <ShieldAlert size={10} /> PVoC{it.requires_pvoc ? '' : '?'}
-                        </button>
+                        {/* iter 256 — PVoC pill removed at user request. */}
                         {/* iter 253 — AI-derived 3D shape. If already derived,
                             show a compact pill with the shape kind; else a
                             "3D?" button that fires Gemini analysis on the
