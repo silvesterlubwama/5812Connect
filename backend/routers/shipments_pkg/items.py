@@ -261,6 +261,18 @@ async def update_item(shipment_id: str, item_id: str, data: dict, current_user: 
             set_ops[f"items.$.{k}"] = v if v else None
         else:
             set_ops[f"items.$.{k}"] = v
+    # iter 260 — Auto-pack: when an item is linked to a packing unit (box),
+    # snap its internal coords to the box origin (0,0,0) and clear any
+    # container-floor coords it may have had as a loose item. Keeps the
+    # visualiser tidy (box-only view) and means bulk-imported / AI-linked
+    # items never carry stale floor positions that could leak past the box
+    # if the box is later un-linked.
+    if "packing_unit_id" in data and data.get("packing_unit_id"):
+        set_ops["items.$.x_cm"] = 0.0
+        set_ops["items.$.y_cm"] = 0.0
+        set_ops["items.$.z_cm"] = 0.0
+        set_ops["items.$.floor_x_cm"] = None
+        set_ops["items.$.floor_y_cm"] = None
     set_ops["items.$.updated_at"] = datetime.now(timezone.utc).isoformat()
     r = await db.shipments.update_one(
         {"id": shipment_id, "items.id": item_id},
@@ -520,6 +532,11 @@ async def scan_boxes(
         "Rules:\n"
         "- Read handwriting carefully; if unsure, still return best guess but drop confidence to 'low'.\n"
         "- iter 255 — Personal / household boxes MUST still list every item individually (shampoo, towels, plates, ...). Do NOT collapse into one 'Personal Item' row. The customs manifest needs the individual lines.\n"
+        "- iter 260 — NO-BOX PHOTOS: when there is NO visible box number, treat the photo as a "
+        "'loose items' shot and enumerate every product you can see (books, appliances, clothing, "
+        "toys, kitchenware, ...) as its own item row with a best-guess qty, category, "
+        "estimated_value_usd, and estimated_weight_kg. Never return an empty items list unless the "
+        "photo is truly blank or unreadable — packers rely on this to bulk-catalogue loose donations.\n"
         "- For qty, use the count written on the box; default 1 if none.\n"
         "- iter 258 — PRICING RULE: every item is USED / SECONDHAND (thrift-store donation). "
         "estimated_value_usd MUST be the secondhand replacement value (what a thrift store or "
@@ -713,7 +730,14 @@ async def scan_boxes(
                     "weight_kg": weight,
                     "ai_identified": True,
                     "scanned_at": datetime.now(timezone.utc).isoformat(),
-                    "notes": f"Auto-added from box photo{' ' + box_number if box_number else ''}",
+                    # iter 260 — annotate items differently depending on whether
+                    # the photo had a box number. No-box photos are treated as
+                    # loose donations and the note reflects that so downstream
+                    # UI + audits can filter them.
+                    "notes": (
+                        f"Auto-added from box photo {box_number}" if box_number
+                        else "Auto-added as loose item from no-box scan"
+                    ),
                 })
                 # iter 250 — tag the item with the run id for surgical undo.
                 new_item["scan_run_id"] = scan_run_id

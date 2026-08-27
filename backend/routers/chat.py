@@ -10,19 +10,46 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 @router.get("/chat/conversations")
 async def get_conversations(current_user: dict = Depends(get_current_user)):
+    # Conversations are already participant-scoped so we intentionally do
+    # NOT apply get_campus_filter here — cross-campus DMs a director opened
+    # with a peer stay visible in their inbox even after switching campus.
     query = {"participants": current_user["id"]}
-    campus = await get_campus_filter(current_user)
-    if campus:
-        query["$or"] = [
-            {"participants": current_user["id"]},
-            {**campus, "participants": current_user["id"]},
-        ]
-        # Simplify: just filter by participant — conversations are already participant-scoped
-        query = {"participants": current_user["id"]}
     convs = await db.conversations.find(query, {"_id": 0}).sort("updated_at", -1).to_list(100)
     # Filter out conversations hidden by this user
     uid = current_user["id"]
-    return [c for c in convs if uid not in (c.get("hidden_by") or [])]
+    visible = [c for c in convs if uid not in (c.get("hidden_by") or [])]
+    # iter 260 — Ghost-user filter. Collect every counterparty across direct
+    # conversations and confirm they still exist as active users. Direct
+    # conversations where the only counterparty was deleted are dropped so
+    # the chat sidebar stops showing dangling names. Group conversations
+    # remain visible even if some members left — the group is still real.
+    if not visible:
+        return visible
+    other_ids = set()
+    for c in visible:
+        if c.get("type") == "direct":
+            for pid in (c.get("participants") or []):
+                if pid and pid != uid:
+                    other_ids.add(pid)
+    live_ids: set = set()
+    if other_ids:
+        async for u in db.users.find(
+            {"id": {"$in": list(other_ids)}, "status": {"$ne": "deleted"}},
+            {"_id": 0, "id": 1},
+        ):
+            live_ids.add(u["id"])
+    cleaned = []
+    for c in visible:
+        if c.get("type") == "direct":
+            others = [pid for pid in (c.get("participants") or []) if pid and pid != uid]
+            # Skip direct DMs with no counterparty at all, or when every
+            # remaining counterparty was deleted.
+            if not others:
+                continue
+            if not any(pid in live_ids for pid in others):
+                continue
+        cleaned.append(c)
+    return cleaned
 
 
 @router.get("/chat/users")
@@ -34,15 +61,21 @@ async def list_chat_users(current_user: dict = Depends(get_current_user)):
                    "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer",
                    "Security Contractor"]
     campus = await get_campus_filter(current_user)
+    # iter 260 — explicitly exclude any user whose status was flipped away
+    # from "active" (deleted / suspended / etc.) so ghost users never leak
+    # into the chat directory. The `status: "active"` clause already covers
+    # the happy path; the extra $ne guard also drops rows where a legacy
+    # bulk update set status to "inactive" without removing the account.
     base = {
         "status": "active",
         "role": {"$in": STAFF_ROLES},
-        "id": {"$ne": current_user["id"]},
+        "id": {"$ne": current_user["id"], "$exists": True},
+        "name": {"$exists": True, "$ne": ""},
     }
     query = {"$and": [base, campus]} if campus else base
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(200)
     # Return only needed fields
-    return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "location_id": u.get("location_id")} for u in users]
+    return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "location_id": u.get("location_id")} for u in users if u.get("id")]
 
 
 @router.post("/chat/conversations")

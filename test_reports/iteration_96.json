@@ -1,0 +1,47 @@
+{
+  "summary": "Backend-only testing of iter260 changes: shipping auto-pack (create + update), packing-unit stacking (parent_id set/clear), chat ghost-user filters (/chat/users + /chat/conversations), campus-switcher RBAC, /api/admin/users/directory, and list-endpoint regressions. New pytest suite: 20 tests, 18 passed, 2 failed. All shipping auto-pack + stacking behaviour and both chat ghost fixes verified working. One pre-existing HIGH RBAC leak found in PUT /api/user/active-campus. All Iter260_ test items/units/users were cleaned up (verified in Mongo).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/user/active-campus",
+        "issue": "Campus scope leak: a Director assigned ONLY to loc_39aa9967 (Haiti) + loc_9d988d24 (Kenya) can successfully switch to loc_419f5d5e (Uganda) — returns 200. Cause: server.py ~L286-306 first adds each assigned location's PARENT campus (loc_001) to user_locs, then adds ALL non-restricted sub-locations of everything in user_locs — which pulls in every sibling campus under loc_001. Restricted campuses are still correctly 403, and non-existent campus is 404. Fix: expand subs only from the user's DIRECTLY assigned locations, not from parents added during expansion.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/shipments/sh_1091d195ee",
+        "issue": "Legacy packing unit pku_dd00a7 ('Test Box 99', no created_at) has no parent_id key at all (stale test data from an earlier iteration, inserted outside the API). Units created via POST /packing-units correctly include parent_id: null. Frontend stack-tower logic reads u.parent_id (undefined is falsy) so it degrades safely, but this leftover 'Test Box 99' should be removed from the production shipment."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter260_shipping_chat_campus.py",
+    "/app/test_reports/pytest/iter260_results.xml"
+  ],
+  "action_items": [
+    "Fix PUT /api/user/active-campus sibling-campus leak (server.py ~L286-306): do not derive allowed sub-locations from parent campuses added during expansion; only from the user's own location_ids/location_id (plus explicit sub-locations of those).",
+    "Delete stale packing unit pku_dd00a7 ('Test Box 99') from shipment sh_1091d195ee, or backfill parent_id: null on legacy units."
+  ],
+  "critical_code_review_comments": [
+    "chat.py get_conversations: the campus block at L13-21 builds a query then immediately overwrites it with the participant-only query — dead code, remove it (get_campus_filter result is unused).",
+    "items.py update_item: the iter260 auto-pack snap is applied AFTER the field loop, so an explicit x_cm in the same PUT as packing_unit_id is silently discarded. That matches the spec but is worth a comment/response field so the UI doesn't think its coords were saved.",
+    "items.py is ~1500+ lines — consider splitting the AI scan/derive-shape sections out of the item CRUD module.",
+    "/api/chat/users includes 'Security Contractor' while /api/admin/users/directory does not. Two divergent STAFF_ROLES lists (chat.py L64 vs admin.py L19) — extract one shared constant in deps.py to keep the ghost-user/scope rules consistent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter260_shipping_chat_campus.py"
+  ],
+  "success_rate": {"backend": "90% (18/20)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Created and then deleted: Iter260_Box A / Iter260_Box Child packing units, 5 Iter260_ shipment items on sh_1091d195ee, users Iter260_Inactive Staff / Iter260_Member Guy / Iter260_Ghost Staff / Iter260_Director, plus one direct DM + one group conversation (both deleted). Mongo re-checked — zero leftovers.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@5812uganda.org / Admin@5812 via {identifier, password}; new users default password Test@5812!",
+  "context_for_next_testing_agent": "Verified PASSING: (1) POST /shipments/{id}/items with packing_unit_id snaps x/y/z_cm to 0 and loose items keep their coords; (2) PUT item {packing_unit_id} resets x/y/z_cm to 0 and nulls floor_x_cm/floor_y_cm; unlinking (packing_unit_id:null) does not wipe coords; reads never mutate legacy non-zero coords; (3) PUT /packing-units/{id} {parent_id} stacks and {parent_id:null} un-stacks, unknown unit -> 404; (4) /chat/users excludes caller, inactive users and non-staff roles, all rows have id+name+staff role; (5) direct DM disappears from /chat/conversations after the counterparty is deleted while the group conversation survives; (6) /admin/users/directory is staff-only, no password_hash/_id, search filter works; (7) /events, /tasks, /shipments all return arrays. Only open backend bug = active-campus sibling leak. Frontend visualizer (drag-to-stack, stack tower, xN badge) was NOT tested per request.",
+  "rca_of_the_issue": "PUT /api/user/active-campus builds the allowed-campus set in three stages against the SAME mutable set: (1) user's location_ids + location_id, (2) parent_id of any of those, (3) every non-restricted location whose parent_id is in the set. Because stage 2 injects the top-level campus (loc_001), stage 3 then enumerates all of loc_001's children, granting a Director access to sibling campuses they were never assigned. Reproduce: create a Director with location_ids=[loc_39aa9967, loc_9d988d24], login, PUT /api/user/active-campus {campus_id: loc_419f5d5e} -> 200 (expected 403). Mitigation: compute sub-location expansion from the user's directly-assigned ids only, and keep parent campuses in a separate read-only set used for data filtering, not for switch authorisation."
+}

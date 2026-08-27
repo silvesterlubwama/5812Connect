@@ -47,16 +47,59 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       length_cm: u.L_cm ?? u.length_cm,
       width_cm: u.W_cm ?? u.width_cm,
       height_cm: u.H_cm ?? u.height_cm,
-      x_cm: u.x_cm,
-      y_cm: u.y_cm,
+      x_cm: u.x_cm ?? u.floor_x_cm,
+      y_cm: u.y_cm ?? u.floor_y_cm,
       color: u.color || null,
       _packing_unit_type: u.type,
+      // iter 260 — parent_id enables Stack Tower View: a unit whose parent
+      // is another unit inherits the parent's (x,y) and its height gets
+      // added to the parent's z-offset in the 3D scene.
+      parent_id: u.parent_id || null,
+      rotation_deg: Number(u.rotation_deg) || 0,
       // iter 251 — surface the shape (box|cylinder) + diameter so the 3D
       // renderer can pick the right geometry for round bins.
       shape: u.shape || (u.type === 'bin' ? 'cylinder' : 'box'),
       diameter_cm: u.diameter_cm || 0,
     }))),
   ];
+  // iter 260 — Stack Tower View: resolve each packing unit's z-offset by
+  // walking its parent_id chain and summing parent heights. Children of a
+  // stacked parent inherit the parent's floor (x,y) so the tower renders
+  // as one column in 3D and only the top-most box shows in 2D. We build a
+  // lookup keyed by unit id containing {z_offset, floor_x, floor_y, root_id,
+  // stack_depth} so downstream layout code can apply it uniformly.
+  const unitById = new Map(unifiedPallets.map(p => [p.id, p]));
+  const stackInfo = new Map();
+  const resolveStack = (uid, visited = new Set()) => {
+    if (stackInfo.has(uid)) return stackInfo.get(uid);
+    if (visited.has(uid)) {
+      const self = { z_offset: 0, floor_x: 0, floor_y: 0, root_id: uid, stack_depth: 0 };
+      stackInfo.set(uid, self); return self;
+    }
+    visited.add(uid);
+    const u = unitById.get(uid);
+    if (!u) {
+      const self = { z_offset: 0, floor_x: 0, floor_y: 0, root_id: uid, stack_depth: 0 };
+      stackInfo.set(uid, self); return self;
+    }
+    if (!u.parent_id || !unitById.has(u.parent_id)) {
+      const self = { z_offset: 0, floor_x: Number(u.x_cm) || 0, floor_y: Number(u.y_cm) || 0, root_id: uid, stack_depth: 0 };
+      stackInfo.set(uid, self); return self;
+    }
+    const parent = unitById.get(u.parent_id);
+    const parentInfo = resolveStack(u.parent_id, visited);
+    const info = {
+      z_offset: parentInfo.z_offset + (Number(parent.height_cm) || 40),
+      floor_x: parentInfo.floor_x,
+      floor_y: parentInfo.floor_y,
+      root_id: parentInfo.root_id,
+      stack_depth: parentInfo.stack_depth + 1,
+    };
+    stackInfo.set(uid, info);
+    return info;
+  };
+  unifiedPallets.forEach(u => resolveStack(u.id));
+
   // Group items by pallet_id OR packing_unit_id (both supported)
   const groups = new Map();
   items.forEach(it => {
@@ -136,15 +179,33 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     // packing units). Un-positioned units land at (0,0); admin can drag
     // them wherever they want, including past the container walls in
     // full-screen mode. No greedy grid, no wall clamping in layout.
-    const x = Number(meta.x_cm) || 0;
-    const y = Number(meta.y_cm) || 0;
+    let x = Number(meta.x_cm) || 0;
+    let y = Number(meta.y_cm) || 0;
+    let z = 0;
+    // iter 260 — apply stack tower z-offset when this unit is stacked on a
+    // parent. Stacked boxes inherit the root's (x,y) so they render as a
+    // vertical column in 3D. In 2D we hide them from the floor plan
+    // (they'd only overlap the parent) and surface a small stack badge
+    // on the root instead.
+    const si = stackInfo.get(g.id);
+    let stackDepth = 0;
+    if (si && si.stack_depth > 0) {
+      x = si.floor_x;
+      y = si.floor_y;
+      z = si.z_offset;
+      stackDepth = si.stack_depth;
+    }
     boxes.push({
       id: g.id,
       label: meta.label,
-      x, y, z: 0,
+      x, y, z,
       length: L,
       width: W,
       height: baseHeight,
+      // iter 260 — parent chain data for consumers (2D hides stacked
+      // children, 3D uses `z` directly which already includes offset).
+      parent_id: (palletMeta.get(g.id) && palletMeta.get(g.id).parent_id) || null,
+      stack_depth: stackDepth,
       weight_kg: Math.round(g.total_weight),
       item_count: g.items.length,
       color: meta.color || (looseItem ? '#94a3b8' : palletColor(g.id)),
@@ -170,6 +231,19 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   const overflow = false;
   const totalVolumeM3 = totalVolume / 1e6;
   const containerVolumeM3 = (CONT.length * CONT.width * CONT.height) / 1e6;
+  // iter 260 — Stack Tower View: count how many boxes are stacked on each
+  // root box so the 2D floor plan can render a "×N stacked" badge on the
+  // parent (children themselves are hidden in 2D — they'd only overlap).
+  const stackChildrenByRoot = new Map();
+  for (const b of boxes) {
+    if (b.stack_depth > 0) {
+      const rootId = (stackInfo.get(b.id) || {}).root_id || b.id;
+      stackChildrenByRoot.set(rootId, (stackChildrenByRoot.get(rootId) || 0) + 1);
+    }
+  }
+  for (const b of boxes) {
+    b.stack_children = stackChildrenByRoot.get(b.id) || 0;
+  }
   return {
     boxes,
     total_volume_m3: Number(totalVolumeM3.toFixed(1)),
@@ -193,12 +267,16 @@ function palletColor(id) {
 // ───────────────────────────────────────────────────────────────
 // 2D — top-down SVG floor plan (with optional drag-to-reposition pallets)
 // ───────────────────────────────────────────────────────────────
-function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscreen = false }) {
+function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, onStack, fullscreen = false }) {
   const svgRef = React.useRef(null);
   const [draggingId, setDraggingId] = React.useState(null);
   const [dragGhost, setDragGhost] = React.useState(null);   // {id,x,y}
+  const [hoverTargetId, setHoverTargetId] = React.useState(null);
   if (!layout || layout.boxes.length === 0) return null;
-  const { container, boxes } = layout;
+  const { container, boxes: allBoxes } = layout;
+  // iter 260 — Stack Tower View: hide stacked children in 2D (they'd only
+  // overlap the parent). The parent shows a small "×N" badge instead.
+  const boxes = allBoxes.filter(b => !b.stack_depth);
   const PAD = 16;
   // iter 254 — full-screen mode extends the SVG canvas well beyond the
   // container walls so items can be dragged / seen past the container's
@@ -218,6 +296,27 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
     e.preventDefault();
     setDraggingId(b.id);
     setDragGhost({ id: b.id, x: b.x, y: b.y, length: b.length, width: b.width, color: b.color });
+    setHoverTargetId(null);
+  };
+  // iter 260 — Drag-to-stack: while dragging one packing unit, detect
+  // whether its centre is over another packing unit's footprint. If so,
+  // highlight the target and — on drop — call onStack instead of
+  // onPalletMove. Loose items (loose_item_id) never participate as either
+  // child or parent in a stack.
+  const findStackTarget = (dragId, gx, gy, gL, gW) => {
+    if (!onStack) return null;
+    const dragBox = boxes.find(bx => bx.id === dragId);
+    if (!dragBox || dragBox.loose_item_id) return null;
+    const cx = gx + gL / 2;
+    const cy = gy + gW / 2;
+    for (const t of boxes) {
+      if (t.id === dragId) continue;
+      if (t.loose_item_id) continue;
+      if (cx >= t.x && cx <= t.x + t.length && cy >= t.y && cy <= t.y + t.width) {
+        return t.id;
+      }
+    }
+    return null;
   };
   const onPointerMove = (e) => {
     if (!draggingId || !svgRef.current) return;
@@ -232,11 +331,20 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
     // (including past the container walls) so admins can stage / overflow
     // items while planning the layout.
     setDragGhost(g => g ? { ...g, x: cx, y: cy } : g);
+    const target = findStackTarget(draggingId, cx, cy, dragGhost?.length || 0, dragGhost?.width || 0);
+    setHoverTargetId(target);
   };
   const endDrag = async () => {
-    if (!draggingId || !dragGhost) { setDraggingId(null); return; }
+    if (!draggingId || !dragGhost) { setDraggingId(null); setHoverTargetId(null); return; }
     const id = draggingId; const x = dragGhost.x; const y = dragGhost.y;
-    setDraggingId(null); setDragGhost(null);
+    const target = hoverTargetId;
+    setDraggingId(null); setDragGhost(null); setHoverTargetId(null);
+    // iter 260 — if the drop centre lies inside another box, stack rather
+    // than move. Silent auto-stack per user spec (no confirm popup).
+    if (target && onStack) {
+      await onStack(id, target);
+      return;
+    }
     if (onPalletMove) await onPalletMove(id, x, y);
   };
 
@@ -261,12 +369,18 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
       {/* Pallets */}
       {boxes.map(b => {
         const isDragging = draggingId === b.id;
+        const isStackTarget = hoverTargetId === b.id;
         const px = isDragging ? dragGhost.x : b.x;
         const py = isDragging ? dragGhost.y : b.y;
         const rot = Number(b.rotation_deg) || 0;
         // Rotate about the shape's own centre so it stays in place visually.
         const cxScreen = PAD + (OX + px + b.length / 2) * scale;
         const cyScreen = PAD + (OY + py + b.width / 2) * scale;
+        // iter 260 — Stack target gets a bright ring while a compatible
+        // box is dragged over it, telling the packer "let go here to
+        // stack". Uses the same colour scheme as the primary CTA.
+        const stroke = isStackTarget ? '#2563eb' : '#1e293b';
+        const strokeW = isStackTarget ? 3 : (isDragging ? 2 : 1);
         return (
           <g
             key={b.id}
@@ -289,14 +403,14 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
                 cx={PAD + (OX + px + b.length / 2) * scale}
                 cy={PAD + (OY + py + b.width / 2) * scale}
                 r={(b.length / 2) * scale}
-                fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75}
-                stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
+                fill={b.color} fillOpacity={isDragging ? 0.55 : (isStackTarget ? 0.9 : 0.75)}
+                stroke={stroke} strokeWidth={strokeW}
               />
             ) : (
               <rect
                 x={PAD + (OX + px) * scale} y={PAD + (OY + py) * scale}
                 width={b.length * scale} height={b.width * scale}
-                fill={b.color} fillOpacity={isDragging ? 0.55 : 0.75} stroke="#1e293b" strokeWidth={isDragging ? 2 : 1}
+                fill={b.color} fillOpacity={isDragging ? 0.55 : (isStackTarget ? 0.9 : 0.75)} stroke={stroke} strokeWidth={strokeW}
               />
             )}
             <text
@@ -337,6 +451,39 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
                   fontSize="10" fill="#1e293b" textAnchor="middle" dominantBaseline="central"
                   style={{ pointerEvents: 'none', fontFamily: 'sans-serif' }}
                 >↻</text>
+              </g>
+            )}
+            {/* iter 260 — Stack Tower badge. When this box has children
+                stacked on top, show a small pill on the top-left corner
+                so packers see how tall the column is. Click un-stacks
+                the top child. */}
+            {b.stack_children > 0 && (
+              <g
+                onPointerDown={(e) => { e.stopPropagation(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!editable || !onStack) return;
+                  // Un-stack the newest child of this root. Callers can
+                  // use the picker for finer control.
+                  const child = layout.boxes.find(x => x.parent_id === b.id);
+                  if (child) onStack(child.id, null);
+                }}
+                style={{ cursor: editable && onStack ? 'pointer' : 'default' }}
+                data-testid={`viz-pallet-stack-badge-${b.id}`}
+              >
+                <rect
+                  x={PAD + (OX + px) * scale + 2}
+                  y={PAD + (OY + py) * scale + 2}
+                  width={26} height={14} rx={7}
+                  fill="#2563eb" fillOpacity="0.95"
+                  stroke="#1e40af" strokeWidth="1"
+                />
+                <text
+                  x={PAD + (OX + px) * scale + 15}
+                  y={PAD + (OY + py) * scale + 9}
+                  fontSize="9" fontWeight="700" fill="#ffffff" textAnchor="middle" dominantBaseline="central"
+                  style={{ pointerEvents: 'none', fontFamily: 'sans-serif' }}
+                >×{b.stack_children + 1}</text>
               </g>
             )}
           </g>
@@ -653,12 +800,12 @@ export default function ContainerVisualizer({ items = [], pallets = [], packing_
               >Un-stack</button>
             </div>
           )}
-          {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} onPalletRotate={onPalletRotate} fullscreen={fullscreen} />}
+          {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} onPalletRotate={onPalletRotate} onStack={onStack} fullscreen={fullscreen} />}
           {mode === '2d' && editable && (
             <p className="text-[10px] text-muted-foreground text-center mt-1">
               {fullscreen
-                ? `Full-screen edit — drag to reposition, double-click an item to rotate 90°. Items can sit past the container walls. Container floor is ${layout.container.length} × ${layout.container.width} cm.`
-                : `Tip: click + drag to reposition, double-click to rotate 90°. Container floor is ${layout.container.length} × ${layout.container.width} cm.`}
+                ? `Full-screen edit — drag to reposition · drop one box onto another to stack · double-click to rotate 90° · click ×N badge to un-stack. Items can sit past the container walls. Container floor is ${layout.container.length} × ${layout.container.width} cm.`
+                : `Tip: drag to reposition · drop onto another box to stack · double-click to rotate 90° · click the ×N badge to un-stack. Container floor is ${layout.container.length} × ${layout.container.width} cm.`}
             </p>
           )}
 

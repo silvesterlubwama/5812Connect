@@ -118,9 +118,12 @@ def _normalise_item(data: dict, units: str = "metric") -> dict:
         "ai_identified": bool(data.get("ai_identified", False)),
         # Position WITHIN the assigned pallet (cm from pallet's back-left
         # corner). Optional — admin can set via the form-based item editor.
-        "x_cm": max(0.0, parse_dim_to_cm(data.get("x_cm") or 0, units)),
-        "y_cm": max(0.0, parse_dim_to_cm(data.get("y_cm") or 0, units)),
-        "z_cm": max(0.0, parse_dim_to_cm(data.get("z_cm") or 0, units)),
+        # iter 260 — items linked to a packing unit auto-snap to the box
+        # origin (0,0,0) so bulk imports / AI-linked items never carry a
+        # stale offset. Loose items keep whatever coords the caller set.
+        "x_cm": 0.0 if data.get("packing_unit_id") else max(0.0, parse_dim_to_cm(data.get("x_cm") or 0, units)),
+        "y_cm": 0.0 if data.get("packing_unit_id") else max(0.0, parse_dim_to_cm(data.get("y_cm") or 0, units)),
+        "z_cm": 0.0 if data.get("packing_unit_id") else max(0.0, parse_dim_to_cm(data.get("z_cm") or 0, units)),
         "donations": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

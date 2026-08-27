@@ -739,9 +739,22 @@ export default function TasksPage() {
                 }
               }}>
                 <SelectTrigger><SelectValue placeholder="Add staff to board..." /></SelectTrigger>
-                <SelectContent>{staffUsers.filter(s => !(currentBoard?.tagged_members || []).includes(s.id)).map(s => (
-                  <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
-                ))}</SelectContent>
+                {/* iter 260 — scope the picker to the board's own location
+                    when set. Same rule as the assignee dropdown so admins
+                    don't accidentally tag a staffer from another campus.
+                    Global boards fall through to the full staff list. */}
+                <SelectContent>{staffUsers
+                  .filter(s => {
+                    const role = (s.role || '').toLowerCase();
+                    if (!STAFF_ROLES.includes(role)) return false;
+                    if (!currentBoard || currentBoard.is_global || !currentBoard.location_id) return true;
+                    if (s.location_id === currentBoard.location_id) return true;
+                    return (s.location_ids || []).includes(currentBoard.location_id);
+                  })
+                  .filter(s => !(currentBoard?.tagged_members || []).includes(s.id))
+                  .map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
+                  ))}</SelectContent>
               </Select>
               <div className="flex flex-wrap gap-1 mt-1">
                 {(currentBoard?.tagged_members || []).map(uid => {

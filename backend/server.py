@@ -282,30 +282,41 @@ async def set_active_campus(data: dict, current_user: dict = Depends(get_current
     if has_campus_switcher(current_user) or is_system_admin(current_user):
         pass  # Can switch to any campus
     else:
-        # Build the set of allowed locations: user's own + their sub-locations' parent campuses
-        user_locs = set(current_user.get("location_ids") or [])
+        # iter 260 — Compute the allowed campus set WITHOUT collapsing across
+        # siblings. Previous logic added parent campuses to `user_locs` and
+        # then enumerated every non-restricted child of `user_locs`, which
+        # granted a Director assigned to Haiti + Kenya access to sibling
+        # campuses (Uganda, United) under the same top-level parent. Now we
+        # keep two disjoint sets: `direct` (what the user was actually
+        # assigned) and `parents` (the campus each of those rolls up to,
+        # allowed as pin targets but NOT used to expand sibling siblings).
+        direct = set(current_user.get("location_ids") or [])
         if current_user.get("location_id"):
-            user_locs.add(current_user["location_id"])
-        # Add parent campuses (if user is in a sub-location, they belong to its campus)
-        if user_locs:
-            parents = await db.locations.find(
-                {"id": {"$in": list(user_locs)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
-                {"_id": 0, "parent_id": 1}
+            direct.add(current_user["location_id"])
+        parents: set = set()
+        if direct:
+            parent_docs = await db.locations.find(
+                {"id": {"$in": list(direct)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+                {"_id": 0, "parent_id": 1},
             ).to_list(50)
-            for p in parents:
+            for p in parent_docs:
                 if p.get("parent_id"):
-                    user_locs.add(p["parent_id"])
-        # Add sub-locations under user's campuses (so they can switch INTO a sub)
-        if user_locs:
+                    parents.add(p["parent_id"])
+        # Expand ONLY the user's direct campuses to their sub-locations
+        # (rooms/buildings). Sub-locations under parent campuses are not
+        # added — those belong to sibling campuses the user was never
+        # assigned to.
+        subs = []
+        if direct:
             subs = await db.locations.find(
-                {"parent_id": {"$in": list(user_locs)}},
-                {"_id": 0, "id": 1, "is_restricted": 1}
+                {"parent_id": {"$in": list(direct)}},
+                {"_id": 0, "id": 1, "is_restricted": 1},
             ).to_list(200)
-            for s in subs:
-                # Only auto-include non-restricted; restricted ones must be explicit
-                if not s.get("is_restricted") or s["id"] in user_locs:
-                    user_locs.add(s["id"])
-        if campus_id not in user_locs:
+        allowed = set(direct) | parents
+        for s in subs:
+            if not s.get("is_restricted") or s["id"] in direct:
+                allowed.add(s["id"])
+        if campus_id not in allowed:
             loc = await db.locations.find_one({"id": campus_id}, {"_id": 0, "type": 1})
             if not loc:
                 raise HTTPException(status_code=404, detail="Campus not found")

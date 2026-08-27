@@ -3,6 +3,20 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 260 (Feb 2026)
+**Shipping visualiser: Drag-to-Stack + Stack Tower View + Auto-Pack Linked Items — plus P0 fixes for chat ghosts, task assignee scope, campus switcher.**
+
+Shipping visualiser
+- **Drag-to-Stack (2D)**: packers now drop one box onto another to stack — no more twin dropdowns. `FloorPlan2D` tracks the dragged box's centre against every visible box footprint during the drag; when a hover target is detected the target ring turns blue and, on drop, we call `onStack(child, parent)` instead of `onPalletMove`. Loose items never participate in stacks. Route unchanged: `PUT /packing-units/{id} {parent_id}`.
+- **Stack Tower View (3D + 2D)**: `computeLayout` walks each packing unit's `parent_id` chain, sums parent heights into a z-offset, and inherits the root's `(x,y)` — so stacked boxes render as a real vertical tower in 3D. In 2D stacked children are hidden (they'd only overlap the parent) and each parent shows a blue `×N` pill counting the column height; clicking it un-stacks the top child.
+- **Auto-Pack Linked Items**: when an item is created with `packing_unit_id` OR updated to receive one, `_normalise_item` and `PUT /items/{id}` now force `x_cm/y_cm/z_cm` to `0` and null out `floor_x_cm/floor_y_cm`. Bulk-imported / AI-linked items stay tidy at the box origin and never leak stale floor coords if later un-linked.
+
+P0/P1 bug fixes (from the outstanding handoff list)
+- **Chat ghost users**: `/api/chat/conversations` now drops direct DMs whose only counterparty was hard/soft-deleted (looks up `db.users` and confirms `status != deleted`). Group conversations are kept even when some participants are missing. `/api/chat/users` tightens the query with `id.$exists`, `name.$ne=""`, and only staff roles — protecting against legacy rows without an id.
+- **Multi-campus switcher visibility**: `Layout.jsx` `hasMultipleCampuses` now unions `location_ids` with the primary `location_id`, so users whose primary campus wasn't pushed into `location_ids` still see the switcher.
+- **Active-campus sibling-campus leak (HIGH)**: `PUT /api/user/active-campus` used to grant a Director access to sibling campuses under the same top-level parent (because it enumerated children of parents added during expansion). Now we keep `direct` (assigned locations), `parents` (rollup targets — read-only), and `subs` (children of `direct` only) as disjoint sets. Verified: a Director assigned only to Haiti + Kenya can no longer pin Uganda / United (403), can still pin Central (parent rollup) or their own sub-locations.
+- **Task assignee scope (Board Edit)**: "Add staff to board" picker in `TasksPage` now filters by `currentBoard.location_id` — matches the existing per-card assignee scope so admins don't accidentally tag a staffer from another campus.
+
 ## Recently Resolved — Iteration 254 (Feb 2026)
 **Shipments visualizer polish — photo-textured 3D boxes + batch shape derivation + no snap + fullscreen edit + rotation + non-blocking bulk AI.**
 

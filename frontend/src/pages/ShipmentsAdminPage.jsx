@@ -1355,7 +1355,12 @@ export default function ShipmentsAdminPage() {
                 body = { floor_x_cm: Math.round(x), floor_y_cm: Math.round(y) };
               } else if (isPackingUnit) {
                 url = `/shipments/${selectedId}/packing-units/${pid}`;
-                body = { x_cm: Math.round(x), y_cm: Math.round(y) };
+                // iter 260 — packing units store their container-floor
+                // position in `floor_x_cm`/`floor_y_cm`. Sending `x_cm`/
+                // `y_cm` here was a silent no-op on the backend (fields
+                // not in `allowed`), which is why dragged boxes snapped
+                // back to their previous position after refresh.
+                body = { floor_x_cm: Math.round(x), floor_y_cm: Math.round(y) };
               } else {
                 url = `/shipments/${selectedId}/pallets/${pid}`;
                 body = { x_cm: Math.round(x), y_cm: Math.round(y) };

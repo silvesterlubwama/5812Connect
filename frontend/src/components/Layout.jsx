@@ -207,7 +207,12 @@ export default function Layout() {
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
   const isGlobalAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
-  const hasMultipleCampuses = (user?.location_ids || []).length > 1;
+  // iter 260 — Multi-campus detection now unions `location_ids` with the
+  // primary `location_id` so users with a mismatch (older accounts where
+  // the primary campus wasn't pushed into `location_ids`) still see the
+  // switcher when they legitimately belong to >1 campus.
+  const _campusScope = new Set([...(user?.location_ids || []), user?.location_id].filter(Boolean));
+  const hasMultipleCampuses = _campusScope.size > 1;
   const canSwitchCampus = isGlobalAdmin || hasMultipleCampuses;
   const userRole = user?.role || '';
   const [isOnline, setIsOnline] = useState(navigator.onLine);
