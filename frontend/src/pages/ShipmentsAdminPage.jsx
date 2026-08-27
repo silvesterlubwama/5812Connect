@@ -115,12 +115,21 @@ export default function ShipmentsAdminPage() {
   // iter 255c — auto-resume unfinished box-scan reviews. When a shipment
   // loads with a persisted `scan_draft` and we don't already have a live
   // result in memory, re-hydrate the dialog so the review isn't lost.
+  // iter 260 — track drafts the user has explicitly dismissed (Done /
+  // Scan-more / Undo) so the effect doesn't re-open the dialog when
+  // `boxScanResult` briefly returns to null before `refreshDetail()`
+  // finishes wiping `scan_draft` on the server. Fix for the "dialog pops
+  // up twice after Done" bug: we also dropped `boxScanResult` from the
+  // dep array so setting it back to null does NOT re-trigger this effect.
+  const dismissedDraftsRef = React.useRef(new Set());
   useEffect(() => {
-    if (selected?.scan_draft && !boxScanResult) {
-      setBoxScanResult(selected.scan_draft);
-      setShowBoxScan(true);
-    }
-  }, [selected?.id, selected?.scan_draft?.scan_run_id, boxScanResult]);
+    const runId = selected?.scan_draft?.scan_run_id;
+    if (!selected?.scan_draft || !runId) return;
+    if (dismissedDraftsRef.current.has(runId)) return;
+    if (boxScanResult) return;   // NB: read-only, NOT a dep — avoid re-fire on close
+    setBoxScanResult(selected.scan_draft);
+    setShowBoxScan(true);
+  }, [selected?.id, selected?.scan_draft?.scan_run_id]);
   // iter 254 — auto-refresh the shipment LIST card whenever the user
   // returns to it from the detail view (their item edits should be
   // immediately reflected in the count / weight / progress on the tile).
@@ -2201,6 +2210,9 @@ export default function ShipmentsAdminPage() {
                         toast.success(`Reverted: ${r.data.items_removed} items, ${r.data.boxes_removed} boxes, ${r.data.items_unlinked} unlinked`);
                         // iter 255c — clear the persisted draft after undo too.
                         try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
+                        // iter 260 — mark this run dismissed so a stale
+                        // shipment reload doesn't reopen the dialog.
+                        if (boxScanResult?.scan_run_id) dismissedDraftsRef.current.add(boxScanResult.scan_run_id);
                         setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null);
                         await refreshDetail();
                       } catch (e) { toast.error(e.response?.data?.detail || 'Revert failed'); }
@@ -2214,12 +2226,17 @@ export default function ShipmentsAdminPage() {
                   // Clear the persisted draft on the server so the "Scan more"
                   // flow starts fresh instead of re-hydrating the old one.
                   try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
+                  // iter 260 — mark dismissed to survive stale reloads.
+                  if (boxScanResult?.scan_run_id) dismissedDraftsRef.current.add(boxScanResult.scan_run_id);
                   setBoxScanResult(null); setBoxScanImages([]);
                 }} data-testid="box-scan-again">Scan more</Button>
                 <Button className="flex-1" onClick={async () => {
                   // iter 255c — mark the review complete on the server so
                   // future loads don't re-open the dialog.
                   try { await api.delete(`/shipments/${selectedId}/scan-draft`); } catch { /* non-fatal */ }
+                  // iter 260 — mark dismissed so the auto-resume effect
+                  // doesn't re-open the dialog if refreshDetail is slow.
+                  if (boxScanResult?.scan_run_id) dismissedDraftsRef.current.add(boxScanResult.scan_run_id);
                   setShowBoxScan(false); setBoxScanImages([]); setBoxScanResult(null);
                   await refreshDetail();
                 }} data-testid="box-scan-done">Done</Button>
