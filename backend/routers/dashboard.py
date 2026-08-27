@@ -24,7 +24,25 @@ async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dic
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     checkins_today = await db.checkins.count_documents({"check_in_time": {"$gte": today_start}, **campus})
     now_str = now.isoformat()[:10]
-    tasks_overdue = await db.tasks.count_documents({"status": {"$nin": ["done"]}, "due_date": {"$lt": now_str, "$ne": ""}})
+    # iter 257c/d — scope task counters to visible boards (see /action-items).
+    _uid = current_user.get("id")
+    _stats_and = [
+        {"is_archived": {"$ne": True}},
+        {"$or": [
+            {"is_restricted": {"$ne": True}, "is_private": {"$ne": True}},
+            {"tagged_members": _uid},
+            {"created_by": _uid},
+        ]},
+    ]
+    if campus:
+        _stats_and.append(campus)
+    _board_ids_a = await db.boards.distinct("id", {"$and": _stats_and})
+    tasks_overdue = 0 if not _board_ids_a else await db.tasks.count_documents({
+        "status": {"$nin": ["done"]},
+        "is_archived": {"$ne": True},
+        "board_id": {"$in": _board_ids_a},
+        "due_date": {"$lt": now_str, "$ne": ""},
+    })
     new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}, **campus})
     sales_result = await db.sales.aggregate([{"$match": {"created_at": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     monthly_sales = sales_result[0]["total"] if sales_result else 0
@@ -60,10 +78,34 @@ async def get_action_items(campus_id: Optional[str] = None, current_user: dict =
     else:
         campus = await get_campus_filter(current_user)
 
-    overdue_tasks = await db.tasks.count_documents({
+    # iter 257c/d — task counters now scope to boards the current user can
+    # actually see. Previous versions leaked archived/other-campus tasks and
+    # (after the restricted/private fix) collided with the campus $or via
+    # duplicate top-level $or keys — the fix wraps campus + visibility in
+    # $and so they compose safely.
+    user_id = current_user.get("id")
+    _and = [
+        {"is_archived": {"$ne": True}},
+        {"$or": [
+            {"is_restricted": {"$ne": True}, "is_private": {"$ne": True}},
+            {"tagged_members": user_id},
+            {"created_by": user_id},
+        ]},
+    ]
+    if campus:
+        _and.append(campus)
+    board_ids = await db.boards.distinct("id", {"$and": _and})
+    if not board_ids:
+        return {"overdue_tasks": 0, "pending_approvals": await db.users.count_documents({"status": "pending", **campus}), "expiring_passes": 0, "unassigned_tasks": 0}
+    task_scope = {
         "status": {"$nin": ["done"]},
-        "due_date": {"$lt": now_str, "$ne": "", "$exists": True},
         "is_archived": {"$ne": True},
+        "board_id": {"$in": board_ids},
+    }
+
+    overdue_tasks = await db.tasks.count_documents({
+        **task_scope,
+        "due_date": {"$lt": now_str, "$ne": "", "$exists": True},
     })
 
     pending_approvals = await db.users.count_documents({"status": "pending", **campus})
@@ -84,9 +126,12 @@ async def get_action_items(campus_id: Optional[str] = None, current_user: dict =
         pass
 
     unassigned_tasks = await db.tasks.count_documents({
-        "status": {"$nin": ["done"]},
-        "is_archived": {"$ne": True},
-        "$or": [{"assignees": {"$size": 0}}, {"assignees": {"$exists": False}}],
+        **task_scope,
+        "$or": [
+            {"assignees": {"$size": 0}},
+            {"assignees": {"$exists": False}},
+            {"assignees": None},
+        ],
     })
 
     return {

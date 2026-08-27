@@ -785,27 +785,11 @@ export default function ShipmentsAdminPage() {
         </CardContent>
       </Card>
 
-      {/* iter223 — mode picker + waybill + AI tracking + packing units / passengers */}
-      {/* iter228: The old dedicated "Pallets" row has been folded into the unified
-          "Packing units" section below (which handles pallets/boxes/totes as one
-          consistent surface). ContainerVisualizer now renders both legacy
-          `pallets` AND `packing_units` in a single 2D+3D layout. */}
-      <ShipmentPackingPanel
-        shipment={selected}
-        refresh={refreshDetail}
-        onDropItem={(itemId, kind, containerId) => {
-          // iter230 — drag-drop packing. kind is 'p' (legacy pallet) | 'u'
-          // (packing unit) | 's' (suitcase); we normalise to the right field.
-          const patch = { pallet_id: null, packing_unit_id: null, suitcase_id: null };
-          if (kind === 'p') patch.pallet_id = containerId;
-          else if (kind === 'u') patch.packing_unit_id = containerId;
-          else if (kind === 's') patch.suitcase_id = containerId;
-          return updateItem(itemId, patch);
-        }}
-      />
-
-      <RecentScans shipmentId={selectedId} refreshDetail={refreshDetail} />
-
+      {/* iter 257b — Manifest Groups + Items list moved above the packing
+          panel + recent scans so admins see the item list first (the thing
+          they edit most) instead of scrolling past packing units and mode
+          pickers to reach it. ShipmentPackingPanel still handles the mode/
+          waybill/AI tracking header, just further down the page. */}
       {/* Manifest Groups (sub-consignments) */}
       <div className="mb-3" data-testid="ship-manifest-groups">
         <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
@@ -1272,6 +1256,24 @@ export default function ShipmentsAdminPage() {
           </div>
         )}
       </div>
+
+      {/* iter223 — mode picker + waybill + AI tracking + packing units / passengers */}
+      {/* iter 257b — moved down here so the Items list sits closer to the top of the page. */}
+      <ShipmentPackingPanel
+        shipment={selected}
+        refresh={refreshDetail}
+        onDropItem={(itemId, kind, containerId) => {
+          // iter230 — drag-drop packing. kind is 'p' (legacy pallet) | 'u'
+          // (packing unit) | 's' (suitcase); we normalise to the right field.
+          const patch = { pallet_id: null, packing_unit_id: null, suitcase_id: null };
+          if (kind === 'p') patch.pallet_id = containerId;
+          else if (kind === 'u') patch.packing_unit_id = containerId;
+          else if (kind === 's') patch.suitcase_id = containerId;
+          return updateItem(itemId, patch);
+        }}
+      />
+
+      <RecentScans shipmentId={selectedId} refreshDetail={refreshDetail} />
 
       {/* Container visualization — 2D / 3D (hidden in airport mode — iter226).
           iter228: now receives both legacy `pallets` AND new `packing_units` so

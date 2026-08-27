@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 93 — backend-only verification of the iter257c dashboard task-counter scoping fix. Logged in via public REACT_APP_BACKEND_URL as admin@5812uganda.org and compared /api/dashboard/action-items and /api/dashboard/stats against independently computed MongoDB counts (mirroring deps.get_campus_filter + non-archived board scoping). Actual API response: {overdue_tasks:1, pending_approvals:0, expiring_passes:0, unassigned_tasks:4} and stats.tasks_overdue=1 — exactly the expected values. Pre-fix global (unscoped) overdue count in the same DB is 6, so the scoping fix is demonstrably effective. 14 pytest cases written; 13 pass, 1 documents a residual scoping gap (restricted/private boards).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/dashboard/action-items (+ /api/dashboard/stats)", "issue": "Residual scoping gap: board scope uses only {is_archived != true, campus}, while GET /api/boards additionally hides is_restricted / is_private boards the user is not tagged on. Reproduced: inserted a non-archived restricted board in loc_001 with 1 overdue+unassigned task -> board correctly absent from /api/boards, but action-items jumped 1->2 overdue and 4->5 unassigned. Same class of phantom-count bug the user reported. Fix: reuse the /api/boards visibility resolution (or add is_restricted/is_private $ne true unless tagged_members/created_by contains the user) when building board_ids."},
+      {"endpoint": "/api/dashboard/action-items", "issue": "Dead sentinel: task_scope sets board_id to the literal string '__no_boards__' when board_ids is empty, but both count queries are already short-circuited with `0 if not board_ids`. Harmless but misleading — drop the sentinel."},
+      {"endpoint": "/api/dashboard/action-items", "issue": "Unassigned predicate only matches assignees [] or missing; assignees: null or ['']/legacy `assignee` field would be missed. No such docs in the preview DB today (all 9 tasks have list-type assignees), so no observed impact."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter93_dashboard_task_scoping.py",
+    "/app/test_reports/pytest/iter93_results.xml"
+  ],
+  "action_items": [
+    "Optional (recommended): also exclude restricted/private boards the user cannot see when computing board_ids in dashboard.py, so counters exactly match what /api/boards exposes.",
+    "Optional cleanup: remove the '__no_boards__' sentinel in task_scope and broaden the unassigned predicate to also treat assignees:null / legacy `assignee` as unassigned."
+  ],
+  "critical_code_review_comments": [
+    "Board-visibility logic is now duplicated in three places (deps.get_campus_filter, boards.list_boards, dashboard board_ids). Extract one helper e.g. `async def visible_board_ids(user)` in deps.py and call it from both boards.list_boards and dashboard.py — otherwise the two views will drift again (already drifted for restricted/private boards).",
+    "stats.tasks_overdue uses due_date {$lt, $ne:''} while action-items uses {$lt, $ne:'', $exists:True}; identical in effect but the duplicated query fragment should be a shared constant/helper to guarantee the two endpoints stay in sync."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter93_dashboard_task_scoping.py"],
+  "success_rate": {"backend": "93% (13/14 assertions passing; the 1 failure is the documented restricted-board scoping gap)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Only transient docs inside tests (TEST_QA_board_iter93 / TEST_QA_restricted_iter93 / TEST_QA_board_iter93_other and their tasks), all deleted in finally blocks. Verified DB has zero leftover TEST_QA_* boards/tasks and admin.active_campus_id is still loc_001.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md; login uses `identifier` field)",
+  "context_for_next_testing_agent": "Preview DB: 1 non-archived board (board_3e7f60e2, loc_001) with 9 tasks -> 4 open, 1 overdue, 4 unassigned. Admin has active_campus_id=loc_001 so campus filter narrows to loc_001 + sub-locations. Regression suite: /app/backend/tests/test_iter93_dashboard_task_scoping.py (run with -p no:xdist). The single failing test test_restricted_board_tasks_not_counted is intentional and will pass once restricted/private boards are excluded from the dashboard board scope. Note: admin without active_campus_id still returned scoped values (no cross-campus leak observed) because a default active campus is resolved server-side.",
+  "rca_of_the_issue": "Original bug: dashboard task counters queried db.tasks globally, so tasks on archived/deleted boards and other campuses were counted (6 overdue globally vs 1 truly visible). The fix (board_ids = db.boards.distinct('id', {is_archived:{$ne:true}, ...campus}) then board_id:{$in:board_ids}) resolves this — verified by injecting an archived-board overdue task and an other-campus overdue task, neither of which moved the counters. Remaining leak is only for restricted/private boards, which the dashboard scope does not filter out even though /api/boards does."
+}

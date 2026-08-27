@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 92 (iter 257b layout re-order) frontend-only verification. Logged in as admin@5812uganda.org, opened shipment 'Dedupe Ship 1782772603' detail page. Verified DOM y-order via getBoundingClientRect: ship-manifest-groups y=308 < items toolbar (ship-add-item) y=412 < ship-packing-panel y=538 < Recent Scans y=1052 < #ship-container-visualizer y=1180. All Items toolbar buttons (ship-bulk-hs-btn, ship-manifest-btn, ship-invoice-btn, ship-csv-import-btn, ship-ai-scan-btn, ship-box-scan-btn, ship-add-item, ship-add-manifest-group-btn) render visible immediately under Manifest Groups. Add Item dialog opens and end-to-end item creation works (created TEST_QA_Item_257b, appeared in list). Container visualiser still renders at bottom; no JS/React console errors (only a benign Push-API-incognito warning and one 404 for a missing packing-unit image asset). Backend testing skipped per request. PVoC not touched.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ShipmentPackingPanel — packing unit 'Test Box 99' photo thumbnail", "issue": "Broken image placeholder rendered (alt text 'box 1' shown) and an accompanying 404 console error for the image resource. Pre-existing/unrelated to the layout re-order but visible on the shipment detail page.", "selector": "packing unit card thumbnail img", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: handle missing/expired packing-unit image URLs with an onError fallback so a broken img + 404 isn't shown on the shipment detail page."
+  ],
+  "critical_code_review_comments": [
+    "ShipmentsAdminPage.jsx is ~2381 lines — well over the 700-line guideline. Recommend extracting the Items list, Manifest Groups block, and the Add/Edit item dialogs into separate components; the layout re-order would then be a trivial JSX swap instead of moving ~470 lines.",
+    "The container visualiser wrapper uses id=\"ship-container-visualizer\" (needed for html-to-image PNG export) but has no data-testid; consider adding data-testid=\"ship-container-visualizer\" for test stability."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested", "frontend": "100%"},
+  "seed_data_creation": "Created one shipment item 'TEST_QA_Item_257b' on shipment 'Dedupe Ship 1782772603' (qty 1, no weight/value) to validate the add-item flow. Safe to delete.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Shipments admin is at /shipments; shipment cards use data-testid ship-row-{id}; detail page root is ship-detail-page. Only one shipment exists in preview DB. Layout order after iter257b: header card -> ship-manifest-groups -> Items list/toolbar -> ship-packing-panel -> Recent Scans -> #ship-container-visualizer. Remember to clean up TEST_QA_Item_257b if it interferes.",
+  "rca_of_the_issue": "N/A — layout re-order verified working as intended."
+}
