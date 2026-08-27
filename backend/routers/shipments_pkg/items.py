@@ -944,174 +944,146 @@ async def upload_item_photo(
     return {"photo_url": file_url}
 
 
-async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: dict) -> dict:
-    """Core Gemini classification for a single item. Returns the persisted
-    shape3d dict. Raises HTTPException on missing photo / AI failure so both
-    the single-item and batch endpoints can surface a consistent error.
+_LOCAL_SHAPE_MODELS = [
+    # (regex-friendly keyword list, kind, (L, W, H) in cm, primary_color, source)
+    # Kitchen appliances
+    (["kitchenaid", "artisan", "stand mixer", "professional 600"], "compound", (35, 22, 36), "#c62828", "known_model"),
+    (["blender", "vitamix", "ninja blender", "nutribullet"], "cylinder", (18, 18, 42), "#334155", "category_default"),
+    (["instant pot", "pressure cooker", "crock pot", "slow cooker"], "cylinder", (33, 33, 33), "#1f2937", "category_default"),
+    (["air fryer", "airfryer"], "box", (32, 30, 36), "#111827", "category_default"),
+    (["toaster oven"], "box", (45, 30, 25), "#e5e7eb", "category_default"),
+    (["toaster"], "box", (30, 18, 22), "#94a3b8", "category_default"),
+    (["microwave"], "box", (50, 40, 30), "#111827", "category_default"),
+    (["coffee maker", "coffeemaker", "keurig", "nespresso"], "box", (25, 22, 35), "#1f2937", "category_default"),
+    (["kettle", "electric kettle"], "compound", (22, 18, 26), "#334155", "category_default"),
+    # Laundry
+    (["washer", "washing machine", "speed queen", "front load", "top load"], "box", (68, 70, 108), "#e5e7eb", "known_model"),
+    (["dryer"], "box", (68, 70, 108), "#e5e7eb", "known_model"),
+    # Refrigeration
+    (["fridge", "refrigerator", "mini fridge"], "box", (60, 60, 150), "#e5e7eb", "category_default"),
+    (["freezer", "chest freezer"], "box", (90, 60, 90), "#e5e7eb", "category_default"),
+    # Entertainment
+    (["tv", "television", "monitor"], "box", (100, 12, 60), "#111827", "category_default"),
+    (["speaker", "soundbar"], "box", (80, 12, 10), "#111827", "category_default"),
+    # Furniture
+    (["chair", "dining chair", "office chair"], "box", (50, 50, 90), "#8b5a2b", "category_default"),
+    (["sofa", "couch", "loveseat"], "box", (200, 90, 90), "#8b5a2b", "category_default"),
+    (["table", "dining table", "coffee table"], "box", (120, 80, 75), "#8b5a2b", "category_default"),
+    (["bed frame", "mattress", "twin bed", "queen bed"], "box", (140, 200, 30), "#8b5a2b", "category_default"),
+    (["bookcase", "shelf", "billy"], "box", (80, 30, 200), "#8b5a2b", "category_default"),
+    (["stool"], "cylinder", (35, 35, 65), "#8b5a2b", "category_default"),
+    # Small items
+    (["lamp", "table lamp", "floor lamp"], "compound", (25, 25, 55), "#eab308", "category_default"),
+    (["book", "textbook"], "box", (18, 3, 24), "#8b5a2b", "category_default"),
+    (["backpack", "bag", "suitcase"], "box", (45, 25, 55), "#334155", "category_default"),
+    (["shoe", "sneaker", "boot"], "box", (30, 12, 12), "#334155", "category_default"),
+    (["bicycle", "bike"], "box", (170, 25, 100), "#334155", "known_model"),
+    (["ball", "soccer ball", "basketball"], "sphere", (22, 22, 22), "#f59e0b", "known_model"),
+]
+
+_CATEGORY_DEFAULTS = {
+    "appliances": ("box", (40, 35, 40), "#94a3b8"),
+    "electronics": ("box", (30, 20, 15), "#111827"),
+    "furniture": ("box", (100, 60, 80), "#8b5a2b"),
+    "kitchen": ("box", (30, 25, 25), "#94a3b8"),
+    "kitchenware": ("box", (30, 25, 25), "#94a3b8"),
+    "clothing": ("box", (30, 8, 30), "#334155"),
+    "clothes": ("box", (30, 8, 30), "#334155"),
+    "shoes": ("box", (30, 12, 12), "#334155"),
+    "books": ("box", (18, 3, 24), "#8b5a2b"),
+    "toys": ("box", (25, 15, 20), "#f59e0b"),
+    "tools": ("box", (30, 10, 10), "#334155"),
+    "bedding": ("box", (60, 20, 60), "#94a3b8"),
+    "linens": ("box", (60, 20, 60), "#94a3b8"),
+    "medical": ("box", (25, 15, 20), "#e5e7eb"),
+}
+
+
+def _local_derive_shape3d(item: dict) -> dict:
+    """iter 261 — 100 % local shape derivation. No AI call, no external
+    network. Match the item name against a curated model list, fall back
+    to category defaults, then to a generic 30×30×30 grey box. This
+    replaces the Gemini call for shape3d so the flow never hits the
+    Cloudflare 100 s wall.
     """
-    item_id = item["id"]
-    photo_url = item.get("photo_url") or ((item.get("image_urls") or [None])[0])
-    if not photo_url:
-        raise HTTPException(status_code=400, detail="Item has no photo yet")
+    name = (item.get("name") or "").lower()
+    cat = (item.get("category") or "").lower().strip()
+    dims_cm = item.get("dims_cm") or {}
+    caller_L = float(dims_cm.get("length") or 0)
+    caller_W = float(dims_cm.get("width") or 0)
+    caller_H = float(dims_cm.get("height") or 0)
 
-    # Fetch the image bytes. Support both local (/api/uploads/*) and cloud URLs.
-    try:
-        if photo_url.startswith("/api/uploads/"):
-            local_path = "/app/backend" + photo_url[4:]  # strip /api → /uploads/…
-            with open(local_path, "rb") as fh:
-                data = fh.read()
-            mime = "image/jpeg"
-        else:
-            import httpx
-            async with httpx.AsyncClient(timeout=15) as hc:
-                resp = await hc.get(photo_url)
-                resp.raise_for_status()
-                data = resp.content
-                mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch item photo: {str(e)[:100]}")
-
-    api_key = _os.environ.get("EMERGENT_LLM_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="AI unavailable (no LLM key)")
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"AI unavailable: {e}")
-
-    import tempfile
-    import json as _json
-
-    fd, tmp = tempfile.mkstemp(suffix=".jpg")
-    with _os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-
-    dims = item.get("dims_cm") or {}
-    fallback_L = float(dims.get("length") or 30)
-    fallback_W = float(dims.get("width") or 30)
-    fallback_H = float(dims.get("height") or 30)
-    # iter 260 — feed the AI the item name + category so it can reach for
-    # background knowledge about typical product dimensions (a "KitchenAid
-    # Artisan" mixer is ~35 × 22 × 36 cm, a "SodaStream Terra" is ~13 × 18
-    # × 44 cm, etc.). The photo still drives shape kind + colour, but the
-    # text context prevents wild-guess dims when the photo is cropped or
-    # missing scale references.
-    item_name = (item.get("name") or "").strip()
-    item_category = (item.get("category") or "").strip()
-
-    SYS = (
-        "You classify a household / appliance item photo into a rough 3D shape primitive "
-        "so a container packing app can draw something better than a plain box. Output STRICT JSON:\n"
-        "{\n"
-        '  "kind": "box" | "cylinder" | "sphere" | "compound",  // compound = base + head like a mixer\n'
-        '  "primary": {"L_cm": float, "W_cm": float, "H_cm": float},  // rough bounding box in centimetres\n'
-        '  "secondary": {"L_cm": float, "W_cm": float, "H_cm": float, "y_offset_cm": float, "shape": "cylinder"|"box"} | null,\n'
-        '  "primary_color": "#RRGGBB",     // dominant colour, lowercase hex\n'
-        '  "confidence": "high" | "medium" | "low",\n'
-        '  "size_source": "photo" | "known_model" | "category_default"   // how you picked the dims\n'
-        "}\n"
-        "Rules:\n"
-        "- Prefer `box` for boxy items (books, boxes, monitors flat), `cylinder` for round/tubular (cans, lamps, stools, mixing bowls), `sphere` for balls / round bulbs.\n"
-        "- Use `compound` for items with a distinct base + narrower head (kitchen mixer, blender, table lamp with base+shade). The `secondary` block describes the head with y_offset_cm = distance from the base's TOP to where the head starts.\n"
-        "- iter 260 — DIMENSION LOOKUP: when the item name / category clearly identifies a real "
-        "product (e.g. 'KitchenAid Artisan mixer', 'Instant Pot Duo 6qt', 'Ikea Billy bookcase 80cm', "
-        "'Xbox Series S', 'Nike Air Force 1 US 10'), use the known real-world dimensions you have "
-        "in your training data — do NOT guess from the photo alone. Set size_source='known_model'. "
-        "If the name is generic ('mixer', 'chair'), fall back to typical dims for that category "
-        "(size_source='category_default'). Only use photo-derived dims (size_source='photo') when "
-        "neither the model nor a solid category default is available.\n"
-        f"- The item is currently named '{item_name}' in category '{item_category}'. Use this as the primary hint.\n"
-        f"- If you truly can't estimate, use the given fallback dims: L={fallback_L}, W={fallback_W}, H={fallback_H} and scale proportions from that.\n"
-        "- primary_color must match the dominant visible colour of the item."
-    )
-    try:
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"shape3d_{item_id}_{uuid.uuid4().hex[:6]}",
-            system_message=SYS,
-        ).with_model("gemini", "gemini-3-flash-preview")
-        # iter 260 — Cloudflare drops connections at ~100s with a 520
-        # ("origin returned invalid response"), which is exactly what
-        # packers see on the "Retry" pill. Bound the AI call at 55s so
-        # we ALWAYS return a proper 504/502 with an actionable message
-        # before Cloudflare kills the socket. The client already knows
-        # how to handle these (shows the Retry pill; user taps again).
-        import asyncio as _asyncio
-        try:
-            raw = await _asyncio.wait_for(
-                chat.send_message(UserMessage(
-                    text="Return the JSON per the schema. One item, best fit.",
-                    file_contents=[FileContentWithMimeType(file_path=tmp, mime_type=mime)],
-                )),
-                timeout=55,
-            )
-        except _asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="AI took too long — tap Retry to try again")
-    finally:
-        try: _os.remove(tmp)
-        except Exception: pass
-
-    s_text = (raw or "").strip().strip("`")
-    if s_text.lower().startswith("json"):
-        s_text = s_text[4:].strip()
-    first, last = s_text.find("{"), s_text.rfind("}")
-    if first >= 0 and last > first:
-        s_text = s_text[first:last + 1]
-    try:
-        parsed = _json.loads(s_text)
-    except Exception:
-        raise HTTPException(status_code=502, detail="AI returned unparseable JSON")
-
-    kind = (parsed.get("kind") or "box").lower()
-    if kind not in {"box", "cylinder", "sphere", "compound"}:
+    kind = None; L = W = H = 0.0; color = "#94a3b8"; source = "category_default"
+    # Model-name match first (highest confidence)
+    for keywords, k, dims, c, src in _LOCAL_SHAPE_MODELS:
+        if any(kw in name for kw in keywords):
+            kind = k
+            L, W, H = float(dims[0]), float(dims[1]), float(dims[2])
+            color = c
+            source = src
+            break
+    # Category fallback
+    if kind is None and cat in _CATEGORY_DEFAULTS:
+        k, dims, c = _CATEGORY_DEFAULTS[cat]
+        kind = k
+        L, W, H = float(dims[0]), float(dims[1]), float(dims[2])
+        color = c
+        source = "category_default"
+    # Absolute fallback
+    if kind is None:
         kind = "box"
-    primary = parsed.get("primary") or {}
+        L, W, H = 30.0, 30.0, 30.0
+        color = "#94a3b8"
+        source = "category_default"
+
+    # Caller-supplied dims always win — user knows better than the LUT.
+    if caller_L > 0: L = caller_L
+    if caller_W > 0: W = caller_W
+    if caller_H > 0: H = caller_H
+
     shape3d = {
         "kind": kind,
-        "primary": {
-            "L_cm": float(primary.get("L_cm") or fallback_L),
-            "W_cm": float(primary.get("W_cm") or fallback_W),
-            "H_cm": float(primary.get("H_cm") or fallback_H),
-        },
+        "primary": {"L_cm": L, "W_cm": W, "H_cm": H},
         "secondary": None,
-        "primary_color": (parsed.get("primary_color") or "#94a3b8")[:16],
-        "confidence": (parsed.get("confidence") or "medium").lower(),
-        # iter 260 — record how the AI picked the dims so the UI can show
-        # "matched to known model" vs "guessed from photo".
-        "size_source": (parsed.get("size_source") or "photo").lower(),
+        "primary_color": color,
+        "confidence": "high" if source == "known_model" else "medium",
+        "size_source": source,
         "derived_at": datetime.now(timezone.utc).isoformat(),
-        "derived_by": current_user["id"],
-        "source_photo_url": photo_url,
     }
-    sec = parsed.get("secondary")
-    if kind == "compound" and isinstance(sec, dict):
+    # Compound items get a slightly narrower head for the visualiser.
+    if kind == "compound":
         shape3d["secondary"] = {
-            "L_cm": float(sec.get("L_cm") or 0),
-            "W_cm": float(sec.get("W_cm") or 0),
-            "H_cm": float(sec.get("H_cm") or 0),
-            "y_offset_cm": float(sec.get("y_offset_cm") or 0),
-            "shape": (sec.get("shape") or "cylinder").lower(),
+            "L_cm": max(6.0, L * 0.55),
+            "W_cm": max(6.0, W * 0.55),
+            "H_cm": max(4.0, H * 0.35),
+            "y_offset_cm": H * 0.05,
+            "shape": "cylinder",
         }
+    return shape3d
 
-    # iter 260 — Staging area outside the container. Newly derived items
-    # that have no pallet, no packing_unit and no floor position get a
-    # deterministic slot just past the container's back wall so packers
-    # can see them at a glance and drag them into place. Slots are
-    # 60 cm apart along the container's width, staggered into rows so a
-    # long shipment doesn't spill off-screen.
+
+async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: dict) -> dict:
+    """iter 261 — Local shape derivation. Uses `_local_derive_shape3d` to
+    pick a rough 3D primitive from the item's name / category without any
+    AI or network call. Also auto-stages loose items outside the container
+    so packers can drag them in.
+    """
+    item_id = item["id"]
+    shape3d = _local_derive_shape3d(item)
+    shape3d["derived_by"] = current_user["id"]
+
     set_ops = {"items.$.shape3d": shape3d}
     unset_ops = {"items.$.shape3d_error": ""}
-    # If the item's dims_cm are unset / zero AND the AI produced dims
-    # sourced from a known model or category default, adopt those so
-    # weight × volume totals reflect reality.
+    # Adopt the derived dims when the item has none set.
     existing_dims = item.get("dims_cm") or {}
     has_real_dims = any(float(existing_dims.get(k) or 0) > 0 for k in ("length", "width", "height"))
-    if not has_real_dims and shape3d["size_source"] in ("known_model", "category_default"):
+    if not has_real_dims:
         set_ops["items.$.dims_cm"] = {
             "length": shape3d["primary"]["L_cm"],
             "width": shape3d["primary"]["W_cm"],
             "height": shape3d["primary"]["H_cm"],
         }
+    # Stage outside the container when the item is loose + un-positioned.
     if (
         not item.get("pallet_id")
         and not item.get("packing_unit_id")
@@ -1125,31 +1097,24 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
         cont = ship_meta.get("container_dims_cm") or {}
         cont_L = float(cont.get("length_cm") or 1203)
         cont_W = float(cont.get("width_cm") or 235)
-        # Count how many items are already staged so we drop this one
-        # into the next free slot.
         staged_count = sum(
             1 for it in (ship_meta.get("items") or [])
             if not it.get("pallet_id")
             and not it.get("packing_unit_id")
             and (it.get("floor_x_cm") or 0) >= cont_L
         )
-        slot_gap_x = 80.0
-        slot_gap_y = 80.0
-        cols = max(1, int(cont_W // slot_gap_y))
-        col = staged_count % cols
-        row = staged_count // cols
-        set_ops["items.$.floor_x_cm"] = cont_L + 30.0 + row * slot_gap_x
-        set_ops["items.$.floor_y_cm"] = col * slot_gap_y
+        slot = 80.0
+        cols = max(1, int(cont_W // slot))
+        set_ops["items.$.floor_x_cm"] = cont_L + 30.0 + (staged_count // cols) * slot
+        set_ops["items.$.floor_y_cm"] = (staged_count % cols) * slot
         shape3d["staged_outside"] = True
 
     await db.shipments.update_one(
         {"id": shipment_id, "items.id": item_id},
-        # iter 254d — clear any prior shape3d_error on success so the
-        # "Retry" pill on the item card goes away automatically.
         {"$set": set_ops, "$unset": unset_ops},
     )
-    await _audit(current_user["id"], "derive_shape3d", "shipment_item", item_id,
-                 {"kind": kind, "confidence": shape3d["confidence"]})
+    await _audit(current_user["id"], "derive_shape3d_local", "shipment_item", item_id,
+                 {"kind": shape3d["kind"], "size_source": shape3d["size_source"]})
     return shape3d
 
 
@@ -1195,25 +1160,18 @@ async def derive_shapes_batch(
     limit: int = 3,
     current_user: dict = Depends(require_admin),
 ):
-    """iter 254c — Chunked derive. Processes up to `limit` items that have a
-    photo but no `shape3d` yet, then returns. The frontend loops until
-    `remaining == 0`. Small chunks (default 3) keep every HTTP call well
-    under the 120s proxy timeout and make progress visible after each
-    batch — even on production where a worker recycle would kill an
-    untracked background task.
+    """iter 261 — Chunked local shape derivation. Processes up to `limit`
+    items that don't yet have a `shape3d`. Local look-up so photo isn't
+    required and every call returns in milliseconds — but we keep the
+    chunk shape for backward-compat with the polling frontend.
     """
-    limit = max(1, min(int(limit or 3), 5))
+    limit = max(1, min(int(limit or 3), 20))
     ship = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1})
     if not ship:
         raise HTTPException(status_code=404, detail="Shipment not found")
     items = ship.get("items") or []
 
-    all_candidates = [
-        it for it in items
-        if not it.get("shape3d") and (
-            it.get("photo_url") or (it.get("image_urls") and it["image_urls"][0])
-        )
-    ]
+    all_candidates = [it for it in items if not it.get("shape3d")]
     chunk = all_candidates[:limit]
 
     succeeded = 0
