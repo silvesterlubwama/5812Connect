@@ -561,6 +561,20 @@ export default function ShipmentsAdminPage() {
   };
   const downloadManifest = (gid) => downloadPdf('manifest', gid);
   const downloadInvoice = (gid) => downloadPdf('invoice', gid);
+  // iter 262 — Printable 3-view container schematic (Top / Side / Front).
+  const downloadSchematic = async () => {
+    try {
+      const r = await api.get(`/shipments/${selectedId}/schematic.pdf`, { responseType: 'blob' });
+      const blob = new Blob([r.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `schematic-${(selected?.name || 'shipment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}.pdf`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('Schematic downloaded');
+    } catch (e) { toast.error(e.response?.data?.detail || 'PDF generation failed'); }
+  };
 
   const runAiPacking = async () => {
     setAiBusy(true);
@@ -894,6 +908,10 @@ export default function ShipmentsAdminPage() {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* iter 262 — 3-view schematic PDF (top, side, front) */}
+            <Button size="sm" variant="outline" className="text-indigo-700 border-indigo-300 hover:bg-indigo-50" onClick={downloadSchematic} disabled={(selected.items || []).length === 0 && (selected.packing_units || []).length === 0} data-testid="ship-schematic-btn" title="Download A3 landscape 3-view schematic (top, side, front) as a printable PDF">
+              <Download size={11} className="mr-1" /> Print Schematic
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" variant="outline" className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" disabled={(selected.items || []).length === 0} data-testid="ship-invoice-btn" title="Download commercial invoice PDF (declared values, HS codes, sorted by value then box)">
@@ -1022,16 +1040,14 @@ export default function ShipmentsAdminPage() {
                         {it.category && <Badge variant="outline" className="text-[10px]">{it.category}</Badge>}
                         <Badge className={`text-[10px] ${PRIORITY_BADGE[it.priority] || ''}`}>{it.priority}</Badge>
                         {covered && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">✓ covered</Badge>}
-                        {/* iter 256 — PVoC pill removed at user request. */}
-                        {/* iter 253 — AI-derived 3D shape. If already derived,
-                            show a compact pill with the shape kind; else a
-                            "3D?" button that fires Gemini analysis on the
-                            item's photo. Silent when there's no photo yet. */}
-                        {it.photo_url && (() => {
-                          // iter 254d — three states: no shape yet ('3D?'),
+                        {/* iter 253 — Local shape classifier button. Iter 261
+                            dropped the photo requirement — the LUT works
+                            from name+category alone, so this pill appears
+                            on every item now. */}
+                        {(() => {
+                          // Three states: no shape yet ('3D?'),
                           // shape derived (kind pill, click to re-derive),
-                          // OR previous derivation failed (red 'Retry' pill
-                          // with the error tooltip so packers know why).
+                          // OR previous derivation failed (red 'Retry' pill).
                           const hasError = !it.shape3d && it.shape3d_error;
                           return (
                             <button
@@ -1039,16 +1055,15 @@ export default function ShipmentsAdminPage() {
                                 if (it.shape3d) {
                                   if (!window.confirm(`Re-derive 3D shape for "${it.name}"?`)) return;
                                 }
-                                const toastId = toast.loading(hasError ? 'Retrying shape derivation…' : 'Analysing photo…');
+                                const toastId = toast.loading(hasError ? 'Retrying shape derivation…' : 'Deriving shape…');
                                 try {
                                   const r = await api.post(`/shipments/${selectedId}/items/${it.id}/derive-shape`);
                                   toast.dismiss(toastId);
-                                  toast.success(`3D shape: ${r.data.shape3d.kind} (${r.data.shape3d.confidence})`);
+                                  toast.success(`3D shape: ${r.data.shape3d.kind} (${r.data.shape3d.size_source || r.data.shape3d.confidence})`);
                                   await refreshDetail();
                                 } catch (e) {
                                   toast.dismiss(toastId);
                                   toast.error(e.response?.data?.detail || 'Shape derivation failed');
-                                  // Backend already persisted shape3d_error; reload so the pill turns red.
                                   await refreshDetail();
                                 }
                               }}
@@ -1061,10 +1076,10 @@ export default function ShipmentsAdminPage() {
                               }`}
                               title={
                                 it.shape3d
-                                  ? `AI-derived 3D shape: ${it.shape3d.kind}${it.shape3d.confidence ? ` (${it.shape3d.confidence})` : ''} — click to re-derive`
+                                  ? `3D shape: ${it.shape3d.kind}${it.shape3d.size_source ? ` (${it.shape3d.size_source.replace('_',' ')})` : ''} — click to re-derive`
                                   : hasError
                                     ? `Last attempt failed: ${it.shape3d_error}. Click to retry.`
-                                    : 'Click to have AI classify this item into a 3D shape from its photo'
+                                    : 'Click to classify this item into a 3D shape (from name + category, no AI)'
                               }
                               data-testid={`ship-item-shape3d-${it.id}`}
                             >

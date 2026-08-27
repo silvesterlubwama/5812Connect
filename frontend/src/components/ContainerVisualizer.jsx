@@ -178,7 +178,7 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
       y_cm: looseItem.floor_y_cm,
       color: (shape3d && shape3d.primary_color) || '#94a3b8',
       _loose_item_id: looseItem.id,
-      shape: shape3d ? (shape3d.kind === 'sphere' ? 'sphere' : shape3d.kind === 'cylinder' ? 'cylinder' : shape3d.kind === 'compound' ? 'compound' : 'box') : 'box',
+      shape: shape3d ? (shape3d.kind === 'sphere' ? 'sphere' : shape3d.kind === 'cylinder' ? 'cylinder' : shape3d.kind === 'compound' ? 'compound' : shape3d.kind === 'appliance' ? 'appliance' : 'box') : 'box',
       shape3d,
       // iter 254 — plumb the item's primary photo through so the 3D
       // renderer can map it onto the front (door-facing) face of the
@@ -604,10 +604,12 @@ function useScene3DObjects(layout) {
       const cz = (b.y + b.width / 2) / 10;
       // iter 251/253 — geometry per shape. box (default), cylinder (round
       // bins / round appliances), sphere (round objects like balls/lamps),
-      // compound (mixer-style base+head — two stacked cylinders).
+      // compound (mixer-style base+head), appliance (box body + decal on
+      // the front / door-facing face for washers, microwaves, TVs, fridges).
       const isCylinder = b.shape === 'cylinder';
       const isSphere = b.shape === 'sphere';
       const isCompound = b.shape === 'compound';
+      const isAppliance = b.shape === 'appliance';
       let geo;
       if (isCylinder) {
         geo = new THREE.CylinderGeometry(sx / 2, sx / 2, sy, 32, 1, false);
@@ -615,9 +617,9 @@ function useScene3DObjects(layout) {
         // Use the smallest axis as radius so the ball fits its bounding box
         const r = Math.min(sx, sy, sz) / 2;
         geo = new THREE.SphereGeometry(r, 24, 16);
-      } else if (isCompound) {
-        // Base cylinder = 60% of total height; head cylinder = 30% stacked on top
-        geo = null; // rendered as two meshes below
+      } else if (isCompound || isAppliance) {
+        // rendered as two meshes below (base + head or box + decal)
+        geo = null;
       } else {
         geo = new THREE.BoxGeometry(sx, sy, sz);
       }
@@ -627,7 +629,7 @@ function useScene3DObjects(layout) {
       // can visually identify items without hovering for the label. Only
       // applies to plain box geometry (cylinders/spheres/compounds wrap
       // textures poorly and their shape already conveys identity).
-      const wantPhotoFaces = !isPallet && !isCylinder && !isSphere && !isCompound && !!b.photo_url;
+      const wantPhotoFaces = !isPallet && !isCylinder && !isSphere && !isCompound && !isAppliance && !!b.photo_url;
       let mat;
       if (isPallet) {
         mat = palletWood.clone();
@@ -670,24 +672,118 @@ function useScene3DObjects(layout) {
       // where the group is rotated about its centre.
       const rotY = (Number(b.rotation_deg) || 0) * Math.PI / 180;
 
+      if (isAppliance) {
+        // Body cube + a decal plane on the +X face (the container's door
+        // side). Decal type comes from shape3d.secondary.decal:
+        //   circle → circular window (washers/dryers/microwaves)
+        //   rect   → rectangular screen (TVs, dishwashers, fridges)
+        //   grid   → shelving grid (bookcases)
+        const bodyGeo = new THREE.BoxGeometry(sx, sy, sz);
+        const bodyMesh = new THREE.Mesh(bodyGeo, mat);
+        bodyMesh.position.set(cx, cy, cz);
+        bodyMesh.rotation.y = rotY;
+        bodyMesh.castShadow = true; bodyMesh.receiveShadow = true;
+        root.add(bodyMesh);
+        const sec = b.shape3d?.secondary || {};
+        const decalKind = sec.decal || 'rect';
+        const decalSize = Math.min(0.98, Math.max(0.2, Number(sec.decal_size) || 0.7));
+        const dW = sz * decalSize;    // decal width along Z (container's Y)
+        const dH = sy * decalSize;    // decal height along Y
+        // Place the decal ~0.1cm off the +X face, facing outward.
+        const decalX = cx + sx / 2 + 0.02;
+        const decalMat = new THREE.MeshStandardMaterial({
+          color: decalKind === 'circle' ? 0x1e293b : (sec.screen ? 0x0f172a : 0x475569),
+          roughness: 0.6, metalness: 0.1, transparent: false,
+        });
+        let decalGeo;
+        if (decalKind === 'circle') {
+          decalGeo = new THREE.CircleGeometry(Math.min(dW, dH) / 2, 32);
+        } else {
+          decalGeo = new THREE.PlaneGeometry(dW, dH);
+        }
+        const decal = new THREE.Mesh(decalGeo, decalMat);
+        decal.position.set(decalX, cy, cz);
+        // Rotate so the plane's normal is +X.
+        decal.rotation.y = Math.PI / 2;
+        decal.rotation.z = 0;
+        if (rotY) {
+          // If the whole body is rotated, wrap decal in same rotation about body centre.
+          const dx = decal.position.x - cx;
+          const dz = decal.position.z - cz;
+          decal.position.x = cx + dx * Math.cos(rotY) - dz * Math.sin(rotY);
+          decal.position.z = cz + dx * Math.sin(rotY) + dz * Math.cos(rotY);
+          decal.rotation.y += rotY;
+        }
+        root.add(decal);
+        // Fine outline on the body for definition
+        const bEdges = new THREE.EdgesGeometry(bodyGeo);
+        const bLine = new THREE.LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.45 });
+        const bWire = new THREE.LineSegments(bEdges, bLine);
+        bWire.position.copy(bodyMesh.position);
+        bWire.rotation.y = rotY;
+        root.add(bWire);
+        continue;
+      }
+
       if (isCompound) {
-        // Base cylinder (60% height) + head (30% height, offset up). Keeps
-        // the overall bounding box the same as the primary dims so packing
-        // stays consistent.
-        const baseH = sy * 0.6;
-        const headH = sy * 0.35;
-        const baseR = sx / 2;
-        const headR = sx / 2.8;
-        const baseGeo = new THREE.CylinderGeometry(baseR, baseR, baseH, 24);
+        const sec = b.shape3d?.secondary || {};
+        const headShape = sec.shape || 'cylinder';
+        const headRatio = Math.min(0.95, Math.max(0.1, (sec.H_cm && sy > 0 ? (sec.H_cm / (sy * 10)) : 0.35)));
+        const baseH = sy * (1 - headRatio);
+        const headH = sy * headRatio;
+        const baseR = Math.min(sx, sz) / 2;
+        const headR = Math.min(sx, sz) / 2.6;
+        // Base — cylinder for round bases (mixers, lamps), box for
+        // furniture-style bases (chairs, sofas, tables).
+        let baseGeo;
+        if (['cylinder', 'cone', 'wheel', 'tilt'].includes(headShape)) {
+          baseGeo = new THREE.CylinderGeometry(baseR, baseR, baseH, 24);
+        } else {
+          baseGeo = new THREE.BoxGeometry(sx, baseH, sz);
+        }
         const baseMesh = new THREE.Mesh(baseGeo, mat);
         baseMesh.position.set(cx, cy - sy / 2 + baseH / 2, cz);
         baseMesh.rotation.y = rotY;
         baseMesh.castShadow = true; baseMesh.receiveShadow = true;
         root.add(baseMesh);
-        const headGeo = new THREE.CylinderGeometry(headR, headR, headH, 24);
+        // Head — geometry depends on secondary.shape
+        let headGeo;
+        if (headShape === 'cylinder') {
+          headGeo = new THREE.CylinderGeometry(headR, headR, headH, 24);
+        } else if (headShape === 'cone') {
+          headGeo = new THREE.ConeGeometry(headR, headH, 24);
+        } else if (headShape === 'wheel') {
+          // Bicycle wheels — two thin tori side by side
+          headGeo = new THREE.TorusGeometry(Math.min(sx, sy) / 2, Math.min(sx, sy) / 20, 12, 24);
+        } else if (headShape === 'tilt') {
+          // Mixer head — tilted cylinder off-axis
+          headGeo = new THREE.CylinderGeometry(headR, headR * 0.7, headH, 24);
+        } else {
+          // box head (chair back, sofa back, table top)
+          const hW = sec.position === 'top' ? sx : sx * 0.9;
+          const hD = sec.position === 'top' ? sz : sz * 0.4;
+          headGeo = new THREE.BoxGeometry(hW, headH, hD);
+        }
         const headMesh = new THREE.Mesh(headGeo, mat.clone());
-        headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz);
-        headMesh.rotation.y = rotY;
+        if (headShape === 'wheel') {
+          headMesh.rotation.z = Math.PI / 2;
+          headMesh.position.set(cx - sx / 3, cy - sy / 2 + Math.min(sx, sy) / 2, cz);
+        } else if (headShape === 'tilt') {
+          headMesh.rotation.z = Math.PI / 6;
+          headMesh.position.set(cx + sx * 0.15, cy - sy / 2 + baseH + headH / 2 - 0.5, cz);
+        } else if (sec.position === 'end') {
+          // Guitar head — offset to +X end
+          headMesh.position.set(cx + sx / 2 - (sx * 0.075), cy, cz);
+        } else if (headShape === 'box' && sec.position === 'top') {
+          // Table top slab
+          headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz);
+        } else if (headShape === 'box') {
+          // Chair/sofa back — offset to back (−Z) so seat + back are visible
+          headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz - sz / 2 + (sz * 0.3));
+        } else {
+          headMesh.position.set(cx, cy - sy / 2 + baseH + headH / 2, cz);
+        }
+        headMesh.rotation.y += rotY;
         headMesh.castShadow = true; headMesh.receiveShadow = true;
         root.add(headMesh);
         continue;   // skip the shared mesh add below

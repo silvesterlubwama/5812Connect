@@ -945,66 +945,78 @@ async def upload_item_photo(
 
 
 _LOCAL_SHAPE_MODELS = [
-    # (regex-friendly keyword list, kind, (L, W, H) in cm, primary_color, source)
+    # (regex-friendly keyword list, kind, (L, W, H) in cm, primary_color, source, extras)
     # Kitchen appliances
-    (["kitchenaid", "artisan", "stand mixer", "professional 600"], "compound", (35, 22, 36), "#c62828", "known_model"),
-    (["blender", "vitamix", "ninja blender", "nutribullet"], "cylinder", (18, 18, 42), "#334155", "category_default"),
-    (["instant pot", "pressure cooker", "crock pot", "slow cooker"], "cylinder", (33, 33, 33), "#1f2937", "category_default"),
-    (["air fryer", "airfryer"], "box", (32, 30, 36), "#111827", "category_default"),
-    (["toaster oven"], "box", (45, 30, 25), "#e5e7eb", "category_default"),
-    (["toaster"], "box", (30, 18, 22), "#94a3b8", "category_default"),
-    (["microwave"], "box", (50, 40, 30), "#111827", "category_default"),
-    (["coffee maker", "coffeemaker", "keurig", "nespresso"], "box", (25, 22, 35), "#1f2937", "category_default"),
-    (["kettle", "electric kettle"], "compound", (22, 18, 26), "#334155", "category_default"),
-    # Laundry
-    (["washer", "washing machine", "speed queen", "front load", "top load"], "box", (68, 70, 108), "#e5e7eb", "known_model"),
-    (["dryer"], "box", (68, 70, 108), "#e5e7eb", "known_model"),
+    (["kitchenaid", "artisan", "stand mixer", "professional 600"], "compound", (35, 22, 36), "#c62828", "known_model", {"head": "tilt"}),
+    (["blender", "vitamix", "ninja blender", "nutribullet"], "compound", (18, 18, 42), "#334155", "category_default", {"head": "cylinder", "head_ratio": 0.4}),
+    (["instant pot", "pressure cooker", "crock pot", "slow cooker"], "cylinder", (33, 33, 33), "#1f2937", "category_default", {}),
+    (["air fryer", "airfryer"], "appliance", (32, 30, 36), "#111827", "category_default", {"door": "circle", "door_size": 0.55}),
+    (["toaster oven"], "appliance", (45, 30, 25), "#e5e7eb", "category_default", {"door": "rect", "door_size": 0.8}),
+    (["toaster"], "box", (30, 18, 22), "#94a3b8", "category_default", {}),
+    (["microwave"], "appliance", (50, 40, 30), "#111827", "category_default", {"door": "rect", "door_size": 0.85}),
+    (["coffee maker", "coffeemaker", "keurig", "nespresso"], "compound", (25, 22, 35), "#1f2937", "category_default", {"head": "box", "head_ratio": 0.35}),
+    (["kettle", "electric kettle"], "compound", (22, 18, 26), "#334155", "category_default", {"head": "cylinder", "head_ratio": 0.5}),
+    # Laundry (front-facing round door!)
+    (["washer", "washing machine", "speed queen", "front load", "top load"], "appliance", (68, 70, 108), "#e5e7eb", "known_model", {"door": "circle", "door_size": 0.65}),
+    (["dryer"], "appliance", (68, 70, 108), "#e5e7eb", "known_model", {"door": "circle", "door_size": 0.65}),
+    (["dishwasher"], "appliance", (60, 60, 85), "#e5e7eb", "known_model", {"door": "rect", "door_size": 0.9}),
     # Refrigeration
-    (["fridge", "refrigerator", "mini fridge"], "box", (60, 60, 150), "#e5e7eb", "category_default"),
-    (["freezer", "chest freezer"], "box", (90, 60, 90), "#e5e7eb", "category_default"),
+    (["fridge", "refrigerator", "mini fridge"], "appliance", (60, 60, 150), "#e5e7eb", "category_default", {"door": "rect", "door_size": 0.9, "handle": True}),
+    (["freezer", "chest freezer"], "appliance", (90, 60, 90), "#e5e7eb", "category_default", {"door": "rect", "door_size": 0.85}),
     # Entertainment
-    (["tv", "television", "monitor"], "box", (100, 12, 60), "#111827", "category_default"),
-    (["speaker", "soundbar"], "box", (80, 12, 10), "#111827", "category_default"),
-    # Furniture
-    (["chair", "dining chair", "office chair"], "box", (50, 50, 90), "#8b5a2b", "category_default"),
-    (["sofa", "couch", "loveseat"], "box", (200, 90, 90), "#8b5a2b", "category_default"),
-    (["table", "dining table", "coffee table"], "box", (120, 80, 75), "#8b5a2b", "category_default"),
-    (["bed frame", "mattress", "twin bed", "queen bed"], "box", (140, 200, 30), "#8b5a2b", "category_default"),
-    (["bookcase", "shelf", "billy"], "box", (80, 30, 200), "#8b5a2b", "category_default"),
-    (["stool"], "cylinder", (35, 35, 65), "#8b5a2b", "category_default"),
+    (["tv", "television", "monitor"], "appliance", (100, 12, 60), "#111827", "category_default", {"door": "rect", "door_size": 0.92, "screen": True}),
+    (["speaker", "soundbar"], "appliance", (80, 12, 10), "#111827", "category_default", {"door": "rect", "door_size": 0.9, "screen": True}),
+    (["xbox", "playstation", "ps5", "ps4"], "box", (30, 26, 8), "#111827", "known_model", {}),
+    # Furniture — compound = seat + back
+    (["office chair", "gaming chair"], "compound", (55, 55, 110), "#334155", "category_default", {"head": "box", "head_ratio": 0.55}),
+    (["dining chair"], "compound", (45, 45, 95), "#8b5a2b", "category_default", {"head": "box", "head_ratio": 0.55}),
+    (["chair"], "compound", (50, 50, 90), "#8b5a2b", "category_default", {"head": "box", "head_ratio": 0.55}),
+    (["sofa", "couch", "loveseat"], "compound", (200, 90, 90), "#8b5a2b", "category_default", {"head": "box", "head_ratio": 0.45}),
+    (["table", "dining table", "coffee table"], "compound", (120, 80, 75), "#8b5a2b", "category_default", {"head": "box", "head_ratio": 0.85, "head_at": "top"}),
+    (["bed frame", "mattress", "twin bed", "queen bed"], "box", (140, 200, 30), "#8b5a2b", "category_default", {}),
+    (["bookcase", "shelf", "billy"], "appliance", (80, 30, 200), "#8b5a2b", "category_default", {"door": "grid", "door_size": 0.9}),
+    (["stool"], "cylinder", (35, 35, 65), "#8b5a2b", "category_default", {}),
     # Small items
-    (["lamp", "table lamp", "floor lamp"], "compound", (25, 25, 55), "#eab308", "category_default"),
-    (["book", "textbook"], "box", (18, 3, 24), "#8b5a2b", "category_default"),
-    (["backpack", "bag", "suitcase"], "box", (45, 25, 55), "#334155", "category_default"),
-    (["shoe", "sneaker", "boot"], "box", (30, 12, 12), "#334155", "category_default"),
-    (["bicycle", "bike"], "box", (170, 25, 100), "#334155", "known_model"),
-    (["ball", "soccer ball", "basketball"], "sphere", (22, 22, 22), "#f59e0b", "known_model"),
+    (["lamp", "table lamp", "floor lamp"], "compound", (25, 25, 55), "#eab308", "category_default", {"head": "cone", "head_ratio": 0.45}),
+    (["book", "textbook"], "box", (18, 3, 24), "#8b5a2b", "category_default", {}),
+    (["backpack", "bag", "suitcase"], "box", (45, 25, 55), "#334155", "category_default", {}),
+    (["shoe", "sneaker", "boot"], "box", (30, 12, 12), "#334155", "category_default", {}),
+    (["bicycle", "bike"], "compound", (170, 25, 100), "#334155", "known_model", {"head": "wheel"}),
+    (["ball", "soccer ball", "basketball"], "sphere", (22, 22, 22), "#f59e0b", "known_model", {}),
+    # Musical
+    (["guitar", "acoustic guitar"], "compound", (100, 12, 40), "#8b5a2b", "category_default", {"head": "box", "head_ratio": 0.15, "head_at": "end"}),
+    (["drum", "snare drum"], "cylinder", (35, 35, 30), "#8b5a2b", "category_default", {}),
 ]
 
 _CATEGORY_DEFAULTS = {
-    "appliances": ("box", (40, 35, 40), "#94a3b8"),
-    "electronics": ("box", (30, 20, 15), "#111827"),
-    "furniture": ("box", (100, 60, 80), "#8b5a2b"),
-    "kitchen": ("box", (30, 25, 25), "#94a3b8"),
-    "kitchenware": ("box", (30, 25, 25), "#94a3b8"),
-    "clothing": ("box", (30, 8, 30), "#334155"),
-    "clothes": ("box", (30, 8, 30), "#334155"),
-    "shoes": ("box", (30, 12, 12), "#334155"),
-    "books": ("box", (18, 3, 24), "#8b5a2b"),
-    "toys": ("box", (25, 15, 20), "#f59e0b"),
-    "tools": ("box", (30, 10, 10), "#334155"),
-    "bedding": ("box", (60, 20, 60), "#94a3b8"),
-    "linens": ("box", (60, 20, 60), "#94a3b8"),
-    "medical": ("box", (25, 15, 20), "#e5e7eb"),
+    "appliances": ("appliance", (40, 35, 40), "#94a3b8", {"door": "rect", "door_size": 0.7}),
+    "electronics": ("box", (30, 20, 15), "#111827", {}),
+    "furniture": ("compound", (100, 60, 80), "#8b5a2b", {"head": "box", "head_ratio": 0.5}),
+    "kitchen": ("box", (30, 25, 25), "#94a3b8", {}),
+    "kitchenware": ("box", (30, 25, 25), "#94a3b8", {}),
+    "clothing": ("box", (30, 8, 30), "#334155", {}),
+    "clothes": ("box", (30, 8, 30), "#334155", {}),
+    "shoes": ("box", (30, 12, 12), "#334155", {}),
+    "books": ("box", (18, 3, 24), "#8b5a2b", {}),
+    "toys": ("box", (25, 15, 20), "#f59e0b", {}),
+    "tools": ("box", (30, 10, 10), "#334155", {}),
+    "bedding": ("box", (60, 20, 60), "#94a3b8", {}),
+    "linens": ("box", (60, 20, 60), "#94a3b8", {}),
+    "medical": ("box", (25, 15, 20), "#e5e7eb", {}),
 }
 
 
 def _local_derive_shape3d(item: dict) -> dict:
     """iter 261 — 100 % local shape derivation. No AI call, no external
     network. Match the item name against a curated model list, fall back
-    to category defaults, then to a generic 30×30×30 grey box. This
-    replaces the Gemini call for shape3d so the flow never hits the
-    Cloudflare 100 s wall.
+    to category defaults, then to a generic 30×30×30 grey box.
+
+    iter 262 — Richer shape variety. New `appliance` kind (box body +
+    circular / rectangular front-door decal — washers, microwaves,
+    fridges, TVs) and expanded compound options via the `extras` dict
+    (head shape: cylinder|box|cone|wheel|tilt). The frontend renderer
+    reads `secondary.shape` and `secondary.decal` to draw the right
+    geometry without any AI in the loop.
     """
     name = (item.get("name") or "").lower()
     cat = (item.get("category") or "").lower().strip()
@@ -1013,28 +1025,31 @@ def _local_derive_shape3d(item: dict) -> dict:
     caller_W = float(dims_cm.get("width") or 0)
     caller_H = float(dims_cm.get("height") or 0)
 
-    kind = None; L = W = H = 0.0; color = "#94a3b8"; source = "category_default"
+    kind = None; L = W = H = 0.0; color = "#94a3b8"; source = "category_default"; extras: dict = {}
     # Model-name match first (highest confidence)
-    for keywords, k, dims, c, src in _LOCAL_SHAPE_MODELS:
+    for keywords, k, dims, c, src, ex in _LOCAL_SHAPE_MODELS:
         if any(kw in name for kw in keywords):
             kind = k
             L, W, H = float(dims[0]), float(dims[1]), float(dims[2])
             color = c
             source = src
+            extras = ex
             break
     # Category fallback
     if kind is None and cat in _CATEGORY_DEFAULTS:
-        k, dims, c = _CATEGORY_DEFAULTS[cat]
+        k, dims, c, ex = _CATEGORY_DEFAULTS[cat]
         kind = k
         L, W, H = float(dims[0]), float(dims[1]), float(dims[2])
         color = c
         source = "category_default"
+        extras = ex
     # Absolute fallback
     if kind is None:
         kind = "box"
         L, W, H = 30.0, 30.0, 30.0
         color = "#94a3b8"
         source = "category_default"
+        extras = {}
 
     # Caller-supplied dims always win — user knows better than the LUT.
     if caller_L > 0: L = caller_L
@@ -1050,14 +1065,31 @@ def _local_derive_shape3d(item: dict) -> dict:
         "size_source": source,
         "derived_at": datetime.now(timezone.utc).isoformat(),
     }
-    # Compound items get a slightly narrower head for the visualiser.
+    # Compound: pack a `secondary` block the visualiser can render as a
+    # narrower stacked head (cylinder / box / cone / wheel) or a tilted
+    # motor head for mixers.
     if kind == "compound":
+        head = extras.get("head", "cylinder")
+        ratio = float(extras.get("head_ratio", 0.35))
+        head_at = extras.get("head_at", "top")   # top | end
         shape3d["secondary"] = {
-            "L_cm": max(6.0, L * 0.55),
-            "W_cm": max(6.0, W * 0.55),
-            "H_cm": max(4.0, H * 0.35),
-            "y_offset_cm": H * 0.05,
-            "shape": "cylinder",
+            "L_cm": max(4.0, L * (1.0 if head == "box" else 0.6)),
+            "W_cm": max(4.0, W * (1.0 if head == "box" else 0.6)),
+            "H_cm": max(3.0, H * ratio),
+            "y_offset_cm": 0.0,
+            "shape": head,           # cylinder|box|cone|wheel|tilt
+            "position": head_at,      # top|end (used by renderer)
+        }
+    # Appliance: pack a `door` decal descriptor on `secondary` so the 3D
+    # renderer draws a matching circle / rectangle / grid on the +X face.
+    if kind == "appliance":
+        door = extras.get("door", "rect")
+        size = float(extras.get("door_size", 0.7))
+        shape3d["secondary"] = {
+            "decal": door,             # circle|rect|grid
+            "decal_size": size,        # 0..1 relative to face
+            "handle": bool(extras.get("handle", False)),
+            "screen": bool(extras.get("screen", False)),
         }
     return shape3d
 
@@ -1571,6 +1603,195 @@ async def shipment_manifest_pdf(shipment_id: str, group: Optional[str] = None, c
         raise HTTPException(status_code=500, detail="PDF generation failed")
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (heading or "manifest"))[:60]
     filename = f"manifest_{safe_name}_{shipment_id[:8]}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# iter 262 — Printable 3-view container schematic PDF. Renders the top,
+# side, and front elevations of every packing unit + pallet + loose item
+# with shape3d, at a fixed scale, on a single A3 landscape page. Useful
+# for loading-plan handoffs where packers don't have the interactive
+# visualiser in front of them.
+@router.get("/shipments/{shipment_id}/schematic.pdf")
+async def shipment_schematic_pdf(shipment_id: str, current_user: dict = Depends(require_admin)):
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    cont = s.get("container_dims_cm") or {}
+    cont_L = float(cont.get("length_cm") or 1203)
+    cont_W = float(cont.get("width_cm") or 235)
+    cont_H = float(cont.get("height_cm") or 239)
+
+    # Collect every visible object (packing units + pallets + loose items
+    # with shape3d) with its bounding box + shape descriptor for the SVG
+    # views. We ignore items nested inside a box (those are represented
+    # by their parent box).
+    objs: list[dict] = []
+    for u in (s.get("packing_units") or []):
+        L = float(u.get("L_cm") or u.get("length_cm") or 40)
+        W = float(u.get("W_cm") or u.get("width_cm") or 40)
+        H = float(u.get("H_cm") or u.get("height_cm") or 40)
+        x = float(u.get("floor_x_cm") or 0)
+        y = float(u.get("floor_y_cm") or 0)
+        objs.append({
+            "label": u.get("name") or "Box",
+            "x": x, "y": y, "z": 0.0,
+            "L": L, "W": W, "H": H,
+            "shape": u.get("shape") or "box",
+            "color": u.get("color") or "#94a3b8",
+            "parent_id": u.get("parent_id"),
+        })
+    # Resolve stack towers: children inherit parent (x,y) and stack on Z.
+    by_id = {u.get("id"): u for u in (s.get("packing_units") or [])}
+    for i, o in enumerate(objs):
+        pu = list(s.get("packing_units") or [])[i]
+        pid = pu.get("parent_id")
+        z = 0.0
+        depth = 0
+        while pid and by_id.get(pid) and depth < 20:
+            parent = by_id[pid]
+            z += float(parent.get("H_cm") or parent.get("height_cm") or 40)
+            o["x"] = float(parent.get("floor_x_cm") or 0)
+            o["y"] = float(parent.get("floor_y_cm") or 0)
+            pid = parent.get("parent_id")
+            depth += 1
+        o["z"] = z
+    for p in (s.get("pallets") or []):
+        objs.append({
+            "label": p.get("label") or "Pallet",
+            "x": float(p.get("x_cm") or 0),
+            "y": float(p.get("y_cm") or 0),
+            "z": 0.0,
+            "L": float(p.get("length_cm") or 120),
+            "W": float(p.get("width_cm") or 100),
+            "H": float(p.get("height_cm") or 15),
+            "shape": "box",
+            "color": p.get("color") or "#b38b5d",
+            "parent_id": None,
+        })
+    for it in (s.get("items") or []):
+        if it.get("pallet_id") or it.get("packing_unit_id"):
+            continue  # nested in a container object above
+        sh = it.get("shape3d")
+        if not sh:
+            continue
+        d = it.get("dims_cm") or sh.get("primary") or {}
+        L = float(d.get("length") or (sh.get("primary") or {}).get("L_cm") or 30)
+        W = float(d.get("width") or (sh.get("primary") or {}).get("W_cm") or 30)
+        H = float(d.get("height") or (sh.get("primary") or {}).get("H_cm") or 30)
+        objs.append({
+            "label": it.get("name") or "Item",
+            "x": float(it.get("floor_x_cm") or 0),
+            "y": float(it.get("floor_y_cm") or 0),
+            "z": 0.0,
+            "L": L, "W": W, "H": H,
+            "shape": sh.get("kind") or "box",
+            "color": sh.get("primary_color") or "#94a3b8",
+            "parent_id": None,
+        })
+
+    def _svg_rect(obj: dict, ax1: str, ax2: str, len1: str, len2: str, w_cm: float, h_cm: float, scale: float) -> str:
+        # Draw one object in an orthographic view (ax1 on X, ax2 on Y).
+        x = obj[ax1] * scale
+        y = (h_cm - obj[ax2] - obj[len2]) * scale   # flip so origin is bottom-left
+        w = obj[len1] * scale
+        h = obj[len2] * scale
+        label = (obj["label"] or "")[:22]
+        # Circles only in TOP view for cylinders/spheres
+        if obj["shape"] in ("cylinder", "sphere") and ax1 == "x" and ax2 == "y":
+            r = min(w, h) / 2
+            cx = x + w / 2; cy = y + h / 2
+            return (
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" '
+                f'fill="{obj["color"]}" fill-opacity="0.6" stroke="#1f2937" stroke-width="0.6" />'
+                f'<text x="{cx:.1f}" y="{cy:.1f}" font-size="6" text-anchor="middle" fill="#111827">{label}</text>'
+            )
+        return (
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" '
+            f'fill="{obj["color"]}" fill-opacity="0.55" stroke="#1f2937" stroke-width="0.6" />'
+            f'<text x="{x + 2:.1f}" y="{y + 8:.1f}" font-size="6" fill="#111827">{label}</text>'
+        )
+
+    def _make_view(title: str, ax1: str, ax2: str, len1: str, len2: str, w_cm: float, h_cm: float, view_w_mm: float) -> str:
+        # cm → mm at chosen scale
+        scale_mm = view_w_mm / w_cm  # mm per cm
+        scale = scale_mm  # 1 svg unit = 1 mm
+        view_h_mm = h_cm * scale
+        rects = []
+        # Container outline
+        rects.append(
+            f'<rect x="0" y="0" width="{w_cm * scale:.1f}" height="{h_cm * scale:.1f}" '
+            f'fill="#f8fafc" stroke="#334155" stroke-width="1" />'
+        )
+        # Ruler ticks every 100 cm along the horizontal axis
+        for tick in range(0, int(w_cm) + 1, 100):
+            xr = tick * scale
+            rects.append(
+                f'<line x1="{xr:.1f}" y1="0" x2="{xr:.1f}" y2="4" stroke="#94a3b8" stroke-width="0.4" />'
+                f'<text x="{xr:.1f}" y="10" font-size="4" text-anchor="middle" fill="#64748b">{tick}</text>'
+            )
+        # Objects sorted by z so lower stacked items draw first
+        for o in sorted(objs, key=lambda o: (o.get("z", 0), o["y"], o["x"])):
+            # z-offset only affects the elevation views
+            oo = dict(o)
+            if ax2 == "z":
+                oo["z"] = o["z"]
+            rects.append(_svg_rect(oo, ax1, ax2, len1, len2, w_cm, h_cm, scale))
+        return (
+            f'<div class="view">'
+            f'<div class="view-title">{title} — 1 : {int(1000 / scale_mm)} scale</div>'
+            f'<svg viewBox="0 0 {w_cm * scale:.0f} {view_h_mm:.0f}" width="{view_w_mm:.0f}mm" height="{view_h_mm:.0f}mm" xmlns="http://www.w3.org/2000/svg">'
+            f'{"".join(rects)}'
+            f'</svg>'
+            f'</div>'
+        )
+
+    # Views: Top (X-Y), Side elevation from long side (X-Z), Front elevation from door (Y-Z).
+    view_w = 240  # mm — fits A3 landscape stacked
+    top = _make_view("Top (Plan)", "x", "y", "L", "W", cont_L, cont_W, view_w)
+    side = _make_view("Side elevation", "x", "z", "L", "H", cont_L, cont_H, view_w)
+    front = _make_view("Front (Door)", "y", "z", "W", "H", cont_W, cont_H, view_w * 0.4)
+
+    ship_name = s.get("name") or "Shipment"
+    generated = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+    html = f"""<!doctype html>
+<html><head><meta charset='utf-8'><style>
+  @page {{ size: A3 landscape; margin: 10mm; }}
+  body {{ font-family: Helvetica, Arial, sans-serif; color: #0f172a; }}
+  h1 {{ font-size: 14pt; margin: 0 0 4mm 0; }}
+  .meta {{ font-size: 9pt; color: #475569; margin-bottom: 6mm; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr; grid-gap: 6mm; }}
+  .view {{ break-inside: avoid; }}
+  .view-title {{ font-size: 10pt; font-weight: 600; margin-bottom: 2mm; color: #1e293b; }}
+  svg {{ border: 1px solid #cbd5e1; background: white; }}
+  .legend {{ margin-top: 4mm; font-size: 8pt; color: #475569; }}
+</style></head><body>
+  <h1>{ship_name} — Container schematic</h1>
+  <div class='meta'>Generated {generated} · Container {int(cont_L)} × {int(cont_W)} × {int(cont_H)} cm · {len(objs)} objects</div>
+  <div class='grid'>
+    {top}
+    <div style='display:flex; flex-direction:column; gap:6mm;'>
+      {side}
+      {front}
+    </div>
+  </div>
+  <p class='legend'>Top view shows footprint on the container floor. Side and Front elevations show height and stacking. Ruler ticks every 100 cm. Circles denote cylindrical / spherical items; rectangles denote boxes, appliances and compound items.</p>
+</body></html>"""
+
+    from weasyprint import HTML
+    from starlette.responses import StreamingResponse
+    import io
+    try:
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"Schematic PDF failed: {e}")
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", (ship_name or "schematic"))[:60]
+    filename = f"schematic_{safe_name}_{shipment_id[:8]}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",
