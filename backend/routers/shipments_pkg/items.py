@@ -1030,10 +1030,23 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
             session_id=f"shape3d_{item_id}_{uuid.uuid4().hex[:6]}",
             system_message=SYS,
         ).with_model("gemini", "gemini-3-flash-preview")
-        raw = await chat.send_message(UserMessage(
-            text="Return the JSON per the schema. One item, best fit.",
-            file_contents=[FileContentWithMimeType(file_path=tmp, mime_type=mime)],
-        ))
+        # iter 260 — Cloudflare drops connections at ~100s with a 520
+        # ("origin returned invalid response"), which is exactly what
+        # packers see on the "Retry" pill. Bound the AI call at 55s so
+        # we ALWAYS return a proper 504/502 with an actionable message
+        # before Cloudflare kills the socket. The client already knows
+        # how to handle these (shows the Retry pill; user taps again).
+        import asyncio as _asyncio
+        try:
+            raw = await _asyncio.wait_for(
+                chat.send_message(UserMessage(
+                    text="Return the JSON per the schema. One item, best fit.",
+                    file_contents=[FileContentWithMimeType(file_path=tmp, mime_type=mime)],
+                )),
+                timeout=55,
+            )
+        except _asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="AI took too long — tap Retry to try again")
     finally:
         try: _os.remove(tmp)
         except Exception: pass
