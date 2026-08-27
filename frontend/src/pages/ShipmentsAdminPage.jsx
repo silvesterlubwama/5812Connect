@@ -1383,6 +1383,15 @@ export default function ShipmentsAdminPage() {
               await refreshDetail();
             } catch (e) { toast.error(e.response?.data?.detail || 'Rotate failed'); }
           }}
+          onStack={async (childId, parentId) => {
+            // iter 259 — stack one packing unit on top of another via the
+            // existing PUT /packing-units/{uid} { parent_id } contract.
+            try {
+              await api.put(`/shipments/${selectedId}/packing-units/${childId}`, { parent_id: parentId });
+              toast.success(parentId ? 'Box stacked' : 'Box un-stacked');
+              await refreshDetail();
+            } catch (e) { toast.error(e.response?.data?.detail || 'Stack failed'); }
+          }}
         />
         </ErrorBoundary>
         </div>

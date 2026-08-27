@@ -62,12 +62,14 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
   items.forEach(it => {
     const acquired = Number(it.qty_acquired || 0);
     if (acquired <= 0) return;
-    // iter 252 — loose items (no pallet/packing_unit) render individually so
-    // each one is draggable on the floor plan. Every loose item becomes its
-    // own group keyed by `_loose:<item_id>` — this also lets us honor a
-    // per-item `floor_x_cm/floor_y_cm` so packers can lay them out anywhere
-    // on the container floor.
-    const key = it.pallet_id || it.packing_unit_id || `_loose:${it.id}`;
+    // iter 259 — per user request the visualiser now shows BOXES / PALLETS
+    // only. Individual items that aren't assigned to a packing_unit or
+    // pallet are no longer drawn on the floor plan — packers care about
+    // where the box lives, not each item inside it. Un-boxed loose items
+    // still count toward container weight/volume totals via the item list
+    // above.
+    const key = it.pallet_id || it.packing_unit_id;
+    if (!key) return;
     if (!groups.has(key)) {
       groups.set(key, { id: key, items: [], total_weight: 0, total_volume: 0, loose_item: null });
     }
@@ -77,7 +79,6 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     const d = it.dims_cm || {};
     const vol = (Number(d.length) || 0) * (Number(d.width) || 0) * (Number(d.height) || 0) * acquired;
     g.total_volume += vol;
-    if (key.startsWith('_loose:')) g.loose_item = it;
   });
   // Ensure every explicit pallet/unit appears even if empty (so users see them
   // on the floor plan before assigning items)
@@ -309,6 +310,35 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, fullscree
               y={PAD + (OY + py + b.width / 2) * scale + Math.max(10, scale * 9)}
               fontSize={Math.max(7, scale * 6)} fill="#fff" textAnchor="middle" opacity="0.9"
             >{b.weight_kg} kg</text>
+            {/* iter 259 — rotate handle. Small circle in the top-right
+                corner of every box. Click rotates 90° (same action as
+                double-clicking the box) so packers see a discoverable
+                affordance instead of guessing at the gesture. */}
+            {editable && b.draggable && onPalletRotate && (
+              <g
+                onPointerDown={(e) => { e.stopPropagation(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPalletRotate(b.id, (rot + 90) % 360);
+                }}
+                style={{ cursor: 'pointer' }}
+                data-testid={`viz-pallet-rotate-${b.id}`}
+              >
+                <circle
+                  cx={PAD + (OX + px + b.length) * scale - 8}
+                  cy={PAD + (OY + py) * scale + 8}
+                  r="8"
+                  fill="#ffffff" fillOpacity="0.9"
+                  stroke="#1e293b" strokeWidth="1"
+                />
+                <text
+                  x={PAD + (OX + px + b.length) * scale - 8}
+                  y={PAD + (OY + py) * scale + 8}
+                  fontSize="10" fill="#1e293b" textAnchor="middle" dominantBaseline="central"
+                  style={{ pointerEvents: 'none', fontFamily: 'sans-serif' }}
+                >↻</text>
+              </g>
+            )}
           </g>
         );
       })}
@@ -518,9 +548,11 @@ const ThreeCanvas = React.lazy(async () => {
 // ───────────────────────────────────────────────────────────────
 // Public component
 // ───────────────────────────────────────────────────────────────
-export default function ContainerVisualizer({ items = [], pallets = [], packing_units = [], container, editable = false, onPalletMove, onPalletRotate, defaultMode = '2d' }) {
+export default function ContainerVisualizer({ items = [], pallets = [], packing_units = [], container, editable = false, onPalletMove, onPalletRotate, onStack, defaultMode = '2d' }) {
   const [mode, setMode] = useState(defaultMode);
   const [fullscreen, setFullscreen] = useState(false);
+  const [stackChild, setStackChild] = useState('');
+  const [stackParent, setStackParent] = useState('');
   const layout = useMemo(() => computeLayout(items, pallets, container, packing_units), [items, pallets, container, packing_units]);
 
   // iter 254 — Esc closes fullscreen; body scroll is locked while open.
@@ -587,6 +619,40 @@ export default function ContainerVisualizer({ items = [], pallets = [], packing_
         </div>
 
         <div className={fullscreen ? 'flex-1 overflow-auto' : ''}>
+          {/* iter 259 — Stack-on picker (packers can put one box on top of
+              another). Only shown in fullscreen edit mode to keep the
+              default view uncluttered. Uses the existing
+              PUT /packing-units/{uid} { parent_id } contract. */}
+          {editable && fullscreen && onStack && packing_units.length >= 2 && (
+            <div className="flex items-center gap-2 flex-wrap text-xs mb-2 p-2 rounded border bg-muted/30" data-testid="ship-viz-stack-picker">
+              <span className="font-semibold text-muted-foreground">Stack</span>
+              <select className="border rounded px-1.5 py-1 bg-background" value={stackChild} onChange={e => setStackChild(e.target.value)} data-testid="ship-viz-stack-child">
+                <option value="">— pick a box —</option>
+                {packing_units.map(u => <option key={u.id} value={u.id}>{u.name || u.id.slice(-6)}</option>)}
+              </select>
+              <span className="text-muted-foreground">on top of</span>
+              <select className="border rounded px-1.5 py-1 bg-background" value={stackParent} onChange={e => setStackParent(e.target.value)} data-testid="ship-viz-stack-parent">
+                <option value="">— pick a parent —</option>
+                {packing_units.filter(u => u.id !== stackChild).map(u => <option key={u.id} value={u.id}>{u.name || u.id.slice(-6)}</option>)}
+              </select>
+              <button
+                className="px-2 py-1 rounded bg-primary text-primary-foreground disabled:opacity-40"
+                disabled={!stackChild || !stackParent || stackChild === stackParent}
+                onClick={async () => {
+                  await onStack(stackChild, stackParent);
+                  setStackChild(''); setStackParent('');
+                }}
+                data-testid="ship-viz-stack-apply"
+              >Stack</button>
+              <button
+                className="px-2 py-1 rounded border hover:bg-muted"
+                disabled={!stackChild}
+                onClick={async () => { await onStack(stackChild, null); setStackChild(''); setStackParent(''); }}
+                title="Un-stack — put the box back on the floor"
+                data-testid="ship-viz-unstack"
+              >Un-stack</button>
+            </div>
+          )}
           {mode === '2d' && <FloorPlan2D layout={layout} editable={editable} onPalletMove={onPalletMove} onPalletRotate={onPalletRotate} fullscreen={fullscreen} />}
           {mode === '2d' && editable && (
             <p className="text-[10px] text-muted-foreground text-center mt-1">
