@@ -123,14 +123,30 @@ async def admin_scan_item(
                 with _os.fdopen(fd, "wb") as fh:
                     fh.write(image_bytes_list[0])
                 sys_msg = (
-                    "You identify physical items from photos for a charity shipment inventory. "
-                    "Items can be ANYTHING a humanitarian container carries — books, clothing, "
-                    "shoes, food, toys, medical supplies, electronics, household goods, furniture, "
-                    "tools, construction, school supplies, agriculture, sports, toiletries, baby "
-                    "gear, bicycles. Read any barcodes, ISBNs, titles, or text on the item. "
-                    "Cross-reference Amazon/Walmart/eBay/Target/Home Depot/Costco/IKEA listings "
-                    "for accurate dimensions, weight and USD retail price. "
-                    "Output STRICT JSON: {\"name\":\"\",\"category\":\"\",\"author\":\"\",\"publisher\":\"\",\"isbn\":\"\",\"upc\":\"\",\"weight_kg\":0.5,\"dims_cm\":{\"length\":20,\"width\":13,\"height\":5},\"value_usd\":5.0,\"source\":\"\",\"confidence\":\"high|medium|low\"}. "
+                    "You identify physical items from photos for a charity DONATION shipment "
+                    "inventory. Items can be ANYTHING a humanitarian container carries — books, "
+                    "clothing, shoes, food, toys, medical supplies, electronics, household goods, "
+                    "furniture, tools, construction, school supplies, agriculture, sports, "
+                    "toiletries, baby gear, bicycles. Read any barcodes, ISBNs, titles, or text "
+                    "on the item.\n\n"
+                    "PRICING RULE — VERY IMPORTANT:\n"
+                    "Almost every item in this container is USED / SECONDHAND (thrift-store, "
+                    "gently-used donation). Look at the photo for visible wear, dust, scuffs, "
+                    "faded colors, dated styling, unboxed / no-packaging state, folds, dirt — "
+                    "any of these mean the item is USED. Only classify as `new` if the item is "
+                    "factory-sealed, in original retail packaging, or a clearly new-with-tags "
+                    "clothing item. `value_usd` MUST be the USED / secondhand replacement value "
+                    "(what a thrift store or eBay used listing would charge), NOT the new-retail "
+                    "MSRP. Typical guidance:\n"
+                    "  • Used clothing: $2-8\n"
+                    "  • Used shoes: $4-12\n"
+                    "  • Used books: $1-4\n"
+                    "  • Used toys: $2-8\n"
+                    "  • Used small appliances: $10-40 (only $100+ if pristine + brand-name)\n"
+                    "  • Used electronics: 15-25% of new MSRP\n"
+                    "  • Used furniture: $15-80\n"
+                    "  • Only for factory-sealed items may you use full retail.\n\n"
+                    "Output STRICT JSON: {\"name\":\"\",\"category\":\"\",\"author\":\"\",\"publisher\":\"\",\"isbn\":\"\",\"upc\":\"\",\"weight_kg\":0.5,\"dims_cm\":{\"length\":20,\"width\":13,\"height\":5},\"value_usd\":5.0,\"condition\":\"used|new|like-new|worn\",\"source\":\"\",\"confidence\":\"high|medium|low\"}. "
                     "No markdown fences."
                 )
                 chat = LlmChat(
@@ -151,16 +167,26 @@ async def admin_scan_item(
                     s_text = s_text[first:last + 1]
                 import json as _json
                 parsed = _json.loads(s_text)
+                _ai_name = parsed.get("name") or ""
+                _ai_cat = parsed.get("category") or "Other"
                 enriched = {
-                    "name": parsed.get("name") or "",
-                    "category": parsed.get("category") or "Other",
+                    "name": _ai_name,
+                    "category": _ai_cat,
                     "author": parsed.get("author") or "",
                     "publisher": parsed.get("publisher") or "",
                     "isbn": parsed.get("isbn") or "",
                     "upc": parsed.get("upc") or "",
                     "weight_kg": float(parsed.get("weight_kg") or 0.5),
                     "dims_cm": parsed.get("dims_cm") or {"length": 20, "width": 13, "height": 5},
-                    "value_usd": float(parsed.get("value_usd") or 5.0),
+                    # iter 258 — route the AI-returned value through the
+                    # `_estimate_value_usd` used-goods safety cap so admin
+                    # AI-Scan can't sneak new-retail MSRPs onto the manifest.
+                    "value_usd": _estimate_value_usd(_ai_name, _ai_cat, parsed.get("value_usd")),
+                    # iter 258 — persist AI-detected condition so downstream
+                    # customs paperwork (USED vs NEW) and value logic use
+                    # the correct classification instead of defaulting to
+                    # new-retail pricing on obviously used donations.
+                    "condition": (parsed.get("condition") or "used").lower(),
                     "ai_identified": True,
                     "ai_confidence": parsed.get("confidence") or "low",
                     "source": "ai_vision",
@@ -335,14 +361,54 @@ _LOW_AVG_WEIGHT_KG = {
 def _estimate_value_usd(name: str, category: str, provided: Optional[float]) -> float:
     """Use the AI-supplied value if any, otherwise map to `_LOW_AVG_VALUE_USD`
     on the coarsest bucket that matches the item's name or category. Falls
-    back to a very safe $5.00 so no line ever ships with $0 value."""
+    back to a very safe $5.00 so no line ever ships with $0 value.
+
+    iter 258 — AI safety cap. Even when the caller asked for a USED price,
+    Gemini sometimes returns new-retail MSRP for thrift-store categories
+    (clothing / books / toys / shoes / kitchen / household / linen / baby).
+    We cap those categories at 3× the low-average bucket so a $180 "new
+    retail" jacket doesn't sneak onto a donation manifest at $180. Regulated
+    categories (vehicles / electronics / tools / furniture) are left alone
+    because their spread is legitimately wide.
+
+    iter 258b — Bucket resolution is category-first (exact / startswith) so
+    a furniture item whose name contains a thrift keyword (e.g. "Bookshelf",
+    "Kitchen table", "Toy box", "Baby stroller") isn't wrongly capped.
+    """
+    _CAPPED_CATEGORIES = ("clothing", "shoes", "book", "books", "toy", "toys",
+                          "kitchen", "household", "linen", "linens", "bedding",
+                          "baby", "school", "personal")
+    cat_norm = (category or "").strip().lower()
+    name_norm = (name or "").strip().lower()
+
+    # 1. Exact / startswith match on the item's declared category.
+    bucket_key = None
+    bucket_val = None
+    if cat_norm:
+        for k, bv in _LOW_AVG_VALUE_USD.items():
+            if cat_norm == k or cat_norm.startswith(k):
+                bucket_key = k
+                bucket_val = bv
+                break
+    # 2. Fallback: substring match on the item name.
+    if bucket_val is None:
+        for k, bv in _LOW_AVG_VALUE_USD.items():
+            if k in name_norm:
+                bucket_key = k
+                bucket_val = bv
+                break
+
     if provided and provided > 0:
-        return round(float(provided), 2)
-    key = ((category or "") + " " + (name or "")).lower()
-    for k, v in _LOW_AVG_VALUE_USD.items():
-        if k in key:
-            return v
-    return 5.0
+        v = round(float(provided), 2)
+        # Only cap when the RESOLVED bucket is a thrift-store category —
+        # not when the name merely contains a thrift word (fixes the old
+        # "Bookshelf → $15" false positive).
+        if bucket_key in _CAPPED_CATEGORIES:
+            ceiling = max(bucket_val * 3.0, 15.0)
+            if v > ceiling:
+                return round(ceiling, 2)
+        return v
+    return bucket_val if bucket_val is not None else 5.0
 
 
 def _estimate_weight_kg(name: str, category: str, provided: Optional[float]) -> float:
@@ -434,8 +500,9 @@ async def scan_boxes(
 
     # Prompt Gemini to be strict about what it returns. One JSON object per photo.
     SYS_PROMPT = (
-        "You are cataloguing photos of labeled cardboard boxes packed for a shipping container. "
-        "Each photo shows one box (occasionally more) with either:\n"
+        "You are cataloguing photos of labeled cardboard boxes packed for a shipping container "
+        "of DONATED / USED humanitarian relief goods. Each photo shows one box (occasionally more) "
+        "with either:\n"
         "  • A box number and a list of items written in marker (e.g. 'Box 12: shoes, kids clothes')\n"
         "  • A 'Personal Items' / 'Household' / 'Personal Effects' label\n"
         "  • Loose items visible with no box\n\n"
@@ -454,7 +521,15 @@ async def scan_boxes(
         "- Read handwriting carefully; if unsure, still return best guess but drop confidence to 'low'.\n"
         "- iter 255 — Personal / household boxes MUST still list every item individually (shampoo, towels, plates, ...). Do NOT collapse into one 'Personal Item' row. The customs manifest needs the individual lines.\n"
         "- For qty, use the count written on the box; default 1 if none.\n"
-        "- estimated_value_usd should be a conservative LOW-AVERAGE US retail price for that category, or null.\n"
+        "- iter 258 — PRICING RULE: every item is USED / SECONDHAND (thrift-store donation). "
+        "estimated_value_usd MUST be the secondhand replacement value (what a thrift store or "
+        "eBay used listing would charge), NOT the new-retail MSRP. Guidance:\n"
+        "    • Used clothing:  $2-8       • Used shoes: $4-12\n"
+        "    • Used books:     $1-4       • Used toys:  $2-8\n"
+        "    • Used small appliances: $10-40 (only $100+ if pristine + brand-name)\n"
+        "    • Used electronics: 15-25% of new MSRP\n"
+        "    • Used furniture: $15-80\n"
+        "  Only use full retail if the on-box label explicitly says NEW or the item is factory-sealed.\n"
         "- estimated_weight_kg is the typical per-unit weight in kilograms for that item (e.g. 0.4 for a t-shirt, 0.6 for a book, 1.5 for a kitchen appliance), or null.\n"
         "- If no box number is visible, set box_number=null."
     )

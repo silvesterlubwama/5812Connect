@@ -1,0 +1,32 @@
+{
+  "summary": "Re-verification of iter-258 USED/secondhand pricing fix after the two iteration_94 follow-ups. Updated /app/backend/tests/test_iter258_used_pricing_cap.py (26 tests, was 21): removed the xfail bookshelf test, added category-first bucket assertions and a strict regex source check on admin_scan_item's value_usd wiring. Result: 26/26 PASSED, 0 failed, 0 xfail. Both previously-flagged gaps are confirmed FIXED: (1) admin_scan_item line 184 now does `\"value_usd\": _estimate_value_usd(_ai_name, _ai_cat, parsed.get(\"value_usd\"))`; (2) _estimate_value_usd (lines 361-411) resolves the bucket category-first (exact/startswith on category, then name-substring fallback) and only caps when the RESOLVED bucket key is in _CAPPED_CATEGORIES. Verified: ('Bookshelf','furniture',200)=200.0, ('Toy box','furniture',120)=120.0, ('Kitchen table','furniture',300)=300.0, ('Baby stroller','baby',60)=15.0, ('Winter jacket','clothing',180)=15.0, ('Paperback novel','books',40)=15.0, ('Bed sheets','linens',90)=15.0, ('Bookshelf','furniture',None)=30.0, ('Nike sneakers','shoes',120)=18.0, ('Laptop','electronics',300)=300.0. Live HTTP regression on sh_1091d195ee passed: admin login OK, GET shipment 200, scan-boxes 422 without image, 404 unknown shipment, 401/403 unauth, garbage-image scan-boxes still returns full envelope (scan_run_id/results/errors/items_added/items_linked/boxes_created/boxes_matched) with no 500, scan-item 200 with name/category/value_usd. Both prompt strings still contain USED + secondhand/thrift-store wording and the value keys (value_usd / estimated_value_usd).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "admin_scan_item Google Books path (items.py:71)", "issue": "STILL OPEN (carried from iteration_94, not part of this request's scope): ISBN lookup sets value_usd from `saleInfo.listPrice.amount` (NEW retail) or a $12 default, bypassing _estimate_value_usd and the used-book $1-4 guidance. Should be `_estimate_value_usd(title, category, listPrice)`."},
+      {"endpoint": "admin_scan_item OpenFoodFacts path (items.py:94)", "issue": "STILL OPEN: hardcodes value_usd=4.0 and omits `condition`; not routed through the cap helper (harmless today since 4.0 < any ceiling, but inconsistent)."},
+      {"endpoint": "admin_scan_item fallback shape (items.py:203-207)", "issue": "STILL OPEN: the non-AI fallback dict omits the new `condition` key, so downstream consumers must handle its absence. Consider defaulting to condition='used'."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter258_used_pricing_cap.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional cleanup only: route the Google Books listPrice (items.py:71) through _estimate_value_usd and add condition='used' to the barcode + fallback enriched shapes so all four admin_scan_item return shapes are uniform."
+  ],
+  "critical_code_review_comments": [
+    "items.py is 1761 lines — well beyond the 700-line guideline; the scan/AI helpers (_estimate_value_usd, _estimate_weight_kg, admin_scan_item, scan_boxes) should move to their own module.",
+    "Bucket resolution uses `cat_norm.startswith(k)` over a dict; because 'book' precedes 'books' in _LOW_AVG_VALUE_USD both resolve to the same $3.0 value so the ordering is harmless today, but any future bucket where a shorter key is a prefix of a longer one with a different value will silently mis-resolve. Prefer longest-key-first iteration.",
+    "Cap ceiling max(low_avg*3, 15) means clothing/books/toys/linens all effectively cap at $15 — the $15 floor dominates every bucket whose low_avg is <= $5, so per-category tuning below $5 has no effect. Confirm this is intentional for books ($1-4 guidance)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter258_used_pricing_cap.py"],
+  "success_rate": {"backend": "100% (26/26 passed)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persisted. One scan-boxes and one scan-item call against sh_1091d195ee with non-decodable bytes (AI parse-error path) — no items/boxes created, revert not required.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (login POSTs `identifier` + `password`, returns access_token)",
+  "context_for_next_testing_agent": "iter-258 pricing cap is now fully verified: `pytest /app/backend/tests/test_iter258_used_pricing_cap.py -v` = 26/26 green. Only cosmetic/consistency minors remain (Google Books listPrice not capped; barcode + fallback shapes omit `condition`). No live Gemini image was ever exercised end-to-end — if a real used-item photo becomes available, POST it to /api/shipments/sh_1091d195ee/scan-item and assert the returned value_usd <= 15 for a clothing item to prove the cap end-to-end through a real model response.",
+  "rca_of_the_issue": "Previous iteration's two defects: (a) admin_scan_item built `enriched` straight from Gemini JSON so the only capped call site was the box-scan loop; (b) the cap's bucket lookup was a substring match over 'category + name' with dict ordering putting 'book'/'kitchen'/'toy'/'baby' before 'furniture', producing false-positive $15 caps on legitimate furniture. Both are resolved — the cap is now applied at the admin AI-Scan call site, and the bucket is resolved from the declared category first with the cap gated on the resolved bucket key rather than raw substring presence."
+}

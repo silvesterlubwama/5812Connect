@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only verification of iter-258 USED/secondhand pricing fix in /app/backend/routers/shipments_pkg/items.py. Created /app/backend/tests/test_iter258_used_pricing_cap.py (21 tests): unit tests for `_estimate_value_usd` cap, prompt-string audits for admin_scan_item sys_msg + box-scan SYS_PROMPT, and live HTTP regression on /api/shipments/sh_1091d195ee (scan-boxes + scan-item, admin@5812uganda.org login). Result: 19 passed, 1 xfail (documented false positive), 1 failed (real gap: cap not wired into admin AI-Scan flow). Core cap logic and both prompts verified correct; no 500s, scan-boxes envelope intact, scan-item returns `condition`.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/shipments/{id}/scan-item (admin_scan_item)", "issue": "The `_estimate_value_usd` AI safety cap is NOT applied in the admin AI-Scan flow. Line 179 does `\"value_usd\": float(parsed.get(\"value_usd\") or 5.0)` straight from Gemini, and neither add_item/_normalise_item nor PUT /items clamps it. So a Gemini hallucination of $180 for a used jacket still reaches the manifest via the admin AI Scan path — only the box-scan path (line 651) is protected. Fix: route the parsed value through `_estimate_value_usd(name, category, parsed.get('value_usd'))`.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "_estimate_value_usd (items.py:369-385)", "issue": "Bucket match is a plain substring on `category + ' ' + name`, and dict order puts 'book' before 'furniture'. So 'Bookshelf' with category=furniture matches bucket 'book' AND the capped-category test, clamping a legitimate $200 used bookshelf to $15. Same class of bug for 'toy box' (furniture), 'kitchen table' (furniture, 'kitchen' hits first), 'baby stroller'. Suggest matching category-first (exact/startswith on category) before falling back to name substrings."},
+      {"endpoint": "admin_scan_item Google Books path (items.py:71)", "issue": "ISBN lookup uses `saleInfo.listPrice.amount` (NEW retail) or a $12 default for a donated used book, bypassing the used-book $1-4 guidance and the cap. Should be clamped to the books bucket too."},
+      {"endpoint": "admin_scan_item fallback shape (items.py:198-202)", "issue": "The non-AI fallback dict omits the new `condition` key, so downstream consumers must handle its absence. Consider defaulting to condition='used'."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter258_used_pricing_cap.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Apply `_estimate_value_usd` to admin_scan_item's parsed AI value_usd (and ideally to the Google Books listPrice) so the admin AI Scan flow is capped like box-scan.",
+    "Harden bucket matching in `_estimate_value_usd` so furniture/electronics items whose NAME contains 'book'/'kitchen'/'toy'/'baby' are not wrongly capped at $15."
+  ],
+  "critical_code_review_comments": [
+    "items.py is 1739 lines — beyond the 700-line guideline; the scan/AI helpers deserve their own module.",
+    "Cap ceiling max(low_avg*3, 15) means books/clothing/toys all effectively cap at $15, i.e. the per-category low_avg has no effect below $5 — verify $15 floor is intentional for books ($1-4 guidance).",
+    "Verified requested unit behaviour: ('Jacket','clothing',180)->15.0, ('Chair','furniture',150)->150.0, ('T-shirt','clothing',3)->3.0, ('Book','books',None)->3.0."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter258_used_pricing_cap.py"],
+  "success_rate": {"backend": "90% (19/21 passed, 1 xfail, 1 genuine gap)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persisted. One scan-boxes call against sh_1091d195ee with a deliberately undecodable image (AI parse error path) — no items/boxes created, no revert needed.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (login uses `identifier` field, returns access_token)",
+  "context_for_next_testing_agent": "Re-run `pytest /app/backend/tests/test_iter258_used_pricing_cap.py -v`. TestCapAppliedOnPersistedItem::test_admin_scan_item_value_is_not_capped asserts the cap IS applied in admin_scan_item and currently fails by design — it should pass once the main agent wires `_estimate_value_usd` in. TestEstimateValueCap::test_bookshelf_false_positive xfails while the substring-matching bug exists. No real Gemini image was uploaded (garbage bytes exercise the AI-parse-error path); if a real used-item photo becomes available, verify persisted value_usd <= 15 for clothing end-to-end.",
+  "rca_of_the_issue": "The three-part fix is implemented, but only two of the three call sites are protected. `_estimate_value_usd` is referenced exactly once in the codebase (items.py:651, box-scan row loop). admin_scan_item builds `enriched` directly from Gemini JSON and returns it to the frontend, which POSTs it to /shipments/{id}/items where _normalise_item and update_item only clamp value_usd to >=0. Hence the admin AI Scan flow relies purely on prompt compliance with no numeric safety net. Additionally the cap's bucket lookup is order-dependent substring matching, producing false-positive caps for furniture whose name contains a thrift keyword."
+}
