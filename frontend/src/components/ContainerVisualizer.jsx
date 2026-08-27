@@ -107,12 +107,29 @@ function computeLayout(items, pallets, containerOverride, packingUnits = []) {
     if (acquired <= 0) return;
     // iter 259 — per user request the visualiser now shows BOXES / PALLETS
     // only. Individual items that aren't assigned to a packing_unit or
-    // pallet are no longer drawn on the floor plan — packers care about
-    // where the box lives, not each item inside it. Un-boxed loose items
-    // still count toward container weight/volume totals via the item list
-    // above.
+    // pallet are no longer drawn on the floor plan — EXCEPT ...
+    // iter 260 — ... loose items with an AI-derived shape3d or a floor
+    // position of their own render as their own draggable block, staged
+    // outside the container by default. Packers can drag them into place
+    // and, once dropped inside a box, they'll auto-link (or the packer
+    // can assign them). Items still inside a box/pallet stay hidden.
     const key = it.pallet_id || it.packing_unit_id;
-    if (!key) return;
+    if (!key) {
+      const hasStagingCoords = it.floor_x_cm != null || it.floor_y_cm != null;
+      if (!it.shape3d && !hasStagingCoords) return;
+      const looseKey = `_loose:${it.id}`;
+      groups.set(looseKey, {
+        id: looseKey,
+        items: [it],
+        total_weight: (Number(it.weight_kg) || 0) * acquired,
+        total_volume: (Number((it.dims_cm || {}).length) || 0)
+          * (Number((it.dims_cm || {}).width) || 0)
+          * (Number((it.dims_cm || {}).height) || 0)
+          * acquired,
+        loose_item: it,
+      });
+      return;
+    }
     if (!groups.has(key)) {
       groups.set(key, { id: key, items: [], total_weight: 0, total_volume: 0, loose_item: null });
     }
@@ -281,14 +298,20 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, onStack, 
   // iter 254 — full-screen mode extends the SVG canvas well beyond the
   // container walls so items can be dragged / seen past the container's
   // physical footprint. Compact mode stays tight around the container.
+  // iter 260 — always leave a strip to the RIGHT of the container so
+  // newly-derived loose items staged outside (floor_x_cm >= container.length)
+  // are visible in the compact view too. Packers can drag from that strip
+  // into the container without opening fullscreen.
   const targetWidth = fullscreen ? 1600 : 700;
-  const OVER_X = fullscreen ? container.length * 0.5 : 0;
+  const OVER_X_RIGHT = fullscreen ? container.length * 0.5 : container.length * 0.25;
+  const OVER_X_LEFT = fullscreen ? container.length * 0.5 : 0;
   const OVER_Y = fullscreen ? container.width * 0.6 : 0;
-  const scale = (targetWidth - PAD * 2) / (container.length + OVER_X * 2);
-  const w = (container.length + OVER_X * 2) * scale + PAD * 2;
+  const totalCmWidth = container.length + OVER_X_LEFT + OVER_X_RIGHT;
+  const scale = (targetWidth - PAD * 2) / totalCmWidth;
+  const w = totalCmWidth * scale + PAD * 2;
   const h = (container.width + OVER_Y * 2) * scale + PAD * 2;
-  // Origin offset so container walls sit at (OVER_X, OVER_Y) in cm-space.
-  const OX = OVER_X;
+  // Origin offset so container walls sit at (OVER_X_LEFT, OVER_Y) in cm-space.
+  const OX = OVER_X_LEFT;
   const OY = OVER_Y;
 
   const beginDrag = (e, b) => {
@@ -363,6 +386,27 @@ function FloorPlan2D({ layout, editable, onPalletMove, onPalletRotate, onStack, 
       {/* Container outline */}
       <rect x={PAD + OX * scale} y={PAD + OY * scale} width={container.length * scale} height={container.width * scale}
         fill="#f8fafc" stroke="#94a3b8" strokeWidth="2" />
+      {/* iter 260 — Staging strip to the RIGHT of the container. Newly
+          AI-derived loose items land here so packers can drag them into
+          the container. Subtle amber tint + dashed outline so it reads as
+          a holding area, not part of the container floor. */}
+      {OVER_X_RIGHT > 0 && (
+        <g data-testid="viz-staging-strip">
+          <rect
+            x={PAD + (OX + container.length + 8) * scale}
+            y={PAD + OY * scale}
+            width={(OVER_X_RIGHT - 8) * scale}
+            height={container.width * scale}
+            fill="#fef3c7" fillOpacity="0.35"
+            stroke="#f59e0b" strokeOpacity="0.55" strokeDasharray="6 4" strokeWidth="1.5"
+          />
+          <text
+            x={PAD + (OX + container.length + OVER_X_RIGHT / 2) * scale}
+            y={PAD + OY * scale - 4}
+            fontSize="10" fill="#b45309" textAnchor="middle" fontWeight="600"
+          >Staging — drag items into container</text>
+        </g>
+      )}
       {/* Door side marker (right edge) */}
       <text x={PAD + (OX + container.length) * scale - 4} y={PAD + OY * scale - 4} fontSize="9" fill="#64748b" textAnchor="end">← Doors (load last)</text>
       <text x={PAD + OX * scale + 2} y={PAD + OY * scale - 4} fontSize="9" fill="#64748b">Back wall (heavy first) →</text>

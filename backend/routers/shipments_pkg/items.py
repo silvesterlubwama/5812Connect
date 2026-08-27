@@ -990,6 +990,14 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
     fallback_L = float(dims.get("length") or 30)
     fallback_W = float(dims.get("width") or 30)
     fallback_H = float(dims.get("height") or 30)
+    # iter 260 — feed the AI the item name + category so it can reach for
+    # background knowledge about typical product dimensions (a "KitchenAid
+    # Artisan" mixer is ~35 × 22 × 36 cm, a "SodaStream Terra" is ~13 × 18
+    # × 44 cm, etc.). The photo still drives shape kind + colour, but the
+    # text context prevents wild-guess dims when the photo is cropped or
+    # missing scale references.
+    item_name = (item.get("name") or "").strip()
+    item_category = (item.get("category") or "").strip()
 
     SYS = (
         "You classify a household / appliance item photo into a rough 3D shape primitive "
@@ -999,12 +1007,21 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
         '  "primary": {"L_cm": float, "W_cm": float, "H_cm": float},  // rough bounding box in centimetres\n'
         '  "secondary": {"L_cm": float, "W_cm": float, "H_cm": float, "y_offset_cm": float, "shape": "cylinder"|"box"} | null,\n'
         '  "primary_color": "#RRGGBB",     // dominant colour, lowercase hex\n'
-        '  "confidence": "high" | "medium" | "low"\n'
+        '  "confidence": "high" | "medium" | "low",\n'
+        '  "size_source": "photo" | "known_model" | "category_default"   // how you picked the dims\n'
         "}\n"
         "Rules:\n"
         "- Prefer `box` for boxy items (books, boxes, monitors flat), `cylinder` for round/tubular (cans, lamps, stools, mixing bowls), `sphere` for balls / round bulbs.\n"
         "- Use `compound` for items with a distinct base + narrower head (kitchen mixer, blender, table lamp with base+shade). The `secondary` block describes the head with y_offset_cm = distance from the base's TOP to where the head starts.\n"
-        f"- If you can't estimate real cm, use the given fallback dims: L={fallback_L}, W={fallback_W}, H={fallback_H} and scale the primary/secondary proportions from that.\n"
+        "- iter 260 — DIMENSION LOOKUP: when the item name / category clearly identifies a real "
+        "product (e.g. 'KitchenAid Artisan mixer', 'Instant Pot Duo 6qt', 'Ikea Billy bookcase 80cm', "
+        "'Xbox Series S', 'Nike Air Force 1 US 10'), use the known real-world dimensions you have "
+        "in your training data — do NOT guess from the photo alone. Set size_source='known_model'. "
+        "If the name is generic ('mixer', 'chair'), fall back to typical dims for that category "
+        "(size_source='category_default'). Only use photo-derived dims (size_source='photo') when "
+        "neither the model nor a solid category default is available.\n"
+        f"- The item is currently named '{item_name}' in category '{item_category}'. Use this as the primary hint.\n"
+        f"- If you truly can't estimate, use the given fallback dims: L={fallback_L}, W={fallback_W}, H={fallback_H} and scale proportions from that.\n"
         "- primary_color must match the dominant visible colour of the item."
     )
     try:
@@ -1046,6 +1063,9 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
         "secondary": None,
         "primary_color": (parsed.get("primary_color") or "#94a3b8")[:16],
         "confidence": (parsed.get("confidence") or "medium").lower(),
+        # iter 260 — record how the AI picked the dims so the UI can show
+        # "matched to known model" vs "guessed from photo".
+        "size_source": (parsed.get("size_source") or "photo").lower(),
         "derived_at": datetime.now(timezone.utc).isoformat(),
         "derived_by": current_user["id"],
         "source_photo_url": photo_url,
@@ -1060,11 +1080,60 @@ async def _derive_shape3d_for_item(shipment_id: str, item: dict, current_user: d
             "shape": (sec.get("shape") or "cylinder").lower(),
         }
 
+    # iter 260 — Staging area outside the container. Newly derived items
+    # that have no pallet, no packing_unit and no floor position get a
+    # deterministic slot just past the container's back wall so packers
+    # can see them at a glance and drag them into place. Slots are
+    # 60 cm apart along the container's width, staggered into rows so a
+    # long shipment doesn't spill off-screen.
+    set_ops = {"items.$.shape3d": shape3d}
+    unset_ops = {"items.$.shape3d_error": ""}
+    # If the item's dims_cm are unset / zero AND the AI produced dims
+    # sourced from a known model or category default, adopt those so
+    # weight × volume totals reflect reality.
+    existing_dims = item.get("dims_cm") or {}
+    has_real_dims = any(float(existing_dims.get(k) or 0) > 0 for k in ("length", "width", "height"))
+    if not has_real_dims and shape3d["size_source"] in ("known_model", "category_default"):
+        set_ops["items.$.dims_cm"] = {
+            "length": shape3d["primary"]["L_cm"],
+            "width": shape3d["primary"]["W_cm"],
+            "height": shape3d["primary"]["H_cm"],
+        }
+    if (
+        not item.get("pallet_id")
+        and not item.get("packing_unit_id")
+        and item.get("floor_x_cm") in (None, 0, 0.0)
+        and item.get("floor_y_cm") in (None, 0, 0.0)
+    ):
+        ship_meta = await db.shipments.find_one(
+            {"id": shipment_id},
+            {"_id": 0, "container_dims_cm": 1, "items": 1},
+        ) or {}
+        cont = ship_meta.get("container_dims_cm") or {}
+        cont_L = float(cont.get("length_cm") or 1203)
+        cont_W = float(cont.get("width_cm") or 235)
+        # Count how many items are already staged so we drop this one
+        # into the next free slot.
+        staged_count = sum(
+            1 for it in (ship_meta.get("items") or [])
+            if not it.get("pallet_id")
+            and not it.get("packing_unit_id")
+            and (it.get("floor_x_cm") or 0) >= cont_L
+        )
+        slot_gap_x = 80.0
+        slot_gap_y = 80.0
+        cols = max(1, int(cont_W // slot_gap_y))
+        col = staged_count % cols
+        row = staged_count // cols
+        set_ops["items.$.floor_x_cm"] = cont_L + 30.0 + row * slot_gap_x
+        set_ops["items.$.floor_y_cm"] = col * slot_gap_y
+        shape3d["staged_outside"] = True
+
     await db.shipments.update_one(
         {"id": shipment_id, "items.id": item_id},
         # iter 254d — clear any prior shape3d_error on success so the
         # "Retry" pill on the item card goes away automatically.
-        {"$set": {"items.$.shape3d": shape3d}, "$unset": {"items.$.shape3d_error": ""}},
+        {"$set": set_ops, "$unset": unset_ops},
     )
     await _audit(current_user["id"], "derive_shape3d", "shipment_item", item_id,
                  {"kind": kind, "confidence": shape3d["confidence"]})

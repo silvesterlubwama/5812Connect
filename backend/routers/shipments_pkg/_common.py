@@ -142,7 +142,7 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
     Also annotates the response with `over_pledged: true` when the merged
     qty exceeds qty_needed so the UI can warn the packer.
     """
-    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "pallets": 1})
+    s = await db.shipments.find_one({"id": shipment_id}, {"_id": 0, "items": 1, "pallets": 1, "container_dims_cm": 1})
     if not s:
         raise HTTPException(status_code=404, detail="Shipment not found")
     existing_items = s.get("items") or []
@@ -186,6 +186,34 @@ async def _add_or_merge_item(shipment_id: str, item: dict) -> dict:
     # caller specifies (or unassigned/loose when nothing is picked), and
     # stacking is 100% manual via drag-and-drop onto another item.
     # auto_place_on_pallet(item, existing_items, s.get("pallets") or [])
+    # iter 260 — Staging area for loose items with real dims. A brand new
+    # item that has no pallet, no packing_unit AND has known dimensions
+    # (either from the caller's dims_cm or an AI shape3d) is dropped just
+    # past the container's back wall so packers can see it and drag it in.
+    # Items still get shape3d/dims later via derive-shape which also
+    # auto-stages when needed — this hook covers items imported with dims.
+    dims_cm = item.get("dims_cm") or {}
+    has_real_dims = any(float(dims_cm.get(k) or 0) > 0 for k in ("length", "width", "height"))
+    if (
+        has_real_dims
+        and not item.get("pallet_id")
+        and not item.get("packing_unit_id")
+        and item.get("floor_x_cm") in (None, 0, 0.0)
+        and item.get("floor_y_cm") in (None, 0, 0.0)
+    ):
+        cont = s.get("container_dims_cm") or {}
+        cont_L = float(cont.get("length_cm") or 1203)
+        cont_W = float(cont.get("width_cm") or 235)
+        staged_count = sum(
+            1 for it in existing_items
+            if not it.get("pallet_id")
+            and not it.get("packing_unit_id")
+            and (it.get("floor_x_cm") or 0) >= cont_L
+        )
+        slot = 80.0
+        cols = max(1, int(cont_W // slot))
+        item["floor_x_cm"] = cont_L + 30.0 + (staged_count // cols) * slot
+        item["floor_y_cm"] = (staged_count % cols) * slot
     # New row
     await db.shipments.update_one({"id": shipment_id}, {"$push": {"items": item}})
     item["over_pledged"] = item.get("qty_acquired", 0) > item.get("qty_needed", 1)
