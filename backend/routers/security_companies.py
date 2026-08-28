@@ -121,17 +121,8 @@ async def upload_company_logo(company_id: str, file: UploadFile = File(...), cur
         raise HTTPException(status_code=404, detail="Company not found")
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "png"
     path = f"security-company-logos/{company_id}.{ext}"
-    logo_url = None
-    try:
-        from storage import put_object
-        result = put_object(path, data, file.content_type)
-        logo_url = result.get("url", f"/api/storage/{path}")
-    except Exception:
-        os.makedirs("/app/backend/uploads/security-company-logos", exist_ok=True)
-        local_name = f"{company_id}.{ext}"
-        with open(f"/app/backend/uploads/security-company-logos/{local_name}", "wb") as fh:
-            fh.write(data)
-        logo_url = f"/api/uploads/security-company-logos/{local_name}"
+    from upload_helper import save_upload
+    logo_url = await save_upload("security-company-logos", f"{company_id}.{ext}", data, file.content_type)
     await db.security_companies.update_one(
         {"id": company_id},
         {"$set": {"logo_url": logo_url, "updated_at": datetime.now(timezone.utc).isoformat()}},

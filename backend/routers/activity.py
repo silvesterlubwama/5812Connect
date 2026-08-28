@@ -221,17 +221,11 @@ async def add_subject_note(
         ext = file.filename.rsplit('.', 1)[-1] if '.' in file.filename else 'bin'
         unique = f"{subject_id}-{uuid.uuid4().hex[:8]}.{ext}"
         try:
-            from storage import put_object
-            result = put_object(f"activity/{unique}", data, file.content_type or 'application/octet-stream')
-            url = result.get("url", f"/api/storage/activity/{unique}")
+            from upload_helper import save_upload_sync
+            url = save_upload_sync("activity", unique, data, file.content_type or 'application/octet-stream')
+            attachments.append({"name": file.filename, "url": url, "size": len(data), "mime": file.content_type})
         except Exception as e:
-            logger.warning(f"Storage put failed, falling back to local: {e}")
-            import os
-            os.makedirs("/app/backend/uploads/files", exist_ok=True)
-            with open(f"/app/backend/uploads/files/{unique}", "wb") as fh:
-                fh.write(data)
-            url = f"/api/uploads/files/{unique}"
-        attachments.append({"name": file.filename, "url": url, "size": len(data), "mime": file.content_type})
+            logger.warning(f"Upload failed: {e}")
     return await log_activity(
         subject_kind, subject_id, "note",
         title=(body[:60] + ("…" if len(body) > 60 else "")) or "Attachment",

@@ -349,16 +349,11 @@ async def add_child_extra(
         unique_name = f"{child_id}-{uuid.uuid4().hex[:8]}.{ext}"
         # Try object storage first, fall back to local filesystem
         try:
-            from storage import put_object
-            result = put_object(f"child-extras/{unique_name}", data, file.content_type or 'application/octet-stream')
-            file_url = result.get("url", f"/api/storage/child-extras/{unique_name}")
+            from upload_helper import save_upload
+            file_url = await save_upload("child-extras", unique_name, data, file.content_type or 'application/octet-stream')
         except Exception as e:
-            logger.warning(f"Storage put failed, saving locally: {e}")
-            import os
-            os.makedirs("/app/backend/uploads/child-extras", exist_ok=True)
-            with open(f"/app/backend/uploads/child-extras/{unique_name}", "wb") as fh:
-                fh.write(data)
-            file_url = f"/api/uploads/child-extras/{unique_name}"
+            logger.warning(f"child-extra upload failed: {e}")
+            file_url = None
     if not file_url and not caption.strip():
         raise HTTPException(status_code=400, detail="Provide a file or a caption")
     doc = {
@@ -404,18 +399,11 @@ async def _save_photo(file: UploadFile, path_prefix: str, subject_id: str) -> st
     ext = file.filename.rsplit('.', 1)[-1] if '.' in (file.filename or '') else 'jpg'
     path = f"profile-photos/{path_prefix}{subject_id}.{ext}"
     try:
-        from storage import put_object
-        result = put_object(path, data, file.content_type)
-        return result.get("url", f"/api/storage/{path}")
+        from upload_helper import save_upload
+        return await save_upload("profile-photos", f"{path_prefix}{subject_id}.{ext}", data, file.content_type)
     except Exception as e:
-        logger.warning(f"Storage upload failed, saving locally: {e}")
-        import os
-        os.makedirs("/app/backend/uploads/photos", exist_ok=True)
-        local_name = f"{path_prefix}{subject_id}.{ext}"
-        local_path = f"/app/backend/uploads/photos/{local_name}"
-        with open(local_path, "wb") as f:
-            f.write(data)
-        return f"/api/uploads/photos/{local_name}"
+        logger.warning(f"Profile photo upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not save photo")
 
 
 @router.post("/members/{member_id}/photo")
@@ -543,16 +531,11 @@ async def upload_file_doc(
     unique = f"{child_id}-{doc_type}-{uuid.uuid4().hex[:8]}.{ext}"
     file_url = None
     try:
-        from storage import put_object
-        result = put_object(f"child-file-docs/{unique}", data, file.content_type or "application/octet-stream")
-        file_url = result.get("url", f"/api/storage/child-file-docs/{unique}")
+        from upload_helper import save_upload
+        file_url = await save_upload("child-file-docs", unique, data, file.content_type or "application/octet-stream")
     except Exception as e:
-        logger.warning(f"Cloud storage put failed, saving locally: {e}")
-        import os as _os
-        _os.makedirs("/app/backend/uploads/child-file-docs", exist_ok=True)
-        with open(f"/app/backend/uploads/child-file-docs/{unique}", "wb") as fh:
-            fh.write(data)
-        file_url = f"/api/uploads/child-file-docs/{unique}"
+        logger.warning(f"Cloud storage put failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not save document")
 
     label = next((t["label"] for t in CHILD_FILE_DOC_TYPES if t["key"] == doc_type), "Other document")
     doc = {

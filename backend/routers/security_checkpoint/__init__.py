@@ -446,16 +446,11 @@ async def grant_one_time_entry(
         fname = f"{cp['id']}_{uuid.uuid4().hex[:10]}.{ext}"
         # Try cloud storage first; fall back to local uploads dir.
         try:
-            from storage import put_object
-            result = put_object(f"checkpoint-ids/{fname}", data_bytes, id_image.content_type or "image/jpeg")
-            id_url = result.get("url", f"/api/storage/checkpoint-ids/{fname}")
+            from upload_helper import save_upload_sync
+            id_url = save_upload_sync("checkpoint-ids", fname, data_bytes, id_image.content_type or "image/jpeg")
         except Exception as e:
-            logger.warning(f"checkpoint id cloud put failed, using local: {e}")
-            import os as _os
-            _os.makedirs("/app/backend/uploads/checkpoint-ids", exist_ok=True)
-            with open(f"/app/backend/uploads/checkpoint-ids/{fname}", "wb") as fh:
-                fh.write(data_bytes)
-            id_url = f"/api/uploads/checkpoint-ids/{fname}"
+            logger.warning(f"checkpoint id upload failed: {e}")
+            id_url = None
     now = datetime.now(timezone.utc)
     grant_id = f"otg_{uuid.uuid4().hex[:10]}"
     grant_doc = {

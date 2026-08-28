@@ -56,7 +56,7 @@ class TestCampusRBAC:
                 for u in users:
                     if u.get("name", "").startswith("TEST_"):
                         self.session.delete(f"{BASE_URL}/api/admin/users/{u['id']}")
-        except:
+        except Exception:
             pass
     
     # ========== SYSTEM ADMIN TESTS ==========

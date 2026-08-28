@@ -108,7 +108,7 @@ class TestIteration54Features:
         try:
             self.session.delete(f"{BASE_URL}/api/admin/users/{created_user['id']}")
             self.session.delete(f"{BASE_URL}/api/guests/{auto_guest['id']}")
-        except:
+        except Exception:
             pass
     
     def test_non_staff_role_no_auto_guest(self):
@@ -149,7 +149,7 @@ class TestIteration54Features:
             # Cleanup
             try:
                 self.session.delete(f"{BASE_URL}/api/admin/users/{created_user['id']}")
-            except:
+            except Exception:
                 pass
     
     # ========== PHOTO UPLOAD ENDPOINT TESTS ==========

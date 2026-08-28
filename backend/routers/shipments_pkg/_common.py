@@ -453,28 +453,13 @@ PUBLIC_ITEM_WISHLIST_FIELDS = {
     "photo_url", "priority", "source_url", "source_retailer",
 }
 async def _persist_shipment_image(shipment_id: str, data: bytes, mime: str) -> str:
-    """Persist a scanned-item photo and return a URL. Cloud storage with
-    on-disk fallback — same pattern as item-photo upload."""
+    """Persist a scanned-item photo and return a URL. iter 264 — now uses
+    the shared `upload_helper.save_upload` so the cloud-first + disk-fallback
+    logic lives in one place instead of being duplicated per module."""
     ext = (mime.split("/")[-1] if "/" in mime else "jpg")
-    name = f"shipments/{shipment_id}/scans/{uuid.uuid4().hex}.{ext}"
-    try:
-        from storage import put_object      # type: ignore
-        # put_object is sync — run in a worker thread so we don't block the
-        # event loop. (Earlier code awaited `upload_bytes` which doesn't
-        # exist, so every photo silently went to the disk fallback below.)
-        import asyncio as _asyncio
-        result = await _asyncio.to_thread(put_object, name, data, mime)
-        return result.get("url") or f"/api/storage/{name}"
-    except Exception:
-        pass
-    # Disk fallback
-    import os as _o
-    base = "/app/backend/uploads/shipments"
-    _o.makedirs(base, exist_ok=True)
-    p = f"{base}/{uuid.uuid4().hex}.{ext}"
-    with open(p, "wb") as fh:
-        fh.write(data)
-    return f"/api/uploads/shipments/{_o.path.basename(p)}"
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    from upload_helper import save_upload
+    return await save_upload(f"shipments/{shipment_id}/scans", filename, data, mime)
 
 
 def _waybill_html(s: dict) -> str:

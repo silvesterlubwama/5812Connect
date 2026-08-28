@@ -1,4 +1,3 @@
-import os
 """
 Iteration 48 - Bulk Operations Testing
 Tests for:

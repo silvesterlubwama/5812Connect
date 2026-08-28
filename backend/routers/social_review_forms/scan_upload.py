@@ -65,10 +65,13 @@ async def upload_filled_scan(
     # can hang the entire worker for the full 120 s timeout).
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "pdf"
     unique = f"{child_id}-{kind}-{uuid.uuid4().hex[:8]}.{ext}"
-    os.makedirs("/app/backend/uploads/social-review-scans", exist_ok=True)
+    # iter 264 — disk-only, via the shared upload helper. We deliberately
+    # skip the cloud round-trip here because scan_upload runs a blocking
+    # OCR pipeline right after, and the disk hop needs to be fast enough
+    # that Cloudflare never sees a 524.
+    from upload_helper import _disk_fallback
+    _disk_fallback("social-review-scans", unique, data)
     local_path = f"/app/backend/uploads/social-review-scans/{unique}"
-    with open(local_path, "wb") as fh:
-        fh.write(data)
     file_url = f"/api/uploads/social-review-scans/{unique}"
 
     # 2) Insert the draft review NOW so the frontend has something to poll

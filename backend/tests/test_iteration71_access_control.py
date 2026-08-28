@@ -49,17 +49,17 @@ class TestAccessControlFeatures:
         for res_id in self.created_residents:
             try:
                 self.session.delete(f"{BASE_URL}/api/access/residents/{res_id}")
-            except:
+            except Exception:
                 pass
         for fp_id in self.created_fingerprints:
             try:
                 self.session.delete(f"{BASE_URL}/api/access/fingerprints/{fp_id}")
-            except:
+            except Exception:
                 pass
         for link_id in self.created_guest_links:
             try:
                 self.session.delete(f"{BASE_URL}/api/access/guest-links/{link_id}")
-            except:
+            except Exception:
                 pass
     
     # ========== HELPER METHODS ==========

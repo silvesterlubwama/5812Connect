@@ -1,4 +1,3 @@
-import os
 """
 Iteration 47 - Testing new features:
 1. Event recurrence: bimonthly, quarterly, custom, custom_weekly patterns

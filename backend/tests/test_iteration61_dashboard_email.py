@@ -102,7 +102,7 @@ class TestTaskAssignmentEmailNotification:
         for task_id in self.created_task_ids:
             try:
                 requests.delete(f"{BASE_URL}/api/tasks/{task_id}", headers=self.headers)
-            except:
+            except Exception:
                 pass
     
     def test_create_task_and_assign_user(self):

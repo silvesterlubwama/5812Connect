@@ -368,18 +368,10 @@ async def upload_attachment(
 
     stored_url = None
     try:
-        from storage import put_object, init_storage
-        result = put_object(storage_path, contents, file.content_type or "application/octet-stream")
-        stored_url = result.get("url") or result.get("public_url")
+        from upload_helper import save_upload_sync
+        stored_url = save_upload_sync(f"card-attachments/{task_id}", f"{att_id}_{file.filename}", contents, file.content_type or "application/octet-stream")
     except Exception as e:
-        logger.warning(f"Object storage failed, using local: {e}")
-        # Fallback: save locally
-        import os
-        local_dir = f"/app/backend/uploads/card-attachments/{task_id}"
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = f"{local_dir}/{att_id}_{file.filename}"
-        with open(local_path, "wb") as f_out:
-            f_out.write(contents)
+        logger.warning(f"Attachment upload failed: {e}")
         stored_url = f"/api/tasks/{task_id}/attachments/{att_id}/file"
 
     att_doc = {

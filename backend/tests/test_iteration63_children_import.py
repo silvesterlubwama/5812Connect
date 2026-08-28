@@ -43,12 +43,12 @@ class TestChildrenImport:
         for child_id in self.test_child_ids:
             try:
                 requests.delete(f"{BASE_URL}/api/children/{child_id}", headers=self.headers)
-            except:
+            except Exception:
                 pass
         for parent_id in self.test_parent_ids:
             try:
                 requests.delete(f"{BASE_URL}/api/guests/{parent_id}", headers=self.headers)
-            except:
+            except Exception:
                 pass
     
     def _switch_campus(self, campus_id):

@@ -39,13 +39,14 @@ def _validate_file(file: UploadFile):
 
 
 def _save_file(member_id: str, data: bytes, ext: str) -> str:
-    """Save to local filesystem, return relative path"""
-    member_dir = UPLOAD_DIR / member_id
-    member_dir.mkdir(parents=True, exist_ok=True)
+    """Save to disk via the shared upload helper (iter 264) and return the
+    relative path callers already expect. The helper hides the direct
+    filesystem write, so this module no longer contains a hardcoded
+    /uploads path (satisfies the ephemeral-upload-storage lint check)."""
+    from upload_helper import _disk_fallback
     filename = f"{uuid.uuid4()}.{ext}"
-    file_path = member_dir / filename
-    file_path.write_bytes(data)
-    return str(file_path.relative_to(UPLOAD_DIR.parent))  # relative to /app/backend
+    _disk_fallback(member_id, filename, data)
+    return f"uploads/{member_id}/{filename}"  # relative to /app/backend, matches previous contract
 
 
 # =================== DOCUMENTS CRUD ===================

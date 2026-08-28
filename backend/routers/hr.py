@@ -389,7 +389,7 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
 async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
     """Return (unpaid_days, working_days_in_period) for a YYYY-MM period.
     Uses approved leave requests whose leave_type maps to a non-paid type (or id == 'unpaid')."""
-    from datetime import date as dt_date, timedelta as td
+    # dt_date / td are already imported at module level
     try:
         y, m = map(int, period.split("-"))
     except Exception:
@@ -1339,7 +1339,7 @@ DEFAULT_LEAVE_TYPES = [
 
 def _count_business_days(start_iso: str, end_iso: str) -> int:
     """Count business days (Mon-Fri) between two YYYY-MM-DD dates inclusive."""
-    from datetime import date as dt_date, timedelta as td
+    # dt_date / td are already imported at module level
     try:
         sd = dt_date.fromisoformat(start_iso[:10])
         ed = dt_date.fromisoformat(end_iso[:10])

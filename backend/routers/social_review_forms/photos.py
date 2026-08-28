@@ -36,15 +36,11 @@ async def upload_review_photo(
     unique = f"{review_id}-{uuid.uuid4().hex[:8]}.{ext}"
     file_url = None
     try:
-        from storage import put_object
-        result = put_object(f"review-photos/{unique}", data, file.content_type)
-        file_url = result.get("url", f"/api/storage/review-photos/{unique}")
+        from upload_helper import save_upload
+        file_url = await save_upload("review-photos", unique, data, file.content_type)
     except Exception as e:
-        logger.warning(f"Cloud storage put failed, saving locally: {e}")
-        os.makedirs("/app/backend/uploads/review-photos", exist_ok=True)
-        with open(f"/app/backend/uploads/review-photos/{unique}", "wb") as fh:
-            fh.write(data)
-        file_url = f"/api/uploads/review-photos/{unique}"
+        logger.warning(f"Review photo upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not save photo")
 
     photo_id = f"vph_{uuid.uuid4().hex[:10]}"
     photo = {

@@ -193,18 +193,12 @@ async def upload_receipt(
         raise HTTPException(status_code=400, detail="Receipt must be under 10 MB")
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
     unique = f"{request_id}-{uuid.uuid4().hex[:8]}.{ext}"
-    # Try cloud storage first; fall back to local disk
-    receipt_url = None
     try:
-        from storage import put_object
-        result = put_object(f"funds-receipts/{unique}", data, file.content_type or "application/octet-stream")
-        receipt_url = result.get("url", f"/api/storage/funds-receipts/{unique}")
+        from upload_helper import save_upload_sync
+        receipt_url = save_upload_sync("funds-receipts", unique, data, file.content_type or "application/octet-stream")
     except Exception as e:
-        logger.warning(f"Cloud storage put failed, saving locally: {e}")
-        os.makedirs(UPLOADS_DIR, exist_ok=True)
-        with open(os.path.join(UPLOADS_DIR, unique), "wb") as fh:
-            fh.write(data)
-        receipt_url = f"/api/uploads/funds-receipts/{unique}"
+        logger.warning(f"Receipt upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not save receipt")
     await db.approval_requests.update_one(
         {"id": request_id},
         {"$set": {
