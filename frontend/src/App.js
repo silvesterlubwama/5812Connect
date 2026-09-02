@@ -104,6 +104,17 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
+// iter 265 — Gate the floating softphone widget to authenticated app routes
+// only. Public routes (public-bookings, marketplace, shared boards, badges,
+// receipts, resources, kiosk, login, register) never show the phone pill.
+function ConditionalSoftphone() {
+  const location = useLocation();
+  const path = location.pathname || '';
+  const publicPrefixes = ['/public-bookings', '/marketplace', '/shared/', '/badge/', '/receipt/', '/resource/', '/kiosk', '/login', '/register', '/reset-password'];
+  if (publicPrefixes.some(p => path === p || path.startsWith(p))) return null;
+  return <SoftphonePanel />;
+}
+
 function AppRoutes() {
   const location = useLocation();
   // Check URL fragment for session_id from Google Auth callback
@@ -217,7 +228,7 @@ function App() {
                 <ErrorBoundary>
                   <AppRoutes />
                 </ErrorBoundary>
-                <SoftphonePanel />
+                <ConditionalSoftphone />
                 <Toaster />
               </BrowserRouter>
             </VoipProvider>

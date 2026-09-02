@@ -105,6 +105,41 @@ export default function CalendarPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // iter 265 — Expand multi-day events into every date in the [date, end_date]
+  // range so a 3-day retreat paints across all 3 cells, not just the start.
+  const expandedEvents = React.useMemo(() => {
+    const out = [];
+    for (const ev of events) {
+      if (!ev.end_date || ev.end_date === ev.date) {
+        out.push(ev);
+        continue;
+      }
+      try {
+        const start = new Date(ev.date + 'T00:00:00');
+        const end = new Date(ev.end_date + 'T00:00:00');
+        if (isNaN(start) || isNaN(end) || end < start) { out.push(ev); continue; }
+        let cursor = new Date(start);
+        let dayIdx = 1;
+        const totalDays = Math.round((end - start) / 86400000) + 1;
+        while (cursor <= end) {
+          const iso = cursor.toISOString().slice(0, 10);
+          out.push({
+            ...ev,
+            date: iso,
+            id: iso === ev.date ? ev.id : `${ev.id}_d${dayIdx}`,
+            _multiDay: true,
+            _dayIndex: dayIdx,
+            _totalDays: totalDays,
+            title: totalDays > 1 ? `${ev.title} (Day ${dayIdx}/${totalDays})` : ev.title,
+          });
+          cursor = new Date(cursor.getTime() + 86400000);
+          dayIdx += 1;
+        }
+      } catch (e) { out.push(ev); }
+    }
+    return out;
+  }, [events]);
+
   const firstDay = new Date(current.year, current.month, 1).getDay();
   const daysInMonth = new Date(current.year, current.month + 1, 0).getDate();
 
@@ -113,12 +148,12 @@ export default function CalendarPage() {
 
   const getEventsForDay = (day) => {
     const dateStr = `${current.year}-${String(current.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return events.filter(e => e.date === dateStr);
+    return expandedEvents.filter(e => e.date === dateStr);
   };
 
   const isToday = (day) => day === today.getDate() && current.month === today.getMonth() && current.year === today.getFullYear();
 
-  const monthEvents = events.filter(e => {
+  const monthEvents = expandedEvents.filter(e => {
     const d = new Date(e.date);
     return d.getMonth() === current.month && d.getFullYear() === current.year;
   }).sort((a, b) => a.date.localeCompare(b.date));

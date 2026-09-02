@@ -193,7 +193,9 @@ export default function EventsPage() {
         <div className="space-y-1.5 text-sm text-muted-foreground mb-4">
           <div className="flex items-center gap-2"><Calendar size={13} /><span>{formatDate(event.date)}</span></div>
           <div className="flex items-center gap-2"><Clock size={13} /><span>{event.time}{event.end_time ? ` – ${event.end_time}` : ''}</span></div>
-          {event.location && <div className="flex items-center gap-2"><MapPin size={13} /><span className="truncate">{event.location}</span></div>}
+          {event.venue_name && <div className="flex items-center gap-2"><MapPin size={13} className="text-primary/70" /><span className="truncate font-medium">{event.venue_name}</span></div>}
+          {event.location && !event.venue_name && <div className="flex items-center gap-2"><MapPin size={13} /><span className="truncate">{event.location}</span></div>}
+          {event.end_date && event.end_date !== event.date && <div className="flex items-center gap-2 text-xs"><Calendar size={11} /><span className="text-primary">Ends {formatDate(event.end_date)}</span></div>}
           <div className="flex items-center gap-2">
             <Users size={13} />
             <span>{event.registered ?? 0}/{event.capacity}</span>

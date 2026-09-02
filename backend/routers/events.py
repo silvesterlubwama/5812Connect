@@ -102,6 +102,18 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
                 filtered.append(ev)
         else:
             filtered.append(ev)
+    # iter 265 — resolve venue_name for every event so the events list card
+    # can show the venue / sub-location without a second round-trip.
+    venue_ids = list({e.get("venue_id") for e in filtered if e.get("venue_id")})
+    if venue_ids:
+        venue_docs = await db.venues.find({"id": {"$in": venue_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        subloc_docs = await db.locations.find({"id": {"$in": venue_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        name_map = {v["id"]: v.get("name") for v in venue_docs}
+        for s in subloc_docs:
+            name_map.setdefault(s["id"], s.get("name"))
+        for ev in filtered:
+            if ev.get("venue_id") and name_map.get(ev["venue_id"]):
+                ev["venue_name"] = name_map[ev["venue_id"]]
     return filtered
 
 
@@ -1202,11 +1214,28 @@ async def public_events(country: Optional[str] = None):
             if not ev.get("country"):
                 ev["country"] = resolved or ""
 
-    # Strict filter: an event without a resolved country is NOT shown when a
-    # specific country is requested (prevents Uganda events leaking to US users).
+    # iter 265 — Same venue_name resolution as list_events / public_events so
+    # the events list card shows the venue without a second round-trip.
+    if events:
+        venue_ids = list({e.get("venue_id") for e in events if e.get("venue_id")})
+        if venue_ids:
+            venue_docs = await db.venues.find({"id": {"$in": venue_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+            subloc_docs = await db.locations.find({"id": {"$in": venue_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+            name_map = {v["id"]: v.get("name") for v in venue_docs}
+            for s in subloc_docs:
+                name_map.setdefault(s["id"], s.get("name"))
+            for ev in events:
+                if ev.get("venue_id") and name_map.get(ev["venue_id"]):
+                    ev["venue_name"] = name_map[ev["venue_id"]]
+
+    # iter 265 — Country filter. Events with an unresolved country_code
+    # (no location country, unmapped freeform value, or intentionally
+    # global) are treated as "global" and stay visible for ANY country
+    # filter — otherwise a public event with no location would never
+    # show up because the frontend always sends the visitor's country.
     if country and country != 'ALL':
         target = _normalize_country_code(country) or country.upper()
-        events = [e for e in events if e.get("country_code") == target]
+        events = [e for e in events if (not e.get("country_code")) or e.get("country_code") == target]
 
     return events
 
