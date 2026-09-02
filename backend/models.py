@@ -133,8 +133,9 @@ class GuestCreate(BaseModel):
 
 class EventCreate(BaseModel):
     title: str
-    type: str = "service"
+    type: str = "meeting"
     date: str
+    end_date: Optional[str] = None  # iter 265 — multi-day events (inclusive)
     time: Optional[str] = None
     end_time: Optional[str] = None
     location: Optional[str] = None
@@ -142,26 +143,27 @@ class EventCreate(BaseModel):
     venue_id: Optional[str] = None
     capacity: int = 100
     description: Optional[str] = None
-    is_public: bool = True
+    is_public: bool = False   # iter 265 — default to private
     is_free: bool = True
     price: Optional[float] = None
-    visibility: str = "external"
+    visibility: str = "internal"   # iter 265 — default to internal
     is_recurring: bool = False
-    recurrence_pattern: Optional[str] = None  # daily, weekly, biweekly, monthly, yearly, custom
+    recurrence_pattern: Optional[str] = None
     recurrence_day: Optional[int] = None
     recurrence_interval: Optional[int] = 1
     recurrence_end_date: Optional[str] = None
-    recurrence_days_of_week: Optional[List[int]] = []  # 0=Mon..6=Sun
-    recurrence_week_of_month: Optional[int] = None  # 1st, 2nd, 3rd, 4th, -1=last
+    recurrence_days_of_week: Optional[List[int]] = []
+    recurrence_week_of_month: Optional[int] = None
     programme_id: Optional[str] = None
     country: Optional[str] = None
-    ticket_tiers: Optional[List[Dict[str, Any]]] = []  # [{id, name, price, capacity, sold, description?}]
+    ticket_tiers: Optional[List[Dict[str, Any]]] = []
     waitlist_enabled: bool = True
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
     type: Optional[str] = None
     date: Optional[str] = None
+    end_date: Optional[str] = None  # iter 265 — multi-day
     time: Optional[str] = None
     end_time: Optional[str] = None
     location: Optional[str] = None

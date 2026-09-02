@@ -72,9 +72,19 @@ export default function CalendarPage() {
           _isSession: true,
         };
       });
-      // Convert tasks with due_date into calendar events (task type)
+      // iter 265 — Calendar shows tasks assigned to the current user OR
+      // that they created. Previously it showed EVERY task with a due
+      // date across the campus, which cluttered the view and buried the
+      // things the viewer actually owns.
+      const currentUser = secureStorage.get('user') || {};
+      const myId = currentUser.id;
       const taskEvents = (taskRes.data || [])
         .filter(t => t.due_date && !t.is_archived)
+        .filter(t => !myId
+          || t.assignee_id === myId
+          || (t.assignees || []).includes(myId)
+          || t.created_by === myId
+          || t.reporter_id === myId)
         .map(t => ({
           id: `task_${t.id}`,
           title: `${t.status === 'done' ? '✓ ' : ''}${t.title || 'Task'}`,

@@ -37,7 +37,7 @@ export default function EventsPage() {
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeColor, setNewTypeColor] = useState('#6366f1');
   const [editingEvent, setEditingEvent] = useState(null);
-  const emptyEvent = { title: '', type: 'service', date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: true, is_free: true, price: '', visibility: 'external', is_recurring: false, recurrence_pattern: '', recurrence_day: 1, country: '', ticket_tiers: [], waitlist_enabled: true };
+  const emptyEvent = { title: '', type: 'meeting', date: '', end_date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: false, is_free: true, price: '', visibility: 'internal', is_recurring: false, recurrence_pattern: '', recurrence_type: 'weekly', recurrence_interval: 1, recurrence_end_date: '', recurrence_day: 1, recurrence_days_of_week: [], recurrence_week_of_month: null, occurrences: 12, country: '', ticket_tiers: [], waitlist_enabled: true };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
 
@@ -79,14 +79,52 @@ export default function EventsPage() {
   const handleAdd = async (e) => {
     e.preventDefault(); setSaving(true);
     try {
-      const payload = { ...newEvent, price: newEvent.price ? parseFloat(newEvent.price) : undefined, capacity: parseInt(newEvent.capacity) };
+      // iter 265 — strip helper-only fields the backend doesn't accept before sending.
+      const { recurrence_type, occurrences, end_date, ...eventFields } = newEvent;
+      const payload = { ...eventFields, price: newEvent.price ? parseFloat(newEvent.price) : undefined, capacity: parseInt(newEvent.capacity) };
       if (!payload.price) delete payload.price;
+      // iter 265 — multi-day span: attach end_date if the user picked one.
+      if (end_date && end_date !== newEvent.date) payload.end_date = end_date;
       const res = editingEvent ? await eventsApi.update(editingEvent.id, payload) : await eventsApi.create(payload);
+      // iter 265 — auto-fire generate-recurring when the event is created
+      // WITH is_recurring=true. Previously the recurrence fields were
+      // stored on the parent event but no follow-up dates were created,
+      // so "recurring" events only ever showed up once.
+      if (!editingEvent && newEvent.is_recurring) {
+        try {
+          const pattern = recurrence_type === 'nth_weekday' ? 'nth_week' : (recurrence_type || 'weekly');
+          const dayMap = { sunday: 6, monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5 };
+          const dow = typeof newEvent.recurrence_pattern === 'string' && dayMap[newEvent.recurrence_pattern.toLowerCase()] !== undefined
+            ? dayMap[newEvent.recurrence_pattern.toLowerCase()] : 0;
+          await eventsApi.generateRecurring({
+            title: payload.title,
+            type: payload.type,
+            location: payload.location,
+            location_id: payload.location_id,
+            venue_id: payload.venue_id,
+            time: payload.time,
+            end_time: payload.end_time,
+            start_date: payload.date,
+            end_date: payload.end_date,
+            pattern,
+            interval: newEvent.recurrence_interval || 1,
+            occurrences: Math.max(1, Math.min(52, newEvent.occurrences || 12)),
+            day_of_week: dow,
+            nth_week: newEvent.recurrence_day || 1,
+            capacity: payload.capacity,
+            is_public: payload.is_public,
+            visibility: payload.visibility,
+            description: payload.description,
+          });
+          toast.success(`Recurring series generated`);
+        } catch (rerr) { toast.error(rerr.response?.data?.detail || 'Recurring series failed'); }
+      }
       if (editingEvent) {
         setEvents(prev => prev.map(ev => ev.id === editingEvent.id ? res.data : ev));
         toast.success('Event updated');
       } else {
-        setEvents(prev => [res.data, ...prev]);
+        // Refresh to include recurring children
+        fetchEvents();
         toast.success(`Event "${res.data.title}" created!`);
       }
       setShowAdd(false); setEditingEvent(null); setNewEvent({ ...emptyEvent });
@@ -263,7 +301,8 @@ export default function EventsPage() {
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-2"><Label>Date *</Label><Input type="date" value={newEvent.date} onChange={e => setNewEvent({...newEvent, date: e.target.value})} required /></div>
+              <div className="space-y-2"><Label>Date *</Label><Input type="date" value={newEvent.date} onChange={e => setNewEvent({...newEvent, date: e.target.value, end_date: newEvent.end_date && newEvent.end_date < e.target.value ? e.target.value : newEvent.end_date})} required /></div>
+              <div className="space-y-2"><Label>End Date (multi-day, optional)</Label><Input type="date" min={newEvent.date} value={newEvent.end_date || ''} onChange={e => setNewEvent({...newEvent, end_date: e.target.value})} data-testid="event-end-date" /></div>
               <div className="space-y-2"><Label>Start</Label><Input type="time" value={newEvent.time} onChange={e => setNewEvent({...newEvent, time: e.target.value})} /></div>
               <div className="space-y-2"><Label>End</Label><Input type="time" value={newEvent.end_time} onChange={e => setNewEvent({...newEvent, end_time: e.target.value})} /></div>
             </div>
