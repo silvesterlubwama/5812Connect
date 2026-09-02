@@ -203,6 +203,14 @@ frontend/node_modules/.cache/default-development/121.pack
 !**/.env.example
 !**/.env.template
 
+# ── Sensitive test artefacts (must never ship) ────────────────────
+# test_credentials.md holds real admin credentials used ONLY by the
+# in-cluster testing agent and forked build environments. It must never
+# be committed or deployed.
+memory/test_credentials.md
+**/test_credentials.md
+auth_testing.md
+
 # ── Tauri / desktop bundle outputs ────────────────────────────────
 desktop/dist/
 desktop/src-tauri/target/
