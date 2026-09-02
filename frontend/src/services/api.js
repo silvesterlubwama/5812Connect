@@ -81,8 +81,8 @@ export const membersApi = {
 export const eventsApi = {
   list: (params) => api.get('/events', { params }),
   get: (id) => api.get(`/events/${id}`),
-  create: (data) => api.post('/events', data),
-  update: (id, data) => api.put(`/events/${id}`, data),
+  create: (data, opts = {}) => api.post('/events', data, { params: opts.force ? { force: true } : undefined }),
+  update: (id, data, opts = {}) => api.put(`/events/${id}`, data, { params: opts.force ? { force: true } : undefined }),
   delete: (id) => api.delete(`/events/${id}`),
   share: (id, userIds) => api.put(`/events/${id}/share`, { user_ids: userIds }),
   duplicate: (id) => api.post(`/events/${id}/duplicate`),
@@ -128,6 +128,7 @@ export const venuesApi = {
   create: (data) => api.post('/venues', data),
   update: (id, data) => api.put(`/venues/${id}`, data),
   delete: (id) => api.delete(`/venues/${id}`),
+  availability: (id, params) => api.get(`/venues/${id}/availability`, { params }),
 };
 
 export const groupTypesApi = {

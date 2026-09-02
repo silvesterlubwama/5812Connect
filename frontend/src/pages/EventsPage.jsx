@@ -40,6 +40,8 @@ export default function EventsPage() {
   const emptyEvent = { title: '', type: 'meeting', date: '', end_date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: false, is_free: true, price: '', visibility: 'internal', is_recurring: false, recurrence_pattern: '', recurrence_type: 'weekly', recurrence_interval: 1, recurrence_end_date: '', recurrence_day: 1, recurrence_days_of_week: [], recurrence_week_of_month: null, occurrences: 12, country: '', ticket_tiers: [], waitlist_enabled: true };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
+  // Venue availability
+  const [venueConflict, setVenueConflict] = useState(null); // {title,date,time,end_time,source}
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -73,6 +75,26 @@ export default function EventsPage() {
     return loc?.country || '';
   };
 
+  // Venue availability check — runs whenever venue/date/time change
+  useEffect(() => {
+    let cancelled = false;
+    const { venue_id, date, end_date, time, end_time } = newEvent;
+    if (!showAdd || !venue_id || !date) { setVenueConflict(null); return; }
+    const t = setTimeout(async () => {
+      try {
+        const r = await venuesApi.availability(venue_id, {
+          date,
+          end_date: end_date || undefined,
+          time: time || undefined,
+          end_time: end_time || undefined,
+          exclude_event_id: editingEvent?.id || undefined,
+        });
+        if (!cancelled) setVenueConflict(r.data?.conflict || null);
+      } catch { /* silent */ }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [showAdd, newEvent.venue_id, newEvent.date, newEvent.end_date, newEvent.time, newEvent.end_time, editingEvent]);
+
   const upcoming = events.filter(e => e.status === 'upcoming');
   const past = events.filter(e => e.status !== 'upcoming');
 
@@ -85,7 +107,28 @@ export default function EventsPage() {
       if (!payload.price) delete payload.price;
       // iter 265 — multi-day span: attach end_date if the user picked one.
       if (end_date && end_date !== newEvent.date) payload.end_date = end_date;
-      const res = editingEvent ? await eventsApi.update(editingEvent.id, payload) : await eventsApi.create(payload);
+      let res;
+      try {
+        res = editingEvent ? await eventsApi.update(editingEvent.id, payload) : await eventsApi.create(payload);
+      } catch (err) {
+        // 409 → venue double-booking. Offer override for privileged users.
+        if (err.response?.status === 409 && err.response?.data?.detail?.conflict) {
+          const d = err.response.data.detail;
+          const c = d.conflict;
+          const when = `${c.date}${c.time ? ' ' + c.time : ''}${c.end_time ? '–' + c.end_time : ''}`;
+          if (d.can_override && window.confirm(`Venue clash with "${c.title}" (${when}). Book anyway?`)) {
+            res = editingEvent
+              ? await eventsApi.update(editingEvent.id, payload, { force: true })
+              : await eventsApi.create(payload, { force: true });
+          } else {
+            toast.error(`Venue already booked: "${c.title}" (${when})`);
+            setSaving(false);
+            return;
+          }
+        } else {
+          throw err;
+        }
+      }
       // iter 265 — auto-fire generate-recurring when the event is created
       // WITH is_recurring=true. Previously the recurrence fields were
       // stored on the parent event but no follow-up dates were created,
@@ -322,6 +365,17 @@ export default function EventsPage() {
                 </Select>
               </div>
             </div>
+            {venueConflict && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive flex items-start gap-2" data-testid="venue-conflict-warning">
+                <span className="font-semibold">⚠ Venue clash</span>
+                <span className="flex-1">
+                  &ldquo;{venueConflict.title}&rdquo; on {venueConflict.date}
+                  {venueConflict.time ? ` ${venueConflict.time}` : ''}
+                  {venueConflict.end_time ? `–${venueConflict.end_time}` : ''}
+                  {venueConflict.source === 'space_booking' ? ' (space booking)' : ''}
+                </span>
+              </div>
+            )}
             {!newEvent.location_id && <div className="space-y-2"><Label>Or type location</Label><Input placeholder="Custom location" value={newEvent.location} onChange={e => setNewEvent({...newEvent, location: e.target.value})} /></div>}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Capacity</Label><Input type="number" value={newEvent.capacity} onChange={e => setNewEvent({...newEvent, capacity: e.target.value})} /></div>

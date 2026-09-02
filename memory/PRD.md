@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 266 (Feb 2026)
+**Venue double-booking prevention across events + public space bookings.**
+
+- **Backend** — `routers/events.py` adds `_find_venue_conflict()` (time-overlap rule `start_a < end_b AND start_b < end_a`, "missing time = all-day"). Called from `POST /events`, `PUT /events/{id}`, and `POST /public/bookings/space`. Also scans `db.public_bookings` (space type) so staff events can't clash with an already-approved guest hire, and vice versa. Non-cancelled events only; multi-day (`end_date`) supported; excludes the row being edited.
+- **Override** — internal endpoints accept `?force=true`. Admins, system_admin, and Managers+ can override; others get a hard 409. Guest space bookings can never override.
+- **`GET /api/venues/{venue_id}/availability?date=&end_date=&time=&end_time=&exclude_event_id=`** returns `{events, space_bookings, conflict, can_override}` for inline UI hints.
+- **Frontend** — `EventsPage.jsx` debounces (250 ms) an availability lookup whenever `venue_id/date/end_date/time/end_time` change and renders a red inline "⚠ Venue clash" banner under the venue picker. On submit-time 409, a confirm dialog offers privileged users "Book anyway" (calls `eventsApi.create/update(data, { force: true })`); everyone else sees a toast.
+- **API surface** — `venuesApi.availability(id, params)`, `eventsApi.create(data, {force})`, `eventsApi.update(id, data, {force})`.
+
 ## Recently Resolved — Iteration 260 (Feb 2026)
 **Shipping visualiser: Drag-to-Stack + Stack Tower View + Auto-Pack Linked Items — plus P0 fixes for chat ghosts, task assignee scope, campus switcher.**
 
