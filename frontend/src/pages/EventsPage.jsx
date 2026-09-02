@@ -17,6 +17,130 @@ import { toast } from 'sonner';
 
 const statusColors = { upcoming: 'bg-blue-100 text-blue-700 border-blue-200', completed: 'bg-green-100 text-green-700 border-green-200', cancelled: 'bg-red-100 text-red-700 border-red-200' };
 
+// ---- Availability Timeline ----------------------------------------------------
+// One horizontal strip per day between startDate..endDate (max 7). Renders busy
+// events + space bookings as red blocks and the user's current selection as a
+// green outline so free slots are visible at a glance.
+const TL_START_MIN = 6 * 60;   // 06:00
+const TL_END_MIN = 22 * 60;    // 22:00
+const TL_SPAN = TL_END_MIN - TL_START_MIN;
+const toMin = (hhmm) => {
+  if (!hhmm || typeof hhmm !== 'string' || !hhmm.includes(':')) return null;
+  const [h, m] = hhmm.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+};
+const clampPct = (min) => Math.max(0, Math.min(100, ((min - TL_START_MIN) / TL_SPAN) * 100));
+const dayList = (start, end) => {
+  const out = [];
+  if (!start) return out;
+  const s = new Date(start + 'T00:00:00');
+  const e = new Date((end || start) + 'T00:00:00');
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e < s) return [start];
+  let d = new Date(s);
+  while (d <= e && out.length < 7) {
+    out.push(d.toISOString().slice(0, 10));
+    d = new Date(d.getTime() + 86400000);
+  }
+  return out;
+};
+const dayCovers = (ev, isoDate) => {
+  const start = ev.date || ev.booking_date;
+  const end = ev.end_date || start;
+  return start <= isoDate && isoDate <= end;
+};
+const busyBlockFor = (ev, isoDate) => {
+  // Determine effective start/end times ON this specific day.
+  const isMultiDay = (ev.end_date && ev.end_date > (ev.date || '')) || false;
+  let start = ev.time || ev.start_time;
+  let end = ev.end_time;
+  if (isMultiDay) {
+    // Multi-day: full-day block on middle days; first day starts at `time`; last day ends at `end_time`.
+    if (isoDate !== ev.date) start = null;      // starts at day start
+    if (isoDate !== ev.end_date) end = null;    // extends to day end
+  }
+  const sMin = toMin(start);
+  const eMin = toMin(end);
+  const left = sMin == null ? 0 : clampPct(sMin);
+  const right = eMin == null ? 100 : clampPct(eMin);
+  return { left, width: Math.max(1.5, right - left) };
+};
+
+const AvailabilityTimeline = ({ startDate, endDate, selection, events, spaceBookings }) => {
+  const days = dayList(startDate, endDate);
+  const hourTicks = [6, 9, 12, 15, 18, 21];
+  const busyItems = [
+    ...(events || []).map(e => ({ ...e, source: 'event' })),
+    ...(spaceBookings || []).map(b => ({
+      ...b, source: 'space',
+      date: b.booking_date, time: b.start_time, end_time: b.end_time,
+      title: b.purpose || (b.name ? `Booking · ${b.name}` : 'Space booking'),
+    })),
+  ];
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 space-y-2" data-testid="venue-availability-timeline">
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span className="font-semibold">Venue availability</span>
+        <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-destructive/60" /> Busy</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm border-2 border-emerald-500" /> Your slot</span>
+        </span>
+      </div>
+      <div className="relative h-3 text-[9px] text-muted-foreground">
+        {hourTicks.map(h => (
+          <span key={h} className="absolute -translate-x-1/2" style={{ left: `${clampPct(h * 60)}%` }}>{h}:00</span>
+        ))}
+      </div>
+      <div className="space-y-1.5">
+        {days.map(d => {
+          const dayBusy = busyItems.filter(b => dayCovers(b, d));
+          const showSel = selection && (d === startDate || d === endDate || (d > startDate && d < (endDate || startDate)));
+          const selBlock = showSel ? busyBlockFor({
+            date: startDate, end_date: endDate,
+            time: selection.time, end_time: selection.end_time,
+          }, d) : null;
+          return (
+            <div key={d} className="flex items-center gap-2">
+              <span className="w-16 shrink-0 text-[10px] font-medium text-muted-foreground">
+                {new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              </span>
+              <div className="relative flex-1 h-6 rounded bg-background border border-border overflow-hidden">
+                {/* faint hour gridlines */}
+                {hourTicks.map(h => (
+                  <div key={h} className="absolute top-0 bottom-0 w-px bg-border/60" style={{ left: `${clampPct(h * 60)}%` }} />
+                ))}
+                {dayBusy.map((b, idx) => {
+                  const blk = busyBlockFor(b, d);
+                  return (
+                    <div
+                      key={`${b.id || 'x'}-${idx}`}
+                      className={`absolute top-0.5 bottom-0.5 rounded-sm ${b.source === 'space' ? 'bg-amber-500/70' : 'bg-destructive/70'} hover:z-10`}
+                      style={{ left: `${blk.left}%`, width: `${blk.width}%` }}
+                      title={`${b.title || 'Busy'} · ${b.time || 'all day'}${b.end_time ? '–' + b.end_time : ''}`}
+                    />
+                  );
+                })}
+                {selBlock && (
+                  <div
+                    className="absolute top-0 bottom-0 rounded-sm border-2 border-emerald-500 pointer-events-none"
+                    style={{ left: `${selBlock.left}%`, width: `${selBlock.width}%` }}
+                  />
+                )}
+                {dayBusy.length === 0 && (
+                  <span className="absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/70">Free all day</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {(endDate && endDate > startDate) && dayList(startDate, endDate).length >= 7 && (
+        <p className="text-[9px] text-muted-foreground">Showing first 7 days of the span.</p>
+      )}
+    </div>
+  );
+};
+
 export default function EventsPage() {
   const { user } = useAuth();
   const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
@@ -42,6 +166,7 @@ export default function EventsPage() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   // Venue availability
   const [venueConflict, setVenueConflict] = useState(null); // {title,date,time,end_time,source}
+  const [venueBusy, setVenueBusy] = useState({ events: [], space_bookings: [] });
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -79,7 +204,7 @@ export default function EventsPage() {
   useEffect(() => {
     let cancelled = false;
     const { venue_id, date, end_date, time, end_time } = newEvent;
-    if (!showAdd || !venue_id || !date) { setVenueConflict(null); return; }
+    if (!showAdd || !venue_id || !date) { setVenueConflict(null); setVenueBusy({ events: [], space_bookings: [] }); return; }
     const t = setTimeout(async () => {
       try {
         const r = await venuesApi.availability(venue_id, {
@@ -89,7 +214,10 @@ export default function EventsPage() {
           end_time: end_time || undefined,
           exclude_event_id: editingEvent?.id || undefined,
         });
-        if (!cancelled) setVenueConflict(r.data?.conflict || null);
+        if (!cancelled) {
+          setVenueConflict(r.data?.conflict || null);
+          setVenueBusy({ events: r.data?.events || [], space_bookings: r.data?.space_bookings || [] });
+        }
       } catch { /* silent */ }
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
@@ -375,6 +503,15 @@ export default function EventsPage() {
                   {venueConflict.source === 'space_booking' ? ' (space booking)' : ''}
                 </span>
               </div>
+            )}
+            {newEvent.venue_id && newEvent.date && (
+              <AvailabilityTimeline
+                startDate={newEvent.date}
+                endDate={newEvent.end_date || newEvent.date}
+                selection={{ time: newEvent.time, end_time: newEvent.end_time }}
+                events={venueBusy.events}
+                spaceBookings={venueBusy.space_bookings}
+              />
             )}
             {!newEvent.location_id && <div className="space-y-2"><Label>Or type location</Label><Input placeholder="Custom location" value={newEvent.location} onChange={e => setNewEvent({...newEvent, location: e.target.value})} /></div>}
             <div className="grid grid-cols-2 gap-4">

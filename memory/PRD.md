@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 267 (Feb 2026)
+**Availability Timeline strip inside Event create/edit dialog.**
+
+- `EventsPage.jsx` now renders a per-day mini timeline (06:00 → 22:00) directly under the venue picker whenever `venue_id` + `date` are set. Populated from `GET /venues/{id}/availability` (same debounced call already added in iteration 266).
+- Busy events render as red blocks, public space bookings as amber blocks, the user's current slot as a green outline — free gaps are obvious at a glance. Hover tooltip shows the clashing booking's title and time.
+- Multi-day support: one row per day, up to 7 days shown; multi-day events render full-day on interior days, partial on edges.
+- New `<AvailabilityTimeline>` component (single file, no extra deps). Hidden until a venue is picked so it stays out of the way.
+
 ## Recently Resolved — Iteration 266 (Feb 2026)
 **Venue double-booking prevention across events + public space bookings.**
 
