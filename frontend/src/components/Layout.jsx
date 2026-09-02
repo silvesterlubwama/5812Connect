@@ -80,8 +80,22 @@ const NAV_SECTIONS = [
       { to: '/banking', icon: Landmark, label: 'Banking', module: 'banking' },
       { to: '/donors', icon: HandHeart, label: 'Donors', module: 'finance' },
       { to: '/vendors', icon: Truck, label: 'Vendors', module: 'finance' },
-      { to: '/hr', icon: Users, label: 'HR & Payroll', module: 'hr' },
       { to: '/approvals', icon: Workflow, label: 'Approvals', module: 'finance' },
+    ]
+  },
+  {
+    label: 'HR & Payroll',
+    collapsible: true,
+    roles: STAFF_PLUS,
+    items: [
+      { to: '/hr', icon: Users, label: 'HR & Payroll', module: 'hr' },
+    ]
+  },
+  {
+    label: 'Marketplace',
+    collapsible: true,
+    roles: STAFF_PLUS,
+    items: [
       { to: '/sales', icon: ShoppingCart, label: 'Marketplace', module: 'sales' },
     ]
   },

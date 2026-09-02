@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 268 (Feb 2026)
+**Finance reset expansion, Marketplace/HR nav split, Sales-portal ESC, bi-weekly payroll.**
+
+- **Finance reset now truly wipes finance + marketplace.** `FINANCE_COLLECTIONS` in `routers/finance/_common.py` grew from 3 to 25 entries covering ledger, `financial*`, banking, donors/vendors, products/variants, sales/orders/quotes/receipts, cash drops, approvals, budgets. HR data (`hr_*`) is intentionally excluded. Archive-then-wipe pattern preserved — every doc lands in `<collection>_archive_<ts>`.
+- **Reset button moved to Admin.** Removed from `FinancePage.jsx` header; new `<FinanceResetCard>` in `AdminPage.jsx` sits in a "Danger Zone" card at the bottom of the users list. Dialog now shows a pre-reset table of current record counts per collection so admins see the blast radius before typing `RESET FINANCE`.
+- **Marketplace & HR split from Finance nav.** `Layout.jsx` — Finance section now contains only Financial, Accounting, Banking, Donors, Vendors, Approvals. Two new top-level collapsible sections: `HR & Payroll` (→ `/hr`) and `Marketplace` (→ `/sales`). Role/module gating preserved.
+- **Sales portal ESC exit.** `SalesPortalPage.jsx` — capture-phase `keydown` listener. Unlocked → `document.exitFullscreen()`. Locked → swallow the key and re-enter fullscreen (also re-enters on `fullscreenchange` when browser drops it while locked).
+- **Bi-weekly payroll with 2- or 3-payday months.** `routers/hr.py` — new helpers `_paydays_for_frequency`, `_period_label`, `_proration_factor`, `_next_payday_after`, `_period_is_multi_pay`. `_generate_payslips_for` now detects a multi-pay window (`YYYY-MM-DD_YYYY-MM-DD (Www)`) and prorates monthly base by 12/26 (bi-weekly) or 12/52 (weekly). `POST /hr/payslips/generate-payday` and `/payslips/auto-generate` iterate every payday whose date has landed, use the correct period label, and auto-roll `hr_settings.next_pay_date` forward. Verified: Jan 2026 and Jul 2026 correctly get **3 bi-weekly paydays**, all other months get 2.
+
 ## Recently Resolved — Iteration 267 (Feb 2026)
 **Availability Timeline strip inside Event create/edit dialog.**
 

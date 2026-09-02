@@ -2,10 +2,119 @@
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view
 from datetime import datetime, timezone, date as dt_date, timedelta as td
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import uuid
 
 router = APIRouter(prefix="/api/hr", tags=["hr"])
+
+
+# ─── PAY PERIOD HELPERS (bi-weekly / weekly / monthly) ───────────────────────
+# A pay period is one of:
+#   monthly    → 'YYYY-MM'                        (e.g. '2026-02')
+#   bi-weekly  → 'YYYY-MM-DD_YYYY-MM-DD (Www)'    (e.g. '2026-02-09_2026-02-22 (W07)')
+#   weekly     → same format, 7-day window
+# The date-range prefix lets us sort by ISO date and stay unique across the
+# 2- or 3-payday months. The ISO week suffix (Www) keeps the label short in
+# the UI when we need it.
+
+def _iso(d: dt_date) -> str:
+    return d.strftime("%Y-%m-%d")
+
+
+def _biweekly_period(start: dt_date, days: int = 14) -> str:
+    """Format a bi-weekly/weekly period label from its start date."""
+    end = start + td(days=days - 1)
+    iso_year, iso_week, _ = start.isocalendar()
+    return f"{_iso(start)}_{_iso(end)} (W{iso_week:02d})"
+
+
+def _paydays_for_frequency(pay_frequency: str, anchor_iso: str, month: dt_date) -> List[dt_date]:
+    """List every payday in the calendar month `month` for the given frequency.
+    - monthly:  1 date (day-of-month clamp to month end).
+    - bi-weekly: every 14 days from anchor; typically 2, sometimes 3 in a month.
+    - weekly:  every 7 days from anchor; 4 or 5 per month.
+    `anchor_iso` should be the reference payday stored in hr_settings
+    (`next_pay_date` when available, else `pay_day` day-of-month).
+    """
+    freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
+    month_start = month.replace(day=1)
+    # first day of next month
+    if month.month == 12:
+        next_month_start = month_start.replace(year=month.year + 1, month=1)
+    else:
+        next_month_start = month_start.replace(month=month.month + 1)
+
+    if freq == "monthly":
+        try:
+            anchor = dt_date.fromisoformat(anchor_iso) if anchor_iso else month_start.replace(day=28)
+        except Exception:
+            anchor = month_start.replace(day=28)
+        day = min(anchor.day, (next_month_start - td(days=1)).day)
+        return [month_start.replace(day=day)]
+
+    step = 14 if freq in {"bi-weekly", "biweekly", "fortnightly"} else 7
+    try:
+        anchor = dt_date.fromisoformat(anchor_iso) if anchor_iso else month_start
+    except Exception:
+        anchor = month_start
+    # walk backwards to first payday <= month_start
+    d = anchor
+    while d > month_start:
+        d = d - td(days=step)
+    while d < month_start:
+        d = d + td(days=step)
+    out: List[dt_date] = []
+    while d < next_month_start:
+        out.append(d)
+        d = d + td(days=step)
+    return out
+
+
+def _period_label(pay_frequency: str, payday: dt_date) -> str:
+    """Convert a payday into the canonical period identifier."""
+    freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
+    if freq == "monthly":
+        return payday.strftime("%Y-%m")
+    if freq in {"bi-weekly", "biweekly", "fortnightly"}:
+        return _biweekly_period(payday, 14)
+    if freq == "weekly":
+        return _biweekly_period(payday, 7)
+    return payday.strftime("%Y-%m")
+
+
+def _proration_factor(pay_frequency: str) -> float:
+    """Multiplier to convert a monthly base_salary into one payslip's gross.
+    Monthly is 1.0. Bi-weekly uses the standard 12/26 (~0.4615) to keep annual
+    take-home identical across a 12-month year. Weekly uses 12/52."""
+    freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
+    if freq in {"bi-weekly", "biweekly", "fortnightly"}:
+        return 12.0 / 26.0
+    if freq == "weekly":
+        return 12.0 / 52.0
+    return 1.0
+
+
+def _period_is_multi_pay(period: str) -> bool:
+    """True when period is a bi-weekly/weekly window rather than a plain YYYY-MM."""
+    return "_" in period or "(W" in period
+
+
+def _next_payday_after(pay_frequency: str, this_payday: dt_date) -> dt_date:
+    freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
+    if freq in {"bi-weekly", "biweekly", "fortnightly"}:
+        return this_payday + td(days=14)
+    if freq == "weekly":
+        return this_payday + td(days=7)
+    # monthly: same day next month (clamp to month end)
+    y, m = this_payday.year, this_payday.month + 1
+    if m > 12:
+        y, m = y + 1, 1
+    # last day of target month
+    if m == 12:
+        last = dt_date(y + 1, 1, 1) - td(days=1)
+    else:
+        last = dt_date(y, m + 1, 1) - td(days=1)
+    return dt_date(y, m, min(this_payday.day, last.day))
 
 
 # Legacy local helper kept as an alias to the centralised `has_module_access(user, 'hr')` —
@@ -459,9 +568,14 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
       days_worked/working_days.
     - pto_days_override: {staff_id: days} — paid time off (does NOT reduce gross,
       informational only, printed on payslip).
+
+    Bi-weekly / weekly: when `period` is a multi-pay window
+    (e.g. '2026-02-09_2026-02-22 (W07)'), the salary's base_salary is treated
+    as a MONTHLY figure and pro-rated to the pay frequency via `_proration_factor`.
     """
     days_worked_override = days_worked_override or {}
     pto_days_override = pto_days_override or {}
+    is_multi_pay = _period_is_multi_pay(period)
     query = {"status": "active"}
     if location_id:
         query["location_id"] = location_id
@@ -471,7 +585,11 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
         if existing:
             continue
-        base_gross = float(sal.get("base_salary", 0) or 0)
+        # For bi-weekly / weekly, scale monthly base into a single paycheque.
+        # For anything else `factor == 1.0` so the number is unchanged.
+        monthly_base = float(sal.get("base_salary", 0) or 0)
+        factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
+        base_gross = round(monthly_base * factor, 2)
         deductions = 0
         allowances = 0
         items = []
@@ -561,35 +679,52 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
 
 @router.post("/payslips/generate-payday")
 async def generate_payday_payslips(current_user: dict = Depends(require_director)):
-    """Generate payslips for all campuses whose payday matches today.
-    A campus 'is on payday' if either: (a) next_pay_date == today (preferred), or
-    (b) pay_day (legacy day-of-month) equals today's day-of-month. Period defaults to current YYYY-MM."""
-    today = datetime.now(timezone.utc)
+    """Generate payslips for every campus whose payday falls today, honouring
+    each campus's `pay_frequency` (monthly / bi-weekly / weekly). A month can
+    contain 2 or 3 bi-weekly paydays; each landing on today triggers its own
+    period. After successful generation, `next_pay_date` is rolled forward on
+    the campus HR settings so the next cron/manual run picks up the following
+    payday automatically."""
+    today = datetime.now(timezone.utc).date()
     today_iso = today.strftime("%Y-%m-%d")
-    today_day = today.day
-    period = f"{today.year:04d}-{today.month:02d}"
-    campus_q = {"hr_enabled": True, "$or": [
-        {"next_pay_date": today_iso},
-        {"pay_day": today_day},
-    ]}
-    settings = await db.hr_settings.find(campus_q, {"_id": 0, "location_id": 1, "pay_day": 1, "next_pay_date": 1}).to_list(100)
-    if not settings:
-        return {"generated": 0, "payslips": [], "message": f"No campuses have payday today ({today_iso} or day-of-month={today_day})", "period": period}
-    all_generated = []
+    settings = await db.hr_settings.find({"hr_enabled": True}, {"_id": 0}).to_list(200)
+    all_generated: list = []
     total_count = 0
+    fired_periods: list = []
     for s in settings:
         loc_id = s.get("location_id", "")
         if not loc_id:
             continue
+        freq = s.get("pay_frequency") or "monthly"
+        # Prefer the stored next_pay_date; fall back to legacy day-of-month.
+        anchor = s.get("next_pay_date") or ""
+        if not anchor and s.get("pay_day"):
+            try:
+                anchor = today.replace(day=int(s["pay_day"])).isoformat()
+            except Exception:
+                anchor = ""
+        # All paydays in this month for this campus
+        paydays = _paydays_for_frequency(freq, anchor, today)
+        if today not in paydays:
+            continue
+        period = _period_label(freq, today)
         res = await _generate_payslips_for(period, loc_id, current_user)
         total_count += res["generated"]
         all_generated.extend(res["payslips"])
+        fired_periods.append({"location_id": loc_id, "period": period, "frequency": freq})
+        # Roll next_pay_date forward so the next scheduled tick picks it up.
+        next_pd = _next_payday_after(freq, today)
+        await db.hr_settings.update_one(
+            {"location_id": loc_id},
+            {"$set": {"next_pay_date": next_pd.isoformat()}},
+        )
+    if not fired_periods:
+        return {"generated": 0, "payslips": [], "message": f"No campuses have payday today ({today_iso})", "date": today_iso}
     return {
         "generated": total_count,
         "payslips": all_generated,
-        "period": period,
-        "day_of_month": today_day,
-        "campuses_matched": [s.get("location_id") for s in settings],
+        "date": today_iso,
+        "campuses_fired": fired_periods,
     }
 
 
@@ -1283,45 +1418,45 @@ async def get_sponsored_children_stats(location_id: Optional[str] = None, curren
 
 @router.post("/payslips/auto-generate")
 async def auto_generate_payslips(current_user: dict = Depends(require_director)):
-    """Auto-generate payslips for current pay period based on campus HR settings.
-    Checks if today is payday, generates for all campuses where it's due."""
-    today = datetime.now(timezone.utc)
-    current_period = today.strftime("%Y-%m")
+    """Auto-generate payslips for all campuses whose next scheduled payday has
+    arrived (today or earlier), honouring each campus's `pay_frequency`. Runs
+    idempotently — a payslip is only created when one doesn't already exist for
+    that (salary_id, period). After each successful campus run, `next_pay_date`
+    is advanced to the following payday."""
+    today = datetime.now(timezone.utc).date()
     generated_total = 0
-    # Get all campuses with HR enabled
+    fired = []
     campuses = await db.hr_settings.find({"hr_enabled": True}, {"_id": 0}).to_list(50)
     for campus_settings in campuses:
-        pay_day = campus_settings.get("pay_day", 28)
         loc_id = campus_settings.get("location_id", "")
-        # Check if already generated for this period
-        existing = await db.hr_payslips.count_documents({"location_id": loc_id, "period": current_period})
-        if existing > 0:
+        freq = campus_settings.get("pay_frequency") or "monthly"
+        anchor = campus_settings.get("next_pay_date") or ""
+        if not anchor and campus_settings.get("pay_day"):
+            try:
+                anchor = today.replace(day=int(campus_settings["pay_day"])).isoformat()
+            except Exception:
+                anchor = ""
+        try:
+            anchor_date = dt_date.fromisoformat(anchor) if anchor else None
+        except Exception:
+            anchor_date = None
+        if anchor_date is None or anchor_date > today:
             continue
-        # Check if today is on or after payday
-        if today.day >= pay_day:
-            salaries = await db.hr_salaries.find({"status": "active", "location_id": loc_id}, {"_id": 0}).to_list(500)
-            for sal in salaries:
-                gross = sal.get("base_salary", 0)
-                deductions = 0; allowances = 0; items = []
-                for li in (sal.get("line_items") or []):
-                    amt = float(li.get("amount", 0))
-                    if li.get("is_percentage"): amt = gross * amt / 100
-                    if li.get("type") == "deduction": deductions += amt
-                    else: allowances += amt
-                    items.append({**li, "calculated_amount": amt})
-                net = gross + allowances - deductions
-                payslip = {
-                    "id": f"ps_{uuid.uuid4().hex[:8]}", "salary_id": sal["id"], "staff_id": sal["staff_id"],
-                    "staff_name": sal.get("staff_name", ""), "department": sal.get("department", ""),
-                    "location_id": loc_id, "period": current_period,
-                    "gross_salary": gross, "allowances": allowances, "deductions": deductions, "net_salary": net,
-                    "currency": sal.get("currency", "UGX"), "line_items": items, "status": "draft",
-                    "auto_generated": True, "pay_day": pay_day,
-                    "created_at": datetime.now(timezone.utc).isoformat(), "created_by": "system",
-                }
-                await db.hr_payslips.insert_one(payslip)
-                generated_total += 1
-    return {"message": f"Auto-generated {generated_total} payslips for {current_period}", "count": generated_total}
+        # Process every payday from the anchor forward up to today so a missed
+        # cron day still catches up.
+        cursor = anchor_date
+        while cursor <= today:
+            period = _period_label(freq, cursor)
+            res = await _generate_payslips_for(period, loc_id, current_user)
+            generated_total += res["generated"]
+            fired.append({"location_id": loc_id, "period": period, "date": cursor.isoformat(), "count": res["generated"]})
+            cursor = _next_payday_after(freq, cursor)
+        # Store the first payday that is strictly in the future.
+        await db.hr_settings.update_one(
+            {"location_id": loc_id},
+            {"$set": {"next_pay_date": cursor.isoformat()}},
+        )
+    return {"message": f"Auto-generated {generated_total} payslips", "count": generated_total, "fired": fired}
 
 
 # ========== LEAVE / TIME-OFF MANAGEMENT (Odoo-style) ==========

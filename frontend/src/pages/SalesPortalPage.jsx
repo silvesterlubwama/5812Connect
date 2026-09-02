@@ -78,6 +78,39 @@ export default function SalesPortalPage() {
     }
   }, [authed]);
 
+  // ESC exits fullscreen — but only when the terminal is NOT locked. When
+  // locked, the admin has explicitly pinned the kiosk in place, so we swallow
+  // ESC and immediately re-enter fullscreen if the browser dropped it.
+  useEffect(() => {
+    if (!authed) return;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (locked) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      } else if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+    };
+    const onFsChange = () => {
+      // If locked and the browser dropped fullscreen (e.g., user pressed F11),
+      // re-enter it so the kiosk stays pinned.
+      if (locked && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    };
+    // Capture-phase so this runs before shadcn Dialog's own ESC handler.
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('fullscreenchange', onFsChange);
+    };
+  }, [authed, locked]);
+
 
 
   const addToCart = (p) => {

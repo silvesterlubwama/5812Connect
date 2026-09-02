@@ -36,7 +36,6 @@ function downloadCsv(filename, rows) {
 
 export default function FinancePage() {
   const { user } = useAuth();
-  const isAdmin = ['admin', 'system_admin'].includes(user?.role || '');
   const [tab, setTab] = useState('overview');
 
   return (
@@ -46,7 +45,6 @@ export default function FinancePage() {
           <h1 className="text-2xl font-bold tracking-tight">Finance</h1>
           <p className="text-sm text-muted-foreground">One ledger. Every posting balanced. Reports read straight from the journal.</p>
         </div>
-        {isAdmin && <ResetFinanceButton onDone={() => window.location.reload()} />}
       </header>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
@@ -682,33 +680,5 @@ function CfView({ d }) {
 }
 
 // ─── RESET (admin only) ──────────────────────────────────────
-function ResetFinanceButton({ onDone }) {
-  const [open, setOpen] = useState(false);
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const submit = async () => {
-    setBusy(true);
-    try { const r = await api.post('/finance/admin/reset', { confirm }); toast.success(`Reset done. Seeded ${r.data.seeded_accounts} accounts.`); setOpen(false); onDone?.(); }
-    catch (e) { toast.error(e?.response?.data?.detail || 'Reset failed'); }
-    setBusy(false);
-  };
-  return (
-    <>
-      <Button variant="outline" size="sm" className="text-red-700 border-red-300 hover:bg-red-50" onClick={() => setOpen(true)} data-testid="finance-reset-open">
-        <AlertTriangle size={14} className="mr-1" /> Reset Finance
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle className="text-red-700">Reset Finance module</DialogTitle></DialogHeader>
-          <p className="text-sm">This ARCHIVES the current Chart of Accounts + Journal + Transactions into timestamped backup collections and re-seeds a fresh standard chart. Existing data is recoverable but out of the active ledger.</p>
-          <p className="text-sm mt-2">Type <strong>RESET FINANCE</strong> to confirm.</p>
-          <Input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="RESET FINANCE" data-testid="finance-reset-input" />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>Cancel</Button>
-            <Button variant="destructive" onClick={submit} disabled={busy || confirm !== 'RESET FINANCE'} data-testid="finance-reset-confirm">{busy ? 'Resetting…' : 'Reset'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
+// Reset UI moved to Admin → Danger Zone (see AdminPage.jsx). Kept as a
+// no-op placeholder to avoid churn if any test imports this file by path.

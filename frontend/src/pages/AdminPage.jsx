@@ -296,6 +296,11 @@ export default function AdminPage() {
       <UserImportDialog open={showImport} onOpenChange={o => { setShowImport(o); if (!o) { setImportResult(null); setImportJson(''); } }} importJson={importJson} setImportJson={setImportJson} importLoading={importLoading} importResult={importResult} onImport={handleImportUsers} onImportFile={handleImportFile} />
       <UserEditDialog open={showEdit} onOpenChange={setShowEdit} selectedUser={selectedUser} editForm={editForm} setEditForm={setEditForm} locations={locations} saving={saving} onSave={saveEdit} memberDocs={memberDocs} setMemberDocs={setMemberDocs} docRequests={docRequests} setDocRequests={setDocRequests} docsLoading={docsLoading} currentUserRole={currentUser?.role} />
 
+      {/* Danger Zone — destructive maintenance surface, admin only */}
+      {(currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
+        <FinanceResetCard />
+      )}
+
       {/* Reset Password Dialog */}
       <Dialog open={showResetPw} onOpenChange={setShowResetPw}>
         <DialogContent className="max-w-sm">
@@ -1045,3 +1050,98 @@ function OrphanCaseRepairCard() {
   );
 }
 
+
+
+// ── Danger Zone: Finance Reset ────────────────────────────────────────────────
+// Wipes and archives every finance/marketplace collection (ledger, financial
+// records, banking, donors, vendors, products, sales, cash drops, approvals,
+// budgets). HR data is intentionally preserved. Every wiped doc lands in
+// `<collection>_archive_<timestamp>` so recovery is always possible.
+function FinanceResetCard() {
+  const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(null);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try { const r = await api.get('/finance/admin/status'); setStatus(r.data); }
+      catch { setStatus(null); }
+    })();
+  }, [open]);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/finance/admin/reset', { confirm });
+      if (r.data?.error) { toast.error(r.data.error); setBusy(false); return; }
+      const wiped = Object.entries(r.data.archived || {})
+        .filter(([, n]) => n > 0)
+        .reduce((s, [, n]) => s + n, 0);
+      toast.success(`Reset complete · ${wiped} records archived · ${r.data.seeded_accounts} accounts seeded`);
+      setOpen(false); setConfirm('');
+    }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Reset failed'); }
+    setBusy(false);
+  };
+
+  return (
+    <Card className="border-red-300/60 bg-red-50/40" data-testid="admin-danger-zone">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-2 text-red-700">
+          <AlertTriangle size={16} />
+          <h3 className="font-semibold text-sm">Danger Zone</h3>
+        </div>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex-1 min-w-[240px]">
+            <p className="text-sm font-medium">Reset Finance & Marketplace</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Archives and clears the ledger, financial records, banking, donors, vendors, products, marketplace postings, sales, cash drops, approvals, and budgets. HR (salaries and payslips) is preserved. Recoverable from timestamped archive collections.
+            </p>
+          </div>
+          <Button
+            variant="outline" size="sm"
+            className="text-red-700 border-red-300 hover:bg-red-100"
+            onClick={() => setOpen(true)}
+            data-testid="finance-reset-open"
+          >
+            <AlertTriangle size={14} className="mr-1" /> Reset Finance
+          </Button>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="text-red-700">Reset Finance & Marketplace</DialogTitle>
+              <DialogDescription>
+                This archives every finance and marketplace collection into <code>_archive_&lt;timestamp&gt;</code> tables and re-seeds a fresh chart of accounts. HR payslips and salaries are left untouched.
+              </DialogDescription>
+            </DialogHeader>
+            {status?.collections && (
+              <div className="max-h-56 overflow-auto rounded border border-border bg-background text-xs">
+                <table className="w-full">
+                  <thead className="bg-muted/60 sticky top-0"><tr><th className="text-left px-2 py-1 font-medium">Collection</th><th className="text-right px-2 py-1 font-medium">Records</th></tr></thead>
+                  <tbody>
+                    {Object.entries(status.collections)
+                      .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                      .map(([k, v]) => (
+                        <tr key={k} className="border-t border-border/60"><td className="px-2 py-1 font-mono text-[11px]">{k}</td><td className="px-2 py-1 text-right">{v}</td></tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="text-sm mt-1">Type <strong>RESET FINANCE</strong> to confirm.</p>
+            <Input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="RESET FINANCE" data-testid="finance-reset-input" />
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>Cancel</Button>
+              <Button variant="destructive" onClick={submit} disabled={busy || confirm !== 'RESET FINANCE'} data-testid="finance-reset-confirm">
+                {busy ? 'Resetting…' : 'Reset Finance'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
+  );
+}

@@ -26,10 +26,40 @@ ACCOUNT_TYPES = {"asset", "liability", "equity", "revenue", "expense"}
 # Reset marker → collections we touch, in one place, so nothing gets missed
 # when the user hits the "Reset Finance" button. Everything ending in
 # `_archive_<ts>` is preserved for audit / recovery.
+# HR data (hr_payslips/hr_salaries/hr_settings) is INTENTIONALLY excluded —
+# HR lives in its own top-level section and has its own admin surface.
 FINANCE_COLLECTIONS = [
+    # Core ledger
     "finance_chart_of_accounts",
     "finance_journal_entries",
     "finance_transactions",
+    # Legacy financial module (records that pre-date the double-entry ledger)
+    "financial",
+    "financial_accounts",
+    "financial_transfers",
+    "financial_categories",
+    "financial_budgets",
+    "financial_assets",
+    "financial_settings",
+    # Banking
+    "bank_accounts",
+    "bank_transactions",
+    "bank_reconciliations",
+    # AR / AP counterparties
+    "donors",
+    "vendors",
+    # Marketplace + sales stack
+    "products",
+    "product_variants",
+    "sales",
+    "sales_orders",
+    "sales_quotes",
+    "sales_receipts",
+    "cash_drops",
+    "cashier_shifts",
+    # Approvals + budgets tied to finance
+    "approvals",
+    "budgets",
 ]
 
 # Seed COA — code prefixes follow the standard convention (1xxx assets,
