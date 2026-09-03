@@ -509,6 +509,16 @@ export const resourcesApi = {
   adjust: (id, data) => api.post(`/resources/${id}/adjust`, data),
   movements: (id, params) => api.get(`/resources/${id}/movements`, { params }),
   consumablesLookup: (q) => api.get('/resources/consumables/lookup', { params: { q } }),
+  // Manual tracking sheets — printable per-month worksheet + upload for auto-decrement
+  trackingSheetUrl: (id, month) => `${BACKEND_URL}/api/resources/${id}/tracking-sheet${month ? `?month=${encodeURIComponent(month)}` : ''}`,
+  uploadTrackingSheet: (id, data) => api.post(`/resources/${id}/tracking-sheet/upload`, data),
+  listTrackingSheets: (id) => api.get(`/resources/${id}/tracking-sheets`),
+};
+
+// ---- EVENT TICKETS (auto-issue to existing members / children) ----
+export const eventTicketsApi = {
+  issue: (eventId, data) => api.post(`/events/${eventId}/issue-tickets`, data),
+  listAutoIssued: (eventId) => api.get(`/events/${eventId}/auto-issued`),
 };
 
 // ---- ANNOUNCEMENTS ----

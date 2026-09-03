@@ -63,6 +63,7 @@ export default function ResourcesPage() {
   const [resourceTypes, setResourceTypes] = useState(RESOURCE_TYPES);
   const [showTypeManager, setShowTypeManager] = useState(false);
   const [newTypeName, setNewTypeName] = useState('');
+  const [showSheetUpload, setShowSheetUpload] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -270,6 +271,30 @@ export default function ResourcesPage() {
                 {!r.serial_number && !canIssueBarcodes && (
                   <p className="text-[10px] text-muted-foreground italic mb-2">No barcode — admin/director can issue one</p>
                 )}
+                {r.is_consumable && (
+                  <div className="flex items-center gap-1 mb-2">
+                    <Button size="sm" variant="outline" className="h-7 text-[10px] flex-1 gap-1" onClick={() => {
+                      const month = window.prompt('Month for tracking sheet (YYYY-MM):', new Date().toISOString().slice(0,7));
+                      if (!month) return;
+                      const url = resourcesApi.trackingSheetUrl(r.id, month);
+                      // Auth is via bearer token in localStorage — use fetch to
+                      // stream the HTML and open it in a new tab. Works even
+                      // when the API is on a different subdomain from the app.
+                      import('../services/secureStorage').then(({ default: ss }) => {
+                        const tk = ss.getToken();
+                        fetch(url, { headers: { Authorization: `Bearer ${tk}` } })
+                          .then(res => res.ok ? res.text() : Promise.reject(res.statusText))
+                          .then(html => { const w = window.open('', '_blank'); w.document.open(); w.document.write(html); w.document.close(); })
+                          .catch(err => toast.error('Failed: ' + err));
+                      });
+                    }} data-testid={`tracking-sheet-btn-${r.id}`}>
+                      <Printer size={10} /> Print Sheet
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-[10px] flex-1 gap-1" onClick={() => { setStockResource(r); setShowSheetUpload(true); }} data-testid={`upload-sheet-btn-${r.id}`}>
+                      <Package size={10} /> Upload Sheet
+                    </Button>
+                  </div>
+                )}
                 {r.description && <p className="text-xs text-muted-foreground line-clamp-2">{r.description}</p>}
                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                   {r.quantity > 1 && <span>Qty: {r.quantity}</span>}
@@ -461,6 +486,12 @@ export default function ResourcesPage() {
         resource={stockResource}
         onDone={() => { setShowStock(false); fetchData(); }}
       />
+
+      <SheetUploadDialog
+        open={showSheetUpload} onOpenChange={setShowSheetUpload}
+        resource={stockResource}
+        onDone={() => { setShowSheetUpload(false); fetchData(); }}
+      />
     </div>
   );
 }
@@ -563,6 +594,80 @@ function StockDialog({ open, onOpenChange, resource, onDone }) {
             {!movements.length && <p className="text-xs text-muted-foreground">No history yet</p>}
           </div>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// Upload a filled tracking sheet — total servings × conversion → auto-decrement stock
+function SheetUploadDialog({ open, onOpenChange, resource, onDone }) {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [total, setTotal] = useState('');
+  const [servingUnit, setServingUnit] = useState('');
+  const [filledBy, setFilledBy] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [convs, setConvs] = useState([]);
+
+  React.useEffect(() => {
+    if (!open || !resource) return;
+    setMonth(new Date().toISOString().slice(0, 7));
+    setTotal(''); setNote(''); setFilledBy('');
+    // Pull the resource's serving_conversions (or fall back to defaults)
+    api.get(`/resources/${resource.id}`).then(r => {
+      const c = r.data?.serving_conversions || [];
+      setConvs(c);
+      setServingUnit(c[0]?.unit || '');
+    }).catch(() => { setConvs([]); setServingUnit(''); });
+  }, [open, resource]);
+
+  const submit = async () => {
+    const n = parseFloat(total);
+    if (!(n > 0)) { toast.error('Enter total servings > 0'); return; }
+    if (!servingUnit) { toast.error('Pick a serving unit'); return; }
+    setBusy(true);
+    try {
+      const r = await resourcesApi.uploadTrackingSheet(resource.id, {
+        month, total_servings: n, serving_unit: servingUnit,
+        note, filled_by: filledBy,
+      });
+      toast.success(`Recorded ${r.data.movement.qty} ${r.data.movement.qty > 1 ? '' : ''}${resource.unit || 'unit'}(s) used · on hand: ${r.data.on_hand}`);
+      onDone?.();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    finally { setBusy(false); }
+  };
+
+  if (!resource) return null;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md" data-testid="sheet-upload-dialog">
+        <DialogHeader>
+          <DialogTitle>Upload Tracking Sheet — {resource.name}</DialogTitle>
+          <DialogDescription>Enter the total from the printed sheet — we convert servings → {resource.unit || 'base unit'} and decrement stock.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <div><Label>Month</Label><Input type="month" value={month} onChange={e => setMonth(e.target.value)} data-testid="sheet-month" /></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label>Total servings</Label><Input type="number" min="0" step="any" value={total} onChange={e => setTotal(e.target.value)} data-testid="sheet-total" /></div>
+            <div>
+              <Label>Serving unit</Label>
+              <Select value={servingUnit} onValueChange={setServingUnit}>
+                <SelectTrigger data-testid="sheet-serving-unit"><SelectValue placeholder="Pick unit" /></SelectTrigger>
+                <SelectContent>
+                  {convs.length === 0 && <SelectItem value="Ugandan cup">Ugandan cup (default)</SelectItem>}
+                  {convs.map((c, i) => <SelectItem key={i} value={c.unit}>{c.unit} — 1 {c.unit} ≈ {c.per_base} {c.base}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div><Label>Filled by (caregiver initials)</Label><Input value={filledBy} onChange={e => setFilledBy(e.target.value)} data-testid="sheet-filled-by" /></div>
+          <div><Label>Notes</Label><Textarea rows={2} value={note} onChange={e => setNote(e.target.value)} /></div>
+          {convs.length === 0 && (
+            <p className="text-[11px] text-amber-700">No custom conversions on this resource — we&apos;ll try the field defaults (rice 2 cups/kg, posho 3 cups/kg, soap 4 quarters/bar).  You can set exact conversions under Resources → Edit → Serving conversions.</p>
+          )}
+        </div>
+        <div className="flex gap-2 pt-2"><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><div className="flex-1" /><Button onClick={submit} disabled={busy} data-testid="sheet-submit">{busy ? 'Uploading…' : 'Post & decrement stock'}</Button></div>
       </DialogContent>
     </Dialog>
   );

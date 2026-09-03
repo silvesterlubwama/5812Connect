@@ -277,18 +277,27 @@ export default function AccountingPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [accRes, jrnRes, typesRes, entRes, taxRes, fpRes, tbRes, plRes, bsRes] = await Promise.all([
-        api.get('/accounting/accounts', { params: { location_id: locationFilter } }).catch(() => ({ data: [] })),
-        api.get('/accounting/journals').catch(() => ({ data: [] })),
-        api.get('/accounting/account-types').catch(() => ({ data: [] })),
-        api.get('/accounting/entries', { params: { limit: 100, include_reversed: showReversed } }).catch(() => ({ data: [] })),
-        api.get('/accounting/taxes').catch(() => ({ data: [] })),
-        api.get('/accounting/fiscal-periods').catch(() => ({ data: [] })),
-        api.get('/accounting/reports/trial-balance', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
-        api.get('/accounting/reports/profit-loss', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
-        api.get('/accounting/reports/balance-sheet', { params: { location_id: locationFilter } }).catch(() => ({ data: null })),
+      // Iter 277 — legacy /accounting/* endpoints were dropped in favour of
+      // the finance package. Point Chart of Accounts / Journal / Reports at
+      // the current backend so the tab stops rendering empty.
+      const [accRes, jrnRes, entRes, tbRes, plRes, bsRes] = await Promise.all([
+        api.get('/finance/chart-of-accounts', { params: { active_only: true } }).catch(() => ({ data: [] })),
+        Promise.resolve({ data: [] }), // journals — legacy, unused
+        api.get('/finance/journal', { params: { limit: 100 } }).catch(() => ({ data: [] })),
+        api.get('/finance/reports/trial-balance').catch(() => ({ data: null })),
+        api.get('/finance/reports/pnl').catch(() => ({ data: null })),
+        api.get('/finance/reports/balance-sheet').catch(() => ({ data: null })),
       ]);
-      setAccounts(accRes.data || []);
+      const typesRes = { data: [] };
+      const taxRes = { data: [] };
+      const fpRes = { data: [] };
+      // Normalize each account so the existing UI mapping (category, type_label) still works
+      const cats = { asset: 'asset', liability: 'liability', equity: 'equity', income: 'income', expense: 'expense' };
+      setAccounts((accRes.data || []).map(a => ({
+        ...a,
+        category: cats[(a.type || '').toLowerCase()] || (a.category || ''),
+        type_label: a.type || a.category || '',
+      })));
       // Filter journals + entries to the picked campus AND its full hierarchy
       // (descendants + ancestors, bounded to depth 3).  Payroll JEs are often
       // posted at sub-location level while operators pick campuses in the
@@ -312,12 +321,26 @@ export default function AccountingPage() {
         cur = node.parent_id;
         scopedLocIds.add(cur);
       }
+      // Normalize legacy field names — /finance/journal returns id/date/
+      // description/source/total/reversed; the (older) UI expects
+      // number/narration/journal_code/total_debit/status/is_reversed/reverses.
+      // Map here so no display code has to fork per-endpoint.
+      const normEntries = (entRes.data || []).map(e => ({
+        ...e,
+        number: e.number || e.id,
+        narration: e.narration || e.description,
+        journal_code: e.journal_code || e.source || '',
+        total_debit: e.total_debit ?? e.total ?? 0,
+        status: e.status || (e.reversed ? 'posted' : 'posted'),
+        is_reversed: e.is_reversed ?? !!e.reversed,
+        reverses: e.reverses || e.reverses_id || null,
+      }));
       const inScope = (row) => !row.location_id || scopedLocIds.has(row.location_id);
-      setJournals((jrnRes.data || []).filter(inScope));
-      setAccountTypes(typesRes.data || []);
-      setEntries((entRes.data || []).filter(inScope));
-      setTaxes((taxRes.data || []).filter(inScope));
-      setFiscalPeriods((fpRes.data || []).filter(inScope));
+      setJournals([]);
+      setAccountTypes([]);
+      setEntries(normEntries.filter(inScope));
+      setTaxes([]);
+      setFiscalPeriods([]);
       setTb(tbRes.data); setPl(plRes.data); setBs(bsRes.data);
     } finally { setLoading(false); }
   }, [locationFilter, showReversed, allLocations]);
@@ -343,11 +366,14 @@ export default function AccountingPage() {
 
   const saveAccount = async () => {
     try {
+      // Backend uses the raw category strings ('asset', 'liability', 'equity', 'income', 'expense')
+      // — collapse legacy sub-types (asset_current, expense_operating, …) to the base.
+      const base = (accountForm.type || 'asset').split('_')[0];
       if (accountForm.id) {
-        await api.put(`/accounting/accounts/${accountForm.id}`, { code: accountForm.code, name: accountForm.name, type: accountForm.type, currency: accountForm.currency });
+        await api.put(`/finance/chart-of-accounts/${accountForm.id}`, { code: accountForm.code, name: accountForm.name, type: base });
         toast.success('Account updated');
       } else {
-        await api.post('/accounting/accounts', { ...accountForm, location_id: locationFilter });
+        await api.post('/finance/chart-of-accounts', { code: accountForm.code, name: accountForm.name, type: base });
         toast.success('Account created');
       }
       setShowAccountForm(false);
@@ -357,10 +383,10 @@ export default function AccountingPage() {
   };
 
   const deleteAccount = async (a) => {
-    if (!window.confirm(`Delete account "${a.code} ${a.name}"? Accounts with journal lines will be deactivated instead.`)) return;
+    if (!window.confirm(`Delete account "${a.code} ${a.name}"? System accounts and any referenced by journal entries cannot be deleted — deactivate them instead.`)) return;
     try {
-      const r = await api.delete(`/accounting/accounts/${a.id}`);
-      toast.success(r.data.deactivated ? 'Deactivated (had journal lines)' : 'Deleted');
+      await api.delete(`/finance/chart-of-accounts/${a.id}`);
+      toast.success('Deleted');
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };

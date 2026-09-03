@@ -267,9 +267,15 @@ export default function TasksPage() {
     const pos = tasks[listId]?.length || 0;
     try {
       const res = await tasksApi.create({ title, board_id: activeBoardId, list_id: listId, list_name: list?.name || '', status: 'todo', position: pos, assignees: [], labels: [], checklist: [], attachments: [] });
+      // Optimistic update. Also refetch the board a beat later so we survive
+      // any race where the WS broadcast lands before local state flushes and
+      // the card never appears (iter 277 — user reported "new tasks aren't
+      // saving"; server IS persisting them, the UI was hiding them).
       setTasks(prev => ({ ...prev, [listId]: [...(prev[listId] || []), res.data] }));
+      setTimeout(() => { fetchBoardDetail(); }, 300);
+      toast.success('Card added');
     } catch { toast.error('Failed to add card'); }
-  }, [activeBoardId, board, tasks]);
+  }, [activeBoardId, board, tasks, fetchBoardDetail]);
 
   const archiveCard = useCallback(async (task) => {
     const { tasksExtApi } = await import('../services/api');
