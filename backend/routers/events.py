@@ -2537,7 +2537,24 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
     title = data.get("title", "Recurring Event")
     event_type = data.get("type", "service")
     location = data.get("location", "")
-    location_id = data.get("location_id", "")
+    location_id = data.get("location_id", "") or ""
+    venue_id = data.get("venue_id", "") or ""
+    # Fallback: if caller didn't provide a location scope, use their active
+    # campus / home campus so the generated events are still visible under
+    # get_campus_filter. Without this, `location_id=""` events would never
+    # appear in eventsApi.list.
+    if not location_id:
+        location_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    # If we got a venue but not a location, resolve the venue's parent location.
+    if venue_id and not location_id:
+        v = await db.venues.find_one({"id": venue_id}, {"_id": 0, "location_id": 1})
+        if v and v.get("location_id"):
+            location_id = v["location_id"]
+    # If we got a location but no venue text, try to resolve a friendly location name
+    if location_id and not location:
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
+        if loc and loc.get("name"):
+            location = loc["name"]
     time_str = data.get("time", "09:00")
     end_time = data.get("end_time", "")
     start_date = data.get("start_date", datetime.now(timezone.utc).isoformat()[:10])
@@ -2551,6 +2568,8 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
     end_date = data.get("end_date")
     custom_dates = data.get("custom_dates", [])  # For custom pattern: list of date strings
     days_of_week = data.get("days_of_week", [])  # For custom: multiple days per week
+    # Only future dates — recurring generation never back-fills the past.
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     from datetime import timedelta
     start = datetime.fromisoformat(start_date)
@@ -2642,12 +2661,16 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
         date_str = event_date.strftime("%Y-%m-%d")
         if end_date and date_str > end_date:
             break
+        # Skip past dates — recurring generation is future-only.
+        if date_str < today_iso:
+            continue
 
         event_id = f"evt_{str(uuid.uuid4())[:8]}"
         doc = {
             "id": event_id, "title": title, "type": event_type,
             "date": date_str, "time": time_str, "end_time": end_time,
             "location": location, "location_id": location_id,
+            "venue_id": venue_id or None,
             "capacity": capacity, "registered": 0, "status": "upcoming",
             "is_public": is_public, "is_free": True, "visibility": "external",
             "is_recurring": True, "recurrence_pattern": pattern,

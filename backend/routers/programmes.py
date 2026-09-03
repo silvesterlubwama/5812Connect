@@ -235,6 +235,9 @@ async def generate_recurring_events(prog_id: str, data: dict, current_user: dict
             continue
 
         date_str = f"{year}-{month:02d}-{day:02d}"
+        # Skip past dates — only future outreach events are auto-generated.
+        if date_str < datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            continue
         event_id = f"evt_{str(uuid.uuid4())[:8]}"
         event = {
             "id": event_id,
@@ -245,6 +248,7 @@ async def generate_recurring_events(prog_id: str, data: dict, current_user: dict
             "end_time": end_time_str,
             "location": prog.get("location", ""),
             "location_id": prog.get("location_id"),
+            "venue_id": prog.get("venue_id"),
             "capacity": prog.get("target", 100),
             "description": prog.get("description", ""),
             "is_public": False,
@@ -293,6 +297,9 @@ async def _auto_generate_outreach_events(prog: dict, user_id: str, months_ahead:
         else:
             continue
         date_str = f"{year}-{month:02d}-{day:02d}"
+        # Skip past dates — auto-generation is future-only.
+        if date_str < datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            continue
         # Check if event already exists for this programme on this date
         existing = await db.events.find_one({"programme_id": prog["id"], "date": date_str})
         if existing:
@@ -302,6 +309,7 @@ async def _auto_generate_outreach_events(prog: dict, user_id: str, months_ahead:
             "id": event_id, "title": prog.get("name", "Outreach Event"),
             "type": "outreach", "date": date_str, "time": time_str, "end_time": end_time_str,
             "location": prog.get("location", ""), "location_id": prog.get("location_id"),
+            "venue_id": prog.get("venue_id"),
             "capacity": prog.get("target", 100), "description": prog.get("description", ""),
             "is_public": False, "is_free": True, "visibility": "internal",
             "is_recurring": True, "programme_id": prog["id"],

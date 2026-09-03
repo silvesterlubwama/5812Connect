@@ -139,6 +139,7 @@ export default function OutreachPage() {
         type: 'outreach',
         location: showRecurring.location || '',
         location_id: showRecurring.location_id || '',
+        venue_id: showRecurring.venue_id || '',
         pattern: recurForm.pattern || 'weekly',
         occurrences,
         interval: parseInt(recurForm.interval) || 1,

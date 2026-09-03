@@ -3,6 +3,19 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 272 (Feb 2026)
+**Outreach → Calendar bridge repaired + no more past-date auto-generation.**
+
+- **Root cause**: `POST /events/generate-recurring` accepted an empty `location_id` and wrote events with `location_id=""`. `get_campus_filter()` then hid every one of those rows from `eventsApi.list()`, so freshly-generated outreach events silently disappeared from the unified Calendar.
+- **Fix (`routers/events.py`)**:
+  - Fallback: when `location_id` is missing on the payload, inherit the caller's `active_campus_id` (or home `location_id`).
+  - Venue inheritance: accept `venue_id`; when provided without a location, resolve the venue's parent location so scoping still works.
+  - Location name auto-resolution when only an id is supplied.
+  - Skip past dates: every generated occurrence is compared against today (UTC) and dropped if it's in the past — partial ranges now generate only the future half.
+- **Fix (`routers/programmes.py`)**: same past-date skip in `POST /outreach/programs/{id}/generate-events` and the shared `_auto_generate_outreach_events` helper. Programme's `venue_id` is now copied onto every generated event.
+- **Fix (`OutreachPage.jsx`)**: recurring generator now forwards `venue_id: showRecurring.venue_id` so the event inherits the programme's venue (venue-availability collision check kicks in automatically).
+- **Verified**: past date range → 0 created; future range → all events appear in `eventsApi.list` with correct `location_id`; venue_id propagates end-to-end.
+
 ## Recently Resolved — Iteration 271 (Feb 2026)
 **Personalised calendar share links — user picks what to include.**
 
