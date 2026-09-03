@@ -1,6 +1,6 @@
 """Tasks CRUD routes — archive/restore, assignees, attachments, WebSocket broadcasts"""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from deps import db, get_current_user, _audit, logger, get_campus_filter, is_system_admin
+from deps import db, get_current_user, _audit, logger, get_campus_filter, is_system_admin, expand_descendants
 from models import TaskCreate, TaskUpdate
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
@@ -63,13 +63,11 @@ async def list_tasks(
         if current_user.get("location_id"):
             user_locs.add(current_user["location_id"])
     if user_locs:
-        sub_locs = await db.locations.find(
-            {"parent_id": {"$in": list(user_locs)}, "type": "sub-location"},
-            {"_id": 0, "id": 1, "is_restricted": 1}
-        ).to_list(500)
-        for s in sub_locs:
-            if not s.get("is_restricted") or s["id"] in user_locs:
-                user_locs.add(s["id"])
+        # Recursive descendant walk — type-agnostic. Viewing 58:12 Uganda
+        # should surface Zimba Farm; viewing 58:12 Global (Central) should
+        # surface every descendant (Uganda, Kenya, Haiti, and their sub-locs).
+        descendants = await expand_descendants(list(user_locs), include_restricted_from=user_locs, allow_all_restricted=False)
+        user_locs |= descendants
     user_locs_list = list(user_locs)
 
     # Boards on which user has a task assigned — include even if otherwise out of scope

@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 270 (Feb 2026)
+**Recursive campus descendant expansion + Shelter reparented under Uganda.**
+
+- **Bug**: `get_campus_filter()` in `deps.py`, `routers/tasks.py`, and `routers/boards.py` only expanded children of `type="sub-location"`. Compass-type children (e.g. `58:12 Uganda` under `58:12 Global (Central)`) were never traversed, so an admin viewing Global Central never saw Uganda's boards/tasks/events and a Uganda user never saw Shelter (which was orphaned separately).
+- **Fix**: New shared helper `expand_descendants(root_ids, include_restricted_from, allow_all_restricted, max_depth=6)` in `deps.py` — walks the location tree downward regardless of `type` with a depth cap, honouring restricted branches (a restricted sub-location and its descendants are skipped unless the user is explicitly assigned to that sub-location, unless system_admin). Wired into all three scoping paths.
+- **Data**: Reparented `58:12 Shelter` (was orphan `type=campus`) → `parent_id=loc_419f5d5e (Uganda)`, `type=sub-location`. Uganda staff now inherit it automatically.
+- **Result**: Location tree is now traversed as `Global Central → {Uganda, Kenya, Haiti, Rescue, United} → their sub-locations` etc. Users see exactly what they should for the parent campus they're pinned to.
+
 ## Recently Resolved — Iteration 269 (Feb 2026)
 **Unified Calendar + kill "All my campuses" + public shareable feeds.**
 

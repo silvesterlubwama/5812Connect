@@ -333,18 +333,12 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
         active and active in user_loc_ids
     )
     if can_use_switcher and active:
-        # Only include sub-locations (type=sub-location), not sibling campuses
-        sub_locs = await db.locations.find(
-            {"parent_id": active, "type": "sub-location"},
-            {"_id": 0, "id": 1, "is_restricted": 1}
-        ).to_list(200)
-        # For non-system-admins, exclude restricted sub-locs unless explicitly assigned
-        if _is_admin:
-            allowed_subs = [s["id"] for s in sub_locs]
-        else:
-            allowed_subs = [s["id"] for s in sub_locs
-                            if not s.get("is_restricted") or s["id"] in user_loc_ids]
-        all_locs = [active] + allowed_subs
+        # Recursive descendant walk (any type). Viewing a parent campus should
+        # surface every descendant the user has permission on — a Uganda user
+        # sees Zimba Farm (sub-location), and a Global Central admin sees
+        # Uganda + Kenya + Haiti + Rescue + all of their descendants.
+        descendants = await expand_descendants([active], include_restricted_from=user_loc_ids, allow_all_restricted=_is_admin)
+        all_locs = list({active, *descendants})
         if len(all_locs) == 1:
             return {"$or": [{field: active}, {"location_ids": active}]}
         return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
@@ -353,20 +347,53 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     locs = list(user_loc_ids)
     if not locs:
         return {}
-    # Only expand to sub-locations; restricted sub-locs only if in user's location_ids
-    sub_locs = await db.locations.find(
-        {"parent_id": {"$in": locs}, "type": "sub-location"},
-        {"_id": 0, "id": 1, "is_restricted": 1}
-    ).to_list(200)
-    expanded = list(locs)
-    for s in sub_locs:
-        if s.get("is_restricted") and s["id"] not in user_loc_ids:
-            continue  # Skip restricted sub-locs not explicitly assigned
-        expanded.append(s["id"])
-    all_locs = list(set(expanded))
+    # Recursive descendant walk (any type) — restricted sub-locs only if in user's location_ids
+    descendants = await expand_descendants(locs, include_restricted_from=user_loc_ids, allow_all_restricted=False)
+    all_locs = list({*locs, *descendants})
     if len(all_locs) == 1:
         return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
     return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
+
+
+async def expand_descendants(root_ids: list, include_restricted_from: set = None,
+                             allow_all_restricted: bool = False, max_depth: int = 6) -> set:
+    """Walk the location tree from `root_ids` downward and return every
+    descendant id, regardless of `type`. This is the type-agnostic replacement
+    for the legacy `type == 'sub-location'` scan — a parent campus of type
+    `compass` (e.g. 58:12 Uganda) can have children of any type (campus,
+    sub-location, sublocation) and we want them all.
+
+    Args:
+        root_ids: Ids whose descendants we want (roots themselves are NOT
+                  included in the return value — caller adds them).
+        include_restricted_from: Users that ARE explicitly assigned to a
+                  restricted location still get to see it. Pass user_loc_ids.
+        allow_all_restricted: system_admin bypass — see everything.
+        max_depth: Safety cap on recursion in case of cyclic data.
+    """
+    if include_restricted_from is None:
+        include_restricted_from = set()
+    seen: set = set()
+    frontier = [r for r in root_ids if r]
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        docs = await db.locations.find(
+            {"parent_id": {"$in": frontier}},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(1000)
+        next_frontier: list = []
+        for d in docs:
+            lid = d.get("id")
+            if not lid or lid in seen:
+                continue
+            if d.get("is_restricted") and not allow_all_restricted and lid not in include_restricted_from:
+                # Restricted branch — user cannot see it OR its children.
+                continue
+            seen.add(lid)
+            next_frontier.append(lid)
+        frontier = next_frontier
+    return seen
 
 
 async def generate_title(role: str, location_ids: list, department: str = None) -> str:

@@ -1,6 +1,6 @@
 """Kanban Boards — Trello-like boards per location, with lists and tasks"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, _audit, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, _audit, logger, is_system_admin, get_campus_filter, expand_descendants
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -91,16 +91,12 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
         user_locs = set(current_user.get("location_ids") or [])
         if current_user.get("location_id"):
             user_locs.add(current_user["location_id"])
-    # Expand to include sub-locations
+    # Expand to include every descendant (any type). A parent campus like
+    # 58:12 Uganda has type=compass; its children can be campus / sub-location
+    # / etc. — this walk grabs all of them, honouring restricted access rules.
     if user_locs:
-        sub_locs = await db.locations.find(
-            {"parent_id": {"$in": list(user_locs)}, "type": "sub-location"},
-            {"_id": 0, "id": 1, "is_restricted": 1}
-        ).to_list(500)
-        for s in sub_locs:
-            # Include non-restricted sub-locations automatically; restricted ones only if explicitly assigned
-            if not s.get("is_restricted") or s["id"] in user_locs:
-                user_locs.add(s["id"])
+        descendants = await expand_descendants(list(user_locs), include_restricted_from=user_locs, allow_all_restricted=False)
+        user_locs |= descendants
     user_locs_list = list(user_locs)
 
     # Boards on which user has a task assigned — include even if otherwise out of scope
