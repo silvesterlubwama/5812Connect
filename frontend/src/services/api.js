@@ -463,6 +463,9 @@ export const exportApi = {
 // ---- PUBLIC CALENDAR SHARE ----
 export const publicCalendarApi = {
   shareLinks: () => api.get('/calendar/share-links'),
+  listConfigs: () => api.get('/calendar/share-configs'),
+  createConfig: (data) => api.post('/calendar/share-configs', data),
+  deleteConfig: (id) => api.delete(`/calendar/share-configs/${id}`),
 };
 
 // ---- OUTREACH ----

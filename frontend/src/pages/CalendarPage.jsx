@@ -239,16 +239,42 @@ export default function CalendarPage() {
   };
 
   const [shareLinks, setShareLinks] = useState(null);
+  const [shareConfigs, setShareConfigs] = useState([]);
+  const [shareConfigsLoading, setShareConfigsLoading] = useState(false);
   const openShare = async () => {
     setShowShare(true);
     if (!shareLinks) {
       try { const r = await publicCalendarApi.shareLinks(); setShareLinks(r.data); }
       catch { toast.error('Could not load share links'); }
     }
+    setShareConfigsLoading(true);
+    try { const r = await publicCalendarApi.listConfigs(); setShareConfigs(r.data || []); }
+    catch { /* silent */ }
+    setShareConfigsLoading(false);
   };
   const backend = process.env.REACT_APP_BACKEND_URL || '';
-  const buildIcalUrl = (scope, id, token) => scope === 'global' ? `${backend}/api/public/calendar/global.ics?token=${token}` : `${backend}/api/public/calendar/location/${id}.ics?token=${token}`;
-  const buildViewUrl = (scope, id, token) => scope === 'global' ? `${window.location.origin}/p/calendar/global/${token}` : `${window.location.origin}/p/calendar/location/${id}/${token}`;
+  const buildIcalUrl = (scope, id, token) => {
+    if (scope === 'global') return `${backend}/api/public/calendar/global.ics?token=${token}`;
+    if (scope === 'user') return `${backend}/api/public/calendar/user/${token}.ics`;
+    return `${backend}/api/public/calendar/location/${id}.ics?token=${token}`;
+  };
+  const buildViewUrl = (scope, id, token) => {
+    if (scope === 'global') return `${window.location.origin}/p/calendar/global/${token}`;
+    if (scope === 'user') return `${window.location.origin}/p/calendar/user/${token}`;
+    return `${window.location.origin}/p/calendar/location/${id}/${token}`;
+  };
+  const createShareConfig = async (payload) => {
+    try {
+      const r = await publicCalendarApi.createConfig(payload);
+      setShareConfigs(list => [r.data, ...list]);
+      toast.success('Share link created');
+    } catch { toast.error('Could not create share link'); }
+  };
+  const revokeShareConfig = async (id) => {
+    if (!window.confirm('Revoke this share link? Anyone using it will lose access.')) return;
+    try { await publicCalendarApi.deleteConfig(id); setShareConfigs(list => list.filter(c => c.id !== id)); toast.success('Link revoked'); }
+    catch { toast.error('Could not revoke link'); }
+  };
 
   // ── Rendering ────────────────────────────────────────────────────────
   const CellItem = ({ it }) => (
@@ -502,17 +528,63 @@ export default function CalendarPage() {
 
       {/* Share dialog */}
       <Dialog open={showShare} onOpenChange={setShowShare}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Share Public Calendar</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Anyone with a link can view <strong>public events only</strong>. Tasks and private events are never included.</p>
-          {shareLinks ? (
-            <div className="space-y-4">
-              <ShareBlock title="Global — all campuses" viewUrl={buildViewUrl('global', '', shareLinks.global.token)} icalUrl={buildIcalUrl('global', '', shareLinks.global.token)} />
-              {shareLinks.locations?.map(loc => (
-                <ShareBlock key={loc.location_id} title={loc.location_name} viewUrl={buildViewUrl('location', loc.location_id, loc.token)} icalUrl={buildIcalUrl('location', loc.location_id, loc.token)} />
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Share Calendar</DialogTitle></DialogHeader>
+
+          {/* Custom (personalised) link creator */}
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+            <div>
+              <p className="text-sm font-semibold">Create a custom share link</p>
+              <p className="text-xs text-muted-foreground">Pick exactly what to include — public events, your private events, your tasks, and which campuses. Each link has its own unique code so you can revoke it later.</p>
+            </div>
+            <CustomShareForm locations={locations} onCreate={createShareConfig} />
+          </div>
+
+          {/* My saved custom links */}
+          {(shareConfigs.length > 0 || shareConfigsLoading) && (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold">My saved links</p>
+              {shareConfigsLoading && shareConfigs.length === 0 && <div className="animate-pulse h-16 bg-muted rounded" />}
+              {shareConfigs.map(cfg => (
+                <div key={cfg.id} className="rounded-lg border border-border p-3 space-y-2" data-testid={`saved-share-${cfg.id}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold truncate">{cfg.name}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {cfg.include_public_events && '· Public events '}
+                        {cfg.include_private_events && '· Private events '}
+                        {cfg.include_tasks && `· Tasks (${cfg.task_scope}) `}
+                        {(cfg.location_ids || []).length ? `· ${cfg.location_ids.length} campus${cfg.location_ids.length > 1 ? 'es' : ''}` : '· All my campuses'}
+                      </p>
+                    </div>
+                    <Button size="sm" variant="ghost" className="text-destructive h-8" onClick={() => revokeShareConfig(cfg.id)} data-testid={`revoke-share-${cfg.id}`}><X size={14} /></Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input readOnly value={buildViewUrl('user', '', cfg.token)} className="text-xs font-mono h-8" />
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildViewUrl('user', '', cfg.token)); toast.success('Link copied'); }}><Copy size={14} /></Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input readOnly value={buildIcalUrl('user', '', cfg.token)} className="text-xs font-mono h-8" />
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildIcalUrl('user', '', cfg.token)); toast.success('Subscribe URL copied'); }}><Copy size={14} /></Button>
+                  </div>
+                </div>
               ))}
             </div>
-          ) : <div className="animate-pulse h-24 bg-muted rounded" />}
+          )}
+
+          {/* Static global / per-location links (public events only, no revoke) */}
+          <div className="space-y-3 pt-2 border-t border-border">
+            <p className="text-sm font-semibold">Quick share (public events only)</p>
+            <p className="text-xs text-muted-foreground">Fixed links — always work, always public-only. Rotate the server SECRET_KEY to invalidate.</p>
+            {shareLinks ? (
+              <div className="space-y-3">
+                <ShareBlock title="Global — all campuses" viewUrl={buildViewUrl('global', '', shareLinks.global.token)} icalUrl={buildIcalUrl('global', '', shareLinks.global.token)} />
+                {shareLinks.locations?.map(loc => (
+                  <ShareBlock key={loc.location_id} title={loc.location_name} viewUrl={buildViewUrl('location', loc.location_id, loc.token)} icalUrl={buildIcalUrl('location', loc.location_id, loc.token)} />
+                ))}
+              </div>
+            ) : <div className="animate-pulse h-24 bg-muted rounded" />}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -540,6 +612,64 @@ function ShareBlock({ title, viewUrl, icalUrl }) {
       </div>
       <p className="text-[10px] text-muted-foreground">Top row = read-only page. Bottom = subscribe URL for Google/Apple Calendar.</p>
     </div>
+  );
+}
+
+// Selection wizard for personalised share links.
+function CustomShareForm({ locations, onCreate }) {
+  const [name, setName] = useState('My calendar');
+  const [inclPublic, setInclPublic] = useState(true);
+  const [inclPrivate, setInclPrivate] = useState(false);
+  const [inclTasks, setInclTasks] = useState(false);
+  const [taskScope, setTaskScope] = useState('mine');
+  const [selectedLocs, setSelectedLocs] = useState([]);   // empty = all
+  const [busy, setBusy] = useState(false);
+  const toggleLoc = (id) => setSelectedLocs(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!inclPublic && !inclPrivate && !inclTasks) { toast.error('Include at least one thing'); return; }
+    setBusy(true);
+    await onCreate({
+      name: name.trim() || 'My calendar',
+      include_public_events: inclPublic,
+      include_private_events: inclPrivate,
+      include_tasks: inclTasks,
+      task_scope: taskScope,
+      location_ids: selectedLocs,
+    });
+    setBusy(false);
+    setName('My calendar');
+  };
+  return (
+    <form onSubmit={submit} className="space-y-3" data-testid="custom-share-form">
+      <div>
+        <Label className="text-xs">Link name</Label>
+        <Input value={name} onChange={e => setName(e.target.value)} placeholder="My weekly plan" data-testid="share-name-input" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-sm">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={inclPublic} onChange={e => setInclPublic(e.target.checked)} data-testid="share-incl-public" /> Public events</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={inclPrivate} onChange={e => setInclPrivate(e.target.checked)} data-testid="share-incl-private" /> My private events</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={inclTasks} onChange={e => setInclTasks(e.target.checked)} data-testid="share-incl-tasks" /> Tasks (with due dates)</label>
+        {inclTasks && (
+          <Select value={taskScope} onValueChange={setTaskScope}>
+            <SelectTrigger className="h-8" data-testid="share-task-scope"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="mine">Only my tasks</SelectItem><SelectItem value="campus">All in my campus</SelectItem></SelectContent>
+          </Select>
+        )}
+      </div>
+      <div>
+        <Label className="text-xs">Campuses (leave empty = all my campuses)</Label>
+        <div className="max-h-28 overflow-y-auto rounded border border-border p-2 space-y-1 mt-1">
+          {(locations || []).slice(0, 30).map(l => (
+            <label key={l.id} className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={selectedLocs.includes(l.id)} onChange={() => toggleLoc(l.id)} data-testid={`share-loc-${l.id}`} />
+              <span className="truncate">{l.name}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <Button type="submit" size="sm" disabled={busy} data-testid="share-create-btn">{busy ? 'Creating…' : 'Generate link'}</Button>
+    </form>
   );
 }
 

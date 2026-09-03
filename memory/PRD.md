@@ -3,6 +3,19 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 271 (Feb 2026)
+**Personalised calendar share links — user picks what to include.**
+
+- New user-owned share configs stored in `calendar_share_configs` with a random 32-char token per link. Owner picks: `include_public_events`, `include_private_events`, `include_tasks` (+ `task_scope: mine|campus`), and an optional `location_ids` narrowing list. Each generated link is unique, revocable, and scoped to the owner's accessible campuses.
+- Backend endpoints:
+  - `POST /api/calendar/share-configs` — mint a link with the selected filters
+  - `GET /api/calendar/share-configs` — list the caller's own links
+  - `DELETE /api/calendar/share-configs/{id}` — hard revoke
+  - `GET /api/public/calendar/user/{token}` (JSON) and `.ics` — respects all owner filters; recomputes owner scope every request (removing a campus assignment or archiving a task immediately narrows what the feed exposes)
+- Tasks are rendered as all-day `VEVENT` blocks with `[Task]` title prefix and `CATEGORIES:TASK` — Google/Apple Calendar shows them inline. Legacy HMAC-based `global` + `location` public feeds still work for the "public events only" quick share (unchanged).
+- Frontend: `CalendarPage.jsx` share dialog now has a **selection wizard** at the top (link name + 3 checkboxes + campus multi-select + task scope dropdown) that generates a unique link on submit, plus a **My saved links** section that lists all of the user's live tokens with copy & revoke buttons. Static global/campus feeds kept below as "Quick share".
+- `PublicCalendarPage.jsx` handles the new `/p/calendar/user/:userToken` route — same month grid + upcoming list, now also renders tasks alongside events. Header shows the link's custom name.
+
 ## Recently Resolved — Iteration 270 (Feb 2026)
 **Recursive campus descendant expansion + Shelter reparented under Uganda.**
 

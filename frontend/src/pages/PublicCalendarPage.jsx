@@ -10,11 +10,17 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const TYPE_COLORS = {
   service: 'bg-purple-500', conference: 'bg-amber-500', meeting: 'bg-slate-500',
   community: 'bg-teal-500', outreach: 'bg-pink-500', workshop: 'bg-violet-500',
-  training: 'bg-cyan-500', social: 'bg-orange-500',
+  training: 'bg-cyan-500', social: 'bg-orange-500', task: 'bg-blue-500',
 };
 
 export default function PublicCalendarPage() {
-  const { scope, token, locationId } = useParams();
+  const params = useParams();
+  const path = window.location.pathname || '';
+  // Detect scope from URL path (routes: /p/calendar/global/:token, /p/calendar/location/:locationId/:token, /p/calendar/user/:userToken)
+  const scope = path.includes('/p/calendar/user/') ? 'user'
+              : path.includes('/p/calendar/location/') ? 'location' : 'global';
+  const token = params.userToken || params.token;
+  const locationId = params.locationId;
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [cursor, setCursor] = useState(new Date());
@@ -22,10 +28,14 @@ export default function PublicCalendarPage() {
   const backend = process.env.REACT_APP_BACKEND_URL || '';
   const jsonUrl = scope === 'global'
     ? `${backend}/api/public/calendar/global?token=${token}`
-    : `${backend}/api/public/calendar/location/${locationId}?token=${token}`;
+    : scope === 'user'
+      ? `${backend}/api/public/calendar/user/${token}`
+      : `${backend}/api/public/calendar/location/${locationId}?token=${token}`;
   const icalUrl = scope === 'global'
     ? `${backend}/api/public/calendar/global.ics?token=${token}`
-    : `${backend}/api/public/calendar/location/${locationId}.ics?token=${token}`;
+    : scope === 'user'
+      ? `${backend}/api/public/calendar/user/${token}.ics`
+      : `${backend}/api/public/calendar/location/${locationId}.ics?token=${token}`;
 
   useEffect(() => {
     axios.get(jsonUrl)
@@ -35,8 +45,8 @@ export default function PublicCalendarPage() {
 
   const byDate = useMemo(() => {
     const m = new Map();
+    const push = (key, obj) => { if (!m.has(key)) m.set(key, []); m.get(key).push(obj); };
     for (const ev of (data?.events || [])) {
-      // Expand multi-day
       const start = ev.date;
       const end = ev.end_date || ev.date;
       try {
@@ -45,11 +55,14 @@ export default function PublicCalendarPage() {
         let c = new Date(s);
         while (c <= e) {
           const key = `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}-${String(c.getDate()).padStart(2, '0')}`;
-          if (!m.has(key)) m.set(key, []);
-          m.get(key).push(ev);
+          push(key, { ...ev, _kind: 'event' });
           c = new Date(c.getTime() + 86400000);
         }
       } catch { /* skip */ }
+    }
+    for (const t of (data?.tasks || [])) {
+      const due = (t.due_date || '').slice(0, 10);
+      if (due) push(due, { id: t.id, title: `[Task] ${t.title || 'Task'}`, type: 'task', time: '', _kind: 'task', status: t.status });
     }
     for (const arr of m.values()) arr.sort((a, b) => (a.time || 'z').localeCompare(b.time || 'z'));
     return m;
@@ -66,7 +79,9 @@ export default function PublicCalendarPage() {
   if (error) return <div className="min-h-screen flex items-center justify-center bg-background p-6"><div className="max-w-md text-center space-y-2"><CalIcon size={40} className="mx-auto text-muted-foreground" /><h1 className="text-lg font-semibold">{error}</h1><p className="text-sm text-muted-foreground">Please check the link and try again.</p></div></div>;
   if (!data) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>;
 
-  const title = data.scope === 'global' ? '58:12 Public Events' : `58:12 · ${data.location?.name || 'Campus'}`;
+  const title = data.scope === 'global' ? '58:12 Public Events'
+               : data.scope === 'user' ? (data.name || 'My Calendar')
+               : `58:12 · ${data.location?.name || 'Campus'}`;
 
   return (
     <div className="min-h-screen bg-background text-foreground">

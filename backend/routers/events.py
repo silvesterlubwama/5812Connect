@@ -1,6 +1,6 @@
 """Events, Check-ins, Venues, Event Types, Public Events routes"""
 from fastapi import APIRouter, Depends, HTTPException, Query
-from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter, verify_password
+from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter, verify_password, expand_descendants
 from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -500,6 +500,220 @@ async def public_calendar_location_json(location_id: str, token: str):
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "city": 1, "country": 1})
     events = await _fetch_public_events(location_id)
     return {"scope": "location", "location": loc or {"id": location_id}, "events": events, "count": len(events)}
+
+
+# ─── PERSONALISED SHARE LINKS ────────────────────────────────────────────
+# Each user can mint any number of custom share links. Each link stores the
+# selections the user made (which sources to include, which locations, whether
+# to include private events, whether to expose task titles). Tokens are
+# random-32 stored in `calendar_share_configs` and validated via lookup so
+# revocation is one delete away.
+
+import secrets as _secrets
+
+
+async def _fetch_events_for_config(cfg: dict) -> list:
+    """Fetch events per share-config selections. Never crosses the config
+    owner's allowed campus scope (we recompute the descendant set from the
+    owner's user doc every request so removing a campus assignment
+    immediately narrows what the share link exposes)."""
+    include_public = bool(cfg.get("include_public_events", True))
+    include_private = bool(cfg.get("include_private_events", False))
+    if not include_public and not include_private:
+        return []
+    owner = await db.users.find_one({"id": cfg["user_id"]}, {"_id": 0})
+    if not owner:
+        return []
+    # Compute the owner's location scope (respects the same recursive rules
+    # get_campus_filter uses, minus the active_campus narrowing).
+    owner_locs = set(owner.get("location_ids") or [])
+    if owner.get("location_id"):
+        owner_locs.add(owner["location_id"])
+    allowed = set(owner_locs)
+    if owner_locs:
+        descendants = await expand_descendants(list(owner_locs), include_restricted_from=owner_locs, allow_all_restricted=is_system_admin(owner))
+        allowed |= descendants
+    # Narrow further to the location(s) the user chose when creating the link.
+    scope_locs = cfg.get("location_ids") or []
+    if scope_locs:
+        allowed &= set(scope_locs)
+        if not allowed:
+            return []
+    q: dict = {"status": {"$ne": "cancelled"}, "location_id": {"$in": list(allowed)} if allowed else {"$exists": True}}
+    # is_public filter: (public and want public) OR (private and want private)
+    or_clauses = []
+    if include_public:
+        or_clauses.append({"is_public": True})
+    if include_private:
+        or_clauses.append({"$or": [{"is_public": False}, {"is_public": {"$exists": False}}]})
+    if len(or_clauses) == 1:
+        q.update(or_clauses[0])
+    else:
+        q["$or"] = or_clauses
+    return await db.events.find(q, {"_id": 0}).sort("date", 1).to_list(2000)
+
+
+async def _fetch_tasks_for_config(cfg: dict) -> list:
+    """Fetch tasks with a due date honouring the config's task_scope."""
+    if not cfg.get("include_tasks"):
+        return []
+    owner = await db.users.find_one({"id": cfg["user_id"]}, {"_id": 0})
+    if not owner:
+        return []
+    scope = cfg.get("task_scope") or "mine"
+    q: dict = {"due_date": {"$exists": True, "$ne": ""}, "is_archived": {"$ne": True}}
+    if scope == "mine":
+        q["$or"] = [{"assignees": owner["id"]}, {"assignee": owner["id"]}, {"created_by": owner["id"]}]
+    else:
+        # scope == 'campus' → all tasks in owner's descendant scope
+        owner_locs = set(owner.get("location_ids") or [])
+        if owner.get("location_id"):
+            owner_locs.add(owner["location_id"])
+        allowed = set(owner_locs)
+        if owner_locs:
+            descendants = await expand_descendants(list(owner_locs), include_restricted_from=owner_locs, allow_all_restricted=is_system_admin(owner))
+            allowed |= descendants
+        cfg_locs = cfg.get("location_ids") or []
+        if cfg_locs:
+            allowed &= set(cfg_locs)
+        if allowed:
+            q["location_id"] = {"$in": list(allowed)}
+    return await db.tasks.find(q, {"_id": 0}).sort("due_date", 1).to_list(2000)
+
+
+def _tasks_to_ical_lines(tasks: list) -> list:
+    """Render each task as an all-day VEVENT (Google Calendar shows these as
+    single-day cards; hides mid-cycle if titles are omitted)."""
+    lines: list = []
+    now_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for t in tasks:
+        due = (t.get("due_date") or "")[:10]
+        if not due:
+            continue
+        dt = due.replace("-", "")
+        try:
+            end = (datetime.strptime(due, "%Y-%m-%d") + timedelta_days(1)).strftime("%Y%m%d")
+        except Exception:
+            end = dt
+        title = t.get("title") or "Task"
+        prefix = "✓ " if t.get("status") == "done" else ""
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:task-{t.get('id', '')}@5812connect",
+            f"DTSTAMP:{now_stamp}",
+            f"DTSTART;VALUE=DATE:{dt}",
+            f"DTEND;VALUE=DATE:{end}",
+            f"SUMMARY:{_ical_escape(prefix + '[Task] ' + title)}",
+            f"DESCRIPTION:{_ical_escape(t.get('description', '') or '')}",
+            f"CATEGORIES:TASK",
+            "STATUS:CONFIRMED",
+            "END:VEVENT",
+        ])
+    return lines
+
+
+def timedelta_days(n):
+    """Small helper to avoid re-importing timedelta at module top."""
+    from datetime import timedelta as _td
+    return _td(days=n)
+
+
+def _combined_to_ical(events: list, tasks: list, cal_name: str) -> str:
+    """iCal render that includes both events (via _events_to_ical) plus tasks
+    encoded as all-day VEVENTS with a [Task] prefix. We keep everything as
+    VEVENT so Google Calendar / Apple Calendar render the tasks inline."""
+    body = _events_to_ical(events, cal_name)
+    # Splice in task VEVENT blocks just before END:VCALENDAR
+    end_marker = "\r\nEND:VCALENDAR"
+    task_lines = _tasks_to_ical_lines(tasks)
+    if not task_lines:
+        return body
+    return body.replace(end_marker, "\r\n" + "\r\n".join(task_lines) + end_marker)
+
+
+@router.post("/calendar/share-configs")
+async def create_share_config(data: dict, current_user: dict = Depends(get_current_user)):
+    """Create a personalised share link. Body:
+    {
+      "name": "My weekly plan",                      # label for the link
+      "include_public_events": true,
+      "include_private_events": false,
+      "include_tasks": false,
+      "task_scope": "mine",                          # 'mine' | 'campus'
+      "location_ids": ["loc_419f5d5e", "loc_002"]    # empty = all owner's scope
+    }
+    """
+    token = _secrets.token_urlsafe(24)
+    cfg = {
+        "id": f"cshare_{uuid.uuid4().hex[:10]}",
+        "token": token,
+        "user_id": current_user["id"],
+        "name": (data.get("name") or "My calendar").strip()[:80],
+        "include_public_events": bool(data.get("include_public_events", True)),
+        "include_private_events": bool(data.get("include_private_events", False)),
+        "include_tasks": bool(data.get("include_tasks", False)),
+        "task_scope": data.get("task_scope") if data.get("task_scope") in ("mine", "campus") else "mine",
+        "location_ids": [l for l in (data.get("location_ids") or []) if isinstance(l, str)],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.calendar_share_configs.insert_one(cfg)
+    cfg.pop("_id", None)
+    return cfg
+
+
+@router.get("/calendar/share-configs")
+async def list_share_configs(current_user: dict = Depends(get_current_user)):
+    docs = await db.calendar_share_configs.find(
+        {"user_id": current_user["id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return docs
+
+
+@router.delete("/calendar/share-configs/{config_id}")
+async def delete_share_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    """Revoke a personalised share link (hard delete). Consumers now get 404."""
+    res = await db.calendar_share_configs.delete_one({"id": config_id, "user_id": current_user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    return {"deleted": True}
+
+
+async def _load_public_config(token: str) -> dict:
+    cfg = await db.calendar_share_configs.find_one({"token": token}, {"_id": 0})
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Invalid or revoked calendar link")
+    return cfg
+
+
+@router.get("/public/calendar/user/{token}")
+async def public_calendar_user_json(token: str):
+    cfg = await _load_public_config(token)
+    events = await _fetch_events_for_config(cfg)
+    tasks = await _fetch_tasks_for_config(cfg)
+    return {
+        "scope": "user",
+        "name": cfg.get("name") or "Calendar",
+        "includes": {
+            "public_events": cfg.get("include_public_events", True),
+            "private_events": cfg.get("include_private_events", False),
+            "tasks": cfg.get("include_tasks", False),
+            "task_scope": cfg.get("task_scope") or "mine",
+        },
+        "events": events,
+        "tasks": tasks,
+        "count": len(events) + len(tasks),
+    }
+
+
+@router.get("/public/calendar/user/{token}.ics")
+async def public_calendar_user_ical(token: str):
+    cfg = await _load_public_config(token)
+    events = await _fetch_events_for_config(cfg)
+    tasks = await _fetch_tasks_for_config(cfg)
+    ical = _combined_to_ical(events, tasks, cfg.get("name") or "58:12 Calendar")
+    from fastapi.responses import Response
+    return Response(content=ical, media_type="text/calendar",
+                    headers={"Cache-Control": "private, max-age=60"})
 
 
 @router.post("/events/import/ical")

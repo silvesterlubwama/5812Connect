@@ -142,6 +142,7 @@ function AppRoutes() {
       <Route path="/p/passenger/:token" element={<PassengerPortalPage />} />
       <Route path="/p/calendar/global/:token" element={<PublicCalendarPage />} />
       <Route path="/p/calendar/location/:locationId/:token" element={<PublicCalendarPage />} />
+      <Route path="/p/calendar/user/:userToken" element={<PublicCalendarPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/security-checkpoint" element={<SecurityCheckpointPage />} />
