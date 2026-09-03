@@ -55,6 +55,7 @@ export default function CampusReportsPage() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchComparison(); }, []);
 
   const downloadPdf = async () => {

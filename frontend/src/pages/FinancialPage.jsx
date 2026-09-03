@@ -987,12 +987,12 @@ export default function FinancialPage() {
               <div className="space-y-2">
                 <Label>Deposit To (Cash / Bank / Momo Account)</Label>
                 <Select value={donationForm.deposit_to_account_id || '_none'} onValueChange={v => setDonationForm({...donationForm, deposit_to_account_id: v === '_none' ? '' : v})}>
-                  <SelectTrigger className="h-9" data-testid="donation-deposit-to-select"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
-                  <SelectContent>
+                  <SelectTrigger className="h-9 w-full" data-testid="donation-deposit-to-select"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
+                  <SelectContent className="min-w-[420px] max-w-[560px]">
                     <SelectItem value="_none">— None —</SelectItem>
                     {myChartAccounts.map(a => (
                       <SelectItem key={a.id} value={a.id} data-testid={`deposit-to-opt-${a.id}`}>
-                        {a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}
+                        <span className="truncate">{a.name}</span> · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1338,8 +1338,8 @@ export default function FinancialPage() {
                 {myChartAccounts.length > 0 && (
                   <div className="space-y-1"><Label>Deposit To Account</Label>
                     <Select value={editForm.deposit_to_account_id || '_none'} onValueChange={v => setEditForm({ ...editForm, deposit_to_account_id: v === '_none' ? '' : v })}>
-                      <SelectTrigger data-testid="fin-edit-deposit-to"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
-                      <SelectContent>
+                      <SelectTrigger className="w-full" data-testid="fin-edit-deposit-to"><SelectValue placeholder="Which account received this?" /></SelectTrigger>
+                      <SelectContent className="min-w-[420px] max-w-[560px]">
                         <SelectItem value="_none">— None —</SelectItem>
                         {myChartAccounts.map(a => (
                           <SelectItem key={a.id} value={a.id}>{a.name} · {a.kind} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>

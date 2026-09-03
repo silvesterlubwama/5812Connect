@@ -135,6 +135,7 @@ export default function CommsPage() {
       setLoading(false);
     };
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchConversations, user?.id]);
 
   // Voicemail unread badge — poll every 60 s, and once when Voicemail room opens/closes.

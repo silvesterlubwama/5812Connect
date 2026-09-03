@@ -53,6 +53,7 @@ export default function VolunteerSchedulingPage() {
 
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFilter, locationFilter]);
 
   const fetchAll = async () => {

@@ -348,6 +348,7 @@ export default function ShipmentDonorPage() {
         setScanMode('photo');
       }
     })();
+    const videoEl = scanVideoRef.current;
     return () => {
       active = false;
       try { scanControlsRef.current?.stop(); } catch (_) {/* noop */}
@@ -359,8 +360,8 @@ export default function ShipmentDonorPage() {
       scanStreamRef.current = null;
       setTorchOn(false);
       setTorchSupported(false);
-      if (scanVideoRef.current) {
-        try { scanVideoRef.current.srcObject = null; } catch (_) {/* noop */}
+      if (videoEl) {
+        try { videoEl.srcObject = null; } catch (_) {/* noop */}
       }
       setBarcodeText('');
     };

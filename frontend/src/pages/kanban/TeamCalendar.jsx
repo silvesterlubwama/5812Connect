@@ -20,7 +20,7 @@ function userColor(name) {
 }
 
 export function TeamCalendar({ boards, allTasks, staffUsers, onCardClick, onRefresh }) {
-  const today = new Date();
+  const today = useMemo(() => new Date(), []);
   const [current, setCurrent] = useState({ month: today.getMonth(), year: today.getFullYear() });
   const [filterAssignee, setFilterAssignee] = useState('all');
   const [filterBoard, setFilterBoard] = useState('all');

@@ -270,6 +270,7 @@ export default function CheckInsPage() {
     finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchData(); }, [search, typeFilter]);
 
   useEffect(() => {

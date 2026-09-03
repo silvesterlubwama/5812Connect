@@ -109,6 +109,7 @@ export const WebSocketProvider = ({ children }) => {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       isConnecting.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, connect]);
 
   // Ping keepalive

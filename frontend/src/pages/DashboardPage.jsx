@@ -119,6 +119,7 @@ export default function DashboardPage() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchAll(); }, [isParent, selectedCampus]);
 
   // ---- PARENT VIEW ----

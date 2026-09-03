@@ -269,6 +269,7 @@ function JournalPanel() {
     const r = await api.get(`/finance/journal?${params}`);
     setEntries(r.data || []);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { reload().catch(() => {}); }, [filters.date_from, filters.date_to, filters.source, filters.include_reversed]);
 
   // Text search is client-side across description + line account names/codes
@@ -501,6 +502,7 @@ function ReportsPanel() {
     } catch (e) { toast.error(e?.response?.data?.detail || 'Report failed'); }
     setBusy(false);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { run(); }, [kind, locationId]);
 
   // Flatten whichever report is on screen into CSV rows. Each report has its

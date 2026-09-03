@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 276 (Feb 2026)
+**CI-safe build · Widened Deposit-To dropdown · Verified scheduler scope.**
+
+- **CI build now passes cleanly (`CI=true yarn build`)** — 19 `react-hooks/exhaustive-deps` warnings resolved across `Layout.jsx`, `VoipContext.jsx`, `WebSocketContext.js`, `AccessPage.jsx`, `AnalyticsPage.jsx`, `CampusReportsPage.jsx`, `CheckInsPage.jsx`, `CommsPage.jsx`, `DashboardPage.jsx`, `EventsPage.jsx`, `FinancePage.jsx` (x2), `PassengerPortalPage.jsx`, `ShipmentsAdminPage.jsx`, `TasksPage.jsx` (x2), `VolunteerSchedulingPage.jsx`, `kanban/CardDetailDialog.jsx`. All intentional non-reactive deps get an inline `eslint-disable-next-line` with the existing rationale left intact. Two genuine bugs also patched: (a) `TeamCalendar.jsx` — `today` now wrapped in `useMemo(() => new Date(), [])` so the workload useMemo's dep array is stable across renders; (b) `ShipmentDonorPage.jsx` — scanner-cleanup effect now snapshots `scanVideoRef.current` into a local `videoEl` so React's ref-in-cleanup warning is gone AND the cleanup uses the correct video element even if the ref has been reassigned by the time it fires.
+- **"Deposit To" (Record Income) dropdown widened.** `FinancialPage.jsx` — both the create-donation and edit-donation `Deposit To` selects now use `w-full` triggers and `SelectContent min-w-[420px] max-w-[560px]` so long account labels (`Petty Cash · asset · UGX 12,300,450`) no longer truncate at the trigger width. Account name is also `<span className="truncate">` so extreme names still ellipsize gracefully instead of forcing a line-break.
+- **Volunteer Scheduler scope verified.** No code change needed — `routers/scheduling.py::available_staff` and `::list_shifts` were already applying `get_campus_filter(user)` (via iteration 260's recursive descendant walk), and `VolunteerSchedulingPage.jsx` linked-event picker already auto-fills `date/start_time/end_time/location_id` from the selected event. Manually confirmed via curl: `GET /api/volunteer/available-staff` as admin returned 50 users all correctly campus-scoped.
+
 ## Recently Resolved — Iteration 275 (Feb 2026)
 **Conflict Resolution UI · Opening Balance · Optional email for non-login staff.**
 

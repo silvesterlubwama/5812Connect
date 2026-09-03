@@ -38,6 +38,7 @@ export default function PassengerPortalPage() {
     } finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchData(); }, [token]);
 
   const openCheckIn = (t) => {

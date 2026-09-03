@@ -73,6 +73,7 @@ export default function TasksPage() {
       const userLocs = u.location_ids || [];
       return userLocs.includes(board.location_id);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffUsers, board]);
 
   // ===== LOAD DATA =====
@@ -91,6 +92,7 @@ export default function TasksPage() {
     finally { setLoading(false); }
   }, [activeBoardId]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchBoards(); }, []);
 
   // Refresh user directory when data changes

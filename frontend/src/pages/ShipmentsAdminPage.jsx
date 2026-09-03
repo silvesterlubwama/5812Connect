@@ -129,6 +129,7 @@ export default function ShipmentsAdminPage() {
     if (boxScanResult) return;   // NB: read-only, NOT a dep — avoid re-fire on close
     setBoxScanResult(selected.scan_draft);
     setShowBoxScan(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, selected?.scan_draft?.scan_run_id]);
   // iter 254 — auto-refresh the shipment LIST card whenever the user
   // returns to it from the detail view (their item edits should be

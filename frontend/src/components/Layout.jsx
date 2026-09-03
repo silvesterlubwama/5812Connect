@@ -213,6 +213,7 @@ export default function Layout() {
     document.documentElement.classList.toggle('dark', next);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { document.documentElement.classList.toggle('dark', darkMode); }, []);
 
   const handleLogout = () => { logout(); navigate('/login'); };

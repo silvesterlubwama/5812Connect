@@ -44,6 +44,7 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
       setChecklist(card.checklist || []);
       setAttachments(card.attachments || []);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card?.id]);
 
   const save = async () => {

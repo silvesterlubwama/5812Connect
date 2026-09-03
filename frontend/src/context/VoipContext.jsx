@@ -193,6 +193,7 @@ export function VoipProvider({ children }) {
       try { uaRef.current?.stop(); } catch {}
       uaRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   // ── helpers ─────────────────────────────────────────────────

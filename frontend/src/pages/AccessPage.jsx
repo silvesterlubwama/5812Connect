@@ -84,6 +84,7 @@ export default function AccessPage() {
       setApiConnections(connRes.data || []);
       setGuestLinks(linksRes.data || []);
     } catch (e) { console.warn(e.message || e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);

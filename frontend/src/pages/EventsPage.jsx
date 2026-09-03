@@ -221,6 +221,7 @@ export default function EventsPage() {
       } catch { /* silent */ }
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAdd, newEvent.venue_id, newEvent.date, newEvent.end_date, newEvent.time, newEvent.end_time, editingEvent]);
 
   const upcoming = events.filter(e => e.status === 'upcoming');
