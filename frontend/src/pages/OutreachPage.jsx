@@ -13,10 +13,54 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { outreachApi, locationsApi, locationVenuesApi, eventsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
-import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
+import { BulkActionBar, exportToCSV } from '../components/BulkActions';
 import EmptyState from '../components/EmptyState';
 
 const statusColors = { active: 'border-green-500 text-green-600', completed: 'border-slate-400 text-slate-500', paused: 'border-amber-500 text-amber-600' };
+
+
+// One row of the venue-clash resolution dialog. Skip, force-book, or pick a
+// new time for a single flagged date; the row removes itself once handled.
+// Defined at module scope (not inside OutreachPage's JSX) so React can render
+// it and craco/eslint doesn't blow up mid-return with an "Unexpected token".
+function ConflictRow({ programme, conflict, onDone }) {
+  const [newTime, setNewTime] = useState(conflict.time || '10:00');
+  const [busy, setBusy] = useState(false);
+  const book = async (force, timeToUse) => {
+    setBusy(true);
+    try {
+      await eventsApi.create({
+        title: programme.name, type: 'outreach', date: conflict.date,
+        time: timeToUse || conflict.time, end_time: programme.recurrence_end_time,
+        location: programme.location || '', location_id: programme.location_id,
+        venue_id: programme.venue_id, capacity: programme.target || 100,
+        programme_id: programme.id, is_public: false, visibility: 'internal',
+      }, { force });
+      toast.success('Booked');
+      onDone();
+    } catch (e) {
+      if (e.response?.status === 409) toast.error('Still clashes — pick another time');
+      else toast.error('Failed');
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="rounded border border-border p-2 space-y-2 text-xs" data-testid={`conflict-row-${conflict.date}`}>
+      <div className="flex items-center justify-between">
+        <span className="font-semibold">{conflict.date} · {conflict.time || 'all day'}</span>
+        <span className="text-muted-foreground truncate">clashes with &quot;{conflict.existing?.title}&quot;</span>
+      </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onDone} data-testid={`conflict-skip-${conflict.date}`}>Skip</Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => book(true, null)} data-testid={`conflict-force-${conflict.date}`}>Book anyway</Button>
+        <div className="flex items-center gap-1">
+          <Input type="time" className="h-7 w-24" value={newTime} onChange={e => setNewTime(e.target.value)} />
+          <Button size="sm" disabled={busy} onClick={() => book(false, newTime)} data-testid={`conflict-retime-${conflict.date}`}>Pick time</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export default function OutreachPage() {
   const { user } = useAuth();
@@ -468,47 +512,6 @@ export default function OutreachPage() {
       <Dialog open={!!conflicts} onOpenChange={o => { if (!o) setConflicts(null); }}>
         <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-
-// One row of the venue-clash resolution dialog. Skip, force-book, or pick a
-// new time for a single flagged date; the row removes itself once handled.
-function ConflictRow({ programme, conflict, onDone }) {
-  const [newTime, setNewTime] = useState(conflict.time || '10:00');
-  const [busy, setBusy] = useState(false);
-  const book = async (force, timeToUse) => {
-    setBusy(true);
-    try {
-      await eventsApi.create({
-        title: programme.name, type: 'outreach', date: conflict.date,
-        time: timeToUse || conflict.time, end_time: programme.recurrence_end_time,
-        location: programme.location || '', location_id: programme.location_id,
-        venue_id: programme.venue_id, capacity: programme.target || 100,
-        programme_id: programme.id, is_public: false, visibility: 'internal',
-      }, { force });
-      toast.success('Booked');
-      onDone();
-    } catch (e) {
-      if (e.response?.status === 409) toast.error('Still clashes — pick another time');
-      else toast.error('Failed');
-    } finally { setBusy(false); }
-  };
-  return (
-    <div className="rounded border border-border p-2 space-y-2 text-xs" data-testid={`conflict-row-${conflict.date}`}>
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">{conflict.date} · {conflict.time || 'all day'}</span>
-        <span className="text-muted-foreground truncate">clashes with "{conflict.existing?.title}"</span>
-      </div>
-      <div className="flex flex-wrap gap-2 items-center">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onDone} data-testid={`conflict-skip-${conflict.date}`}>Skip</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => book(true, null)} data-testid={`conflict-force-${conflict.date}`}>Book anyway</Button>
-        <div className="flex items-center gap-1">
-          <Input type="time" className="h-7 w-24" value={newTime} onChange={e => setNewTime(e.target.value)} />
-          <Button size="sm" disabled={busy} onClick={() => book(false, newTime)} data-testid={`conflict-retime-${conflict.date}`}>Pick time</Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
             <DialogTitle>Venue clashes · {conflicts?.programme?.name}</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">These dates weren't recreated because the venue was already booked. Skip each one, force-book anyway, or move it to a new time.</p>
