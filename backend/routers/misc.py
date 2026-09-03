@@ -87,6 +87,8 @@ class ResourceCreate(BaseModel):
     mac_address: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
+    unit: Optional[str] = None
+    reorder_level: Optional[float] = None
 
 class ResourceBookingCreate(BaseModel):
     resource_id: str
@@ -198,7 +200,8 @@ async def create_resource(data: ResourceCreate, current_user: dict = Depends(get
 async def update_resource(res_id: str, data: dict, current_user: dict = Depends(get_current_user)):
     allowed = {"name", "type", "category", "capacity", "quantity", "description", "location_id",
                "hourly_rate", "is_bookable", "staff_only", "is_consumable", "available",
-               "serial_number", "barcode", "purchase_date", "purchase_value", "condition", "owner"}
+               "serial_number", "barcode", "purchase_date", "purchase_value", "condition", "owner",
+               "unit", "reorder_level"}
     update = {k: v for k, v in data.items() if k in allowed}
     # Only admins/directors can change the serial number after creation
     if "serial_number" in update or "barcode" in update:
@@ -289,6 +292,129 @@ async def create_resource_booking(data: ResourceBookingCreate, current_user: dic
 @router.delete("/resources/bookings/{booking_id}")
 async def delete_resource_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
     await db.resource_bookings.delete_one({"id": booking_id}); return {"message": "Deleted"}
+
+
+# ========== CONSUMABLE STOCK & USAGE TRACKING ==========
+# Every "in" (restock) or "out" (usage) is a row in `resource_movements`; the
+# on-hand quantity is `SUM(in - out)` computed on demand so we never fall out
+# of sync. A movement's `consumer_ref` tells us who/what consumed it (event,
+# child, department, or a free-text note).
+
+async def _resource_on_hand(res_id: str, location_id: Optional[str] = None) -> float:
+    q = {"resource_id": res_id}
+    if location_id:
+        q["location_id"] = location_id
+    total = 0.0
+    async for m in db.resource_movements.find(q, {"_id": 0, "type": 1, "qty": 1}):
+        qty = float(m.get("qty") or 0)
+        total += qty if m.get("type") == "in" else -qty
+    return round(total, 3)
+
+
+@router.get("/resources/{res_id}/stock")
+async def get_resource_stock(res_id: str, current_user: dict = Depends(get_current_user)):
+    res = await db.resources.find_one({"id": res_id}, {"_id": 0})
+    if not res:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    on_hand = await _resource_on_hand(res_id)
+    # Per-location breakdown (helps kits split across campuses)
+    pipeline = [
+        {"$match": {"resource_id": res_id}},
+        {"$group": {"_id": "$location_id",
+                     "in_": {"$sum": {"$cond": [{"$eq": ["$type", "in"]}, "$qty", 0]}},
+                     "out": {"$sum": {"$cond": [{"$eq": ["$type", "out"]}, "$qty", 0]}}}},
+    ]
+    breakdown = []
+    async for row in db.resource_movements.aggregate(pipeline):
+        breakdown.append({"location_id": row["_id"], "on_hand": round(float(row["in_"] or 0) - float(row["out"] or 0), 3)})
+    reorder = float(res.get("reorder_level") or 0)
+    return {
+        "resource_id": res_id, "unit": res.get("unit") or "unit",
+        "on_hand": on_hand, "reorder_level": reorder,
+        "low_stock": reorder > 0 and on_hand <= reorder,
+        "location_breakdown": breakdown,
+    }
+
+
+@router.post("/resources/{res_id}/adjust")
+async def adjust_resource_stock(res_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Log an in/out movement. Body:
+       { type:'in'|'out', qty:number, location_id:str, consumer_ref?:{kind,id,label}, note?:str, at?:'YYYY-MM-DD' }
+    """
+    res = await db.resources.find_one({"id": res_id}, {"_id": 0})
+    if not res:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    mtype = data.get("type")
+    if mtype not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="type must be 'in' or 'out'")
+    try:
+        qty = float(data.get("qty") or 0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="qty must be numeric")
+    if qty <= 0:
+        raise HTTPException(status_code=400, detail="qty must be > 0")
+    if mtype == "out":
+        current = await _resource_on_hand(res_id, data.get("location_id") or res.get("location_id"))
+        if qty > current:
+            raise HTTPException(status_code=400, detail=f"Only {current} on hand — cannot log {qty} out")
+    doc = {
+        "id": f"rmv_{uuid.uuid4().hex[:10]}",
+        "resource_id": res_id, "type": mtype, "qty": qty,
+        "location_id": data.get("location_id") or res.get("location_id"),
+        "consumer_ref": data.get("consumer_ref") or None,
+        "note": (data.get("note") or "").strip()[:280],
+        "at": data.get("at") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "user_id": current_user["id"],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.resource_movements.insert_one(doc); doc.pop("_id", None)
+    on_hand = await _resource_on_hand(res_id, doc["location_id"])
+    return {"movement": doc, "on_hand": on_hand}
+
+
+@router.get("/resources/{res_id}/movements")
+async def list_resource_movements(res_id: str, limit: int = 50, current_user: dict = Depends(get_current_user)):
+    return await db.resource_movements.find(
+        {"resource_id": res_id}, {"_id": 0}
+    ).sort("timestamp", -1).to_list(min(limit, 500))
+
+
+@router.get("/resources/consumables/lookup")
+async def consumables_lookup(q: str = "", current_user: dict = Depends(get_current_user)):
+    """Combined search across events, children, and departments for the
+    consumer_ref picker on the Log Usage dialog. Case-insensitive contains."""
+    from deps import get_campus_filter
+    campus = await get_campus_filter(current_user)
+    qs = (q or "").strip()
+    rx = {"$regex": qs, "$options": "i"} if qs else None
+    scope = campus or {}
+    # Events (upcoming/future first)
+    ev_q = {**scope}
+    if rx:
+        ev_q["title"] = rx
+    events = await db.events.find(ev_q, {"_id": 0, "id": 1, "title": 1, "date": 1}).sort("date", -1).limit(20).to_list(20)
+    # Children
+    ch_q = {"is_child": True, **({field: v for field, v in scope.items()} if scope else {})}
+    if rx:
+        ch_q["$or"] = [{"first_name": rx}, {"last_name": rx}]
+    children = await db.members.find(ch_q, {"_id": 0, "id": 1, "first_name": 1, "last_name": 1}).limit(20).to_list(20)
+    # Departments — distinct list from users + locations
+    dept_names: set = set()
+    async for u in db.users.find({"department": {"$exists": True, "$ne": ""}}, {"_id": 0, "department": 1}):
+        if u.get("department"):
+            dept_names.add(u["department"])
+    async for loc in db.locations.find({"departments": {"$exists": True, "$ne": []}}, {"_id": 0, "departments": 1}):
+        for d in (loc.get("departments") or []):
+            if d:
+                dept_names.add(d)
+    depts = sorted(dept_names)
+    if qs:
+        depts = [d for d in depts if qs.lower() in d.lower()]
+    return {
+        "events": [{"kind": "event", "id": e["id"], "label": f"{e.get('title')} · {e.get('date','')}"} for e in events],
+        "children": [{"kind": "child", "id": c["id"], "label": f"{c.get('first_name','')} {c.get('last_name','')}".strip()} for c in children],
+        "departments": [{"kind": "department", "id": d, "label": d} for d in depts[:20]],
+    }
 
 
 # ========== ANNOUNCEMENTS ==========

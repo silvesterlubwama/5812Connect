@@ -504,6 +504,11 @@ export const resourcesApi = {
   // Serial / barcode
   generateSerial: (id) => api.post(`/resources/${id}/generate-serial`),
   lookupBySerial: (serial) => api.get(`/resources/by-serial/${encodeURIComponent(serial)}`),
+  // Consumable stock tracking
+  stock: (id) => api.get(`/resources/${id}/stock`),
+  adjust: (id, data) => api.post(`/resources/${id}/adjust`, data),
+  movements: (id, params) => api.get(`/resources/${id}/movements`, { params }),
+  consumablesLookup: (q) => api.get('/resources/consumables/lookup', { params: { q } }),
 };
 
 // ---- ANNOUNCEMENTS ----

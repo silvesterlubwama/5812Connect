@@ -3,6 +3,20 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 274 (Feb 2026)
+**Venue-conflict-aware regenerate + Consumable stock tracking.**
+
+- **Regenerate now respects venue availability.** `POST /outreach/programs/{id}/refresh-events` runs each generated date through `_find_venue_conflict`; clashes are **auto-skipped** and returned in a new `conflicts` array (`[{date, time, existing}]`). Response now `{deleted, created, conflicts, events}` so the UI can flag skipped dates.
+- **Consumable stock tracking** — new `resource_movements` collection acts as an append-only audit log; on-hand is `SUM(in) - SUM(out)` computed per request so no drift.
+  - `GET /resources/{id}/stock` → `{on_hand, unit, reorder_level, low_stock, location_breakdown[]}`
+  - `POST /resources/{id}/adjust` → body `{type: 'in'|'out', qty, location_id, consumer_ref?, note?, at?}`; rejects out-of-stock consumption
+  - `GET /resources/{id}/movements` → recent audit log
+  - `GET /resources/consumables/lookup?q=` → combined search across events + children + departments for the "given to / used for" picker
+- **ResourceCreate/update** now accept `unit` and `reorder_level`.
+- **Frontend (`ResourcesPage.jsx`)** — new `<Package>` icon button on each consumable card opens a `StockDialog` with tabs `Log usage | Restock`, live-searched consumer picker (events + children + departments), qty + note, and a recent-movements audit strip. Consumable badges show current `on_hand` inline with a red "LOW" flag when at/under `reorder_level`.
+
+- **Verified end-to-end** — created "Juice Boxes", restocked 250, consumed 100 → 150 on hand; audit log shows both entries with `Saturday Outreach` consumer ref; over-consume 9999 rejected with HTTP 400; consumables/lookup returned 19 departments. Venue-conflict regenerate: seeded a clash on the first Saturday → refresh created 2, flagged 1 conflict with the existing event.
+
 ## Recently Resolved — Iteration 273 (Feb 2026)
 **Programme Venue Picker + Bulk Regenerate.**
 

@@ -194,19 +194,17 @@ async def duplicate_programme(prog_id: str, current_user: dict = Depends(get_cur
 async def refresh_programme_events(prog_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
     """Wipe every FUTURE event linked to this programme and regenerate them
     from the programme's current recurrence pattern. Past events are preserved
-    so historical attendance data is never destroyed."""
+    so historical attendance data is never destroyed. Dates that clash with an
+    existing venue booking are auto-skipped and returned in `conflicts`."""
     prog = await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
     if not prog:
         raise HTTPException(status_code=404, detail="Programme not found")
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    # Delete future events tied to this programme (either legacy or new field name)
     q = {
         "$or": [{"programme_id": prog_id}, {"outreach_program_id": prog_id}],
         "date": {"$gte": today_iso},
     }
     deleted = (await db.events.delete_many(q)).deleted_count
-    # Regenerate. Use the programme's stored recurrence pattern; caller can
-    # optionally override any field via `data`.
     d = data or {}
     months_ahead = int(d.get("months_ahead", 3))
     nth_day = d.get("nth_day", prog.get("recurrence_day", 1))
@@ -216,7 +214,11 @@ async def refresh_programme_events(prog_id: str, data: dict = None, current_user
     day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
     target_weekday = day_map.get(str(day_name).lower(), 5)
     now = datetime.now(timezone.utc)
-    created = []
+    created: list = []
+    conflicts: list = []
+    # Lazy import to avoid a circular dependency at module load time.
+    from routers.events import _find_venue_conflict
+    venue_id = prog.get("venue_id")
     for m_offset in range(months_ahead):
         month = now.month + m_offset
         year = now.year
@@ -236,6 +238,12 @@ async def refresh_programme_events(prog_id: str, data: dict = None, current_user
         date_str = f"{year}-{month:02d}-{day:02d}"
         if date_str < today_iso:
             continue
+        # Skip if this venue is already booked in that time window.
+        if venue_id:
+            clash = await _find_venue_conflict(venue_id, date_str, None, time_str, end_time_str)
+            if clash:
+                conflicts.append({"date": date_str, "time": time_str, "existing": clash})
+                continue
         event = {
             "id": f"evt_{str(uuid.uuid4())[:8]}",
             "title": prog.get("name", "Programme Event"),
@@ -243,7 +251,7 @@ async def refresh_programme_events(prog_id: str, data: dict = None, current_user
             "date": date_str, "time": time_str, "end_time": end_time_str,
             "location": prog.get("location", ""),
             "location_id": prog.get("location_id"),
-            "venue_id": prog.get("venue_id"),
+            "venue_id": venue_id,
             "capacity": prog.get("target", 100),
             "description": prog.get("description", ""),
             "is_public": False, "is_free": True, "visibility": "internal",
@@ -255,7 +263,7 @@ async def refresh_programme_events(prog_id: str, data: dict = None, current_user
         await db.events.insert_one(event)
         event.pop("_id", None)
         created.append(event)
-    return {"deleted": deleted, "created": len(created), "events": created}
+    return {"deleted": deleted, "created": len(created), "conflicts": conflicts, "events": created}
 
 
 @router.post("/outreach/programs/{prog_id}/generate-events")

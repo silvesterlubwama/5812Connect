@@ -30,6 +30,7 @@ const RESOURCE_TYPES = [
 const emptyForm = {
   name: '', type: 'room', category: '', capacity: '', quantity: 1, description: '',
   location_id: '', hourly_rate: '', is_bookable: true, staff_only: false, is_consumable: false,
+  unit: '', reorder_level: '',
 };
 
 export default function ResourcesPage() {
@@ -48,6 +49,9 @@ export default function ResourcesPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [search, setSearch] = useState('');
+  const [showStock, setShowStock] = useState(false);
+  const [stockResource, setStockResource] = useState(null);
+  const [stockMap, setStockMap] = useState({});
   const [typeFilter, setTypeFilter] = useState('all');
   const [showBooking, setShowBooking] = useState(false);
   const [bookingResource, setBookingResource] = useState(null);
@@ -71,6 +75,12 @@ export default function ResourcesPage() {
       setResources(resRes.data);
       setLocations(locRes.data);
       if (typRes.data?.length > 0) setResourceTypes(typRes.data.map(t => ({ value: t.name, label: t.label, id: t.id })));
+      // Load stock for all consumables in parallel
+      const consumables = (resRes.data || []).filter(r => r.is_consumable);
+      const stockResults = await Promise.all(consumables.map(r => resourcesApi.stock(r.id).catch(() => null)));
+      const smap = {};
+      consumables.forEach((r, i) => { if (stockResults[i]?.data) smap[r.id] = stockResults[i].data; });
+      setStockMap(smap);
     } catch { toast.error('Failed to load resources'); }
     finally { setLoading(false); }
   };
@@ -212,6 +222,9 @@ export default function ResourcesPage() {
                     </div>
                   </div>
                   <div className="flex gap-1">
+                    {r.is_consumable && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600" title="Log usage / restock" onClick={() => { setStockResource(r); setShowStock(true); }} data-testid={`log-usage-${r.id}`}><Package size={12} /></Button>
+                    )}
                     {r.is_bookable && (
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-primary" title="Book" onClick={() => { setBookingResource(r); setShowBooking(true); }} data-testid="book-resource-btn"><CalendarDays size={12} /></Button>
                     )}
@@ -225,6 +238,11 @@ export default function ResourcesPage() {
                   {r.staff_only && <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300">Staff Only</Badge>}
                   {!r.is_bookable && <Badge variant="outline" className="text-xs bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300">Not Bookable</Badge>}
                   {r.is_consumable && <Badge variant="outline" className="text-xs">Consumable</Badge>}
+                  {r.is_consumable && stockMap[r.id] != null && (
+                    <Badge variant="outline" className={`text-xs ${stockMap[r.id].low_stock ? 'bg-red-50 text-red-700 border-red-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`} data-testid={`stock-badge-${r.id}`}>
+                      {stockMap[r.id].on_hand} {stockMap[r.id].unit || ''}{stockMap[r.id].low_stock ? ' · LOW' : ''}
+                    </Badge>
+                  )}
                 </div>
                 {r.serial_number && (
                   <div className="flex items-center justify-between gap-2 mb-2 p-1.5 rounded bg-muted/50">
@@ -437,6 +455,116 @@ export default function ResourcesPage() {
           .filter(r => r && r.serial_number)
           .map(r => ({ name: r.name, code: r.serial_number, location_name: getLocationName(r.location_id) }))}
       />
+
+      <StockDialog
+        open={showStock} onOpenChange={setShowStock}
+        resource={stockResource}
+        onDone={() => { setShowStock(false); fetchData(); }}
+      />
     </div>
   );
 }
+
+// Consumable stock adjustment dialog — in/out with reason picker (event/child/department)
+function StockDialog({ open, onOpenChange, resource, onDone }) {
+  const [tab, setTab] = useState('out');
+  const [qty, setQty] = useState('');
+  const [note, setNote] = useState('');
+  const [q, setQ] = useState('');
+  const [picker, setPicker] = useState({ events: [], children: [], departments: [] });
+  const [ref, setRef] = useState(null);
+  const [movements, setMovements] = useState([]);
+  const [stock, setStock] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  React.useEffect(() => {
+    if (!open || !resource) return;
+    setTab('out'); setQty(''); setNote(''); setRef(null); setQ('');
+    resourcesApi.stock(resource.id).then(r => setStock(r.data)).catch(() => setStock(null));
+    resourcesApi.movements(resource.id, { limit: 20 }).then(r => setMovements(r.data || []));
+    resourcesApi.consumablesLookup('').then(r => setPicker(r.data));
+  }, [open, resource]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => resourcesApi.consumablesLookup(q).then(r => setPicker(r.data)).catch(() => {}), 250);
+    return () => clearTimeout(t);
+  }, [q, open]);
+
+  const submit = async () => {
+    if (!resource) return;
+    const n = parseFloat(qty);
+    if (!(n > 0)) { toast.error('Enter a quantity > 0'); return; }
+    setBusy(true);
+    try {
+      await resourcesApi.adjust(resource.id, {
+        type: tab, qty: n, location_id: resource.location_id,
+        consumer_ref: ref || undefined, note: note || undefined,
+      });
+      toast.success(tab === 'out' ? `Logged ${n} used` : `Restocked ${n}`);
+      onDone?.();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    finally { setBusy(false); }
+  };
+
+  const combined = [
+    ...(picker.events || []).map(e => ({ ...e, group: 'Events' })),
+    ...(picker.children || []).map(c => ({ ...c, group: 'Children' })),
+    ...(picker.departments || []).map(d => ({ ...d, group: 'Departments' })),
+  ];
+
+  if (!resource) return null;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="stock-dialog">
+        <DialogHeader>
+          <DialogTitle>{resource.name}</DialogTitle>
+          <DialogDescription>
+            On hand: <strong>{stock?.on_hand ?? '…'}</strong> {stock?.unit || 'unit'}
+            {stock?.low_stock && <span className="ml-2 text-red-600 font-semibold">· LOW STOCK</span>}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex border rounded overflow-hidden text-sm">
+          <button className={`flex-1 py-1.5 ${tab === 'out' ? 'bg-primary text-primary-foreground' : ''}`} onClick={() => setTab('out')} data-testid="stock-tab-out">Log usage</button>
+          <button className={`flex-1 py-1.5 ${tab === 'in' ? 'bg-primary text-primary-foreground' : ''}`} onClick={() => setTab('in')} data-testid="stock-tab-in">Restock</button>
+        </div>
+        <div className="space-y-2">
+          <div><Label>Quantity</Label><Input type="number" min="0" step="any" value={qty} onChange={e => setQty(e.target.value)} data-testid="stock-qty" /></div>
+          {tab === 'out' && (
+            <div>
+              <Label>Given to / Used for</Label>
+              <Input placeholder="Search events, children, departments…" value={q} onChange={e => setQ(e.target.value)} data-testid="stock-search" />
+              <div className="max-h-40 overflow-y-auto border rounded mt-1 divide-y">
+                {combined.map(item => (
+                  <button key={`${item.kind}-${item.id}`} type="button" className={`w-full text-left px-2 py-1 text-xs hover:bg-accent ${ref?.id === item.id && ref?.kind === item.kind ? 'bg-accent' : ''}`}
+                    onClick={() => setRef({ kind: item.kind, id: item.id, label: item.label })} data-testid={`stock-pick-${item.kind}-${item.id}`}>
+                    <span className="text-[10px] uppercase text-muted-foreground mr-1">{item.kind}</span>{item.label}
+                  </button>
+                ))}
+                {!combined.length && <p className="p-2 text-xs text-muted-foreground text-center">No matches</p>}
+              </div>
+              {ref && <p className="text-xs text-muted-foreground mt-1">Selected: <strong>{ref.label}</strong></p>}
+            </div>
+          )}
+          <div><Label>Note (optional)</Label><Textarea rows={2} value={note} onChange={e => setNote(e.target.value)} /></div>
+        </div>
+        <div className="flex gap-2 pt-2"><Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button><div className="flex-1" /><Button onClick={submit} disabled={busy} data-testid="stock-submit">{busy ? 'Saving…' : (tab === 'out' ? 'Log usage' : 'Add stock')}</Button></div>
+        <div className="pt-3 border-t border-border">
+          <p className="text-xs font-semibold mb-1">Recent movements</p>
+          <div className="max-h-32 overflow-y-auto space-y-1">
+            {movements.map(m => (
+              <div key={m.id} className="text-[11px] flex items-center gap-2">
+                <span className={m.type === 'out' ? 'text-red-600' : 'text-green-600'}>{m.type === 'out' ? '−' : '+'}{m.qty}</span>
+                <span className="text-muted-foreground">{m.at}</span>
+                {m.consumer_ref?.label && <span className="truncate">→ {m.consumer_ref.label}</span>}
+                {m.note && <span className="text-muted-foreground truncate">· {m.note}</span>}
+              </div>
+            ))}
+            {!movements.length && <p className="text-xs text-muted-foreground">No history yet</p>}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
