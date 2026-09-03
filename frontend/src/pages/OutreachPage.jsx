@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Globe, Plus, Trash2, Users, Calendar, MapPin, RefreshCw, Copy, Settings, Repeat } from 'lucide-react';
+import { Globe, Plus, Trash2, Users, Calendar, MapPin, RefreshCw, Copy, Settings, Repeat, RefreshCcw } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -227,14 +227,15 @@ export default function OutreachPage() {
                     <div className="flex gap-1.5 border-t border-border pt-3">
                       <Button size="sm" variant="ghost" onClick={() => editProgram(p)} title="Edit"><Settings size={13} /></Button>
                       <Button size="sm" variant="ghost" onClick={() => duplicateProgram(p)} title="Duplicate"><Copy size={13} /></Button>
+                      <Button size="sm" variant="ghost" onClick={async () => {
+                        if (!window.confirm(`Wipe every future occurrence of "${p.name}" and regenerate them from the current pattern? Past events are kept intact.`)) return;
+                        try {
+                          const r = await outreachApi.refreshEvents(p.id);
+                          toast.success(`Refreshed: ${r.data.deleted} removed · ${r.data.created} recreated`);
+                        } catch { toast.error('Refresh failed'); }
+                      }} title="Refresh future occurrences" data-testid={`outreach-refresh-${p.id}`}><RefreshCcw size={13} /></Button>
                       <Button size="sm" variant="ghost" onClick={() => {
                         // Open the recurrence dialog with a properly-shaped form.
-                        // Pre-fills FROM the programme's stored recurrence_* settings
-                        // when present, so editing an existing recurring programme
-                        // keeps the user's prior choices. Defaults match the form
-                        // schema declared in useState(line 42) — critical to avoid
-                        // React's "controlled-to-uncontrolled" warning that hid the
-                        // pattern + dates and silently dropped them on submit.
                         const today = new Date().toISOString().split('T')[0];
                         setRecurForm({
                           pattern: p.recurrence_pattern || 'weekly',

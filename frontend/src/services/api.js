@@ -477,6 +477,7 @@ export const outreachApi = {
   deleteProgram: (id) => api.delete(`/outreach/programs/${id}`),
   duplicateProgram: (id) => api.post(`/outreach/programs/${id}/duplicate`),
   generateEvents: (id, data) => api.post(`/outreach/programs/${id}/generate-events`, data),
+  refreshEvents: (id, data) => api.post(`/outreach/programs/${id}/refresh-events`, data || {}),
   generateRecurring: (data) => api.post('/events/generate-recurring', data),
   sessions: (params) => api.get('/outreach/sessions', { params }),
   createSession: (data) => api.post('/outreach/sessions', data),

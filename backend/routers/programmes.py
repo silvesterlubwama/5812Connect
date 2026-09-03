@@ -17,6 +17,7 @@ class ProgrammeCreate(BaseModel):
     status: str = "active"
     location: Optional[str] = None
     location_id: Optional[str] = None
+    venue_id: Optional[str] = None
     start_date: Optional[str] = None
     target: Optional[int] = None
     is_recurring: bool = False
@@ -138,7 +139,7 @@ async def get_programme(prog_id: str, current_user: dict = Depends(get_current_u
 
 @router.put("/outreach/programs/{prog_id}")
 async def update_outreach_program(prog_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    allowed = {"name", "description", "category", "status", "location", "location_id", "start_date", "target", "is_recurring", "recurrence_pattern", "recurrence_day", "recurrence_time", "recurrence_end_time"}
+    allowed = {"name", "description", "category", "status", "location", "location_id", "venue_id", "start_date", "target", "is_recurring", "recurrence_pattern", "recurrence_day", "recurrence_time", "recurrence_end_time"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.outreach_programs.update_one({"id": prog_id}, {"$set": update})
@@ -148,6 +149,7 @@ async def update_outreach_program(prog_id: str, data: dict, current_user: dict =
     if "name" in data: event_update["title"] = data["name"]
     if "location" in data: event_update["location"] = data["location"]
     if "location_id" in data: event_update["location_id"] = data["location_id"]
+    if "venue_id" in data: event_update["venue_id"] = data["venue_id"]
     if "recurrence_time" in data: event_update["time"] = data["recurrence_time"]
     if event_update:
         event_update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -186,6 +188,74 @@ async def duplicate_programme(prog_id: str, current_user: dict = Depends(get_cur
     await db.outreach_programs.insert_one(new_prog)
     new_prog.pop("_id", None)
     return new_prog
+
+
+@router.post("/outreach/programs/{prog_id}/refresh-events")
+async def refresh_programme_events(prog_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Wipe every FUTURE event linked to this programme and regenerate them
+    from the programme's current recurrence pattern. Past events are preserved
+    so historical attendance data is never destroyed."""
+    prog = await db.outreach_programs.find_one({"id": prog_id}, {"_id": 0})
+    if not prog:
+        raise HTTPException(status_code=404, detail="Programme not found")
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Delete future events tied to this programme (either legacy or new field name)
+    q = {
+        "$or": [{"programme_id": prog_id}, {"outreach_program_id": prog_id}],
+        "date": {"$gte": today_iso},
+    }
+    deleted = (await db.events.delete_many(q)).deleted_count
+    # Regenerate. Use the programme's stored recurrence pattern; caller can
+    # optionally override any field via `data`.
+    d = data or {}
+    months_ahead = int(d.get("months_ahead", 3))
+    nth_day = d.get("nth_day", prog.get("recurrence_day", 1))
+    day_name = d.get("day_of_week", prog.get("recurrence_pattern", "saturday"))
+    time_str = d.get("time", prog.get("recurrence_time", "09:00"))
+    end_time_str = d.get("end_time", prog.get("recurrence_end_time", "12:00"))
+    day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
+    target_weekday = day_map.get(str(day_name).lower(), 5)
+    now = datetime.now(timezone.utc)
+    created = []
+    for m_offset in range(months_ahead):
+        month = now.month + m_offset
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        cal_ = calendar.monthcalendar(year, month)
+        matching = [w[target_weekday] for w in cal_ if w[target_weekday] != 0]
+        if not matching:
+            continue
+        if nth_day == -1:
+            day = matching[-1]
+        elif 1 <= nth_day <= len(matching):
+            day = matching[nth_day - 1]
+        else:
+            continue
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        if date_str < today_iso:
+            continue
+        event = {
+            "id": f"evt_{str(uuid.uuid4())[:8]}",
+            "title": prog.get("name", "Programme Event"),
+            "type": "outreach",
+            "date": date_str, "time": time_str, "end_time": end_time_str,
+            "location": prog.get("location", ""),
+            "location_id": prog.get("location_id"),
+            "venue_id": prog.get("venue_id"),
+            "capacity": prog.get("target", 100),
+            "description": prog.get("description", ""),
+            "is_public": False, "is_free": True, "visibility": "internal",
+            "is_recurring": True, "programme_id": prog_id,
+            "registered": 0, "status": "upcoming",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": current_user["id"],
+        }
+        await db.events.insert_one(event)
+        event.pop("_id", None)
+        created.append(event)
+    return {"deleted": deleted, "created": len(created), "events": created}
 
 
 @router.post("/outreach/programs/{prog_id}/generate-events")

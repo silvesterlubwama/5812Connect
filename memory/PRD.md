@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 273 (Feb 2026)
+**Programme Venue Picker + Bulk Regenerate.**
+
+- **Programme venue is now saved**. `ProgrammeCreate` (`routers/programmes.py`) now accepts `venue_id`; PUT `/outreach/programs/{id}` includes it in the allowed-fields set and cascades venue changes into every linked event. Frontend picker (already in the dialog) now round-trips end-to-end.
+- **Bulk Regenerate button** on each programme card. New `POST /outreach/programs/{id}/refresh-events` endpoint wipes every event whose date ≥ today for that programme (matches either `programme_id` or legacy `outreach_program_id`), then re-runs the pattern generator using the programme's stored settings. Past events are preserved so historical attendance stays intact.
+- Frontend: new `RefreshCcw` icon button in the card action row with a confirm prompt. Calls `outreachApi.refreshEvents(id)`; toast shows `X removed · Y recreated`.
+- Verified: created a programme with `venue_id`, saw venue propagate on generated events, ran refresh (deleted 6 future, recreated 3 from the corrected pattern), confirmed a manually-inserted 2024 past event survived the refresh.
+
 ## Recently Resolved — Iteration 272 (Feb 2026)
 **Outreach → Calendar bridge repaired + no more past-date auto-generation.**
 
