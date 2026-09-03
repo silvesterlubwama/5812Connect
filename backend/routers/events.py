@@ -685,6 +685,17 @@ async def _load_public_config(token: str) -> dict:
     return cfg
 
 
+@router.get("/public/calendar/user/{token}.ics")
+async def public_calendar_user_ical(token: str):
+    cfg = await _load_public_config(token)
+    events = await _fetch_events_for_config(cfg)
+    tasks = await _fetch_tasks_for_config(cfg)
+    ical = _combined_to_ical(events, tasks, cfg.get("name") or "58:12 Calendar")
+    from fastapi.responses import Response
+    return Response(content=ical, media_type="text/calendar",
+                    headers={"Cache-Control": "private, max-age=60"})
+
+
 @router.get("/public/calendar/user/{token}")
 async def public_calendar_user_json(token: str):
     cfg = await _load_public_config(token)
@@ -703,17 +714,6 @@ async def public_calendar_user_json(token: str):
         "tasks": tasks,
         "count": len(events) + len(tasks),
     }
-
-
-@router.get("/public/calendar/user/{token}.ics")
-async def public_calendar_user_ical(token: str):
-    cfg = await _load_public_config(token)
-    events = await _fetch_events_for_config(cfg)
-    tasks = await _fetch_tasks_for_config(cfg)
-    ical = _combined_to_ical(events, tasks, cfg.get("name") or "58:12 Calendar")
-    from fastapi.responses import Response
-    return Response(content=ical, media_type="text/calendar",
-                    headers={"Cache-Control": "private, max-age=60"})
 
 
 @router.post("/events/import/ical")
