@@ -45,7 +45,7 @@ export default function AdminPage() {
   const [bulkRole, setBulkRole] = useState('');
   const [saving, setSaving] = useState(false);
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false });
+  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false, will_sign_in: true });
   const [createdUser, setCreatedUser] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importJson, setImportJson] = useState('');
@@ -80,7 +80,8 @@ export default function AdminPage() {
   }, [fetchUsers]);
 
   const handleCreateUser = async () => {
-    if (!createForm.name.trim() || !createForm.email.trim()) { toast.error('Name and email are required'); return; }
+    if (!createForm.name.trim()) { toast.error('Name is required'); return; }
+    if (createForm.will_sign_in && !createForm.email.trim()) { toast.error('Email is required for users who will sign in'); return; }
     try {
       const payload = { ...createForm };
       if (payload.is_admin) payload.role = 'admin';
@@ -237,7 +238,7 @@ export default function AdminPage() {
         <div className="flex gap-2 flex-wrap">
           {selectedIds.size > 0 && <Button variant="outline" onClick={() => setShowBulk(true)} className="gap-2"><UserCog size={16} /> Bulk ({selectedIds.size})</Button>}
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setShowImport(true); setImportResult(null); setImportJson(''); }}><Download size={14} /> Import</Button>
-          <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
+          <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false, will_sign_in: true }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
           <Button variant="outline" size="sm" onClick={fetchUsers}><RefreshCw size={14} /></Button>
         </div>
       </div>

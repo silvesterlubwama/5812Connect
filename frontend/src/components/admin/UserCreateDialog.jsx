@@ -50,7 +50,13 @@ export function UserCreateDialog({ open, onOpenChange, form, setForm, locations,
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1.5"><Label className="text-xs">Full Name *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} data-testid="create-user-name" /></div>
-              <div className="col-span-2 space-y-1.5"><Label className="text-xs">Email *</Label><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} data-testid="create-user-email" /></div>
+              <div className="col-span-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={form.will_sign_in ?? true} onChange={e => setForm({ ...form, will_sign_in: e.target.checked })} data-testid="create-user-will-sign-in" />
+                  This person will sign in to the system
+                </label>
+              </div>
+              <div className="col-span-2 space-y-1.5"><Label className="text-xs">Email{(form.will_sign_in ?? true) ? ' *' : ' (optional)'}</Label><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} data-testid="create-user-email" /></div>
               <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Role</Label>

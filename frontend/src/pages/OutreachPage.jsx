@@ -10,7 +10,7 @@ import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { outreachApi, locationsApi, locationVenuesApi } from '../services/api';
+import { outreachApi, locationsApi, locationVenuesApi, eventsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -32,6 +32,7 @@ export default function OutreachPage() {
   const [showSession, setShowSession] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
   const [showRecurring, setShowRecurring] = useState(null);
+  const [conflicts, setConflicts] = useState(null);   // {programme, list:[{date,time,existing}]}
   const [editingProg, setEditingProg] = useState(null);
   const [saving, setSaving] = useState(false);
   const [newCatName, setNewCatName] = useState('');
@@ -231,7 +232,10 @@ export default function OutreachPage() {
                         if (!window.confirm(`Wipe every future occurrence of "${p.name}" and regenerate them from the current pattern? Past events are kept intact.`)) return;
                         try {
                           const r = await outreachApi.refreshEvents(p.id);
-                          toast.success(`Refreshed: ${r.data.deleted} removed · ${r.data.created} recreated`);
+                          const kept = r.data.created || 0;
+                          const clashes = r.data.conflicts || [];
+                          toast.success(`Refreshed: ${r.data.deleted} removed · ${kept} recreated${clashes.length ? ` · ${clashes.length} clash${clashes.length > 1 ? 'es' : ''}` : ''}`);
+                          if (clashes.length) setConflicts({ programme: p, list: clashes });
                         } catch { toast.error('Refresh failed'); }
                       }} title="Refresh future occurrences" data-testid={`outreach-refresh-${p.id}`}><RefreshCcw size={13} /></Button>
                       <Button size="sm" variant="ghost" onClick={() => {
@@ -459,6 +463,66 @@ export default function OutreachPage() {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Conflict resolution dialog — appears after a refresh whenever some
+          generated dates couldn't be booked because the venue was already busy. */}
+      <Dialog open={!!conflicts} onOpenChange={o => { if (!o) setConflicts(null); }}>
+        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+
+// One row of the venue-clash resolution dialog. Skip, force-book, or pick a
+// new time for a single flagged date; the row removes itself once handled.
+function ConflictRow({ programme, conflict, onDone }) {
+  const [newTime, setNewTime] = useState(conflict.time || '10:00');
+  const [busy, setBusy] = useState(false);
+  const book = async (force, timeToUse) => {
+    setBusy(true);
+    try {
+      await eventsApi.create({
+        title: programme.name, type: 'outreach', date: conflict.date,
+        time: timeToUse || conflict.time, end_time: programme.recurrence_end_time,
+        location: programme.location || '', location_id: programme.location_id,
+        venue_id: programme.venue_id, capacity: programme.target || 100,
+        programme_id: programme.id, is_public: false, visibility: 'internal',
+      }, { force });
+      toast.success('Booked');
+      onDone();
+    } catch (e) {
+      if (e.response?.status === 409) toast.error('Still clashes — pick another time');
+      else toast.error('Failed');
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="rounded border border-border p-2 space-y-2 text-xs" data-testid={`conflict-row-${conflict.date}`}>
+      <div className="flex items-center justify-between">
+        <span className="font-semibold">{conflict.date} · {conflict.time || 'all day'}</span>
+        <span className="text-muted-foreground truncate">clashes with "{conflict.existing?.title}"</span>
+      </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onDone} data-testid={`conflict-skip-${conflict.date}`}>Skip</Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => book(true, null)} data-testid={`conflict-force-${conflict.date}`}>Book anyway</Button>
+        <div className="flex items-center gap-1">
+          <Input type="time" className="h-7 w-24" value={newTime} onChange={e => setNewTime(e.target.value)} />
+          <Button size="sm" disabled={busy} onClick={() => book(false, newTime)} data-testid={`conflict-retime-${conflict.date}`}>Pick time</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+            <DialogTitle>Venue clashes · {conflicts?.programme?.name}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">These dates weren't recreated because the venue was already booked. Skip each one, force-book anyway, or move it to a new time.</p>
+          <div className="space-y-2 mt-2">
+            {(conflicts?.list || []).map((c, i) => (
+              <ConflictRow key={c.date + '-' + i} programme={conflicts.programme} conflict={c}
+                onDone={() => setConflicts(prev => ({ ...prev, list: prev.list.filter((x, idx) => idx !== i) }))} />
+            ))}
+            {!(conflicts?.list || []).length && <p className="text-xs text-muted-foreground text-center py-4">All clashes resolved</p>}
+          </div>
+          <div className="flex justify-end pt-2"><Button variant="outline" onClick={() => setConflicts(null)}>Close</Button></div>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

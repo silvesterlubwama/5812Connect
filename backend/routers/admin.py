@@ -97,11 +97,18 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{new_role}' role")
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
-    if not name or not email:
-        raise HTTPException(status_code=400, detail="Name and email are required")
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    # Email is only mandatory when the user will actually sign in
+    # (`will_sign_in=true` in the payload). Otherwise, staff-only records
+    # like volunteers / kiosk-only helpers can be created without an email.
+    will_sign_in = bool(data.get("will_sign_in") or data.get("password"))
+    if will_sign_in and not email:
+        raise HTTPException(status_code=400, detail="Email is required for users who will sign in")
+    if email:
+        existing = await db.users.find_one({"email": email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
     password = data.get("password") or "Test@5812!"
     user_id = str(uuid.uuid4())
     # Support multi-campus: accept location_ids array + expand with parent campuses

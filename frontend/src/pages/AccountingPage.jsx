@@ -48,6 +48,8 @@ export default function AccountingPage() {
   const [loading, setLoading] = useState(true);
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [accountForm, setAccountForm] = useState({ id: '', code: '', name: '', type: 'asset_current', currency: 'UGX' });
+  const [openBalAcct, setOpenBalAcct] = useState(null);
+  const [openBalForm, setOpenBalForm] = useState({ amount: '', date: new Date().toISOString().slice(0, 10), memo: '' });
   const [showJournalForm, setShowJournalForm] = useState(false);
   const [journalForm, setJournalForm] = useState({ id: '', code: '', name: '', kind: 'miscellaneous', default_debit_account_id: '', default_credit_account_id: '' });
   const [showEntryForm, setShowEntryForm] = useState(false);
@@ -733,6 +735,7 @@ export default function AccountingPage() {
                       <Badge variant="secondary" className="text-[10px]">{a.type_label}</Badge>
                       {isFinanceAdmin && (
                         <>
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); setOpenBalAcct(a); }} data-testid={`acc-opening-balance-${a.id}`} title="Set opening balance">Opening</Button>
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); openEditAccount(a); }} data-testid={`acc-edit-account-${a.id}`} title="Edit"><FileText size={12} /></Button>
                           <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); deleteAccount(a); }} data-testid={`acc-delete-account-${a.id}`} title="Delete"><Trash2 size={12} /></Button>
                         </>
@@ -1420,6 +1423,33 @@ function AdvancedReports({ locationId, currency }) {
           </CardContent>
         </Card>
       )}
+
+      {/* Opening Balance dialog */}
+      <Dialog open={!!openBalAcct} onOpenChange={o => { if (!o) { setOpenBalAcct(null); setOpenBalForm({ amount: '', date: new Date().toISOString().slice(0, 10), memo: '' }); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Opening Balance · {openBalAcct?.name}</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground">Posts a balanced journal entry against <strong>Opening Balance Equity (3000)</strong>. Auto-seeds the equity account if missing.</p>
+          <div className="space-y-2 mt-2">
+            <div><Label className="text-xs">Amount</Label><Input type="number" min="0" step="any" value={openBalForm.amount} onChange={e => setOpenBalForm({ ...openBalForm, amount: e.target.value })} data-testid="ob-amount" /></div>
+            <div><Label className="text-xs">As of date</Label><Input type="date" value={openBalForm.date} onChange={e => setOpenBalForm({ ...openBalForm, date: e.target.value })} data-testid="ob-date" /></div>
+            <div><Label className="text-xs">Memo (optional)</Label><Input value={openBalForm.memo} onChange={e => setOpenBalForm({ ...openBalForm, memo: e.target.value })} /></div>
+          </div>
+          <div className="flex gap-2 pt-3">
+            <Button variant="outline" onClick={() => setOpenBalAcct(null)}>Cancel</Button>
+            <div className="flex-1" />
+            <Button data-testid="ob-submit" onClick={async () => {
+              const amt = parseFloat(openBalForm.amount);
+              if (!(amt > 0)) { toast.error('Enter an amount > 0'); return; }
+              try {
+                await api.post(`/finance/chart-of-accounts/${openBalAcct.id}/opening-balance`, { amount: amt, date: openBalForm.date, memo: openBalForm.memo });
+                toast.success('Opening balance posted');
+                setOpenBalAcct(null); setOpenBalForm({ amount: '', date: new Date().toISOString().slice(0, 10), memo: '' });
+                fetchAll();
+              } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+            }}>Post</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

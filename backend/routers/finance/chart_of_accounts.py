@@ -6,6 +6,7 @@ one is refused if any JE line references it (keeps the ledger closed).
 """
 import uuid
 from typing import Optional
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -89,6 +90,62 @@ async def delete_account(account_id: str, current_user: dict = Depends(require_d
         raise HTTPException(status_code=400, detail="Account referenced by journal entries — deactivate instead")
     await db.finance_chart_of_accounts.delete_one({"id": account_id})
     return {"deleted": True}
+
+
+@router.post("/{account_id}/opening-balance")
+async def post_opening_balance(account_id: str, data: dict, current_user: dict = Depends(require_director)):
+    """Post a balanced journal entry that sets an account's opening balance.
+    Body: `{ amount: number, date?: 'YYYY-MM-DD', currency?: str, memo?: str }`.
+    The counter-account is `Opening Balance Equity` (code 3000) — auto-seeded
+    if missing. Sign is inferred from the account category:
+      * asset / expense  → debit target, credit equity
+      * liability / equity / income → credit target, debit equity
+    """
+    from ._common import post_journal_entry
+    acct = await db.finance_chart_of_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        amount = float(data.get("amount") or 0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="amount must be numeric")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be > 0")
+    # Ensure the Opening Balance Equity account exists (code 3000).
+    ob = await db.finance_chart_of_accounts.find_one({"code": "3000"}, {"_id": 0})
+    if not ob:
+        ob = {
+            "id": f"acc_{__import__('uuid').uuid4().hex[:10]}",
+            "code": "3000", "name": "Opening Balance Equity",
+            "type": "equity", "category": "equity",
+            "currency": acct.get("currency") or "UGX",
+            "active": True, "is_system": True,
+            "location_id": acct.get("location_id"),
+        }
+        await db.finance_chart_of_accounts.insert_one(ob)
+    # Direction — assets & expenses have a natural debit balance; equity,
+    # liability, income sit on the credit side.
+    cat = (acct.get("category") or acct.get("type") or "").lower()
+    debit_target = any(cat.startswith(p) for p in ("asset", "expense"))
+    if debit_target:
+        lines = [
+            {"account_id": account_id, "account_code": acct.get("code"), "account_name": acct.get("name"), "debit": amount, "credit": 0},
+            {"account_id": ob["id"],   "account_code": ob["code"],       "account_name": ob["name"],       "debit": 0, "credit": amount},
+        ]
+    else:
+        lines = [
+            {"account_id": ob["id"],   "account_code": ob["code"],       "account_name": ob["name"],       "debit": amount, "credit": 0},
+            {"account_id": account_id, "account_code": acct.get("code"), "account_name": acct.get("name"), "debit": 0, "credit": amount},
+        ]
+    je = await post_journal_entry(
+        date=data.get("date") or datetime.now(timezone.utc).date().isoformat(),
+        description=data.get("memo") or f"Opening balance · {acct.get('name')}",
+        lines=lines, source="opening_balance",
+        reference=account_id, location_id=acct.get("location_id"),
+        created_by=current_user["id"], created_by_name=current_user.get("name"),
+        idempotency_key=f"open:{account_id}:{data.get('date') or ''}",
+    )
+    return {"journal_entry": je, "amount": amount, "account": acct}
 
 
 @router.post("/seed")

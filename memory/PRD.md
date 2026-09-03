@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 275 (Feb 2026)
+**Conflict Resolution UI · Opening Balance · Optional email for non-login staff.**
+
+- **Venue-clash resolution dialog**: `OutreachPage.jsx` — after `refresh-events`, if the response has `conflicts[]`, opens a per-row dialog with three actions each: **Skip**, **Book anyway** (calls `eventsApi.create(..., {force: true})`) or **Pick time** (retries at a new HH:MM). Rows self-remove as they resolve; toast summary now reads `X removed · Y recreated · N clash(es)` when there's a collision.
+- **Opening Balance**: new backend endpoint `POST /api/finance/chart-of-accounts/{id}/opening-balance` — posts a balanced JE with the account as debit target (asset/expense) or credit target (liability/equity/income) and `Opening Balance Equity (3000)` as counter (auto-seeded if missing). Idempotent per `(account, date)`. `AccountingPage.jsx` adds an "Opening" pill on every CoA row that opens a `{amount, date, memo}` dialog.
+- **Optional email for non-login users**: `admin.py` — email is now only required when `will_sign_in=true` (or when a password is supplied). Volunteers / kiosk-only helpers can be created with just a name. Frontend: `UserCreateDialog` gets a "This person will sign in to the system" toggle above the email field; the star on Email flips to `(optional)` when unchecked. `AdminPage.handleCreateUser` validates accordingly.
+- **Verified end-to-end**: create a Volunteer without an email → 200 (badge_id auto-generated); create a Staff without email + `will_sign_in=true` → 400 "Email is required for users who will sign in"; post opening balance of 5000 UGX → balanced JE with `source=opening_balance`, lines: Dr Petty Cash 5000, Cr Opening Balance Equity 5000; amount 0 rejected 400.
+
 ## Recently Resolved — Iteration 274 (Feb 2026)
 **Venue-conflict-aware regenerate + Consumable stock tracking.**
 
