@@ -3,6 +3,20 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 269 (Feb 2026)
+**Unified Calendar + kill "All my campuses" + public shareable feeds.**
+
+- **Calendar merge.** `CalendarPage.jsx` fully rewritten as a single canvas for events + tasks. Three views (`Month | Week | Day`) with a persisted preference. Week/Day use a 6 AM–10 PM time grid with drop-in-time blocks. Legacy `/events` route now redirects to `/calendar`; sidebar `Events` link removed and `Calendar` promoted into the `Ministry` section.
+- **Task overlay & cross-post.** Only tasks with a `due_date` render. Visibility toggle (`My tasks only | All in campus | Hide`) persisted per user via `localStorage`. Create dialog has a `Event | Task` kind toggle — task path prompts for a board and writes via `tasksApi.create`; event path keeps venue-availability logic from iter 266.
+- **Kill "All my campuses".** Layout switcher no longer offers the `__all__` option. Auto-migration on mount: any user landing with a blank / stale `active_campus_id` is snapped to `user.location_id` and the backend is updated silently. Only the user's real campuses and their sub-locations are listed.
+- **Public shareable calendar.** New endpoints:
+  - `GET /api/calendar/share-links` — returns HMAC-signed tokens for the user's global feed + each of their campuses (`SECRET_KEY` rotation invalidates all links).
+  - `GET /api/public/calendar/global` and `.ics`
+  - `GET /api/public/calendar/location/{id}` and `.ics`
+  - Read-only, no-auth, RFC 5545 iCal (all-day event support, escaped fields), 5-min cache. Tasks are **never** included.
+- **Public view page.** New `PublicCalendarPage.jsx` at `/p/calendar/global/:token` and `/p/calendar/location/:locationId/:token` — clean month grid + upcoming list + one-click .ics subscribe. No softphone widget, no auth, no edit controls.
+- **Share dialog** on the internal calendar surfaces a copyable read-only URL + subscribe URL for every location the user can share, plus the global one.
+
 ## Recently Resolved — Iteration 268 (Feb 2026)
 **Finance reset expansion, Marketplace/HR nav split, Sales-portal ESC, bi-weekly payroll.**
 

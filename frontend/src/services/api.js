@@ -460,6 +460,11 @@ export const exportApi = {
   generateRecurring: (data) => api.post('/events/generate-recurring', data),
 };
 
+// ---- PUBLIC CALENDAR SHARE ----
+export const publicCalendarApi = {
+  shareLinks: () => api.get('/calendar/share-links'),
+};
+
 // ---- OUTREACH ----
 export const outreachApi = {
   programs: (params) => api.get('/outreach/programs', { params }),

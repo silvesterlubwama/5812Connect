@@ -353,6 +353,155 @@ async def webcal_feed(token: str):
     return Response(content="\r\n".join(lines), media_type="text/calendar")
 
 
+# ─── PUBLIC SHAREABLE CALENDAR (global + per-location, JSON + iCal) ─────────
+# Users can share a stable, unauth link that renders only public events
+# (`is_public=True`) and never leaks tasks. Tokens are HMAC-signed so no db
+# lookup is required to validate the link — rotate SECRET_KEY to invalidate.
+
+import hmac as _hmac, hashlib as _hashlib
+from deps import SECRET_KEY as _SECRET_KEY
+
+
+def _calendar_token(scope: str, ident: str = "") -> str:
+    """Deterministic 12-char signature so the same scope always yields the
+    same URL. Rotating SECRET_KEY invalidates every existing link."""
+    msg = f"cal:{scope}:{ident}".encode("utf-8")
+    return _hmac.new(_SECRET_KEY.encode(), msg, _hashlib.sha256).hexdigest()[:16]
+
+
+def _verify_calendar_token(token: str, scope: str, ident: str = "") -> bool:
+    return _hmac.compare_digest(token, _calendar_token(scope, ident))
+
+
+def _ical_escape(s: str) -> str:
+    """RFC 5545: escape commas, semicolons, backslashes, and newlines."""
+    if not s:
+        return ""
+    return (s.replace("\\", "\\\\").replace(",", "\\,")
+             .replace(";", "\\;").replace("\n", "\\n").replace("\r", ""))
+
+
+def _events_to_ical(events: list, cal_name: str) -> str:
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0",
+        "PRODID:-//58:12 Global Connect//CRM//EN",
+        f"X-WR-CALNAME:{_ical_escape(cal_name)}",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    ]
+    status_map = {"upcoming": "CONFIRMED", "completed": "CONFIRMED", "cancelled": "CANCELLED"}
+    now_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for ev in events:
+        uid = ev.get("id") or ""
+        dt = (ev.get("date") or "").replace("-", "")
+        if not dt:
+            continue
+        start_t = (ev.get("time") or "").replace(":", "")
+        end_t = (ev.get("end_time") or "").replace(":", "")
+        end_d = (ev.get("end_date") or ev.get("date") or "").replace("-", "")
+        if not start_t:
+            # All-day event
+            lines.extend([
+                "BEGIN:VEVENT",
+                f"UID:{uid}@5812connect",
+                f"DTSTAMP:{now_stamp}",
+                f"DTSTART;VALUE=DATE:{dt}",
+                f"DTEND;VALUE=DATE:{end_d}",
+                f"SUMMARY:{_ical_escape(ev.get('title', ''))}",
+                f"DESCRIPTION:{_ical_escape(ev.get('description', ''))}",
+                f"LOCATION:{_ical_escape(ev.get('location', ''))}",
+                f"STATUS:{status_map.get(ev.get('status'), 'CONFIRMED')}",
+                "END:VEVENT",
+            ])
+        else:
+            end_t = end_t or start_t
+            lines.extend([
+                "BEGIN:VEVENT",
+                f"UID:{uid}@5812connect",
+                f"DTSTAMP:{now_stamp}",
+                f"DTSTART:{dt}T{start_t}00",
+                f"DTEND:{end_d}T{end_t}00",
+                f"SUMMARY:{_ical_escape(ev.get('title', ''))}",
+                f"DESCRIPTION:{_ical_escape(ev.get('description', ''))}",
+                f"LOCATION:{_ical_escape(ev.get('location', ''))}",
+                f"STATUS:{status_map.get(ev.get('status'), 'CONFIRMED')}",
+                "END:VEVENT",
+            ])
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+
+@router.get("/calendar/share-links")
+async def get_calendar_share_links(current_user: dict = Depends(get_current_user)):
+    """Return the shareable public calendar URLs for this user — one global feed
+    plus one per campus they can access. Tokens are stable across calls."""
+    global_token = _calendar_token("global")
+    user_loc_ids = set(current_user.get("location_ids") or [])
+    if current_user.get("location_id"):
+        user_loc_ids.add(current_user["location_id"])
+    active = current_user.get("active_campus_id")
+    if active:
+        user_loc_ids.add(active)
+    per_loc = []
+    if user_loc_ids:
+        locs = await db.locations.find(
+            {"id": {"$in": list(user_loc_ids)}}, {"_id": 0, "id": 1, "name": 1},
+        ).to_list(50)
+        for loc in locs:
+            per_loc.append({
+                "location_id": loc["id"],
+                "location_name": loc.get("name") or loc["id"],
+                "token": _calendar_token("location", loc["id"]),
+            })
+    return {"global": {"token": global_token}, "locations": per_loc}
+
+
+async def _fetch_public_events(location_id: Optional[str] = None) -> list:
+    q: dict = {"is_public": True, "status": {"$ne": "cancelled"}}
+    if location_id:
+        q["location_id"] = location_id
+    return await db.events.find(q, {"_id": 0}).sort("date", 1).to_list(1000)
+
+
+@router.get("/public/calendar/global.ics")
+async def public_calendar_global_ical(token: str):
+    if not _verify_calendar_token(token, "global"):
+        raise HTTPException(status_code=404, detail="Invalid calendar link")
+    events = await _fetch_public_events()
+    ical = _events_to_ical(events, "58:12 Public Events")
+    from fastapi.responses import Response
+    return Response(content=ical, media_type="text/calendar",
+                    headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.get("/public/calendar/global")
+async def public_calendar_global_json(token: str):
+    if not _verify_calendar_token(token, "global"):
+        raise HTTPException(status_code=404, detail="Invalid calendar link")
+    events = await _fetch_public_events()
+    return {"scope": "global", "events": events, "count": len(events)}
+
+
+@router.get("/public/calendar/location/{location_id}.ics")
+async def public_calendar_location_ical(location_id: str, token: str):
+    if not _verify_calendar_token(token, "location", location_id):
+        raise HTTPException(status_code=404, detail="Invalid calendar link")
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
+    events = await _fetch_public_events(location_id)
+    ical = _events_to_ical(events, f"58:12 · {loc.get('name') if loc else location_id}")
+    from fastapi.responses import Response
+    return Response(content=ical, media_type="text/calendar",
+                    headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.get("/public/calendar/location/{location_id}")
+async def public_calendar_location_json(location_id: str, token: str):
+    if not _verify_calendar_token(token, "location", location_id):
+        raise HTTPException(status_code=404, detail="Invalid calendar link")
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "city": 1, "country": 1})
+    events = await _fetch_public_events(location_id)
+    return {"scope": "location", "location": loc or {"id": location_id}, "events": events, "count": len(events)}
+
+
 @router.post("/events/import/ical")
 async def import_calendar_ical(data: dict, current_user: dict = Depends(get_current_user)):
     """Import events from iCal text content."""

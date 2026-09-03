@@ -32,6 +32,7 @@ import FundsPage from './pages/FundsPage';
 const ShipmentsAdminPage = lazy(() => import('./pages/ShipmentsAdminPage'));
 const FareAlertsPage = lazy(() => import('./pages/FareAlertsPage'));
 const PassengerPortalPage = lazy(() => import('./pages/PassengerPortalPage'));
+const PublicCalendarPage = lazy(() => import('./pages/PublicCalendarPage'));
 const VoipAdminPage = lazy(() => import('./pages/VoipAdminPage'));
 const ShipmentDonorPage = lazy(() => import('./pages/ShipmentDonorPage'));
 import SchoolPortalPage from './pages/SchoolPortalPage';
@@ -139,6 +140,8 @@ function AppRoutes() {
       <Route path="/sponsor-portal/:portalToken" element={<SponsorPortalPage />} />
       <Route path="/donate/shipment/:token" element={<ShipmentDonorPage />} />
       <Route path="/p/passenger/:token" element={<PassengerPortalPage />} />
+      <Route path="/p/calendar/global/:token" element={<PublicCalendarPage />} />
+      <Route path="/p/calendar/location/:locationId/:token" element={<PublicCalendarPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/security-checkpoint" element={<SecurityCheckpointPage />} />
@@ -146,7 +149,7 @@ function AppRoutes() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="members" element={<UnifiedPeoplePage />} />
-        <Route path="events" element={<EventsPage />} />
+        <Route path="events" element={<Navigate to="/calendar" replace />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="boards" element={<TasksPage />} />
         <Route path="calendar" element={<CalendarPage />} />
