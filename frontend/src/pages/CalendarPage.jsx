@@ -12,18 +12,33 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { eventsApi, exportApi, outreachApi, tasksApi, publicCalendarApi, boardsApi, locationsApi } from '../services/api';
+import { eventsApi, exportApi, outreachApi, tasksApi, publicCalendarApi, boardsApi, locationsApi, holidaysApi } from '../services/api';
 import { secureStorage } from '../services/secureStorage';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+// iter 281 — new palette per user request:
+//   outreach = green, tasks = blue-light, US holidays = blue-deep, UG = red
+// Every "user event" (i.e. an event YOU created) is coloured brown instead
+// of using the type colour, so a leader can see their own contributions at
+// a glance. The type map here still drives the default for events created
+// by other people.
 const TYPE_COLORS = {
-  service: 'bg-purple-500', conference: 'bg-amber-500', meeting: 'bg-slate-500',
-  community: 'bg-teal-500', outreach: 'bg-pink-500', workshop: 'bg-violet-500',
-  training: 'bg-cyan-500', social: 'bg-orange-500', task: 'bg-blue-500',
-  imported: 'bg-gray-300',
+  service:    'bg-purple-500',
+  conference: 'bg-amber-500',
+  meeting:    'bg-slate-500',
+  community:  'bg-teal-500',
+  outreach:   'bg-green-600',
+  workshop:   'bg-violet-500',
+  training:   'bg-cyan-500',
+  social:     'bg-orange-500',
+  task:       'bg-sky-400',
+  imported:   'bg-gray-300',
+  holiday_us: 'bg-blue-700',
+  holiday_ug: 'bg-red-600',
+  user_event: 'bg-amber-800',   // brown-ish, for events the current user authored
 };
 const VIEW_MODES = ['month', 'week', 'day'];
 const TASK_SCOPES = [
@@ -45,6 +60,8 @@ export default function CalendarPage() {
   const [taskScope, setTaskScope] = useState(() => localStorage.getItem('5812_cal_task_scope') || 'mine');
   const [rawEvents, setRawEvents] = useState([]);
   const [rawTasks, setRawTasks] = useState([]);
+  const [holidays, setHolidays] = useState([]);
+  const [showHolidays, setShowHolidays] = useState(() => localStorage.getItem('5812_cal_holidays') !== 'off');
   const [loading, setLoading] = useState(true);
 
   // Selected item drawer & create dialog
@@ -64,6 +81,17 @@ export default function CalendarPage() {
 
   useEffect(() => localStorage.setItem('5812_cal_view', view), [view]);
   useEffect(() => localStorage.setItem('5812_cal_task_scope', taskScope), [taskScope]);
+  useEffect(() => localStorage.setItem('5812_cal_holidays', showHolidays ? 'on' : 'off'), [showHolidays]);
+
+  // Pull public holidays for the current + next year so month/week/day views
+  // are always populated regardless of which month the user paged to. This
+  // is a public endpoint, cached in state so no repeated fetches during nav.
+  const yearKey = cursor.getFullYear();
+  useEffect(() => {
+    holidaysApi.list({ year: yearKey, year_to: yearKey + 1, country: 'all' })
+      .then(r => setHolidays(r.data || []))
+      .catch(() => setHolidays([]));
+  }, [yearKey]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -129,8 +157,27 @@ export default function CalendarPage() {
         });
       }
     }
+    // Merge holidays as read-only calendar items with country-specific type
+    if (showHolidays) {
+      for (const h of holidays) {
+        out.push({
+          _kind: 'holiday', _readOnly: true, id: `hol_${h.country}_${h.date}`,
+          title: h.name, type: h.country === 'US' ? 'holiday_us' : 'holiday_ug',
+          date: h.date, time: '', location: h.country === 'US' ? '🇺🇸 United States' : '🇺🇬 Uganda',
+          description: `${h.country === 'US' ? 'US Federal' : 'Uganda Public'} Holiday`,
+        });
+      }
+    }
+    // Flag any event authored by the current user so it renders in "user" brown
+    if (user?.id) {
+      for (const it of out) {
+        if (it._kind === 'event' && (it.created_by === user.id || it.reporter_id === user.id)) {
+          it._authoredByMe = true;
+        }
+      }
+    }
     return out;
-  }, [rawEvents, rawTasks, taskScope, user?.id]);
+  }, [rawEvents, rawTasks, taskScope, user?.id, holidays, showHolidays]);
 
   // Item bucketing by ISO date for fast rendering
   const byDate = useMemo(() => {
@@ -279,7 +326,7 @@ export default function CalendarPage() {
   // ── Rendering ────────────────────────────────────────────────────────
   const CellItem = ({ it }) => (
     <div onClick={(e) => { e.stopPropagation(); openItem(it); }}
-         className={`text-[10px] px-1 py-0.5 rounded truncate cursor-pointer hover:opacity-80 ${it._kind === 'task' ? 'bg-blue-500 text-white' : `text-white ${TYPE_COLORS[it.type] || 'bg-slate-500'}`}`}
+         className={`text-[10px] px-1 py-0.5 rounded truncate cursor-pointer hover:opacity-80 ${it._kind === 'task' ? `${TYPE_COLORS.task} text-white` : it._kind === 'holiday' ? `text-white ${TYPE_COLORS[it.type] || 'bg-slate-500'}` : `text-white ${it._authoredByMe ? TYPE_COLORS.user_event : (TYPE_COLORS[it.type] || 'bg-slate-500')}`}`}
          title={it.title} data-testid={`cal-item-${it.id}`}>
       {it.time && <span className="opacity-80">{it.time} </span>}{it.title}
     </div>
@@ -358,7 +405,11 @@ export default function CalendarPage() {
                 {hours.map(h => <div key={h} className="h-10 border-b border-border hover:bg-accent/10 cursor-pointer" />)}
                 {dayItems.map(it => {
                   const { top, height } = laneFor(it);
-                  const color = it._kind === 'task' ? 'bg-blue-500' : (TYPE_COLORS[it.type] || 'bg-slate-500');
+                  const color = it._kind === 'task'
+                    ? TYPE_COLORS.task
+                    : it._kind === 'holiday'
+                      ? (TYPE_COLORS[it.type] || 'bg-slate-500')
+                      : (it._authoredByMe ? TYPE_COLORS.user_event : (TYPE_COLORS[it.type] || 'bg-slate-500'));
                   return (
                     <div key={it.id} onClick={(e) => { e.stopPropagation(); openItem(it); }}
                          className={`absolute left-1 right-1 rounded px-1.5 py-0.5 text-[10px] text-white cursor-pointer hover:opacity-90 ${color} overflow-hidden`}
@@ -415,14 +466,31 @@ export default function CalendarPage() {
               }}><Download size={14} /> Export .ics</Button>
             </PopoverContent>
           </Popover>
+          <Button size="sm" variant={showHolidays ? 'default' : 'outline'} className="h-8 text-xs gap-1" onClick={() => setShowHolidays(v => !v)} data-testid="cal-holidays-toggle" title="Toggle US federal + Ugandan public holidays">
+            {showHolidays ? '🎉 Holidays on' : 'Holidays off'}
+          </Button>
           <Button size="sm" className="gap-1.5" onClick={() => { setCreateKind('event'); setCreateForm(f => ({ ...f, date: iso(cursor) })); setShowCreate(true); }} data-testid="cal-new-btn"><Plus size={14} />New</Button>
         </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend — new palette (iter 281): outreach=green, US holidays=blue,
+          UG holidays=red, your own events=brown, other events keep type colour */}
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-        {Object.entries(TYPE_COLORS).filter(([k]) => k !== 'imported').map(([k, c]) => (
-          <div key={k} className="flex items-center gap-1.5"><div className={`w-2.5 h-2.5 rounded-full ${c}`} /><span className="capitalize">{k}</span></div>
+        {[
+          ['user_event', 'Your events'],
+          ['task', 'Tasks'],
+          ['holiday_us', 'US Holiday'],
+          ['holiday_ug', 'UG Holiday'],
+          ['outreach', 'Outreach'],
+          ['service', 'Service'],
+          ['conference', 'Conference'],
+          ['meeting', 'Meeting'],
+          ['community', 'Community'],
+          ['workshop', 'Workshop'],
+          ['training', 'Training'],
+          ['social', 'Social'],
+        ].map(([k, label]) => (
+          <div key={k} className="flex items-center gap-1.5"><div className={`w-2.5 h-2.5 rounded-full ${TYPE_COLORS[k] || 'bg-slate-500'}`} /><span>{label}</span></div>
         ))}
       </div>
 

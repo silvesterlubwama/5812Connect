@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 281 (Feb 2026)
+**Snappier event add · Public holidays on calendar · Full colour palette · Event-type inline edit.**
+
+- **Event creation is no longer blocked on notification I/O** — the "notify managers" step in `POST /events` now fires via `asyncio.create_task` after `db.events.insert_one`, so the API responds as soon as the doc is persisted (Resend calls used to sit on the request thread when the free-tier throttle kicked in).
+- **Public holidays on the calendar** — new `/api/holidays?year=Y&year_to=Y2&country=all|US|UG` router (`routers/holidays.py`) that server-computes US federal (fixed + nth-weekday) + Uganda public holidays (fixed + Easter via Computus + pre-tabled Eid al-Fitr / Eid al-Adha 2024–2028). `CalendarPage` fetches them for the visible year + next, merges them as read-only items, and the header now has a "🎉 Holidays on/off" toggle (persisted to localStorage). Country label prefixed with 🇺🇸 / 🇺🇬 flag.
+- **New colour palette per user brief**: US Holidays **blue-700**, UG Holidays **red-600**, Outreach **green-600**, your own events (created_by === current user) **brown/amber-800**, tasks **sky-400**. Other event types keep their existing rainbow (purple/amber/slate/teal/violet/cyan/orange). Legend rebuilt with human labels ("Your events", "Tasks", "US Holiday", …) instead of raw enum names.
+- **Event types are now editable** (`EventsPage.jsx` → Event Types dialog) — click the colour swatch or the label to change and it saves on blur via existing `PUT /event-types/{id}`. Was create/delete-only before.
+
 ## Recently Resolved — Iteration 280 (Feb 2026)
 **Copy-public-link pill + Map pin on public bookings + Sheet history on consumables + parent-campus member scoping verified.**
 

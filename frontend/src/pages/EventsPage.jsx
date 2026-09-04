@@ -338,6 +338,17 @@ export default function EventsPage() {
     try { const r = await eventsApi.createType({ name: newTypeName, label: newTypeName, color: newTypeColor }); setEventTypes(prev => [...prev, r.data]); setNewTypeName(''); toast.success('Type added'); } catch { toast.error('Failed to add type'); }
   };
 
+  // iter 281 — inline edit of event types (label + colour). Backend already
+  // exposed PUT /event-types/{id} but the UI had no way to trigger it, so
+  // users had to delete + recreate.
+  const updateEventType = async (id, patch) => {
+    try {
+      const r = await eventsApi.updateType(id, patch);
+      setEventTypes(prev => prev.map(t => t.id === id ? { ...t, ...r.data } : t));
+      toast.success('Type updated');
+    } catch { toast.error('Failed to update type'); }
+  };
+
   const deleteEventType = async (id) => {
     try { await eventsApi.deleteType(id); setEventTypes(prev => prev.filter(t => t.id !== id)); toast.success('Type deleted'); } catch { toast.error('Failed to delete type'); }
   };
@@ -767,16 +778,31 @@ export default function EventsPage() {
           <DialogHeader><DialogTitle>Manage Event Types</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             {eventTypes.map(t => (
-              <div key={t.id} className="flex items-center justify-between p-2 rounded border border-border">
-                <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.color }} /><span className="text-sm font-medium">{t.label}</span></div>
-                <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={() => deleteEventType(t.id)}><Trash2 size={13} /></Button>
+              <div key={t.id} className="flex items-center gap-2 p-2 rounded border border-border" data-testid={`event-type-row-${t.id}`}>
+                <input
+                  type="color"
+                  value={t.color || '#6366f1'}
+                  onChange={e => updateEventType(t.id, { color: e.target.value })}
+                  className="w-8 h-8 rounded border cursor-pointer flex-shrink-0"
+                  title="Click to change colour"
+                  data-testid={`event-type-color-${t.id}`}
+                />
+                <Input
+                  defaultValue={t.label}
+                  className="h-8 text-sm flex-1"
+                  data-testid={`event-type-label-${t.id}`}
+                  onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.label) updateEventType(t.id, { label: v }); }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+                />
+                <Button size="sm" variant="ghost" className="text-destructive h-7 w-7 p-0" onClick={() => deleteEventType(t.id)} data-testid={`event-type-delete-${t.id}`}><Trash2 size={13} /></Button>
               </div>
             ))}
             <div className="flex gap-2 pt-2 border-t border-border">
-              <Input placeholder="New type name" value={newTypeName} onChange={e => setNewTypeName(e.target.value)} className="flex-1" />
-              <input type="color" value={newTypeColor} onChange={e => setNewTypeColor(e.target.value)} className="w-10 h-9 rounded border cursor-pointer" />
-              <Button size="sm" onClick={addEventType} disabled={!newTypeName.trim()}>Add</Button>
+              <Input placeholder="New type name" value={newTypeName} onChange={e => setNewTypeName(e.target.value)} className="flex-1" data-testid="event-type-new-name" />
+              <input type="color" value={newTypeColor} onChange={e => setNewTypeColor(e.target.value)} className="w-10 h-9 rounded border cursor-pointer" data-testid="event-type-new-color" />
+              <Button size="sm" onClick={addEventType} disabled={!newTypeName.trim()} data-testid="event-type-add-btn">Add</Button>
             </div>
+            <p className="text-[10px] text-muted-foreground">Tip: click a swatch or a label to edit — changes save on blur.</p>
           </div>
         </DialogContent>
       </Dialog>

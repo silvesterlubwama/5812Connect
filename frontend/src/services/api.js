@@ -468,6 +468,11 @@ export const publicCalendarApi = {
   deleteConfig: (id) => api.delete(`/calendar/share-configs/${id}`),
 };
 
+// Public holidays (US federal + Ugandan) — server-computed, non-auth
+export const holidaysApi = {
+  list: (params) => api.get('/holidays', { params }),
+};
+
 // ---- OUTREACH ----
 export const outreachApi = {
   programs: (params) => api.get('/outreach/programs', { params }),

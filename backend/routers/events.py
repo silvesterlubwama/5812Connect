@@ -222,19 +222,29 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
             event["country"] = loc["country"]
     await db.events.insert_one(event)
     event.pop("_id", None)
+    # Fire notifications in the background so the API response returns
+    # immediately (iter 281 — was blocking event creation on Resend I/O).
     try:
         from routers.notifications import send_bulk_notifications
-        recipients = await db.users.find(
-            {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}, "email": {"$exists": True, "$ne": ""}},
-            {"_id": 0, "email": 1, "name": 1}
-        ).to_list(200)
-        if recipients:
-            await send_bulk_notifications({
-                "recipients": recipients, "type": "event_reminder",
-                "data": {"event_title": event.get("title"), "date": event.get("date"), "time": event.get("time"), "location": event.get("location")},
-            })
+        import asyncio
+
+        async def _notify_bg():
+            try:
+                recipients = await db.users.find(
+                    {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}, "email": {"$exists": True, "$ne": ""}},
+                    {"_id": 0, "email": 1, "name": 1}
+                ).to_list(200)
+                if recipients:
+                    await send_bulk_notifications({
+                        "recipients": recipients, "type": "event_reminder",
+                        "data": {"event_title": event.get("title"), "date": event.get("date"), "time": event.get("time"), "location": event.get("location")},
+                    })
+            except Exception as e:
+                logger.warning(f"Event notify failed: {e}")
+
+        asyncio.create_task(_notify_bg())
     except Exception as e:
-        logger.warning(f"Event notify failed: {e}")
+        logger.warning(f"Event notify scheduling failed: {e}")
     return event
 
 

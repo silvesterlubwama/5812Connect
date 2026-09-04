@@ -608,6 +608,7 @@ try:
     from routers.consumable_sheets import router as consumable_sheets_router
     from routers.event_tickets import router as event_tickets_router
     from routers.purchase_orders import router as purchase_orders_router
+    from routers.holidays import router as holidays_router
     app.include_router(bookings_router)
     app.include_router(ws_router)
     app.include_router(notifications_router)
@@ -641,6 +642,7 @@ try:
     app.include_router(consumable_sheets_router)
     app.include_router(event_tickets_router)
     app.include_router(purchase_orders_router)
+    app.include_router(holidays_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
     from routers.donors_vendors import router as donors_vendors_router
