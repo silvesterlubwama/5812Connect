@@ -60,6 +60,19 @@ FINANCE_COLLECTIONS = [
     # Approvals + budgets tied to finance
     "approvals",
     "budgets",
+    # Legacy accounting collections (deprecated iter 246 but never cleared —
+    # they were still showing up in Banking, drop-downs & reports after a
+    # reset. iter 284 pulls them into the reset scope so a "Reset Finance"
+    # really does nuke every stale CoA/JE/tax row from the old module.)
+    "accounting_accounts",
+    "accounting_entries",
+    "accounting_entry_lines",
+    "accounting_journals",
+    "accounting_taxes",
+    "accounting_fiscal_periods",
+    "chart_accounts",
+    "chart_account_transfers",
+    "customer_accounts",
 ]
 
 # Seed COA — code prefixes follow the standard convention (1xxx assets,

@@ -420,32 +420,59 @@ function JournalPanel() {
 }
 
 // ─── CHART OF ACCOUNTS ───────────────────────────────────────
+const BANK_SUBTYPES = [
+  { value: '', label: '— Not a bank account —' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'checking', label: 'Checking' },
+  { value: 'savings', label: 'Savings' },
+  { value: 'momo', label: 'Mobile Money' },
+  { value: 'credit_card', label: 'Credit Card' },
+];
+
 function CoaPanel() {
   const [rows, setRows] = useState([]);
+  const [balances, setBalances] = useState({});   // { account_id: balance }
   const [addOpen, setAddOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
   const [obRow, setObRow] = useState(null);
   const [obForm, setObForm] = useState({ amount: '', date: todayIso(), memo: '' });
-  const [form, setForm] = useState({ code: '', name: '', type: 'expense', is_cash: false });
-  const reload = () => api.get('/finance/chart-of-accounts?active_only=false').then(r => setRows(r.data || []));
+  const [form, setForm] = useState({ code: '', name: '', type: 'expense', bank_subtype: '' });
+  const reload = async () => {
+    const [coaR, tbR] = await Promise.all([
+      api.get('/finance/chart-of-accounts?active_only=false'),
+      api.get('/finance/reports/trial-balance').catch(() => ({ data: { rows: [] } })),
+    ]);
+    setRows(coaR.data || []);
+    setBalances(Object.fromEntries((tbR.data?.rows || []).map(r => [r.account_id || r.id, r.balance || 0])));
+  };
   useEffect(() => { reload().catch(() => {}); }, []);
 
   const submit = async () => {
     if (!form.code || !form.name) { toast.error('Code and name required'); return; }
-    try { await api.post('/finance/chart-of-accounts', form); toast.success('Account created'); setAddOpen(false); setForm({ code: '', name: '', type: 'expense', is_cash: false }); reload(); }
-    catch (e) { toast.error(e?.response?.data?.detail || 'Create failed'); }
+    try {
+      await api.post('/finance/chart-of-accounts', {
+        code: form.code, name: form.name, type: form.type,
+        bank_subtype: form.bank_subtype || null,
+        is_cash: !!form.bank_subtype,
+      });
+      toast.success('Account created'); setAddOpen(false);
+      setForm({ code: '', name: '', type: 'expense', bank_subtype: '' });
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Create failed'); }
   };
 
   // iter 282 — Chart of Accounts was previously read-only. Now supports
-  // inline edit (name / type / is_cash), delete (falls back to deactivate
-  // when journal entries reference the account), and one-click opening
-  // balance so admins can seed real balances against `3000 Opening
+  // inline edit (name / type / bank subtype), delete (falls back to
+  // deactivate when journal entries reference the account), and one-click
+  // opening balance so admins can seed real balances against `3000 Opening
   // Balance Equity` without leaving the page.
   const saveEdit = async () => {
     if (!editRow?.code || !editRow?.name) { toast.error('Code and name required'); return; }
     try {
       await api.put(`/finance/chart-of-accounts/${editRow.id}`, {
-        code: editRow.code, name: editRow.name, type: editRow.type, is_cash: !!editRow.is_cash,
+        code: editRow.code, name: editRow.name, type: editRow.type,
+        bank_subtype: editRow.bank_subtype || null,
+        is_cash: !!editRow.bank_subtype,
       });
       toast.success('Account updated'); setEditRow(null); reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
@@ -476,6 +503,8 @@ function CoaPanel() {
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
   };
 
+  const bankLabel = (a) => (BANK_SUBTYPES.find(s => s.value === (a.bank_subtype || '')) || { label: '' }).label;
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -484,14 +513,19 @@ function CoaPanel() {
       </CardHeader>
       <CardContent>
         <Table>
-          <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Cash?</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Bank subtype</TableHead><TableHead className="text-right">Balance</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
           <TableBody>
-            {rows.map(a => (
+            {rows.map(a => {
+              const bal = balances[a.id] ?? 0;
+              return (
               <TableRow key={a.id} data-testid={`coa-row-${a.code}`} className={!a.active ? 'opacity-50' : ''}>
                 <TableCell className="font-mono">{a.code}</TableCell>
                 <TableCell>{a.name}{a.is_system && <span className="ml-1 text-[10px] text-muted-foreground">🔒 system</span>}</TableCell>
                 <TableCell><Badge variant="outline" className="text-[10px]">{a.type}</Badge></TableCell>
-                <TableCell>{a.is_cash ? '✓' : ''}</TableCell>
+                <TableCell>{a.bank_subtype ? <Badge className="text-[10px] bg-sky-100 text-sky-700">{bankLabel(a)}</Badge> : (a.is_cash ? <Badge className="text-[10px] bg-sky-100 text-sky-700">Cash</Badge> : <span className="text-[10px] text-muted-foreground">—</span>)}</TableCell>
+                <TableCell className={`text-right font-mono text-xs ${bal < 0 ? 'text-rose-600' : bal > 0 ? 'text-emerald-700' : 'text-muted-foreground'}`} data-testid={`coa-balance-${a.code}`}>
+                  {bal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </TableCell>
                 <TableCell>
                   <button
                     className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${a.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}
@@ -514,7 +548,8 @@ function CoaPanel() {
                   </div>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </Table>
       </CardContent>
@@ -533,7 +568,14 @@ function CoaPanel() {
                 <SelectContent>{['asset', 'liability', 'equity', 'revenue', 'expense'].map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_cash} onChange={e => setForm({ ...form, is_cash: e.target.checked })} /> Cash/bank account (appears in cashflow)</label>
+            <div>
+              <Label>Bank subtype (optional)</Label>
+              <Select value={form.bank_subtype || '_none'} onValueChange={v => setForm({ ...form, bank_subtype: v === '_none' ? '' : v })}>
+                <SelectTrigger data-testid="coa-add-bank-subtype"><SelectValue /></SelectTrigger>
+                <SelectContent>{BANK_SUBTYPES.map(s => <SelectItem key={s.value || '_none'} value={s.value || '_none'}>{s.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground mt-1">Cash/Checking/Savings/Momo accounts show up in the Banking module & Deposit-To pickers.</p>
+            </div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button onClick={submit} data-testid="coa-add-submit">Create</Button></DialogFooter>
         </DialogContent>
@@ -554,8 +596,15 @@ function CoaPanel() {
                   <SelectContent>{['asset', 'liability', 'equity', 'revenue', 'expense'].map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!editRow.is_cash} onChange={e => setEditRow({ ...editRow, is_cash: e.target.checked })} /> Cash/bank account</label>
-              {editRow.is_system && <p className="text-[11px] text-amber-700">Seed account — only the name and cash flag can be changed.</p>}
+              <div>
+                <Label>Bank subtype</Label>
+                <Select value={editRow.bank_subtype || '_none'} onValueChange={v => setEditRow({ ...editRow, bank_subtype: v === '_none' ? '' : v })}>
+                  <SelectTrigger data-testid="coa-edit-bank-subtype"><SelectValue /></SelectTrigger>
+                  <SelectContent>{BANK_SUBTYPES.map(s => <SelectItem key={s.value || '_none'} value={s.value || '_none'}>{s.label}</SelectItem>)}</SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground mt-1">Picking any subtype flags this as a bank/cash account so it appears in the Banking module.</p>
+              </div>
+              {editRow.is_system && <p className="text-[11px] text-amber-700">Seed account — only the name and bank subtype can be changed.</p>}
             </div>
           )}
           <DialogFooter><Button variant="outline" onClick={() => setEditRow(null)}>Cancel</Button><Button onClick={saveEdit} data-testid="coa-edit-submit">Save</Button></DialogFooter>

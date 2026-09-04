@@ -49,7 +49,8 @@ async def create_account(data: dict, current_user: dict = Depends(require_direct
         "code": code,
         "name": name,
         "type": acct_type,
-        "is_cash": bool(data.get("is_cash")),
+        "is_cash": bool(data.get("is_cash") or data.get("bank_subtype")),
+        "bank_subtype": (data.get("bank_subtype") or "").strip().lower() or None,  # cash|checking|savings|momo|credit_card
         "is_system": False,
         "active": True,
         "created_at": _now(),
@@ -65,14 +66,20 @@ async def update_account(account_id: str, data: dict, current_user: dict = Depen
     acct = await db.finance_chart_of_accounts.find_one({"id": account_id}, {"_id": 0})
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
-    # System accounts: only `active`, `is_cash` and `name` can be updated (never
+    # System accounts: only `active`, `is_cash`, `bank_subtype` and `name` can be updated (never
     # the `type` or `code` — those would break historical JEs).
-    allowed = {"name", "is_cash", "active"}
+    allowed = {"name", "is_cash", "bank_subtype", "active"}
     if not acct.get("is_system"):
         allowed |= {"code", "type"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "type" in update and update["type"] not in ACCOUNT_TYPES:
         raise HTTPException(status_code=400, detail="Invalid account type")
+    if "bank_subtype" in update:
+        sub = (update["bank_subtype"] or "").strip().lower() or None
+        update["bank_subtype"] = sub
+        # If they picked a subtype, force is_cash on; if they cleared it, leave is_cash alone
+        if sub:
+            update["is_cash"] = True
     update["updated_at"] = _now()
     await db.finance_chart_of_accounts.update_one({"id": account_id}, {"$set": update})
     return await db.finance_chart_of_accounts.find_one({"id": account_id}, {"_id": 0})

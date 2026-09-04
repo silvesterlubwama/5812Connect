@@ -3,6 +3,20 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 284 (Feb 2026)
+**Reset Finance now really wipes every stale accounting collection.**
+
+- **Root cause**: `FINANCE_COLLECTIONS` was missing 9 legacy collections (`accounting_accounts` 140 rows, `chart_accounts` 24, `chart_account_transfers`, `customer_accounts`, `accounting_entries` 815, `accounting_entry_lines` 1 630, `accounting_journals` 26, `accounting_taxes`, `accounting_fiscal_periods`), so "Reset Finance" left them behind and drop-downs / lookups in Banking, invoices, statements were still surfacing pre-reset rows.
+- **Fix**: pulled every legacy collection into `FINANCE_COLLECTIONS` in `_common.py`. Any future Reset Finance also purges them. Ran a one-time DB cleanup: **2 664 stale rows dropped across the 9 collections**. Banking is now clean, and any future full-reset will stay that way.
+- Live `bank_accounts` (real, current-module) intentionally preserved.
+
+## Recently Resolved — Iteration 283 (Feb 2026)
+**Cash = bank account · Balances column on Chart of Accounts.**
+
+- **Bank subtype on every account** — new `bank_subtype` field on `finance_chart_of_accounts` (Cash / Checking / Savings / Mobile Money / Credit Card). Picking any subtype auto-flags the account as `is_cash=true`, so Cash on Hand and 5812 Bank now sit side-by-side in the Banking module and every "Deposit To" picker. Backend passes through on both create + update (system accounts included).
+- **Balances column on Chart of Accounts** — CoA now fetches `/finance/reports/trial-balance` in parallel with the CoA list and shows each account's current balance in a monospaced right-aligned column (emerald for positive, rose for negative, grey for zero). Admins can now spot a Cash account that's gone negative or a receivable that's ballooned without opening the TB report.
+- **Verified via curl**: PUT bank_subtype=cash on Cash on Hand returns `{"bank_subtype":"cash","is_cash":true}`; TB endpoint returns 8 rows including `balance` per account; `CI=true yarn build` clean.
+
 ## Recently Resolved — Iteration 282 (Feb 2026)
 **Chart of Accounts is now editable on the actual page users see.**
 
