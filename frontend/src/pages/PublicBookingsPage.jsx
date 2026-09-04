@@ -207,6 +207,20 @@ export default function PublicBookingsPage() {
 
   const isPaid = (ev) => !ev.is_free && ev.price > 0;
 
+  // Deep-link — /public-bookings?event=<id> auto-opens the registration
+  // modal for that event once data loads. Powers the "Copy public link" pill
+  // on the internal Events page (iter 280).
+  useEffect(() => {
+    if (loading || events.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const eid = params.get('event');
+    if (eid) {
+      const found = events.find(e => e.id === eid);
+      if (found) setSelectedEvent(found);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, events.length]);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900">
       {/* Header */}
@@ -317,6 +331,14 @@ export default function PublicBookingsPage() {
                               <h4 className="font-semibold text-sm line-clamp-2">{event.title}</h4>
                               {isPaid(event) ? <Badge className="bg-amber-100 text-amber-800 text-[10px] shrink-0">{event.price?.toLocaleString()} {event.currency || 'UGX'}</Badge> : <Badge variant="outline" className="text-[10px] text-green-600 shrink-0">Free</Badge>}
                             </div>
+                            {(event.country || event.location_name) && (
+                              <div className="mb-2 flex items-center gap-1.5">
+                                <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium border ${typeColors[event.type] ? 'border-transparent bg-slate-100 text-slate-700' : 'border-slate-200 bg-white'}`} data-testid={`event-map-pin-${event.id}`}>
+                                  <MapPin size={9} className="text-rose-500" />
+                                  {event.country ? (COUNTRIES.find(c => c.code === event.country)?.label.split(' ')[0] || event.country) : event.location_name}
+                                </span>
+                              </div>
+                            )}
                             <div className="space-y-1 text-xs text-muted-foreground">
                               <p className="flex items-center gap-1.5"><Calendar size={11} />{formatDate(event.date)}</p>
                               {event.time && <p className="flex items-center gap-1.5"><Clock size={11} />{event.time}{event.end_time ? ` - ${event.end_time}` : ''}</p>}

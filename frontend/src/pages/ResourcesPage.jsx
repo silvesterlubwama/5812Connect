@@ -297,6 +297,9 @@ export default function ResourcesPage() {
                     </Button>
                   </div>
                 )}
+                {r.is_consumable && (
+                  <SheetHistory resourceId={r.id} />
+                )}
                 {r.description && <p className="text-xs text-muted-foreground line-clamp-2">{r.description}</p>}
                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                   {r.quantity > 1 && <span>Qty: {r.quantity}</span>}
@@ -517,6 +520,28 @@ export default function ResourcesPage() {
 }
 
 // Consumable stock adjustment dialog — in/out with reason picker (event/child/department)
+function SheetHistory({ resourceId }) {
+  const [sheets, setSheets] = useState([]);
+  React.useEffect(() => {
+    let cancelled = false;
+    resourcesApi.listTrackingSheets(resourceId)
+      .then(r => { if (!cancelled) setSheets((r.data || []).slice(0, 2)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [resourceId]);
+  if (sheets.length === 0) return null;
+  return (
+    <div className="mb-2 border-l-2 border-emerald-200 pl-2 py-1 space-y-0.5" data-testid={`sheet-history-${resourceId}`}>
+      <p className="text-[9px] font-semibold text-emerald-700 uppercase tracking-wide">Recent Sheets</p>
+      {sheets.map(s => (
+        <p key={s.id} className="text-[10px] text-muted-foreground truncate" title={`${s.total_servings} ${s.serving_unit} = ${s.base_qty} ${s.base_unit} · ${s.filled_by || '—'}`}>
+          <span className="font-mono">{s.month || s.uploaded_at?.slice(0, 7)}</span> · {s.total_servings} {s.serving_unit} → {s.base_qty} {s.base_unit}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function StockDialog({ open, onOpenChange, resource, onDone }) {
   const [tab, setTab] = useState('out');
   const [qty, setQty] = useState('');

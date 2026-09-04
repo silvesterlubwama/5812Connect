@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 280 (Feb 2026)
+**Copy-public-link pill + Map pin on public bookings + Sheet history on consumables + parent-campus member scoping verified.**
+
+- **Copy Public Link pill on internal Events page** — every public event card now shows an emerald "Public link" pill next to its status badges (only when `is_public`). Clicking copies `<origin>/public-bookings?event=<id>` to the clipboard. Companion **deep-link support** in `PublicBookingsPage` — the query-param `?event=<id>` auto-opens the registration modal for that event as soon as data loads, so leaders can share a link that lands users directly on Register.
+- **Map-pin badge on public bookings event cards** — each `PublicBookingsPage` event card now shows a rose-pin badge with the country (or campus name if country isn't set) between the title and details block, giving international audiences a quick "where is this?" at a glance without clicking through.
+- **Sheet History strip on consumable cards** — new `<SheetHistory>` component fetches `/api/resources/{id}/tracking-sheets` and renders the two most-recent uploads inline on each consumable card (month → servings → base qty). Empty state hides itself. Gives caregivers a monthly-rhythm view without opening a modal.
+- **Parent-campus member visibility verified** — curl as admin returned 40+ members across every descendant location, confirming the recursive `expand_descendants` in `deps.py::get_campus_filter` scopes correctly for parent-campus admins.
+
 ## Recently Resolved — Iteration 279 (Feb 2026)
 **Purchase Orders MVP + Locked-period guard + Serving-conversions editor + verified parent-campus scoping.**
 

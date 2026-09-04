@@ -345,7 +345,9 @@ export default function EventsPage() {
   const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
   const typeColorMap = Object.fromEntries(eventTypes.map(t => [t.name, t.color]));
 
-  const EventCard = ({ event }) => (
+  const EventCard = ({ event }) => {
+    const shareUrl = event.is_public ? `${window.location.origin}/public-bookings?event=${event.id}` : null;
+    return (
     <Card data-testid={`event-card-${event.id}`} className={`shadow-soft rounded-xl hover:shadow-soft-lg transition-shadow ${selectedIds.has(event.id) ? 'ring-2 ring-primary/40' : ''}`}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
@@ -354,6 +356,22 @@ export default function EventsPage() {
             <div className="flex flex-wrap gap-1.5">
             <span className="text-xs px-2 py-0.5 rounded-full font-medium capitalize" style={{ backgroundColor: (typeColorMap[event.type] || '#6366f1') + '22', color: typeColorMap[event.type] || '#6366f1' }}>{event.type}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium border capitalize ${statusColors[event.status] || ''}`}>{event.status}</span>
+            {shareUrl && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(shareUrl)
+                    .then(() => toast.success('Public link copied'))
+                    .catch(() => toast.error('Copy failed'));
+                }}
+                data-testid={`event-copy-link-${event.id}`}
+                title="Copy public booking link"
+                className="text-[10px] px-2 py-0.5 rounded-full font-medium border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors flex items-center gap-1"
+              >
+                <Copy size={9} /> Public link
+              </button>
+            )}
             </div>
           </div>
           <div className="flex gap-1">
@@ -383,7 +401,8 @@ export default function EventsPage() {
         </div>
       </CardContent>
     </Card>
-  );
+    );
+  };
 
   return (
     <div className="p-6 space-y-5">
