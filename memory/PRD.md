@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 285 (Feb 2026)
+**Resource save actually works · Form matches resource kind.**
+
+- **Consumable & bookable resources now persist end-to-end.** Two backend fixes: (1) `serving_conversions` added to `ResourceCreate` Pydantic model (was silently dropped); (2) `update_resource` `allowed` set had a missing comma that stitched `serving_conversions` and `serial_number` into one bogus string — mongo would silently reject the serial-number update. Both fixed.
+- **Form is now kind-aware.** Consumables show `Base unit`, `Reorder level`, `Serving Conversions`; bookable gear shows `Capacity`, `Hourly Rate`, `Serial / MAC / Manufacturer / Model`, `Bookable / Staff-Only` switches. No more "obviously not bookable but marked bookable" junk on a bag of rice.
+- **Location required** — enforced before submit with a clear toast instead of the previous mysterious 422.
+- **Real error messages surfaced** — Pydantic validation errors now hydrate the toast so users see the actual field name that failed instead of "Failed to save".
+- **Curl verified**: consumable with serving_conversions persists both `unit` and `serving_conversions[]`; bookable persists `capacity` + `hourly_rate`.
+
 ## Recently Resolved — Iteration 284 (Feb 2026)
 **Reset Finance now really wipes every stale accounting collection.**
 

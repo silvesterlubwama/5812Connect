@@ -114,26 +114,58 @@ export default function ResourcesPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!form.location_id) { toast.error('Pick a campus / location'); return; }
     setSaving(true);
     try {
-      const payload = {
-        ...form,
-        capacity: form.capacity ? parseInt(form.capacity) : null,
+      // iter 285 — only send fields that apply to the resource kind. Consumables
+      // don't carry hourly_rate/mac/manufacturer/model/is_bookable; bookable
+      // gear doesn't carry unit/reorder_level/serving_conversions. Empty ""
+      // strings are collapsed to null so Pydantic doesn't reject int fields.
+      const isCons = !!form.is_consumable;
+      const clean = {
+        name: form.name.trim(),
+        type: form.type,
+        category: form.category || null,
         quantity: parseInt(form.quantity) || 1,
-        hourly_rate: form.hourly_rate ? parseFloat(form.hourly_rate) : null,
+        description: form.description || null,
         location_id: form.location_id || null,
+        serial_number: form.serial_number || null,
       };
+      if (isCons) {
+        Object.assign(clean, {
+          is_consumable: true,
+          is_bookable: false,
+          staff_only: false,
+          unit: form.unit || null,
+          reorder_level: form.reorder_level ? parseFloat(form.reorder_level) : null,
+          serving_conversions: form.serving_conversions || [],
+        });
+      } else {
+        Object.assign(clean, {
+          is_consumable: false,
+          is_bookable: !!form.is_bookable,
+          staff_only: !!form.staff_only,
+          capacity: form.capacity ? parseInt(form.capacity) : null,
+          hourly_rate: form.hourly_rate ? parseFloat(form.hourly_rate) : null,
+          mac_address: form.mac_address || null,
+          manufacturer: form.manufacturer || null,
+          model: form.model || null,
+        });
+      }
       if (editing) {
-        await api.put(`/resources/${editing.id}`, payload);
-        setResources(prev => prev.map(r => r.id === editing.id ? { ...r, ...payload } : r));
+        await api.put(`/resources/${editing.id}`, clean);
+        setResources(prev => prev.map(r => r.id === editing.id ? { ...r, ...clean } : r));
         toast.success('Resource updated!');
       } else {
-        const res = await api.post('/resources', payload);
+        const res = await api.post('/resources', clean);
         setResources(prev => [...prev, res.data]);
         toast.success('Resource added!');
       }
       setShowModal(false);
-    } catch { toast.error('Failed to save'); }
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail[0]?.msg || 'Validation failed' : 'Failed to save');
+    }
     finally { setSaving(false); }
   };
 
@@ -351,47 +383,65 @@ export default function ResourcesPage() {
               <div className="space-y-2"><Label>Quantity</Label>
                 <Input type="number" min="1" value={form.quantity} onChange={e => setForm({...form, quantity: e.target.value})} />
               </div>
-              <div className="space-y-2"><Label>Capacity</Label>
-                <Input type="number" min="0" placeholder="Optional" value={form.capacity} onChange={e => setForm({...form, capacity: e.target.value})} />
-              </div>
-              <div className="space-y-2"><Label>Hourly Rate</Label>
-                <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.hourly_rate} onChange={e => setForm({...form, hourly_rate: e.target.value})} />
-              </div>
+              {!form.is_consumable && (
+                <>
+                  <div className="space-y-2"><Label>Capacity</Label>
+                    <Input type="number" min="0" placeholder="Optional" value={form.capacity} onChange={e => setForm({...form, capacity: e.target.value})} />
+                  </div>
+                  <div className="space-y-2"><Label>Hourly Rate</Label>
+                    <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.hourly_rate} onChange={e => setForm({...form, hourly_rate: e.target.value})} />
+                  </div>
+                </>
+              )}
+              {form.is_consumable && (
+                <>
+                  <div className="space-y-2"><Label>Base unit *</Label>
+                    <Input placeholder="kg, liter, bar" value={form.unit} onChange={e => setForm({...form, unit: e.target.value})} data-testid="resource-unit-input" />
+                  </div>
+                  <div className="space-y-2"><Label>Reorder level</Label>
+                    <Input type="number" min="0" step="any" placeholder="Alert threshold" value={form.reorder_level} onChange={e => setForm({...form, reorder_level: e.target.value})} />
+                  </div>
+                </>
+              )}
             </div>
             <div className="space-y-2"><Label>Description</Label>
               <Textarea rows={2} placeholder="Describe this resource" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Serial Number / Barcode</Label>
-                <div className="flex gap-1">
-                  <Input className="font-mono text-xs" placeholder="Auto-issued if empty" value={form.serial_number || ''} onChange={e => setForm({...form, serial_number: e.target.value})} data-testid="resource-serial-input" />
-                  {!form.serial_number && (
-                    <span className="text-[10px] text-muted-foreground self-center px-1" title="Will auto-generate 5812-XXX serial">auto</span>
+            {!form.is_consumable && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Serial Number / Barcode</Label>
+                    <div className="flex gap-1">
+                      <Input className="font-mono text-xs" placeholder="Auto-issued if empty" value={form.serial_number || ''} onChange={e => setForm({...form, serial_number: e.target.value})} data-testid="resource-serial-input" />
+                      {!form.serial_number && (
+                        <span className="text-[10px] text-muted-foreground self-center px-1" title="Will auto-generate 5812-XXX serial">auto</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Format: <span className="font-mono">5812-{`<COUNTRY><LOC>-<DDMMYY>-<NNNN>`}</span></p>
+                  </div>
+                  <div className="space-y-2"><Label>MAC Address</Label><Input placeholder="AA:BB:CC:DD:EE:FF" value={form.mac_address || ''} onChange={e => setForm({...form, mac_address: e.target.value})} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2"><Label>Manufacturer</Label><Input placeholder="e.g. Dell, Apple" value={form.manufacturer || ''} onChange={e => setForm({...form, manufacturer: e.target.value})} /></div>
+                  <div className="space-y-2"><Label>Model</Label><Input placeholder="e.g. XPS 15" value={form.model || ''} onChange={e => setForm({...form, model: e.target.value})} /></div>
+                </div>
+                <div className="space-y-3 p-3 border border-border rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div><p className="text-sm font-medium">Bookable</p>
+                      <p className="text-xs text-muted-foreground">Can this resource be booked?</p></div>
+                    <Switch checked={form.is_bookable} onCheckedChange={v => setForm({...form, is_bookable: v})} data-testid="resource-bookable-toggle" />
+                  </div>
+                  {form.is_bookable && (
+                    <div className="flex items-center justify-between">
+                      <div><p className="text-sm font-medium">Staff Only</p>
+                        <p className="text-xs text-muted-foreground">Only staff can book (not public)</p></div>
+                      <Switch checked={form.staff_only} onCheckedChange={v => setForm({...form, staff_only: v})} data-testid="resource-staffonly-toggle" />
+                    </div>
                   )}
                 </div>
-                <p className="text-[10px] text-muted-foreground">Format: <span className="font-mono">5812-{`<COUNTRY><LOC>-<DDMMYY>-<NNNN>`}</span></p>
-              </div>
-              <div className="space-y-2"><Label>MAC Address</Label><Input placeholder="AA:BB:CC:DD:EE:FF" value={form.mac_address || ''} onChange={e => setForm({...form, mac_address: e.target.value})} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Manufacturer</Label><Input placeholder="e.g. Dell, Apple" value={form.manufacturer || ''} onChange={e => setForm({...form, manufacturer: e.target.value})} /></div>
-              <div className="space-y-2"><Label>Model</Label><Input placeholder="e.g. XPS 15" value={form.model || ''} onChange={e => setForm({...form, model: e.target.value})} /></div>
-            </div>
-            <div className="space-y-3 p-3 border border-border rounded-lg">
-              <div className="flex items-center justify-between">
-                <div><p className="text-sm font-medium">Bookable</p>
-                  <p className="text-xs text-muted-foreground">Can this resource be booked?</p></div>
-                <Switch checked={form.is_bookable} onCheckedChange={v => setForm({...form, is_bookable: v})} data-testid="resource-bookable-toggle" />
-              </div>
-              {form.is_bookable && (
-                <div className="flex items-center justify-between">
-                  <div><p className="text-sm font-medium">Staff Only</p>
-                    <p className="text-xs text-muted-foreground">Only staff can book (not public)</p></div>
-                  <Switch checked={form.staff_only} onCheckedChange={v => setForm({...form, staff_only: v})} data-testid="resource-staffonly-toggle" />
-                </div>
-              )}
-            </div>
+              </>
+            )}
             {form.is_consumable && (
               <div className="space-y-2 p-3 border border-border rounded-lg">
                 <div className="flex items-center justify-between">

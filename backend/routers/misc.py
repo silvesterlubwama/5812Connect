@@ -89,6 +89,9 @@ class ResourceCreate(BaseModel):
     model: Optional[str] = None
     unit: Optional[str] = None
     reorder_level: Optional[float] = None
+    # iter 285 — consumables carry serving-unit conversion tables (Ugandan
+    # cup ≈ 500 g rice, quarter bar of soap, etc.). Persisted straight through.
+    serving_conversions: Optional[list] = None
 
 class ResourceBookingCreate(BaseModel):
     resource_id: str
@@ -200,8 +203,8 @@ async def create_resource(data: ResourceCreate, current_user: dict = Depends(get
 async def update_resource(res_id: str, data: dict, current_user: dict = Depends(get_current_user)):
     allowed = {"name", "type", "category", "capacity", "quantity", "description", "location_id",
                "hourly_rate", "is_bookable", "staff_only", "is_consumable", "available",
-               "serial_number", "barcode", "purchase_date", "purchase_value", "condition", "owner",
-               "unit", "reorder_level"}
+               "unit", "reorder_level", "serial_number", "mac_address", "manufacturer", "model",
+               "serving_conversions", "barcode", "purchase_date", "purchase_value", "condition", "owner"}
     update = {k: v for k, v in data.items() if k in allowed}
     # Only admins/directors can change the serial number after creation
     if "serial_number" in update or "barcode" in update:
