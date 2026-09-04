@@ -106,6 +106,8 @@ export default function ResourcesPage() {
       location_id: r.location_id || '', hourly_rate: r.hourly_rate || '',
       is_bookable: r.is_bookable !== false, staff_only: r.staff_only || false,
       is_consumable: r.is_consumable || false,
+      unit: r.unit || '', reorder_level: r.reorder_level || '',
+      serving_conversions: r.serving_conversions || [],
     });
     setShowModal(true);
   };
@@ -387,6 +389,24 @@ export default function ResourcesPage() {
                 </div>
               )}
             </div>
+            {form.is_consumable && (
+              <div className="space-y-2 p-3 border border-border rounded-lg">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Serving Conversions</p>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, serving_conversions: [...(form.serving_conversions || []), { unit: '', per_base: 0.5, base: form.unit || 'kg' }] })} data-testid="add-conversion-btn"><Plus size={12} /></Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">1 serving unit ≈ X base units — used for sheet uploads. Empty falls back to defaults (rice 2 UG cups/kg, posho 3, soap 4 quarters/bar).</p>
+                {(form.serving_conversions || []).map((c, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-1 items-center">
+                    <Input className="col-span-4 h-7 text-xs" placeholder="Unit (e.g. Ugandan cup)" value={c.unit} onChange={e => setForm({ ...form, serving_conversions: form.serving_conversions.map((x, j) => j === i ? { ...x, unit: e.target.value } : x) })} data-testid={`conv-unit-${i}`} />
+                    <span className="col-span-1 text-[10px] text-center">= 1</span>
+                    <Input className="col-span-3 h-7 text-xs" type="number" min="0" step="any" placeholder="Per base" value={c.per_base} onChange={e => setForm({ ...form, serving_conversions: form.serving_conversions.map((x, j) => j === i ? { ...x, per_base: parseFloat(e.target.value) || 0 } : x) })} />
+                    <Input className="col-span-3 h-7 text-xs" placeholder="Base (kg/liter/bar)" value={c.base} onChange={e => setForm({ ...form, serving_conversions: form.serving_conversions.map((x, j) => j === i ? { ...x, base: e.target.value } : x) })} />
+                    <Button type="button" size="sm" variant="ghost" className="col-span-1 h-7 w-7 p-0 text-destructive" onClick={() => setForm({ ...form, serving_conversions: form.serving_conversions.filter((_, j) => j !== i) })}><Trash2 size={12} /></Button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowModal(false)}>Cancel</Button>
               <Button type="submit" className="flex-1" disabled={saving} data-testid="save-resource-btn">

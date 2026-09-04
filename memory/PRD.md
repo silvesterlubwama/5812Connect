@@ -3,6 +3,14 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 279 (Feb 2026)
+**Purchase Orders MVP + Locked-period guard + Serving-conversions editor + verified parent-campus scoping.**
+
+- **Purchase Orders module** — new `/app/backend/routers/purchase_orders.py` with full lifecycle: `draft → submitted → approved → received → billed → closed` (plus `cancelled`). Line items validated on create, subtotal computed server-side, per-year `PO-2026-000001` numbering with mongo-based sequence. Manager+ can submit / receive / cancel; only Director+ can approve. Draft & cancelled POs are hard-deletable. Frontend `PurchaseOrdersPage.jsx` gives list + status filter + create dialog (multi-line with live subtotal) + detail dialog with next-action buttons based on current status. Sidebar link added under Finance. `purchaseOrdersApi` bound. End-to-end curl verified all six transitions succeed.
+- **Locked fiscal period guard** — `post_journal_entry()` now calls `period_is_locked(date, location_id)` before saving; refuses with a clear 400 error message. Any downstream write (donations, expenses, sales, HR payroll) inherits this because they all flow through `post_journal_entry`.
+- **Serving-conversions editor** — Resources → Edit form now shows an inline table for consumables: `unit / per_base / base`. Empty falls back to the field defaults seeded in `consumable_sheets.py`. Add / remove rows without leaving the dialog.
+- **Parent-campus visibility verified** — curl as admin on `board_3e7f60e2` (which sits at `loc_001` = 58:12 Global) returned 5 tasks including descendant-campus records. The recursive `expand_descendants` in `deps.py` and `tasks.py` was already correct; the user's earlier report was likely production stale-code before the last redeploy.
+
 ## Recently Resolved — Iteration 278 (Feb 2026)
 **Journals + Taxes + Fiscal Periods wire-up.**
 

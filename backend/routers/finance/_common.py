@@ -192,6 +192,20 @@ async def post_journal_entry(
             detail=f"Journal not balanced: debits={total_debit} vs credits={total_credit}",
         )
 
+    # Refuse to post into a locked fiscal period (iter 279)
+    if location_id:
+        try:
+            from routers.finance.setup import period_is_locked
+            if await period_is_locked((date or "")[:10], location_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Fiscal period covering {date} is locked at this campus — reopen it before posting",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"period_is_locked check skipped: {e}")
+
     doc = {
         "id": f"je_{uuid.uuid4().hex[:12]}",
         "date": (date or datetime.now(timezone.utc).date().isoformat())[:10],

@@ -80,6 +80,7 @@ const NAV_SECTIONS = [
       { to: '/donors', icon: HandHeart, label: 'Donors', module: 'finance' },
       { to: '/vendors', icon: Truck, label: 'Vendors', module: 'finance' },
       { to: '/approvals', icon: Workflow, label: 'Approvals', module: 'finance' },
+      { to: '/purchase-orders', icon: FileText, label: 'Purchase Orders', module: 'finance' },
     ]
   },
   {

@@ -52,6 +52,7 @@ import ReportsPage from './pages/ReportsPage';
 import CampusReportsPage from './pages/CampusReportsPage';
 import AdminPage from './pages/AdminPage';
 import AppSettingsPage from './pages/AppSettingsPage';
+import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import AuthCallback from './pages/AuthCallback';
 import Layout from './components/Layout';
 import PortalLayout from './components/PortalLayout';
@@ -163,6 +164,7 @@ function AppRoutes() {
         <Route path="donors" element={<DonorsPage />} />
         <Route path="vendors" element={<VendorsPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
+        <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="funds" element={<FundsPage />} />
         <Route path="shipments" element={<ShipmentsAdminPage />} />
         <Route path="fare-alerts" element={<FareAlertsPage />} />
