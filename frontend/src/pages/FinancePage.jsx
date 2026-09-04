@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -423,6 +423,9 @@ function JournalPanel() {
 function CoaPanel() {
   const [rows, setRows] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
+  const [editRow, setEditRow] = useState(null);
+  const [obRow, setObRow] = useState(null);
+  const [obForm, setObForm] = useState({ amount: '', date: todayIso(), memo: '' });
   const [form, setForm] = useState({ code: '', name: '', type: 'expense', is_cash: false });
   const reload = () => api.get('/finance/chart-of-accounts?active_only=false').then(r => setRows(r.data || []));
   useEffect(() => { reload().catch(() => {}); }, []);
@@ -433,6 +436,46 @@ function CoaPanel() {
     catch (e) { toast.error(e?.response?.data?.detail || 'Create failed'); }
   };
 
+  // iter 282 — Chart of Accounts was previously read-only. Now supports
+  // inline edit (name / type / is_cash), delete (falls back to deactivate
+  // when journal entries reference the account), and one-click opening
+  // balance so admins can seed real balances against `3000 Opening
+  // Balance Equity` without leaving the page.
+  const saveEdit = async () => {
+    if (!editRow?.code || !editRow?.name) { toast.error('Code and name required'); return; }
+    try {
+      await api.put(`/finance/chart-of-accounts/${editRow.id}`, {
+        code: editRow.code, name: editRow.name, type: editRow.type, is_cash: !!editRow.is_cash,
+      });
+      toast.success('Account updated'); setEditRow(null); reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
+  };
+
+  const removeAccount = async (a) => {
+    if (a.is_system) { toast.error('System accounts cannot be deleted — deactivate instead'); return; }
+    if (!window.confirm(`Delete account "${a.code} ${a.name}"? Accounts referenced by journal entries will be deactivated instead.`)) return;
+    try { const r = await api.delete(`/finance/chart-of-accounts/${a.id}`); toast.success(r.data?.deactivated ? 'Deactivated (had journal entries)' : 'Deleted'); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
+  };
+
+  const toggleActive = async (a) => {
+    try { await api.put(`/finance/chart-of-accounts/${a.id}`, { active: !a.active }); toast.success(a.active ? 'Deactivated' : 'Activated'); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+
+  const submitOpeningBalance = async () => {
+    const amt = parseFloat(obForm.amount);
+    if (!obRow || !(amt !== 0)) { toast.error('Amount required (positive or negative)'); return; }
+    try {
+      await api.post(`/finance/chart-of-accounts/${obRow.id}/opening-balance`, {
+        amount: amt, date: obForm.date, memo: obForm.memo,
+      });
+      toast.success('Opening balance posted');
+      setObRow(null); setObForm({ amount: '', date: todayIso(), memo: '' });
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -441,20 +484,42 @@ function CoaPanel() {
       </CardHeader>
       <CardContent>
         <Table>
-          <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Cash?</TableHead><TableHead>System?</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Cash?</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
           <TableBody>
             {rows.map(a => (
-              <TableRow key={a.id} data-testid={`coa-row-${a.code}`}>
+              <TableRow key={a.id} data-testid={`coa-row-${a.code}`} className={!a.active ? 'opacity-50' : ''}>
                 <TableCell className="font-mono">{a.code}</TableCell>
-                <TableCell>{a.name}</TableCell>
+                <TableCell>{a.name}{a.is_system && <span className="ml-1 text-[10px] text-muted-foreground">🔒 system</span>}</TableCell>
                 <TableCell><Badge variant="outline" className="text-[10px]">{a.type}</Badge></TableCell>
                 <TableCell>{a.is_cash ? '✓' : ''}</TableCell>
-                <TableCell>{a.is_system ? '🔒' : ''}</TableCell>
+                <TableCell>
+                  <button
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${a.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}
+                    onClick={() => toggleActive(a)}
+                    data-testid={`coa-toggle-active-${a.code}`}
+                    title={a.active ? 'Click to deactivate' : 'Click to activate'}
+                  >
+                    {a.active ? 'Active' : 'Inactive'}
+                  </button>
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={() => { setObRow(a); setObForm({ amount: '', date: todayIso(), memo: `Opening balance — ${a.name}` }); }} data-testid={`coa-opening-${a.code}`}>
+                      Opening
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setEditRow({ ...a })} data-testid={`coa-edit-${a.code}`} title="Edit"><Pencil size={12} /></Button>
+                    {!a.is_system && (
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => removeAccount(a)} data-testid={`coa-delete-${a.code}`} title="Delete"><Trash2 size={12} /></Button>
+                    )}
+                  </div>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </CardContent>
+
+      {/* Add */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Add account</DialogTitle></DialogHeader>
@@ -470,7 +535,48 @@ function CoaPanel() {
             </div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_cash} onChange={e => setForm({ ...form, is_cash: e.target.checked })} /> Cash/bank account (appears in cashflow)</label>
           </div>
-          <DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button onClick={submit}>Create</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button><Button onClick={submit} data-testid="coa-add-submit">Create</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit */}
+      <Dialog open={!!editRow} onOpenChange={o => { if (!o) setEditRow(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit account {editRow?.code}</DialogTitle></DialogHeader>
+          {editRow && (
+            <div className="space-y-3">
+              <div><Label>Code</Label><Input value={editRow.code} onChange={e => setEditRow({ ...editRow, code: e.target.value })} disabled={editRow.is_system} /></div>
+              <div><Label>Name</Label><Input value={editRow.name} onChange={e => setEditRow({ ...editRow, name: e.target.value })} data-testid="coa-edit-name" /></div>
+              <div>
+                <Label>Type</Label>
+                <Select value={editRow.type} onValueChange={v => setEditRow({ ...editRow, type: v })} disabled={editRow.is_system}>
+                  <SelectTrigger data-testid="coa-edit-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>{['asset', 'liability', 'equity', 'revenue', 'expense'].map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!editRow.is_cash} onChange={e => setEditRow({ ...editRow, is_cash: e.target.checked })} /> Cash/bank account</label>
+              {editRow.is_system && <p className="text-[11px] text-amber-700">Seed account — only the name and cash flag can be changed.</p>}
+            </div>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => setEditRow(null)}>Cancel</Button><Button onClick={saveEdit} data-testid="coa-edit-submit">Save</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Opening Balance */}
+      <Dialog open={!!obRow} onOpenChange={o => { if (!o) setObRow(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Opening balance — {obRow?.code} {obRow?.name}</DialogTitle></DialogHeader>
+          {obRow && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Posts a balanced journal against <span className="font-mono">3000 Opening Balance Equity</span>. Positive amounts debit for assets/expenses, credit for liabilities/equity/revenue.
+              </p>
+              <div><Label>Amount</Label><Input type="number" step="any" value={obForm.amount} onChange={e => setObForm({ ...obForm, amount: e.target.value })} placeholder="e.g. 5000" data-testid="coa-ob-amount" /></div>
+              <div><Label>Date</Label><Input type="date" value={obForm.date} onChange={e => setObForm({ ...obForm, date: e.target.value })} /></div>
+              <div><Label>Memo</Label><Input value={obForm.memo} onChange={e => setObForm({ ...obForm, memo: e.target.value })} /></div>
+            </div>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => setObRow(null)}>Cancel</Button><Button onClick={submitOpeningBalance} data-testid="coa-ob-submit">Post</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </Card>

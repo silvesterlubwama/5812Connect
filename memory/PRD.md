@@ -3,6 +3,13 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 282 (Feb 2026)
+**Chart of Accounts is now editable on the actual page users see.**
+
+- **Root cause found**: previous iter 277/278 edits were on `AccountingPage.jsx`, but `/finance`, `/financial`, `/accounting` all route to `FinancePage.jsx` — the old page has no Route pointing at it. So the fixes shipped never rendered.
+- **`FinancePage.CoaPanel` rebuilt** — inline **Edit** (name / type / is_cash; code + type locked on system accounts), **Delete** (falls back to deactivate when JEs reference the account), **Opening Balance** dialog per row (posts a balanced JE against `3000 Opening Balance Equity`, respects the account's normal-balance side), plus a click-to-toggle **Active/Inactive** status pill.
+- **Curl verified** — PUT `/finance/chart-of-accounts/{id}` returns the updated doc; POST opening-balance for 25 000 UGX posts a JE and returns the id + total.
+
 ## Recently Resolved — Iteration 281 (Feb 2026)
 **Snappier event add · Public holidays on calendar · Full colour palette · Event-type inline edit.**
 
