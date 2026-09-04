@@ -280,17 +280,16 @@ export default function AccountingPage() {
       // Iter 277 — legacy /accounting/* endpoints were dropped in favour of
       // the finance package. Point Chart of Accounts / Journal / Reports at
       // the current backend so the tab stops rendering empty.
-      const [accRes, jrnRes, entRes, tbRes, plRes, bsRes] = await Promise.all([
+      const [accRes, jrnRes, entRes, taxRes, fpRes, tbRes, plRes, bsRes] = await Promise.all([
         api.get('/finance/chart-of-accounts', { params: { active_only: true } }).catch(() => ({ data: [] })),
-        Promise.resolve({ data: [] }), // journals — legacy, unused
+        api.get('/finance/journals').catch(() => ({ data: [] })),
         api.get('/finance/journal', { params: { limit: 100 } }).catch(() => ({ data: [] })),
+        api.get('/finance/taxes').catch(() => ({ data: [] })),
+        api.get('/finance/fiscal-periods').catch(() => ({ data: [] })),
         api.get('/finance/reports/trial-balance').catch(() => ({ data: null })),
         api.get('/finance/reports/pnl').catch(() => ({ data: null })),
         api.get('/finance/reports/balance-sheet').catch(() => ({ data: null })),
       ]);
-      const typesRes = { data: [] };
-      const taxRes = { data: [] };
-      const fpRes = { data: [] };
       // Normalize each account so the existing UI mapping (category, type_label) still works
       const cats = { asset: 'asset', liability: 'liability', equity: 'equity', income: 'income', expense: 'expense' };
       setAccounts((accRes.data || []).map(a => ({
@@ -336,11 +335,11 @@ export default function AccountingPage() {
         reverses: e.reverses || e.reverses_id || null,
       }));
       const inScope = (row) => !row.location_id || scopedLocIds.has(row.location_id);
-      setJournals([]);
+      setJournals((jrnRes.data || []).filter(inScope));
       setAccountTypes([]);
       setEntries(normEntries.filter(inScope));
-      setTaxes([]);
-      setFiscalPeriods([]);
+      setTaxes((taxRes.data || []).filter(inScope));
+      setFiscalPeriods((fpRes.data || []).filter(inScope));
       setTb(tbRes.data); setPl(plRes.data); setBs(bsRes.data);
     } finally { setLoading(false); }
   }, [locationFilter, showReversed, allLocations]);
@@ -399,10 +398,10 @@ export default function AccountingPage() {
   const saveJournal = async () => {
     try {
       if (journalForm.id) {
-        await api.put(`/accounting/journals/${journalForm.id}`, { code: journalForm.code, name: journalForm.name, kind: journalForm.kind, default_debit_account_id: journalForm.default_debit_account_id, default_credit_account_id: journalForm.default_credit_account_id });
+        await api.put(`/finance/journals/${journalForm.id}`, { code: journalForm.code, name: journalForm.name, kind: journalForm.kind, default_debit_account_id: journalForm.default_debit_account_id, default_credit_account_id: journalForm.default_credit_account_id });
         toast.success('Journal updated');
       } else {
-        await api.post('/accounting/journals', { ...journalForm, location_id: locationFilter });
+        await api.post('/finance/journals', { ...journalForm, location_id: locationFilter });
         toast.success('Journal created');
       }
       setShowJournalForm(false);
@@ -414,7 +413,7 @@ export default function AccountingPage() {
   const deleteJournal = async (j) => {
     if (!window.confirm(`Delete journal "${j.code} ${j.name}"?`)) return;
     try {
-      await api.delete(`/accounting/journals/${j.id}`);
+      await api.delete(`/finance/journals/${j.id}`);
       toast.success('Deleted');
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
@@ -429,10 +428,10 @@ export default function AccountingPage() {
     try {
       const payload = { ...taxForm, rate: parseFloat(taxForm.rate) };
       if (taxForm.id) {
-        await api.put(`/accounting/taxes/${taxForm.id}`, payload);
+        await api.put(`/finance/taxes/${taxForm.id}`, payload);
         toast.success('Tax updated');
       } else {
-        await api.post('/accounting/taxes', { ...payload, location_id: locationFilter });
+        await api.post('/finance/taxes', { ...payload, location_id: locationFilter });
         toast.success('Tax created');
       }
       setShowTaxForm(false);
@@ -444,7 +443,7 @@ export default function AccountingPage() {
   const deleteTax = async (t) => {
     if (!window.confirm(`Delete tax "${t.name}"?`)) return;
     try {
-      await api.delete(`/accounting/taxes/${t.id}`);
+      await api.delete(`/finance/taxes/${t.id}`);
       toast.success('Deleted');
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
@@ -456,7 +455,7 @@ export default function AccountingPage() {
 
   const createFiscal = async () => {
     try {
-      await api.post('/accounting/fiscal-periods', { ...fiscalForm, location_id: locationFilter });
+      await api.post('/finance/fiscal-periods', { ...fiscalForm, location_id: locationFilter });
       toast.success('Fiscal period created');
       setShowFiscalForm(false);
       setFiscalForm({ name: '', start_date: '', end_date: '' });
@@ -467,7 +466,7 @@ export default function AccountingPage() {
   const cycleFiscalStatus = async (fp) => {
     const next = fp.status === 'open' ? 'closed' : fp.status === 'closed' ? 'locked' : 'open';
     try {
-      await api.put(`/accounting/fiscal-periods/${fp.id}`, { status: next });
+      await api.put(`/finance/fiscal-periods/${fp.id}`, { status: next });
       toast.success(`Period set to ${next}`);
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }

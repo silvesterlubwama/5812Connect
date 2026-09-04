@@ -3,6 +3,17 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 278 (Feb 2026)
+**Journals + Taxes + Fiscal Periods wire-up.**
+
+- **New `/api/finance/setup.py` router** — thin CRUD on the pre-existing `accounting_journals`, `accounting_taxes`, `accounting_fiscal_periods` collections so nothing is lost after the iter 246 finance reset. Endpoints:
+  - `GET/POST/PUT/DELETE /api/finance/journals` (director+; delete falls back to deactivate if any `finance_journal_entries.journal_id` references the row).
+  - `GET/POST/PUT/DELETE /api/finance/fiscal-periods` — full open/closed/locked lifecycle; `period_is_locked()` helper exposed for postings to guard against writes into closed months.
+  - `GET/POST/PUT/DELETE /api/finance/taxes` — sales / purchase kinds, inclusive flag, campus-scoped.
+  Registered inside the `finance/__init__.py` aggregator, so `include_router(finance_router)` still boots them all.
+- **AccountingPage.jsx** — all six legacy `/api/accounting/*` calls (`journals`, `taxes`, `fiscal-periods`) repointed to `/api/finance/*`. Tabs now render live data (3 journals + 1 tax carried through from before the finance reset).
+- **Verified via curl**: `GET /api/finance/journals` returns 3 (GL, GLBCE, SAL); `GET /api/finance/taxes` returns 1. `CI=true yarn build` still clean.
+
 ## Recently Resolved — Iteration 277 (Feb 2026)
 **Chart of Accounts editable + tasks save fix + badge relayout + consumable tracking sheets + auto-issue tickets.**
 
