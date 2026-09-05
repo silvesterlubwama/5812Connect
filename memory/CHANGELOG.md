@@ -15,6 +15,22 @@ Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank 
 - **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
 - **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
 
+## Iteration 291 (Feb 2026) — Session #4: Receipt UI + Locked Periods UI + Auto-Issue UI + Legacy purge
+
+### 🟢 Receipt Scan UI (mobile-first)
+- FinancePage Overview now has a **Scan receipt** button that opens `ReceiptScanDialog`. Uses `capture="environment"` on the file input so mobile devices launch the rear camera directly. Result panel shows extracted vendor / date / amount / currency + draft-JE id.
+
+### 🟢 Locked Period Guard UI
+- New **Fiscal Periods** tab on SettingsPage (admin only). `FiscalPeriodsPanel` lists periods, lets directors Reopen / Close / Lock / Delete each. Backed by existing `/api/finance/fiscal-periods` endpoints. Curl-verified: locking a period rejects JEs dated inside it with HTTP 400 "Fiscal period covering YYYY-MM-DD is locked".
+
+### 🟢 Auto-Issue Tickets Dialog
+- EventsPage got an **Auto-issue tickets** header button + `AutoIssueTicketsDialog`. Pick event → audience (children / members) → location → optional tier / custom label. Wired to `POST /api/events/{event_id}/issue-tickets`. Shows created / skipped counts on completion.
+
+### 🟢 Legacy Accounting Purge (partial — phase 1)
+- **Deleted** `/app/frontend/src/pages/AccountingPage.jsx` (1481 lines) — no routes referenced it.
+- `accounting.py` router prefix moved to `/api/_legacy_accounting` (not mounted in server.py, so 404 for all its endpoints). Big deprecation header explaining it stays only because `bank.py` still calls `_next_entry_number`, `create_entry`, `reverse_entry` from it. Curl-verified: `/api/accounting/*` now 404, `/api/bank/accounts` still works.
+- **Phase 2 (deferred)**: migrate `bank.py` recurring-entry scheduler to `post_journal_entry`, then physically delete `accounting.py`.
+
 ## Iteration 291 (Feb 2026) — Session #3: Restricted access · Receipt OCR · Report tables
 
 ### 🟢 Receipt scan (no AI — pure Tesseract + regex)

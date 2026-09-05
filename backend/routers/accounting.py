@@ -1,5 +1,15 @@
-"""Accounting depth (Odoo-style): Chart of Accounts, Journals, Double-entry Ledger,
-Fiscal Periods, Tax Codes, Trial Balance + P&L."""
+"""[DEPRECATED — iter 291] Legacy accounting router.
+
+This file is retained ONLY because `bank.py` imports three helpers from it
+(`_next_entry_number`, `create_entry`, `reverse_entry`) for the recurring-
+entries scheduler. The FastAPI router below is NOT included in `server.py`
+so none of the endpoints in this file are served over HTTP — all live
+accounting/finance UI now flows through `routers/finance/*`. Do NOT add
+new endpoints here. When `bank.py`'s recurring-entries scheduler is
+migrated to `post_journal_entry`, this whole file can be deleted.
+
+See PRD → "Legacy Accounting Purge" (session #4).
+"""
 from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, require_director, require_admin, _audit, logger, get_campus_filter, is_system_admin, require_finance_view, require_finance_admin
 from datetime import datetime, timezone, date as dt_date
@@ -8,7 +18,10 @@ import uuid
 import io
 import csv
 
-router = APIRouter(prefix="/api/accounting", tags=["accounting"])
+# NB: this router is deliberately NOT mounted in server.py. Present only so
+# the module-level helper functions below (`_next_entry_number`,
+# `create_entry`, `reverse_entry`) remain callable by `bank.py`.
+router = APIRouter(prefix="/api/_legacy_accounting", tags=["accounting-legacy"])
 
 
 async def _user_can_access_location(user: dict, location_id: str) -> bool:

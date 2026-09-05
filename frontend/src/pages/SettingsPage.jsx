@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint, Smartphone, Monitor } from 'lucide-react';
+import { Save, Bell, Shield, Building, Plus, Trash2, Edit2, Check, X, Wrench, KeyRound, Fingerprint, Smartphone, Monitor, Lock } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -340,10 +340,11 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="organization">
-        <TabsList className="w-full sm:w-auto grid grid-cols-5 sm:flex">
+        <TabsList className="w-full sm:w-auto grid grid-cols-6 sm:flex">
           <TabsTrigger value="organization" className="gap-1.5 text-xs sm:text-sm"><Building size={13} />Organization</TabsTrigger>
           <TabsTrigger value="notifications" className="gap-1.5 text-xs sm:text-sm"><Bell size={13} />Notifications</TabsTrigger>
           <TabsTrigger value="security" className="gap-1.5 text-xs sm:text-sm"><Shield size={13} />Security</TabsTrigger>
+          {isAdmin && <TabsTrigger value="fiscal" className="gap-1.5 text-xs sm:text-sm"><Lock size={13} />Fiscal Periods</TabsTrigger>}
           {isAdmin && <TabsTrigger value="admin" className="gap-1.5 text-xs sm:text-sm"><Wrench size={13} />Admin</TabsTrigger>}
         </TabsList>
 
@@ -679,6 +680,13 @@ export default function SettingsPage() {
           </div>
         </TabsContent>
 
+        {/* Fiscal Periods — director/admin only */}
+        {isAdmin && (
+          <TabsContent value="fiscal" className="mt-6">
+            <FiscalPeriodsPanel />
+          </TabsContent>
+        )}
+
         {/* Admin */}
         {isAdmin && (
           <TabsContent value="admin" className="mt-6">
@@ -722,5 +730,104 @@ export default function SettingsPage() {
         )}
       </Tabs>
     </div>
+  );
+}
+
+// ─── FISCAL PERIODS PANEL ────────────────────────────────────
+// Directors define fiscal periods (e.g. "Feb 2026", "Q1 2026") with start /
+// end dates and a status. `post_journal_entry` refuses to write into a
+// period flagged `locked`, so this is the single knob that stops late
+// entries from re-opening a closed month.
+function FiscalPeriodsPanel() {
+  const [periods, setPeriods] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [form, setForm] = React.useState({ name: '', start_date: '', end_date: '', status: 'open' });
+
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/finance/fiscal-periods');
+      setPeriods(r.data || []);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to load fiscal periods'); }
+    setLoading(false);
+  }, []);
+  React.useEffect(() => { reload(); }, [reload]);
+
+  const create = async () => {
+    if (!form.name || !form.start_date || !form.end_date) { toast.error('Name and both dates required'); return; }
+    try {
+      await api.post('/finance/fiscal-periods', form);
+      setShowAdd(false); setForm({ name: '', start_date: '', end_date: '', status: 'open' });
+      toast.success('Fiscal period created'); reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const setStatus = async (p, next) => {
+    try { await api.put(`/finance/fiscal-periods/${p.id}`, { status: next }); toast.success(`Marked ${next}`); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const del = async (p) => {
+    if (!window.confirm(`Delete "${p.name}"?`)) return;
+    try { await api.delete(`/finance/fiscal-periods/${p.id}`); toast.success('Deleted'); reload(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+
+  const statusTone = { open: 'bg-emerald-50 text-emerald-700', closed: 'bg-amber-50 text-amber-700', locked: 'bg-rose-50 text-rose-700' };
+
+  return (
+    <Card className="shadow-soft rounded-xl">
+      <CardHeader className="pb-4 flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base flex items-center gap-2"><Lock size={16} /> Fiscal Periods</CardTitle>
+          <CardDescription>Close a month to stop late entries. Locked periods reject new journal entries dated inside them.</CardDescription>
+        </div>
+        <Button onClick={() => setShowAdd(true)} size="sm" className="gap-1" data-testid="fiscal-period-add"><Plus size={13} />New period</Button>
+      </CardHeader>
+      <CardContent>
+        {loading ? <div className="h-16 animate-pulse bg-muted rounded" /> : periods.length === 0 ? (
+          <div className="p-6 rounded-lg border border-dashed border-border text-center text-sm text-muted-foreground">
+            <Lock size={28} className="mx-auto mb-2 opacity-30" />
+            <p>No fiscal periods defined yet</p>
+            <p className="text-xs mt-1">Add a period (e.g. "Feb 2026") and mark it <em>locked</em> when the books close.</p>
+          </div>
+        ) : (
+          <div className="space-y-2" data-testid="fiscal-period-list">
+            {periods.map(p => (
+              <div key={p.id} data-testid={`fiscal-period-${p.id}`} className="flex items-center justify-between p-3 rounded-lg border border-border flex-wrap gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">{p.start_date} → {p.end_date}</p>
+                </div>
+                <Badge className={`text-[10px] ${statusTone[p.status] || ''}`}>{(p.status || 'open').toUpperCase()}</Badge>
+                <div className="flex gap-1">
+                  {p.status !== 'open' && <Button size="sm" variant="ghost" onClick={() => setStatus(p, 'open')} data-testid={`fiscal-open-${p.id}`}>Reopen</Button>}
+                  {p.status !== 'closed' && <Button size="sm" variant="ghost" onClick={() => setStatus(p, 'closed')} data-testid={`fiscal-close-${p.id}`}>Close</Button>}
+                  {p.status !== 'locked' && <Button size="sm" variant="ghost" onClick={() => setStatus(p, 'locked')} data-testid={`fiscal-lock-${p.id}`}><Lock size={11} className="mr-1" />Lock</Button>}
+                  <Button size="sm" variant="ghost" onClick={() => del(p)} className="text-destructive hover:text-destructive" data-testid={`fiscal-del-${p.id}`}><Trash2 size={12} /></Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {/* Add dialog — inline for simplicity */}
+      {showAdd && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowAdd(false)}>
+          <div className="bg-background rounded-lg p-5 w-full max-w-sm space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="text-base font-semibold">New fiscal period</h3>
+            <div><Label className="text-xs">Name</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Feb 2026" data-testid="fiscal-form-name" /></div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><Label className="text-xs">Start</Label><Input type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} data-testid="fiscal-form-start" /></div>
+              <div><Label className="text-xs">End</Label><Input type="date" value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} data-testid="fiscal-form-end" /></div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
+              <Button size="sm" onClick={create} data-testid="fiscal-form-submit">Create</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

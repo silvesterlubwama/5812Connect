@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2 } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -70,6 +70,7 @@ function OverviewPanel() {
   const [recent, setRecent] = useState([]);
   const [addOpen, setAddOpen] = useState(null); // 'expense' | 'income'
   const [transferOpen, setTransferOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
 
   const reload = async () => {
     const [p, b, r] = await Promise.all([
@@ -104,6 +105,7 @@ function OverviewPanel() {
         <Button onClick={() => setAddOpen('expense')} data-testid="finance-add-expense" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record expense</Button>
         <Button onClick={() => setAddOpen('income')} data-testid="finance-add-income" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record income</Button>
         <Button onClick={() => setTransferOpen(true)} data-testid="finance-add-transfer" size="sm" variant="outline"><RefreshCw size={14} className="mr-1" />Record transfer</Button>
+        <Button onClick={() => setReceiptOpen(true)} data-testid="finance-scan-receipt" size="sm" variant="outline"><Camera size={14} className="mr-1" />Scan receipt</Button>
         <BackfillButtons onDone={reload} />
       </div>
 
@@ -134,7 +136,76 @@ function OverviewPanel() {
 
       <QuickPostDialog mode={addOpen} onClose={() => setAddOpen(null)} onDone={() => { setAddOpen(null); reload(); }} />
       <TransferDialog open={transferOpen} onClose={() => setTransferOpen(false)} onDone={() => { setTransferOpen(false); reload(); }} />
+      <ReceiptScanDialog open={receiptOpen} onClose={() => setReceiptOpen(false)} onDone={() => { setReceiptOpen(false); reload(); }} />
     </div>
+  );
+}
+
+// ─── RECEIPT SCAN DIALOG ─────────────────────────────────────
+// Snap-and-post workflow. `capture="environment"` on the file input tells
+// mobile browsers to open the rear camera directly so users can shoot the
+// receipt without a detour into their photo library. Result panel shows
+// what the OCR/regex pass pulled out so users can spot obvious misses
+// before finance reviews.
+function ReceiptScanDialog({ open, onClose, onDone }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => { if (open) { setFile(null); setResult(null); } }, [open]);
+
+  const submit = async () => {
+    if (!file) { toast.error('Pick or snap a receipt first'); return; }
+    setBusy(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/finance/receipts/scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setResult(r.data);
+      if (r.data?.journal_entry?.id) toast.success('Draft entry created — finance can now review');
+      else if (r.data?.hint) toast.warning(r.data.hint);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Scan failed'); }
+    setBusy(false);
+  };
+
+  const closeAndReload = () => { setResult(null); setFile(null); onDone(); };
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Scan receipt</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">Snap or upload a receipt — we OCR the image, pull out the vendor / date / amount, and drop a draft journal entry for finance to review. No AI, just Tesseract + regex.</p>
+          <div>
+            <Label className="text-xs">Receipt image or PDF</Label>
+            <Input type="file" accept="image/*,application/pdf" capture="environment" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="receipt-file-input" />
+            {file && <p className="text-xs text-muted-foreground mt-1">{file.name} · {(file.size / 1024).toFixed(0)} KB</p>}
+          </div>
+          {result?.extracted && (
+            <div className="rounded-md bg-muted/40 p-3 space-y-1 text-xs" data-testid="receipt-scan-result">
+              <div><strong>Vendor:</strong> {result.extracted.vendor || '—'}</div>
+              <div><strong>Date:</strong> {result.extracted.date || '—'}</div>
+              <div><strong>Amount:</strong> {result.extracted.currency} {Number(result.extracted.amount || 0).toLocaleString()}</div>
+              {result.journal_entry && (<div className="pt-1 border-t"><Badge variant="outline" className="text-[10px]">Draft posted · needs review</Badge> <span className="font-mono">{result.journal_entry.id}</span></div>)}
+              {result.hint && <div className="text-amber-700 pt-1">{result.hint}</div>}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          {result ? (
+            <Button onClick={closeAndReload} data-testid="receipt-done">Done</Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+              <Button onClick={submit} disabled={busy || !file} data-testid="receipt-scan-submit">{busy ? 'Scanning…' : 'Scan & post draft'}</Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

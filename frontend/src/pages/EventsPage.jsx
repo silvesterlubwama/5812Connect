@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign, Download } from 'lucide-react';
+import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign, Download, Ticket } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -151,6 +151,7 @@ export default function EventsPage() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [visFilter, setVisFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
+  const [showAutoIssue, setShowAutoIssue] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [eventDetail, setEventDetail] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -426,6 +427,7 @@ export default function EventsPage() {
           <Button variant="outline" size="sm" onClick={() => setShowTypeManager(true)}>Event Types</Button>
           <Button variant="outline" size="sm" onClick={fetchEvents}><RefreshCw size={14} /></Button>
           <Button data-testid="create-event-btn" onClick={() => { setEditingEvent(null); setNewEvent({ ...emptyEvent }); setShowAdd(true); }} className="gap-2"><Plus size={16} /> Create Event</Button>
+          <Button data-testid="auto-issue-tickets-btn" variant="outline" onClick={() => setShowAutoIssue(true)} className="gap-2"><Ticket size={14} /> Auto-issue tickets</Button>
         </div>
       </div>
 
@@ -772,7 +774,6 @@ export default function EventsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Event Type Manager Dialog */}
       <Dialog open={showTypeManager} onOpenChange={setShowTypeManager}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Manage Event Types</DialogTitle></DialogHeader>
@@ -806,7 +807,111 @@ export default function EventsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Auto-Issue Tickets dialog — pick an event + audience, POST /events/{id}/issue-tickets */}
+      <AutoIssueTicketsDialog
+        open={showAutoIssue}
+        events={events}
+        onClose={() => setShowAutoIssue(false)}
+        onDone={() => { setShowAutoIssue(false); fetchEvents(); }}
+      />
     </div>
+  );
+}
+
+// ─── AUTO-ISSUE TICKETS DIALOG ───────────────────────────────
+// Admin quick-action: create bookings for every child (or member, or a
+// custom-picked set) at a location. Backed by
+// `POST /api/events/{event_id}/issue-tickets` which lives in
+// `routers/event_tickets.py`. Returns { created, skipped } — we surface
+// both so it's obvious when duplicates got skipped.
+function AutoIssueTicketsDialog({ open, events, onClose, onDone }) {
+  const [eventId, setEventId] = useState('');
+  const [audience, setAudience] = useState('children');
+  const [locationId, setLocationId] = useState('');
+  const [tierId, setTierId] = useState('');
+  const [customLabel, setCustomLabel] = useState('');
+  const [note, setNote] = useState('');
+  const [locations, setLocations] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setEventId(''); setAudience('children'); setLocationId(''); setTierId(''); setCustomLabel(''); setNote(''); setResult(null);
+    locationsApi.list().then(r => setLocations(r.data || [])).catch(() => {});
+  }, [open]);
+
+  const selectedEvent = events.find(e => e.id === eventId);
+  const tiers = selectedEvent?.ticket_tiers || [];
+
+  const submit = async () => {
+    if (!eventId) { toast.error('Pick an event'); return; }
+    if (audience !== 'custom' && !locationId) { toast.error('Pick a location — required for children/members'); return; }
+    setBusy(true);
+    setResult(null);
+    try {
+      const payload = { audience, location_id: locationId || undefined, tier_id: tierId || undefined, custom_label: customLabel || undefined, note: note || undefined };
+      const r = await api.post(`/events/${eventId}/issue-tickets`, payload);
+      setResult(r.data);
+      toast.success(`Issued ${r.data?.created?.length || 0} tickets` + (r.data?.skipped?.length ? ` (${r.data.skipped.length} skipped)` : ''));
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to auto-issue'); }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Auto-issue tickets</DialogTitle><DialogDescription>Create bookings for every child or member at a location in one click.</DialogDescription></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Event</Label>
+            <Select value={eventId} onValueChange={setEventId}>
+              <SelectTrigger data-testid="auto-issue-event"><SelectValue placeholder="Pick an event" /></SelectTrigger>
+              <SelectContent>{events.map(e => <SelectItem key={e.id} value={e.id}>{e.title} · {e.date}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Audience</Label>
+            <Select value={audience} onValueChange={setAudience}>
+              <SelectTrigger data-testid="auto-issue-audience"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="children">All children at location</SelectItem>
+                <SelectItem value="members">All members at location</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Location</Label>
+            <Select value={locationId} onValueChange={setLocationId}>
+              <SelectTrigger data-testid="auto-issue-location"><SelectValue placeholder="Pick a location" /></SelectTrigger>
+              <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.parent_id ? ' (sub)' : ''}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          {tiers.length > 0 && (
+            <div>
+              <Label className="text-xs">Ticket tier (optional)</Label>
+              <Select value={tierId} onValueChange={setTierId}>
+                <SelectTrigger data-testid="auto-issue-tier"><SelectValue placeholder="Free / no specific tier" /></SelectTrigger>
+                <SelectContent>{tiers.map(t => <SelectItem key={t.id} value={t.id}>{t.name} · {(t.price || 0).toLocaleString()}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
+          <div><Label className="text-xs">Custom label (optional)</Label><Input value={customLabel} onChange={e => setCustomLabel(e.target.value)} placeholder="e.g. Complimentary" /></div>
+          <div><Label className="text-xs">Note (optional)</Label><Input value={note} onChange={e => setNote(e.target.value)} placeholder="Reason / audit note" /></div>
+          {result && (
+            <div className="rounded-md bg-muted/40 p-3 text-xs space-y-1" data-testid="auto-issue-result">
+              <div><strong>Issued:</strong> {result.created?.length || 0}</div>
+              <div><strong>Skipped:</strong> {result.skipped?.length || 0} <span className="text-muted-foreground">(already had a ticket)</span></div>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>Close</Button>
+          <Button onClick={submit} disabled={busy || !eventId} data-testid="auto-issue-submit">{busy ? 'Issuing…' : 'Issue tickets'}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
