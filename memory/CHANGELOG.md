@@ -15,6 +15,22 @@ Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank 
 - **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
 - **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
 
+## Iteration 291 (Feb 2026) — Session #6: JE edit UI · Guest-pass scan payload · accounting.py deleted · Sales spot-check
+
+### 🟢 JE Edit UI on Journal tab
+- `JournalPanel` in FinancePage got an **Edit** button per un-reversed row alongside Reverse. Opens `journal-edit-dialog` — metadata form (description / reference / date) that PUTs to `/finance/journal/{id}`. Edited entries display an **EDITED** badge. `edit_history` count shown in the dialog footer.
+
+### 🟢 Guest-pass ↔ checkpoint scan wired end-to-end
+- `AccessPage.handleScan` now inspects the scanned value: anything starting with `gp_` (guest-pass QR) is sent as `guest_pass_id` alongside the legacy `guest_request_id` and `guest_name`. The backend endpoint (already updated last session) validates against `guest_passes` first, falls back to legacy. Approved guests scan straight through.
+
+### 🟢 Legacy Accounting purge — complete
+- Deleted `/app/backend/routers/accounting.py` (1530 lines).
+- Bank.py + financial.py's five stale imports rerouted to `routers/accounting_shim.py` — a tiny 70-line module exposing only `_next_entry_number` (counter over `accounting_entries`) and `reverse_entry` (mirror-JE poster). `create_entry` callers in bank.py's recurring scheduler now use `post_journal_entry` from `finance._common` directly, so recurring journal entries flow through the unified ledger.
+- Curl-verified: `/api/bank/accounts`, `/api/bank/recurring`, `/api/finance/journal` all 200 after delete. Zero remaining `from routers.accounting` imports.
+
+### 🔍 Marketplace / sales JE spot-check
+- Zero `source='sale'` JEs exist in the ledger across all 4 locations (loc_001-004). Sales module is wired via `sales.py::_auto_post_sale_journal_entry` → `routers/finance/postings.py::post_sale` which passes `location_id` from the sale doc — verified in code. Once real sales flow through the POS/marketplace, they will tag to the store's location automatically.
+
 ## Iteration 291 (Feb 2026) — Session #5: Location-mandatory finance + JE editing + guest-pass scan
 
 ### 🔴 Restricted-access — checkpoint scan wired to guest passes

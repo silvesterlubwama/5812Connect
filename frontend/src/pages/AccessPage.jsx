@@ -187,6 +187,15 @@ export default function AccessPage() {
 
       const payload = { location_id: selectedLocation, action: scanForm.action };
       if (scanMode === 'guest') {
+        // iter 291 — new guest_passes table is the primary path; send both
+        // the pass id and legacy request id so any backend version resolves.
+        // The scanned QR value on a guest pass is `gp_XXXX` — surface it.
+        const scanned = (scanForm.member_id || '').trim();
+        if (scanned.startsWith('gp_')) {
+          payload.guest_pass_id = scanned;
+        } else if (scanForm.guest_pass_id) {
+          payload.guest_pass_id = scanForm.guest_pass_id;
+        }
         payload.guest_request_id = scanForm.guest_request_id;
         payload.guest_name = scanForm.guest_name;
         payload.member_id = scanForm.member_id || 'guest';

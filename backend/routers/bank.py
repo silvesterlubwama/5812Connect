@@ -888,7 +888,7 @@ async def _post_bill_to_ledger(bill: dict, current_user: dict):
     ))
     if not journal:
         return
-    from routers.accounting import _next_entry_number
+    from routers.accounting_shim import _next_entry_number
     entry_id = f"je_{uuid.uuid4().hex[:10]}"
     entry_number = await _next_entry_number(journal["id"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1031,7 +1031,7 @@ async def _post_bill_payment_to_ledger(bill: dict, payment: dict, bank_acc: dict
     ))
     if not journal:
         return
-    from routers.accounting import _next_entry_number
+    from routers.accounting_shim import _next_entry_number
     entry_id = f"je_{uuid.uuid4().hex[:10]}"
     entry_number = await _next_entry_number(journal["id"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1174,11 +1174,21 @@ async def run_recurring_now(rid: str, current_user: dict = Depends(require_finan
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     created = None
     if rec["kind"] == "journal_entry":
-        from routers.accounting import create_entry
-        # Force the date to today on this run
-        payload = {**rec["template"], "date": today_iso}
-        # Use admin-like override — create_entry requires require_director; we already are
-        created = await create_entry(payload, current_user)
+        # iter 291 — recurring journal entries now go through the unified
+        # ledger (`post_journal_entry`). Replaces the deleted legacy
+        # `routers.accounting.create_entry`.
+        from routers.finance._common import post_journal_entry
+        tpl = {**rec["template"], "date": today_iso}
+        created = await post_journal_entry(
+            date=tpl.get("date") or today_iso,
+            description=tpl.get("description") or f"Recurring: {rec.get('name', '')}",
+            lines=tpl.get("lines") or [],
+            source="manual",
+            reference=tpl.get("reference"),
+            location_id=tpl.get("location_id") or rec.get("location_id"),
+            created_by=current_user["id"],
+            created_by_name=current_user.get("name"),
+        )
     elif rec["kind"] == "bill":
         payload = {**rec["template"], "bill_date": today_iso}
         created = await create_bill(payload, current_user)
@@ -1205,8 +1215,18 @@ async def fire_due_recurring_entries():
                 sys_user = {"id": "system", "name": "System (recurring scheduler)", "role": "system_admin",
                             "active_campus_id": rec.get("location_id")}
                 if rec["kind"] == "journal_entry":
-                    from routers.accounting import create_entry
-                    await create_entry({**rec["template"], "date": today_iso}, sys_user)
+                    from routers.finance._common import post_journal_entry
+                    tpl = {**rec["template"], "date": today_iso}
+                    await post_journal_entry(
+                        date=tpl.get("date") or today_iso,
+                        description=tpl.get("description") or f"Recurring: {rec.get('name', '')}",
+                        lines=tpl.get("lines") or [],
+                        source="manual",
+                        reference=tpl.get("reference"),
+                        location_id=tpl.get("location_id") or rec.get("location_id"),
+                        created_by="system",
+                        created_by_name="System (recurring scheduler)",
+                    )
                 elif rec["kind"] == "bill":
                     await create_bill({**rec["template"], "bill_date": today_iso}, sys_user)
                 new_next = _advance_recurring_date(rec["next_run_date"], rec["schedule"], rec.get("day_of_month") or 1)

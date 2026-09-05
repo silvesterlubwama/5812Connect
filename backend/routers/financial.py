@@ -283,7 +283,7 @@ async def _reverse_auto_posted_je(source_kind: str, source_id: str, current_user
     if not entry or entry.get("status") != "posted":
         return 0
     try:
-        from routers.accounting import reverse_entry
+        from routers.accounting_shim import reverse_entry
         await reverse_entry(entry["id"], {"reason": f"Source {source_kind} deleted"}, current_user)
         return 1
     except Exception as ex:
@@ -367,7 +367,7 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
     )
     if existing:
         return
-    from routers.accounting import _next_entry_number
+    from routers.accounting_shim import _next_entry_number
     entry_id = f"je_{uuid.uuid4().hex[:10]}"
     entry_number = await _next_entry_number(journal["id"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1762,7 +1762,7 @@ async def repair_orphaned_journals(current_user: dict = Depends(require_admin)):
     Returns per-kind counts of what was reversed / already-clean / skipped.
     Idempotent — safe to run multiple times.
     """
-    from routers.accounting import reverse_entry
+    from routers.accounting_shim import reverse_entry
     reversed_count = 0
     already_reversed = 0
     orphan_ids: list = []

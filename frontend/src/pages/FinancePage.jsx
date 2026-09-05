@@ -416,6 +416,8 @@ function JournalPanel() {
   const [entries, setEntries] = useState([]);
   const [expanded, setExpanded] = useState({});
   const [reversing, setReversing] = useState(null); // je object being reversed
+  const [editing, setEditing] = useState(null); // je object being edited (metadata only)
+  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '' });
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   // Filters — kept in the URL query string on submit so the exact list can be shared
@@ -439,6 +441,23 @@ function JournalPanel() {
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { reload().catch(() => {}); }, [filters.date_from, filters.date_to, filters.source, filters.include_reversed]);
+
+  // When a JE is selected for editing, pre-fill the metadata form.
+  useEffect(() => {
+    if (editing) setEditForm({ description: editing.description || '', reference: editing.reference || '', date: editing.date || '' });
+  }, [editing]);
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      await api.put(`/finance/journal/${editing.id}`, editForm);
+      toast.success('Entry updated');
+      setEditing(null);
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
+    setBusy(false);
+  };
 
   // Text search is client-side across description + line account names/codes
   // — cheap on 200 rows and lets staff type freeform without waiting for the
@@ -525,22 +544,23 @@ function JournalPanel() {
             <TableHeader><TableRow>
               <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Source</TableHead>
               <TableHead className="text-right">Total</TableHead>
-              {canReverse && <TableHead className="w-28"></TableHead>}
+              {canReverse && <TableHead className="w-36"></TableHead>}
             </TableRow></TableHeader>
             <TableBody>
               {filteredEntries.map(je => (
                 <React.Fragment key={je.id}>
                   <TableRow className={`cursor-pointer hover:bg-muted/40 ${je.reversed ? 'opacity-50 line-through' : ''}`} onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))} data-testid={`journal-row-${je.id}`}>
                     <TableCell className="font-mono text-xs">{je.date}</TableCell>
-                    <TableCell>{je.description}{je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}</TableCell>
+                    <TableCell>{je.description}{je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}{je.edit_history?.length > 0 && <Badge variant="outline" className="ml-2 text-[10px]">EDITED</Badge>}</TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{je.source}</Badge></TableCell>
                     <TableCell className="text-right font-mono">{money(je.total)}</TableCell>
                     {canReverse && (
                       <TableCell className="text-right no-underline" onClick={(e) => e.stopPropagation()}>
                         {!je.reversed && je.source !== 'reversal' && (
-                          <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>
-                            Reverse
-                          </Button>
+                          <>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(je)} data-testid={`journal-edit-${je.id}`}>Edit</Button>
+                            <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>Reverse</Button>
+                          </>
                         )}
                       </TableCell>
                     )}
@@ -564,6 +584,25 @@ function JournalPanel() {
           </Table>
         )}
       </CardContent>
+      <Dialog open={!!editing} onOpenChange={o => !o && setEditing(null)}>
+        <DialogContent className="max-w-md" data-testid="journal-edit-dialog">
+          <DialogHeader><DialogTitle>Edit journal entry</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground">Metadata edits (description, reference, date) update in place with an audit trail. Refused if the fiscal period is locked.</p>
+          <div className="space-y-3 pt-2">
+            <div><Label className="text-xs">Description</Label><Input value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} data-testid="journal-edit-description" /></div>
+            <div><Label className="text-xs">Reference / receipt #</Label><Input value={editForm.reference} onChange={e => setEditForm({ ...editForm, reference: e.target.value })} data-testid="journal-edit-reference" /></div>
+            <div><Label className="text-xs">Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="journal-edit-date" /></div>
+            {editing?.edit_history?.length > 0 && (
+              <p className="text-[11px] text-muted-foreground">Previously edited {editing.edit_history.length}×</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)} disabled={busy}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={busy} data-testid="journal-edit-save">{busy ? 'Saving…' : 'Save'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!reversing} onOpenChange={o => !o && setReversing(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Reverse journal entry</DialogTitle></DialogHeader>
