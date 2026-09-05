@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
 import { portalApi, childrenApi, familiesApi } from '../services/api';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -211,7 +212,15 @@ export default function PortalFamily() {
                     </div>
                     {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1">{c.allergies}</Badge>}
                   </div>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditChild(c); setEditChildForm({ name: c.name, date_of_birth: c.date_of_birth || '', gender: c.gender || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' }); }} data-testid={`edit-child-${c.id}`}><Edit size={13} /></Button>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={async () => {
+                      try {
+                        const r = await api.post(`/portal/children/${c.id}/wallet-badge`);
+                        if (r.data?.token) window.open(`/badge/${r.data.token}`, '_blank');
+                      } catch (e) { toast.error(e?.response?.data?.detail || 'Badge issuance failed'); }
+                    }} data-testid={`child-badge-${c.id}`}>Badge</Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditChild(c); setEditChildForm({ name: c.name, date_of_birth: c.date_of_birth || '', gender: c.gender || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' }); }} data-testid={`edit-child-${c.id}`}><Edit size={13} /></Button>
+                  </div>
                 </div>
               ))}
             </div>

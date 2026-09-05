@@ -631,7 +631,7 @@ export default function Layout() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {!isOnline && <Badge variant="destructive" className="text-[10px] gap-1 h-6 px-2"><WifiOff size={11} /> Offline</Badge>}
+          {!isOnline && <Badge variant="destructive" className="text-[10px] gap-1 h-6 px-2" data-testid="offline-pill" title="No connection — showing cached data from your last online session"><WifiOff size={11} /> Offline · Cached</Badge>}
           <Button variant="ghost" size="icon" className="h-9 w-9" onClick={toggleDarkMode} data-testid="dark-mode-toggle">{darkMode ? <Sun size={17} /> : <Moon size={17} />}</Button>
 
           {/* Notifications */}

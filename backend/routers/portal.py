@@ -110,6 +110,98 @@ async def update_portal_profile(data: dict, current_user: dict = Depends(get_cur
     return user
 
 
+@router.post("/my-wallet-badge")
+async def portal_issue_own_badge(current_user: dict = Depends(get_current_user)):
+    """Self-service: issue/return the caller's own wallet badge token so they
+    can view + download it from the user portal. Idempotent — reuses an existing
+    active badge if there is one. Works whether the user is linked to a members
+    row or is just a bare user account."""
+    uid = current_user["id"]
+    email = (current_user.get("email") or "").strip().lower()
+    # Prefer the linked members row (has photo/dept/role); fall back to the user
+    member = None
+    if email:
+        member = await db.members.find_one({"email": email}, {"_id": 0, "password_hash": 0})
+    if not member:
+        member = await db.members.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
+    subject_id = member["id"] if member else uid
+    subject = member or current_user
+    existing = await db.wallet_badges.find_one(
+        {"member_id": subject_id, "status": {"$ne": "invalidated"}}, {"_id": 0},
+    )
+    if existing:
+        return existing
+    token = uuid.uuid4().hex[:16]
+    loc = await db.locations.find_one(
+        {"id": subject.get("location_id") or subject.get("active_campus_id") or ""},
+        {"_id": 0, "name": 1, "country": 1, "country_code": 1},
+    ) if (subject.get("location_id") or subject.get("active_campus_id")) else None
+    badge = {
+        "id": f"wbadge_{token}", "token": token,
+        "member_id": subject_id,
+        "name": subject.get("name", ""),
+        "role": subject.get("role", subject.get("membership_type", "")),
+        "title": subject.get("title", ""),
+        "department": subject.get("department", ""),
+        "photo_url": subject.get("photo_url", ""),
+        "location_name": loc.get("name") if loc else "",
+        "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+        "qr_data": subject_id,
+        "status": "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": uid,
+        "self_issued": True,
+    }
+    await db.wallet_badges.update_one({"member_id": subject_id}, {"$set": badge}, upsert=True)
+    return badge
+
+
+@router.post("/children/{child_id}/wallet-badge")
+async def portal_issue_child_badge(child_id: str, current_user: dict = Depends(get_current_user)):
+    """Self-service: parents issue a wallet badge for their own child.
+    Auth: `current_user.id` must appear in `child.parent_ids`. Idempotent."""
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    parent_ids = child.get("parent_ids") or []
+    if current_user["id"] not in parent_ids:
+        # Also allow if the parent's members.id is listed
+        m = await db.members.find_one({"user_id": current_user["id"]}, {"_id": 0, "id": 1})
+        if not (m and m["id"] in parent_ids):
+            raise HTTPException(status_code=403, detail="Only a listed parent can issue this child's badge")
+    existing = await db.wallet_badges.find_one(
+        {"member_id": child_id, "status": {"$ne": "invalidated"}}, {"_id": 0},
+    )
+    if existing:
+        return existing
+    token = uuid.uuid4().hex[:16]
+    loc = await db.locations.find_one({"id": child.get("location_id", "")}, {"_id": 0, "name": 1, "country": 1, "country_code": 1, "contact_phone": 1}) if child.get("location_id") else None
+    parents_summary = []
+    for pid in parent_ids:
+        p = await db.users.find_one({"id": pid}, {"_id": 0, "name": 1, "phone": 1})
+        if not p:
+            p = await db.members.find_one({"id": pid}, {"_id": 0, "name": 1, "phone": 1})
+        if p:
+            parents_summary.append({"name": p.get("name", ""), "phone": p.get("phone", "")})
+    badge = {
+        "id": f"wbadge_{token}", "token": token,
+        "member_id": child_id, "name": child.get("name", ""), "role": "Child",
+        "photo_url": child.get("photo_url", ""),
+        "location_name": loc.get("name") if loc else "",
+        "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+        "qr_data": child_id, "parents": parents_summary,
+        "campus_phone": loc.get("contact_phone") if loc else "",
+        "status": "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": current_user["id"],
+        "self_issued": True,
+    }
+    await db.wallet_badges.update_one({"member_id": child_id}, {"$set": badge}, upsert=True)
+    return badge
+
+
 @router.get("/tasks")
 async def portal_tasks(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Get tasks assigned to the current user"""

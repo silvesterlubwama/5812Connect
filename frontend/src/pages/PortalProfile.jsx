@@ -29,6 +29,32 @@ export default function PortalProfile() {
   const [ptoForm, setPtoForm] = useState({ start_date: new Date().toISOString().slice(0, 10), end_date: new Date().toISOString().slice(0, 10), reason: '' });
   const [tsForm, setTsForm] = useState({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
   const [viewingPayslip, setViewingPayslip] = useState(null);
+  const [myBadge, setMyBadge] = useState(null);   // { token } once issued
+  const [badgeLoading, setBadgeLoading] = useState(false);
+
+  // ISO week helpers — timesheet period is Mon–Sun weeks (server accepts YYYY-Www).
+  const isoWeekOf = (d = new Date()) => {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const day = t.getUTCDay() || 7;
+    t.setUTCDate(t.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+    return { period: `${t.getUTCFullYear()}-W${String(week).padStart(2, '0')}`, monday: (() => { const m = new Date(d); const dow = (m.getDay() + 6) % 7; m.setDate(m.getDate() - dow); return m.toISOString().slice(0, 10); })() };
+  };
+  const _initWeek = isoWeekOf();
+  const [tsWeek, setTsWeek] = useState({ period: _initWeek.period, monday: _initWeek.monday, days: [false, false, false, false, false, false, false], pto: 0, notes: '' });
+
+  const openMyBadge = async () => {
+    setBadgeLoading(true);
+    try {
+      const r = await api.post('/portal/my-wallet-badge');
+      if (r.data?.token) {
+        setMyBadge(r.data);
+        window.open(`/badge/${r.data.token}`, '_blank');
+      }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Badge issuance failed'); }
+    setBadgeLoading(false);
+  };
 
   const loadHR = async () => {
     try {
@@ -95,17 +121,29 @@ export default function PortalProfile() {
   }, []);
 
   const submitTimesheet = async () => {
-    if (!tsForm.period || !tsForm.days_worked) return toast.error('Period and days_worked required');
+    // iter298 — weekly Mon–Sun grid. `entries[]` carries the exact dates worked
+    // so payroll can spot short weeks and daily-wage staff get accurate gross.
+    const daysWorked = tsWeek.days.filter(Boolean).length;
+    if (daysWorked === 0 && !tsWeek.pto) return toast.error('Check at least one day worked or PTO');
+    const monday = new Date(tsWeek.monday);
+    const entries = tsWeek.days
+      .map((worked, i) => {
+        const d = new Date(monday); d.setDate(monday.getDate() + i);
+        return worked ? { date: d.toISOString().slice(0, 10), day_worked: true } : null;
+      })
+      .filter(Boolean);
     try {
       await api.post('/hr/timesheets', {
-        period: tsForm.period,
-        days_worked: parseFloat(tsForm.days_worked),
-        pto_days: parseFloat(tsForm.pto_days) || 0,
-        notes: tsForm.notes,
+        period: tsWeek.period,
+        days_worked: daysWorked,
+        pto_days: parseFloat(tsWeek.pto) || 0,
+        entries,
+        notes: tsWeek.notes,
       });
-      toast.success('Timesheet submitted for approval');
+      toast.success(`Timesheet for ${tsWeek.period} submitted (${daysWorked} day${daysWorked === 1 ? '' : 's'})`);
       setShowTimesheet(false);
-      setTsForm({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
+      const nxt = isoWeekOf();
+      setTsWeek({ period: nxt.period, monday: nxt.monday, days: [false, false, false, false, false, false, false], pto: 0, notes: '' });
       loadHR();
     } catch (e) { toast.error(e.response?.data?.detail || 'Submission failed'); }
   };
@@ -155,6 +193,20 @@ export default function PortalProfile() {
           {editing ? <><Save size={14} /> {saving ? 'Saving...' : 'Save'}</> : 'Edit Profile'}
         </Button>
       </div>
+
+      {/* My Wallet Badge — iter298 self-service: opens /badge/<token> in a new
+          tab where the user can Add-to-Wallet / save the image on their phone. */}
+      <Card className="shadow-soft rounded-xl border-primary/30" data-testid="my-badge-card">
+        <CardContent className="p-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">My Wallet Badge</p>
+            <p className="text-xs text-muted-foreground">Open a printable, wallet-ready badge. Add-to-Wallet or save the image to your phone from the badge page.</p>
+          </div>
+          <Button size="sm" className="gap-1.5" onClick={openMyBadge} disabled={badgeLoading} data-testid="portal-open-my-badge">
+            <Download size={14} /> {badgeLoading ? 'Preparing…' : 'View & Download'}
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Profile Card */}
       <Card className="shadow-soft rounded-xl">
@@ -417,24 +469,45 @@ export default function PortalProfile() {
         </DialogContent>
       </Dialog>
 
-      {/* SUBMIT TIMESHEET DIALOG */}
+      {/* SUBMIT TIMESHEET DIALOG — weekly Mon–Sun grid (iter298) */}
       <Dialog open={showTimesheet} onOpenChange={setShowTimesheet}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Submit Timesheet</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Log this week</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div className="space-y-1.5"><Label className="text-xs">Pay Period</Label>
-              <Input type="month" value={tsForm.period} onChange={e => setTsForm({...tsForm, period: e.target.value})} data-testid="ts-period" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1.5"><Label className="text-xs">Days Worked *</Label>
-                <Input type="number" step="0.5" min="0" value={tsForm.days_worked} onChange={e => setTsForm({...tsForm, days_worked: e.target.value})} placeholder="e.g. 20" data-testid="ts-days" />
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex-1 space-y-1.5">
+                <Label className="text-xs">Week starting (Mon)</Label>
+                <Input type="date" value={tsWeek.monday} onChange={e => {
+                  const d = new Date(e.target.value); const w = isoWeekOf(d);
+                  setTsWeek({ ...tsWeek, monday: w.monday, period: w.period });
+                }} data-testid="ts-week-monday" />
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">PTO Days</Label>
-                <Input type="number" step="0.5" min="0" value={tsForm.pto_days} onChange={e => setTsForm({...tsForm, pto_days: e.target.value})} placeholder="e.g. 2" data-testid="ts-pto" />
-              </div>
+              <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 font-mono" data-testid="ts-week-period">{tsWeek.period}</div>
             </div>
-            <div className="space-y-1.5"><Label className="text-xs">Notes / activity summary</Label>
-              <Textarea rows={3} value={tsForm.notes} onChange={e => setTsForm({...tsForm, notes: e.target.value})} placeholder="What did you get done this period?" data-testid="ts-notes" />
+            <div>
+              <Label className="text-xs">Days worked</Label>
+              <div className="grid grid-cols-7 gap-1 mt-1.5" data-testid="ts-week-days">
+                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((ltr, i) => {
+                  const d = new Date(tsWeek.monday); d.setDate(d.getDate() + i);
+                  const label = d.toLocaleDateString(undefined, { day: 'numeric' });
+                  const on = tsWeek.days[i];
+                  return (
+                    <button key={i} type="button" onClick={() => { const nd = [...tsWeek.days]; nd[i] = !nd[i]; setTsWeek({ ...tsWeek, days: nd }); }}
+                      data-testid={`ts-day-${i}`}
+                      className={`flex flex-col items-center justify-center h-14 rounded-md border text-xs transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-muted/40'}`}>
+                      <span className="font-semibold">{ltr}</span>
+                      <span className="text-[10px] opacity-70">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">Total: <b>{tsWeek.days.filter(Boolean).length}</b> day(s) worked</p>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">PTO days (optional)</Label>
+              <Input type="number" step="0.5" min="0" value={tsWeek.pto} onChange={e => setTsWeek({ ...tsWeek, pto: e.target.value })} data-testid="ts-pto" />
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={tsWeek.notes} onChange={e => setTsWeek({ ...tsWeek, notes: e.target.value })} placeholder="Optional summary" data-testid="ts-notes" />
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowTimesheet(false)}>Cancel</Button>

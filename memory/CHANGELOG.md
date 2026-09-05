@@ -1,48 +1,44 @@
 # CHANGELOG
 
-## iter 297 — 2026-02 — PWA offline data · Wallet cache · Digest Snooze
+## iter 298 — 2026-02 — Portal self-service · weekly timesheets · wage types · offline pill
 
-**PWA offline data cache** — `sw.js` bumped to `5812-crm-v4` and grew a
-third named cache `5812-offline-data-v1`. New `isOfflineDataRequest()`
-allow-list covers `/api/auth/me`, `/api/dashboard/stats`, `/api/locations`,
-`/api/tasks`, `/api/events*`, `/api/access/checkpoints`, and the
-director-digest-preview — all served stale-while-revalidate so today's
-roster + user dashboard render immediately with zero signal. On login a
-new `prefetch-offline-set` message tells the SW to preload the entire
-bundle (auth token forwarded so the SW can authenticate the preload).
+**Portal self-service badges** — Two new endpoints under `/api/portal/`:
+- `POST /portal/my-wallet-badge` — issues (or returns) the caller's own badge
+  token so they can view + Add-to-Wallet from `/badge/<token>`. Idempotent.
+- `POST /portal/children/{child_id}/wallet-badge` — parent-only endpoint that
+  issues a child's badge as long as `current_user.id` is in `child.parent_ids`
+  (falls back to `members.id` lookup for members-linked parents).
 
-**Wallet pass cache on login** — The same offline-prefetch hook also
-preloads the current user's `/api/members/<id>/qr-code` and
-`/profile-photo`, so their badge scans at the checkpoint even when the
-signal is out. Existing per-badge `prefetch-wallet-pass` from
-`WalletBadgePage` still works and now piggybacks on the same cache.
+Frontend hookups:
+- `PortalProfile` — new "My Wallet Badge" card with `View & Download`
+  (`data-testid="portal-open-my-badge"`); opens `/badge/<token>` in a new tab
+  where existing Add-to-Wallet / auto-print / save-image works.
+- `PortalFamily` — every child row now shows a `Badge` button
+  (`data-testid="child-badge-<id>"`).
 
-**Digest Snooze** — `DirectorDigestWidget` rows gained a small
-snooze icon (`MoonStar`, `data-testid="digest-snooze-<id>"`). One click
-POSTs to the existing `/api/tasks/<id>/snooze` with `days=1` — the task
-drops out of tomorrow's digest. Optimistic UI + background reload keep
-the widget count in sync. Directors are already in the endpoint's
-`privileged` role set (`routers/tasks.py:373-375`), so no backend changes
-needed.
+**Weekly Mon–Sun timesheet grid** — `PortalProfile` timesheet dialog replaced
+with a 7-cell button grid (M/T/W/T/F/S/S) that auto-computes `days_worked`
+from checked days, sends the ISO-week identifier as `period` (`YYYY-Www`),
+and includes an `entries[]` daily breakdown so payroll can spot short weeks
+and daily-wage staff get accurate gross. Verified via curl:
+`POST /hr/timesheets {period:'2026-W09', days_worked:3, entries:[3 dates]}`
+→ status=submitted.
 
-**Verification**
-- Curl end-to-end: seeded overdue task → digest count=1 → snooze POST →
-  digest count=0 → cleanup. All 200.
-- Testing agent iter 230: full regression pass.
+**Wage types** — `hr_salaries` now has `wage_type` (one of
+salary/hourly/daily/weekly/biweekly/monthly), `hourly_rate`, `daily_rate`.
+`_proration_factor` extended: daily → 1/22, hourly → 1/(22×8). Payroll
+generation still respects `pay_frequency` for cadence; wage_type describes
+how the base amount is expressed.
+
+**Offline pill** — Existing offline detection copy updated: pill now reads
+"Offline · Cached" with a hover title explaining the SW is serving the last
+online snapshot. `data-testid="offline-pill"`.
+
+**Verification (curl end-to-end)**
+- `POST /portal/my-wallet-badge` → token issued, status=active.
+- `POST /hr/timesheets` weekly → period=2026-W09, days_worked=3, entries=3.
+- `POST /hr/salaries wage_type=daily daily_rate=50000` → fields persist.
+- All test rows cleaned up.
 
 ---
-
-## iter 296 — 2026-02 — Finance/AP/HR/access MongoDB indexes + bcrypt pin verify
-(previous, unchanged)
-
-## iter 295 — 2026-02 — Digest widget · Mobile tabs on People/HR/Sales
-(previous, unchanged)
-
-## iter 294 — 2026-02 — Bulk barcodes · Director digest · Mobile Finance
-(previous, unchanged)
-
-## iter 293 — 2026-02 — Review Queue UI · PDF FX · nested sublocations
-(previous, unchanged)
-
-## iter 292 — 2026-02 — Accounting-shim retirement / bank.py migration
-(previous, unchanged)
+(prior iter 292–297 entries unchanged)

@@ -84,13 +84,23 @@ def _period_label(pay_frequency: str, payday: dt_date) -> str:
 
 def _proration_factor(pay_frequency: str) -> float:
     """Multiplier to convert a monthly base_salary into one payslip's gross.
+
     Monthly is 1.0. Bi-weekly uses the standard 12/26 (~0.4615) to keep annual
-    take-home identical across a 12-month year. Weekly uses 12/52."""
+    take-home identical across a 12-month year. Weekly uses 12/52. Daily is
+    treated as 1/22 of a month (avg working days).
+
+    NOTE: for `wage_type=daily` we don't scale base_salary — the payslip's gross
+    is computed as `daily_rate * days_worked` in `_generate_payslips_for`. This
+    factor is only the fallback when no daily_rate is set."""
     freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
     if freq in {"bi-weekly", "biweekly", "fortnightly"}:
         return 12.0 / 26.0
     if freq == "weekly":
         return 12.0 / 52.0
+    if freq == "daily":
+        return 1.0 / 22.0
+    if freq == "hourly":
+        return 1.0 / (22.0 * 8.0)  # 22 workdays * 8h — refined by hours_worked in generation
     return 1.0
 
 
@@ -265,6 +275,12 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
     staff = await db.users.find_one({"id": staff_id}, {"_id": 0, "name": 1, "role": 1, "location_id": 1, "department": 1})
     if not staff:
         raise HTTPException(status_code=404, detail="Staff not found")
+    # iter298 — wage_type + rate fields. `pay_frequency` is the payslip cadence
+    # (monthly/biweekly/weekly), independent from `wage_type` which is how the
+    # base amount is expressed (salary/hourly/daily/weekly/biweekly/monthly).
+    wage_type = (data.get("wage_type") or "salary").lower()
+    if wage_type not in {"salary", "hourly", "daily", "weekly", "biweekly", "monthly"}:
+        raise HTTPException(status_code=400, detail="wage_type must be one of: salary, hourly, daily, weekly, biweekly, monthly")
     doc = {
         "id": f"sal_{uuid.uuid4().hex[:8]}",
         "staff_id": staff_id,
@@ -273,6 +289,9 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "department": staff.get("department", ""),
         "location_id": data.get("location_id") or staff.get("location_id") or current_user.get("active_campus_id", ""),
         "base_salary": float(data.get("base_salary", 0)),
+        "wage_type": wage_type,
+        "hourly_rate": float(data.get("hourly_rate") or 0),
+        "daily_rate": float(data.get("daily_rate") or 0),
         "currency": data.get("currency", "UGX"),
         "pay_frequency": data.get("pay_frequency", "monthly"),
         "effective_date": data.get("effective_date", datetime.now(timezone.utc).isoformat()[:10]),
