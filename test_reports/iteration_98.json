@@ -1,0 +1,60 @@
+{
+  "summary": "Iter 293 review-queue UI + FX PDF params + nested sublocation dropdown pass. Backend is fully green (10/10 pytest cases pass — review-queue list, receipt scan → draft JE flagged needs_review, /receipts/{id}/approve, PDF with & without fx_target/fx_rate, HR payday generate, plus finance journal/coa/pnl regression). CRITICAL FRONTEND BUG: /finance page crashes on mount with `ReferenceError: ReviewQueuePanel is not defined`. FinancePage.jsx line 60 renders <ReviewQueuePanel /> but the component was never actually declared in the file. The E1 diff added the <TabsTrigger> and <TabsContent value='review'> but omitted the actual component body. This breaks not just the new tab — it takes down the entire Finance page (overview, journal, coa, reports) because the JSX throws at render time and the ErrorBoundary catches it. ReportsPage sublocation nesting code is in place (verified statically). HR payday scheduler wiring at server.py:783 still present.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "FinancePage",
+        "issue": "ReferenceError: ReviewQueuePanel is not defined. Line 60 of /app/frontend/src/pages/FinancePage.jsx renders <ReviewQueuePanel /> but no `function ReviewQueuePanel` / `const ReviewQueuePanel` / `import ReviewQueuePanel` exists anywhere. ESLint confirms: 'react/jsx-no-undef' error at line 60:38. The ErrorBoundary catches it and shows 'Something went wrong — ReviewQueuePanel is not defined', so the ENTIRE /finance route is unusable — not just the Review tab. This regresses overview/journal/coa/reports tabs as a side-effect.",
+        "selector": "[data-testid=\"finance-tab-review\"] / [data-testid=\"review-queue-panel\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Review Queue tab click → list draft JEs → Reclassify → Save & repost → Approve",
+        "issue": "Cannot exercise ANY of these flows because the panel component doesn't exist. Nothing renders. All row-level data-testids (review-queue-row-<id>, review-queue-reclass-<id>, review-queue-save-<id>, review-queue-approve-<id>, review-queue-empty) are unreachable.",
+        "affected_selectors": [
+          "[data-testid=\"review-queue-panel\"]",
+          "[data-testid=\"review-queue-empty\"]",
+          "[data-testid^=\"review-queue-row-\"]",
+          "[data-testid^=\"review-queue-reclass-\"]",
+          "[data-testid^=\"review-queue-save-\"]",
+          "[data-testid^=\"review-queue-approve-\"]"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter293_review_queue_fx_pdf.py",
+    "/app/test_reports/pytest/iter293.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Add the missing `ReviewQueuePanel` component definition to /app/frontend/src/pages/FinancePage.jsx (referenced at line 60 but never declared). The component must: (1) render a card with data-testid='review-queue-panel', (2) GET /api/finance/receipts/review-queue on mount, (3) render either data-testid='review-queue-empty' when empty or a table where each row has data-testid=`review-queue-row-<je.id>`, (4) 'Reclassify' button data-testid=`review-queue-reclass-<id>` swaps line accounts into Select dropdowns, (5) 'Save & repost' data-testid=`review-queue-save-<id>` PUTs /api/finance/journal/<id> and reloads, (6) 'Approve' data-testid=`review-queue-approve-<id>` PUTs /api/finance/receipts/<id>/approve and reloads.",
+    "After adding the component, re-run the frontend UI flow test — the backend endpoints are already verified working."
+  ],
+  "critical_code_review_comments": [
+    "FinancePage.jsx line 60 references ReviewQueuePanel — ESLint reports react/jsx-no-undef. The build compiled because CRA only emits a warning for undefined JSX components at build time; the error only surfaces at runtime when the page renders. Recommend enabling `no-undef` as an error in CI.",
+    "FinancePage.jsx is 1124 lines. Once ReviewQueuePanel is added it will grow further. Consider extracting each *Panel component to its own file under /pages/finance/panels/ — the file is well past the 700-line guideline.",
+    "The ErrorBoundary catches the crash but there's no defensive fallback for the tab content; a broken tab component brings down the whole page (all sibling tabs become unreachable). Consider per-tab ErrorBoundaries so one bad panel doesn't blow up siblings.",
+    "Backend receipts.py: /review-queue query filters {needs_review: True, reversed: {$ne: True}} but does NOT filter to status='draft'. If an approved-then-later-flipped JE ever had needs_review re-set, it would surface here. Consider adding `status: 'draft'` to the filter for defensive robustness.",
+    "reports.py fx logic silently ignores fx_target when fx_rate is missing (and vice-versa). Consider raising 400 if exactly one of the pair is provided — currently a caller who supplies only fx_target gets a report in the base currency with no warning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter293_review_queue_fx_pdf.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (10/10)",
+    "frontend": "0% — Finance page crashes on mount"
+  },
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (worked)",
+  "seed_data_creation": "None — /api/finance/receipts/scan run returned extracted-only (tiny synthetic PIL PNG didn't have OCR-detectable amount), so no draft JE was actually created in this test run. The scan endpoint responded 200 correctly. If needed, seed a real receipt image to exercise the queue with data.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend for iter 293 is fully verified (see test_iter293_review_queue_fx_pdf.py). The single blocker is the missing ReviewQueuePanel component in /app/frontend/src/pages/FinancePage.jsx (line 60 references it, no definition exists). After the main agent adds the component, retest the full UI flow: (1) click finance-tab-review → panel renders → empty state or rows visible; (2) trigger a receipt scan with a real receipt image so a draft JE exists → row visible; (3) Reclassify → swap account → Save & repost → toast + queue reloads; (4) Approve → row removed from queue.",
+  "rca of the issue": "Main agent's iter 293 diff on FinancePage.jsx added the <TabsTrigger value='review' data-testid='finance-tab-review'> in the TabsList AND the <TabsContent value='review'><ReviewQueuePanel /></TabsContent> below it, and changed TabsList to grid-cols-5 max-w-3xl — but the actual `function ReviewQueuePanel(){...}` body was never included in the committed file. Grepping the file for 'ReviewQueuePanel' returns ONLY the single reference on line 60. ESLint flags this as react/jsx-no-undef. At runtime React tries to render an undefined identifier, throws ReferenceError, and the app-level ErrorBoundary catches it — replacing the entire Finance page with the 'Something went wrong' fallback. Fix: add the ReviewQueuePanel component (either inline in FinancePage.jsx or as a new file that's imported at the top of FinancePage.jsx). Reproduction: log in as admin, navigate to /finance — the page shows the ErrorBoundary screen immediately, no user action required."
+}

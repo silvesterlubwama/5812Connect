@@ -1,0 +1,33 @@
+{
+  "summary": "RETEST FAILED — the claimed fix for the missing ReviewQueuePanel component was NOT applied. FinancePage.jsx still contains only ONE reference to ReviewQueuePanel (the JSX usage at line 60) and NO definition anywhere in the file (grep count = 1, file is 1123 lines). ESLint still reports `react/jsx-no-undef` at line 60:38. This is the identical state as iteration_98. The E1 note claims a `function ReviewQueuePanel` was inserted at ~line 150 right before ReceiptScanDialog, but the file shows ReceiptScanDialog at line 147 with no ReviewQueuePanel definition preceding it. The search_replace edit must have silently failed again. Skipped further UI/backend re-verification because the /finance page will crash on mount exactly as before — retesting the FX PDF / payday / ReportsPage flows would just repeat iter 98's results (all were already green backend-side in iter 293/98).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "FinancePage",
+        "issue": "IDENTICAL to iter 98: ReferenceError: ReviewQueuePanel is not defined. Line 60 renders <ReviewQueuePanel /> but no function/const/import for ReviewQueuePanel exists in the file. grep count for 'ReviewQueuePanel' in FinancePage.jsx = 1 (only the JSX reference). ESLint: react/jsx-no-undef at 60:38. The claimed insertion at ~line 150 did not land — ReceiptScanDialog is still at line 147 with nothing between it and the tabs JSX. Entire /finance route crashes via ErrorBoundary on mount, blocking overview/journal/coa/reports/review tabs.",
+        "selector": "[data-testid=\"review-queue-panel\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_98.json", "/app/backend/tests/test_iter293_review_queue_fx_pdf.py"],
+  "action_items": [
+    "CRITICAL: Actually add the ReviewQueuePanel component this time. Verify with `grep -c ReviewQueuePanel /app/frontend/src/pages/FinancePage.jsx` — the count MUST be >= 2 (definition + JSX usage). Also verify `npx eslint /app/frontend/src/pages/FinancePage.jsx` reports 0 errors (only warnings acceptable). Suggested: create component in its own file /app/frontend/src/pages/finance/ReviewQueuePanel.jsx and import it at the top of FinancePage.jsx — this bypasses any inline search_replace failure and also addresses the >700-line file-size issue.",
+    "After confirming grep count and clean ESLint, ping T1 for retest of the review-queue reclass/approve flows."
+  ],
+  "critical_code_review_comments": [
+    "The main agent's confidence that the edit landed without verifying with a grep is the root cause of the second wasted retest cycle. Add a post-edit verification step: after any search_replace on a JSX component reference, grep for the identifier's definition.",
+    "FinancePage.jsx at 1123 lines still violates the 700-line guideline; extracting panels into separate files would also prevent this class of missing-definition bug."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not re-tested (was 100% in iter 98)", "frontend": "0% — same crash as iter 98"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Only proceed with UI retest after confirming `grep -c ReviewQueuePanel /app/frontend/src/pages/FinancePage.jsx` returns >= 2 AND ESLint on that file reports no errors. Backend for iter 293 flows is already green — no need to re-run pytest unless main agent changes backend code.",
+  "rca of the issue": "Main agent's search_replace or insert to add the ReviewQueuePanel function body failed silently a second time (E1 acknowledged the first failure with 'Missing required argument'). The file was not re-verified with grep after the edit, so the failure went unnoticed and this retest was requested prematurely. Fix: (a) actually insert the function body, (b) verify with grep + ESLint before flagging for retest. Reproduction: `grep -c ReviewQueuePanel /app/frontend/src/pages/FinancePage.jsx` → returns 1 (should be >=2); loading /finance in the browser as admin shows the ErrorBoundary fallback immediately."
+}

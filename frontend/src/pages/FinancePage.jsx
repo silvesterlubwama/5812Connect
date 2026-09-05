@@ -48,14 +48,16 @@ export default function FinancePage() {
       </header>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="grid grid-cols-4 max-w-2xl">
+        <TabsList className="grid grid-cols-5 max-w-3xl">
           <TabsTrigger value="overview" data-testid="finance-tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="journal" data-testid="finance-tab-journal">Journal</TabsTrigger>
+          <TabsTrigger value="review" data-testid="finance-tab-review">Review Queue</TabsTrigger>
           <TabsTrigger value="coa" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
           <TabsTrigger value="reports" data-testid="finance-tab-reports">Reports</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewPanel /></TabsContent>
         <TabsContent value="journal"><JournalPanel /></TabsContent>
+        <TabsContent value="review"><ReviewQueuePanel /></TabsContent>
         <TabsContent value="coa"><CoaPanel /></TabsContent>
         <TabsContent value="reports"><ReportsPanel /></TabsContent>
       </Tabs>
@@ -141,12 +143,148 @@ function OverviewPanel() {
   );
 }
 
+// ─── REVIEW QUEUE (draft / needs-review JEs from receipt scans) ────
+// Reviewers see the OCR-drafted JEs, can reclassify a line's account (via a
+// simple Select) and click Approve — which clears the `needs_review` flag.
+// Reclassification hits PUT /finance/journal/{id} with the swapped lines,
+// which the backend accepts as a full replace (reverse-and-repost path).
+function ReviewQueuePanel() {
+  const [rows, setRows] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [busyId, setBusyId] = useState(null);
+  const [editing, setEditing] = useState(null); // { id, lines: [...] }
+
+  const reload = async () => {
+    const [q, coa] = await Promise.all([
+      api.get('/finance/receipts/review-queue'),
+      api.get('/finance/chart-of-accounts'),
+    ]);
+    setRows(q.data || []);
+    setAccounts(coa.data || []);
+  };
+  useEffect(() => { reload().catch(() => {}); }, []);
+
+  const approve = async (id) => {
+    setBusyId(id);
+    try {
+      await api.put(`/finance/receipts/${id}/approve`);
+      toast.success('Approved');
+      await reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Approve failed'); }
+    setBusyId(null);
+  };
+
+  const startEdit = (je) => setEditing({ id: je.id, lines: (je.lines || []).map(ln => ({ ...ln })) });
+  const cancelEdit = () => setEditing(null);
+  const swapAccount = (idx, acctId) => {
+    const acct = accounts.find(a => a.id === acctId);
+    if (!acct) return;
+    setEditing(e => ({ ...e, lines: e.lines.map((ln, i) => i === idx ? { ...ln, account_id: acct.id, account_code: acct.code, account_name: acct.name } : ln) }));
+  };
+  const saveReclassify = async () => {
+    if (!editing) return;
+    setBusyId(editing.id);
+    try {
+      await api.put(`/finance/journal/${editing.id}`, { lines: editing.lines });
+      toast.success('Reclassified — new JE posted');
+      setEditing(null);
+      await reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Reclassify failed'); }
+    setBusyId(null);
+  };
+
+  return (
+    <Card data-testid="review-queue-panel">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base">Receipt review queue</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Draft journal entries from receipt scans. Reclassify the account if the OCR guessed wrong, then approve.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => reload().catch(() => {})} data-testid="review-queue-refresh"><RefreshCw size={14} className="mr-1" />Refresh</Button>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center" data-testid="review-queue-empty">
+            No receipts waiting for review — the queue is clear.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader><TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Lines</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+              <TableHead className="w-56"></TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map(r => {
+                const isEdit = editing?.id === r.id;
+                const linesToShow = isEdit ? editing.lines : (r.lines || []);
+                return (
+                  <TableRow key={r.id} data-testid={`review-queue-row-${r.id}`}>
+                    <TableCell className="font-mono text-xs">{r.date}</TableCell>
+                    <TableCell className="max-w-xs">
+                      <div className="font-medium text-sm">{r.description}</div>
+                      {r.reference && <div className="text-[10px] text-muted-foreground font-mono">{r.reference}</div>}
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1">
+                        {linesToShow.map((ln, idx) => (
+                          <div key={idx} className="flex items-center gap-2 text-xs">
+                            <Badge variant={ln.debit > 0 ? 'default' : 'outline'} className="text-[9px] w-8 justify-center">
+                              {ln.debit > 0 ? 'Dr' : 'Cr'}
+                            </Badge>
+                            {isEdit ? (
+                              <Select value={ln.account_id} onValueChange={v => swapAccount(idx, v)}>
+                                <SelectTrigger className="h-7 text-xs" data-testid={`review-queue-swap-${r.id}-${idx}`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {accounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <span className="font-mono">{ln.account_code} — {ln.account_name}</span>
+                            )}
+                            <span className="font-mono ml-auto">{money(ln.debit || ln.credit)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono">{money(r.total)}</TableCell>
+                    <TableCell>
+                      {isEdit ? (
+                        <div className="flex gap-1 justify-end">
+                          <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={busyId === r.id} data-testid={`review-queue-cancel-${r.id}`}>Cancel</Button>
+                          <Button size="sm" onClick={saveReclassify} disabled={busyId === r.id} data-testid={`review-queue-save-${r.id}`}>
+                            {busyId === r.id ? 'Saving…' : 'Save & repost'}
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-1 justify-end">
+                          <Button size="sm" variant="outline" onClick={() => startEdit(r)} disabled={busyId === r.id} data-testid={`review-queue-reclass-${r.id}`}>
+                            <Pencil size={12} className="mr-1" />Reclassify
+                          </Button>
+                          <Button size="sm" onClick={() => approve(r.id)} disabled={busyId === r.id} data-testid={`review-queue-approve-${r.id}`}>
+                            {busyId === r.id ? 'Approving…' : 'Approve'}
+                          </Button>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── RECEIPT SCAN DIALOG ─────────────────────────────────────
-// Snap-and-post workflow. `capture="environment"` on the file input tells
-// mobile browsers to open the rear camera directly so users can shoot the
-// receipt without a detour into their photo library. Result panel shows
-// what the OCR/regex pass pulled out so users can spot obvious misses
-// before finance reviews.
 function ReceiptScanDialog({ open, onClose, onDone }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);

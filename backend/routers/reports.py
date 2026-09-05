@@ -43,16 +43,26 @@ async def reports_summary(location_id: Optional[str] = None, date_from: Optional
 
 @router.get("/reports/pdf")
 async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str] = None,
-                      date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+                      date_to: Optional[str] = None,
+                      fx_target: Optional[str] = None, fx_rate: Optional[float] = None,
+                      current_user: dict = Depends(get_current_user)):
     """Render the summary report as a printable PDF (WeasyPrint).
 
-    Same numbers as /reports/summary, wrapped in a clean HTML template. This
-    endpoint used to exist but was removed during a routing refactor — the
-    frontend's `Export PDF` button on /reports has been failing ever since.
+    Optional `fx_target` (e.g. "USD") and `fx_rate` (1 base = ? target) convert
+    every money figure in the output. If either is missing or fx_rate<=0, the
+    report renders in the base currency untouched.
+
+    Same numbers as /reports/summary, wrapped in a clean HTML template.
     Placed BEFORE /reports/{report_id} so the literal /pdf path wins on match.
     """
     summary = await reports_summary(location_id=location_id, date_from=date_from,
                                     date_to=date_to, current_user=current_user)
+
+    # FX conversion — apply to every displayed money figure
+    fx_active = bool(fx_target) and fx_rate is not None and float(fx_rate) > 0
+    def fx(v):
+        return round(float(v or 0) * float(fx_rate), 2) if fx_active else float(v or 0)
+    currency_suffix = f" ({fx_target} @ {fx_rate})" if fx_active else ""
 
     loc_name = "All locations"
     if location_id:
@@ -74,11 +84,11 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
         return "".join(
             f'<tr><td>{(x.get("_id") or "—")}</td>'
             f'<td style="text-align:right">{x.get("count", 0)}</td>'
-            f'<td style="text-align:right">{x.get("total", 0):,.0f}</td></tr>'
+            f'<td style="text-align:right">{fx(x.get("total", 0)):,.2f}</td></tr>'
             for x in items
         )
 
-    net = summary["net"]
+    net = fx(summary["net"])
     net_color = "#059669" if net >= 0 else "#dc2626"
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -97,6 +107,7 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
   th {{ text-align: left; color: #64748b; font-weight: 500; font-size: 9pt; padding: 4px 6px; border-bottom: 1px solid #e2e8f0; }}
   td {{ padding: 4px 6px; border-bottom: 1px solid #f1f5f9; }}
   .footer {{ margin-top: 30px; font-size: 8pt; color: #94a3b8; text-align: center; }}
+  .fx-note {{ margin-top: 8px; font-size: 9pt; color: #64748b; font-style: italic; }}
 </style></head>
 <body>
   <h1>58:12 Connect · Summary Report</h1>
@@ -104,14 +115,15 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
     Location: <strong>{loc_name}</strong> · Period: <strong>{period}</strong> ·
     Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
   </div>
+  {f'<div class="fx-note">All amounts converted to {fx_target} at rate {fx_rate}.</div>' if fx_active else ''}
 
   <div class="stats">
-    <div class="stat"><div class="label">Total Income</div>
-      <div class="value" style="color:#059669">{summary["total_income"]:,.0f}</div></div>
-    <div class="stat"><div class="label">Total Expenses</div>
-      <div class="value" style="color:#dc2626">{summary["total_expenses"]:,.0f}</div></div>
-    <div class="stat"><div class="label">Net Balance</div>
-      <div class="value" style="color:{net_color}">{net:,.0f}</div></div>
+    <div class="stat"><div class="label">Total Income{currency_suffix}</div>
+      <div class="value" style="color:#059669">{fx(summary["total_income"]):,.2f}</div></div>
+    <div class="stat"><div class="label">Total Expenses{currency_suffix}</div>
+      <div class="value" style="color:#dc2626">{fx(summary["total_expenses"]):,.2f}</div></div>
+    <div class="stat"><div class="label">Net Balance{currency_suffix}</div>
+      <div class="value" style="color:{net_color}">{net:,.2f}</div></div>
   </div>
 
   <div class="stats">
@@ -121,11 +133,11 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
   </div>
 
   <h2>Income breakdown</h2>
-  <table><thead><tr><th>Category</th><th style="text-align:right">Count</th><th style="text-align:right">Total</th></tr></thead>
+  <table><thead><tr><th>Category</th><th style="text-align:right">Count</th><th style="text-align:right">Total{currency_suffix}</th></tr></thead>
   <tbody>{_rows(summary["income_breakdown"])}</tbody></table>
 
   <h2>Expense breakdown</h2>
-  <table><thead><tr><th>Category</th><th style="text-align:right">Count</th><th style="text-align:right">Total</th></tr></thead>
+  <table><thead><tr><th>Category</th><th style="text-align:right">Count</th><th style="text-align:right">Total{currency_suffix}</th></tr></thead>
   <tbody>{_rows(summary["expense_breakdown"])}</tbody></table>
 
   <div class="footer">58:12 Connect — Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d')}</div>

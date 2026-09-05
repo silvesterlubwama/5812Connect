@@ -7,10 +7,12 @@ Multi-tenant CRM for 58:12 Global's Uganda operations. Needs:
 - Kanban tasks, calendar, events with due-task overlay, volunteer/shift
   scheduling — all campus-scoped.
 - Full double-entry Finance & Accounting on a single unified ledger
-  (`finance_journal_entries`), with strict location enforcement, PDF reports,
-  FX conversion, receipt OCR (Tesseract), bank statement import (CSV / PDF),
-  vendors / bills (AP), recurring JEs, bank reconciliation.
-- HR / Payroll wired to auto-post double-entry JEs.
+  (`finance_journal_entries`), with strict location enforcement, PDF reports
+  (with FX conversion), receipt OCR (Tesseract) + reviewer approval queue,
+  bank statement import (CSV / PDF), vendors / bills (AP), recurring JEs,
+  bank reconciliation.
+- HR / Payroll wired to auto-post double-entry JEs, with a payday scheduler
+  that fires draft payslips at 08:00 UTC on each campus's payday.
 - Sales portal, POS, Shipments tracking, consumable resources tracking.
 - NFC badge issuance with HMAC-SHA256 signatures; profile PDF + Wallet passes.
 - Kiosk check-in via phone-last-4, QR, and NFC — with lockdowns on restricted
@@ -18,46 +20,39 @@ Multi-tenant CRM for 58:12 Global's Uganda operations. Needs:
 - Guest Pass / Checkpoint scanning at security perimeters.
 - Social Work case management.
 
-## Current status (as of iter 292)
+## Current status (as of iter 293)
 
 ### DONE
-- Whole finance stack unified onto `finance_journal_entries`.
-- `routers.accounting` deleted; `accounting_shim.py` deleted; bank.py fully
-  migrated to `post_journal_entry` (bills, bill payments, bank reconciliation,
-  recurring JEs, bank-balance aggregation, linked-account validation).
-- HR payroll double-entry integration, restricted-location kiosk lockdown,
-  Guest Pass ↔ checkpoint validation, JE inline editing with reversal chain,
-  Report Table view + CSV/PDF/FX exports, seed COA guarded, locked-period UI.
-- Receipt OCR (Tesseract) end-to-end with mobile camera capture.
+- Unified finance ledger (`finance_journal_entries`) is the single source of
+  truth. `routers.accounting` and `accounting_shim.py` both deleted; bank.py
+  fully migrated (iter 292).
+- **Receipt Review Queue UI** on FinancePage (iter 293).
+- **PDF report FX conversion** via `fx_target` + `fx_rate` query params
+  on `/api/reports/pdf` (iter 293).
+- **Nested sublocation picker** in ReportsPage location dropdown (iter 293).
+- **HR payday scheduler** wired at `server.py:783` (verified iter 293).
+- Restricted-location kiosk lockdown, Guest Pass ↔ checkpoint validation,
+  JE inline editing with reversal chain, Report Table view + CSV/PDF/FX
+  exports, seed COA guarded, locked-period UI, receipt OCR (Tesseract) with
+  mobile camera capture.
 - Unified badge (QR + photo merged), profile PDFs, NFC HMAC signing.
-- Regression pytest `test_iter292_bank_finance_migration.py` passing.
 
-### P0 / P1 remaining
-- **P1 — Receipt Review Queue UI** — backend `/api/finance/receipts/review-queue`
-  + `/approve` exist; needs a panel on `FinancePage.jsx` for reviewers.
-- **P1 — HR auto-payslip cron** — endpoint `/hr/payslips/generate-payday` exists;
-  needs a scheduled hook (`webhook-crond.sh` or internal APScheduler job).
-- **P2 — Verify PDF export templates** consume `fx_target` / `fx_rate` params in
-  `routers/finance/reports.py`.
-- **P2 — Sublocations nested visual in Reports location dropdown**
-  (`ReportsPage.jsx`).
-
-### Backlog
-- Full variant barcode printing UI.
-- Mobile responsiveness audit.
-- `server.py` modularization (1600+ lines).
-- PWA offline / service worker for Wallet passes.
-- Multi-language translation files.
-- Bcrypt version pinning + MongoDB index optimization.
+### Remaining backlog
+- **P2** Full variant barcode printing UI (layout + bulk print).
+- **P2** Mobile responsiveness audit across all pages.
+- **Future** `server.py` modularization (currently ~1614 lines).
+- **Future** PWA offline support + Service Worker for Wallet passes.
+- **Future** Multi-language translation files.
+- **Future** Bcrypt version pinning + MongoDB index optimization pass.
+- **Future** Scheduled overdue-task email digests.
 
 ## Boundary from user
 > "Never suggest Wave H5 SDK again unless I call for it. Do not suggest
 > unrequested enhancements moving forward."
 
-Stick to the P0/P1 items above. No new libraries, no AI features, no
-enhancements the user didn't ask for.
+No Wave H5, no unrequested features. Stick to the backlog above.
 
-## Architecture (finance) — post iter 292
+## Architecture (finance) — post iter 293
 ```
 Client
   │
@@ -65,15 +60,21 @@ Client
 FastAPI (server.py)
   ├─ routers/finance/*  ← unified ledger (finance_journal_entries)
   │      _common.post_journal_entry(...)   ← ONE write path
-  │      reports.py, journal.py, setup.py, transactions.py, receipts.py
-  ├─ routers/bank.py           ← bills, bank recon, recurring → post_journal_entry
+  │      journal.py, setup.py, transactions.py, receipts.py, reports.py
+  ├─ routers/bank.py           ← bills / bank recon / recurring → post_journal_entry
   ├─ routers/hr.py             ← payslips → post_journal_entry
-  └─ routers/financial.py      ← UNMOUNTED. Legacy shim helpers inlined here for
-                                 HR's `repair-payslip-journals` repair endpoint.
+  ├─ routers/reports.py        ← /reports/pdf (with fx_target + fx_rate)
+  └─ routers/financial.py      ← UNMOUNTED. Legacy shim helpers inlined here
+                                 for HR's `repair-payslip-journals` endpoint.
 ```
 
-Legacy `accounting_*` collections still exist for historical data + repair
-endpoints, but no new writes go there.
+Daily scheduler loop (server.py:731+) fires at 08:00 UTC:
+- birthday/anniversary notifications
+- scheduled customer statements
+- overdue payment reminders
+- overdue task emails
+- **payday payslip auto-generation** (`_fire_payday_payslip_generation`)
+- recurring journal entries / bills (`fire_due_recurring_entries`)
 
 ## Credentials
 See `/app/memory/test_credentials.md`.

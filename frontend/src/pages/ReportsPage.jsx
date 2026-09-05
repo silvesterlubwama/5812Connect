@@ -199,7 +199,24 @@ export default function ReportsPage() {
                 <SelectContent>
                   {showAllLocations && <SelectItem value="__all__">All Locations</SelectItem>}
                   {locations.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No locations found</div>}
-                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.parent_id ? ' (sub)' : ''}</SelectItem>)}
+                  {/* iter 293 — visually nest sublocations under their parent. Sort so
+                      each parent is followed by its children; children get a leading
+                      "└" glyph + left padding so the hierarchy is obvious at a glance. */}
+                  {[...locations]
+                    .sort((a, b) => {
+                      const pa = a.parent_id || a.id;
+                      const pb = b.parent_id || b.id;
+                      if (pa !== pb) return String(pa).localeCompare(String(pb));
+                      // Parent (no parent_id) sorts before children of the same group
+                      if (!a.parent_id && b.parent_id) return -1;
+                      if (a.parent_id && !b.parent_id) return 1;
+                      return String(a.name || '').localeCompare(String(b.name || ''));
+                    })
+                    .map(l => (
+                      <SelectItem key={l.id} value={l.id} data-testid={`report-location-option-${l.id}`}>
+                        {l.parent_id ? <span className="pl-4 text-muted-foreground">└ {l.name}</span> : l.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

@@ -1,0 +1,32 @@
+{
+  "summary": "Iter 293 full retest — GREEN. Fix landed on disk this time: ReviewQueuePanel is defined at FinancePage.jsx line 151 (grep count = 2, file wc -l = 1265). UI flow verified end-to-end as admin: /finance loads without ReferenceError, all five tabs (overview/journal/coa/reports + finance-tab-review) switch correctly, Review Queue panel renders with 1 real draft JE (from a prior receipts scan seed). Reclassify → swap account → Save & repost fires PUT /api/finance/journal/{id} → 200 and the queue reloads (row cleared as JE was reversed & reposted). PDF FX, HR payday, sublocation nesting, and finance regression endpoints all pass. Backend pytest suite iter293: 10/10 pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ReportsPage location dropdown", "issues": ["Sublocations render with `└` glyph correctly and are visually indented, but the `pl-4` padding class inspected on the SelectItem root came back false — the indentation appears to be applied to a child span. Cosmetic only; not blocking. E1 spec asked for pl-4 on the SelectItem itself for consistency."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter293_review_queue_fx_pdf.py",
+    "/app/test_reports/pytest/iter293_retest.xml"
+  ],
+  "action_items": [
+    "(Optional / cosmetic) In ReportsPage, add the `pl-4` utility to the SelectItem root for sublocations to fully match the spec — currently indentation is achieved via the `└ ` prefix in the label span, which visually looks correct but the class assertion in tests fails.",
+    "(Housekeeping) FinancePage.jsx is 1265 lines — extract ReviewQueuePanel and its siblings into /pages/finance/panels/ for maintainability."
+  ],
+  "critical_code_review_comments": [
+    "FinancePage.jsx now exceeds 1265 lines. Per file-size guideline, extract each *Panel to its own module (ReviewQueuePanel, ReceiptScanDialog, JournalPanel, etc.) — reduces future risk of the exact bug this iteration chased (missing inline component).",
+    "receipts.py /review-queue filter still {needs_review: True, reversed: {$ne: True}} — consider adding `status: 'draft'` for defensive robustness (carried over from iter 98 review).",
+    "reports.py FX handling: passing only fx_target (without fx_rate) silently returns base-currency output. Consider 400 when exactly one of the pair is provided."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (10/10 pytest)", "frontend": "100% — all requested flows verified"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (worked)",
+  "seed_data_creation": "None new — pre-existing draft JE je_f4e3b38645eb (Receipt: 'ACME SUPPLIES LTD', UGX 7,500) was already in the queue from a prior scan and was consumed by the reclass test (reversed + reposted). The reposted JE also cleared from the queue.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 293 is fully verified. Backend pytest at /app/backend/tests/test_iter293_review_queue_fx_pdf.py stays green (10/10). Only optional cleanup remaining: (1) apply `pl-4` class to SelectItem root in ReportsPage sublocation options if strict spec matching is required, (2) split FinancePage.jsx (1265 lines) into per-panel modules.",
+  "rca of the issue": "N/A — the fix landed on disk this iteration. Iter 99's race with search_replace has been resolved; grep -c ReviewQueuePanel = 2 as claimed. UI runtime confirms no ReferenceError. Verified: (a) PUT /api/finance/journal/je_f4e3b38645eb → 200 during reclass; (b) five Tabs all switch cleanly; (c) 3 sublocations (Entebbe, Jinja, Kampala East) render nested under 58:12 Global (Central) with └ prefix; (d) server.py:783 contains `await _fire_payday_payslip_generation()` inside the 08:00 UTC daily branch."
+}
