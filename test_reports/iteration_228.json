@@ -1,0 +1,35 @@
+{
+  "summary": "Iter 294 testing — director email digest (backend + real DB), single & bulk barcode print (code review + partial UI), mobile finance layout (fully verified end-to-end). Found and fixed a JSX compile error in FinancePage.jsx (missing </div> in CoaPanel overflow wrapper) that was blocking the entire frontend. All 9 backend tests pass including the digest idempotency + scope guards.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "FinancePage.jsx / CoaPanel", "issue": "Missing </div> to close the `overflow-x-auto -mx-4 md:mx-0` wrapper before </CardContent> — broke ALL of frontend with a JSX SyntaxError overlay. FIXED by testing agent.", "selector": "line 987 of FinancePage.jsx", "priority": "CRITICAL (fixed)"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter294_director_digest_and_regression.py",
+    "/app/test_reports/pytest/iter294_results.xml"
+  ],
+  "action_items": [
+    "Seed at least 2 products with variants for a future iteration so that bulk-print end-to-end can be runtime-tested (currently /sales → Products tab shows 'No products added yet.' so bulk-print UI wiring was only source-verified, not clicked live).",
+    "Consider adding a rendered-count-only smoke test for _fire_overdue_task_director_digest in CI so scope regressions surface fast."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew past 1750 lines; _fire_overdue_task_director_digest and its siblings should live in a dedicated tasks_scheduler.py module.",
+    "Overflow-wrapper JSX pattern is duplicated 4× in FinancePage — a small <ScrollableTable> wrapper component would prevent the class of bug we hit at line 987.",
+    "Director digest uses date.today() (server local TZ) but the caller sits in the 08:00 UTC branch — inconsistent. Prefer datetime.now(timezone.utc).date().isoformat() so 'today' matches the scheduler."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/FinancePage.jsx (added missing </div>)",
+    "/app/backend/tests/test_iter294_director_digest_and_regression.py (new)"
+  ],
+  "success_rate": {"backend": "100% (9/9 tests, incl. digest create/idempotent/scope-guard + regression on review-queue, /reports/pdf ±fx, /hr/payslips/generate-payday, /bank/accounts, /finance/journal)", "frontend": "Mobile finance layout verified end-to-end at 390×844 (all 5 tabs reachable, page scrollWidth=390=clientWidth). Bulk/single barcode print UI: source-verified only (no products seeded)."},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (used, working)",
+  "seed_data_creation": "Backend tests seed TEST_ prefixed director + board + tasks in fixtures and clean them up on teardown. `db.task_director_digests` rows also cleaned up per director.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Frontend was broken by a missing </div> in FinancePage.jsx CoaPanel — the fix is in place. If the main agent adds a similar overflow-x-auto wrapper elsewhere, double-check the closing </div> lives before the next </CardContent>. To fully test bulk barcode print, seed ≥2 products with variants (has_variants=true, variants=[{...}]) — the wiring in ProductsPage.jsx (bulkBarcodeProducts state + second <VariantBarcodePrint products={bulkBarcodeProducts}>) and BulkActions.jsx (data-testid='bulk-print-barcodes-btn') is confirmed correct.",
+  "rca of the issue": "SyntaxError in FinancePage.jsx line 987 — while wrapping the Chart-of-Accounts <Table> in <div className='overflow-x-auto -mx-4 md:mx-0'>, the closing </div> was omitted before </CardContent>. Webpack overlay 'Expected corresponding JSX closing tag for <div>' blocked the entire app. Reproduced by loading any route; fixed by inserting </div> between </Table> and </CardContent> (matches the pattern used correctly in OverviewPanel, JournalPanel, ReviewQueuePanel)."
+}

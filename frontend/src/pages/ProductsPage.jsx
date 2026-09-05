@@ -90,6 +90,7 @@ export default function ProductsPage() {
   const [importingData, setImportingData] = useState(false);
   // Variant barcode printing
   const [barcodePrintProduct, setBarcodePrintProduct] = useState(null);
+  const [bulkBarcodeProducts, setBulkBarcodeProducts] = useState(null);
   // Customer profile drawer (receipt history)
   const [customerProfile, setCustomerProfile] = useState(null);
   // Variant picker (when clicking a product with variants on POS)
@@ -813,7 +814,7 @@ export default function ProductsPage() {
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">{[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />)}</div>
                 ) : (
                   <div>
-                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!await confirm({ title: `Delete ${selectedIds.size} products?`, message: 'This cannot be undone.', destructive: true, confirmLabel: 'Delete all' })) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch { /* ignore individual failures */ } } setSelectedIds(new Set()); fetchAll(); toast.success('Deleted'); }} /></div>}
+                    {selectedIds.size > 0 && <div className="mb-3"><BulkActionBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} onBulkPrintBarcodes={() => setBulkBarcodeProducts(filteredProducts.filter(p => selectedIds.has(p.id) && p.has_variants && (p.variants || []).length > 0))} onBulkExport={() => { exportToCSV(filteredProducts.filter(p => selectedIds.has(p.id)), 'products-export.csv'); }} onBulkDelete={async () => { if (!await confirm({ title: `Delete ${selectedIds.size} products?`, message: 'This cannot be undone.', destructive: true, confirmLabel: 'Delete all' })) return; for (const id of selectedIds) { try { await productsApi.delete(id); } catch { /* ignore individual failures */ } } setSelectedIds(new Set()); fetchAll(); toast.success('Deleted'); }} /></div>}
                   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
                     {filteredProducts.map(p => (
                       <div key={p.id} className={`relative ${selectedIds.has(p.id) ? 'ring-2 ring-primary/40 rounded-xl' : ''}`}>
@@ -1571,7 +1572,7 @@ export default function ProductsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Variant Barcode Print Dialog */}
+      {/* Variant Barcode Print Dialog (single product) */}
       <VariantBarcodePrint
         open={!!barcodePrintProduct}
         onOpenChange={(open) => { if (!open) setBarcodePrintProduct(null); }}
@@ -1588,6 +1589,14 @@ export default function ProductsPage() {
             if (fresh) setBarcodePrintProduct(fresh);
           } catch { /* ignore */ }
         }}
+      />
+
+      {/* Bulk Barcode Print Dialog — every variant across selected products */}
+      <VariantBarcodePrint
+        open={!!bulkBarcodeProducts && bulkBarcodeProducts.length > 0}
+        onOpenChange={(open) => { if (!open) setBulkBarcodeProducts(null); }}
+        products={bulkBarcodeProducts || []}
+        currency={bulkBarcodeProducts?.[0]?.currency || 'UGX'}
       />
 
       {/* POS Barcode Scan Dialog */}

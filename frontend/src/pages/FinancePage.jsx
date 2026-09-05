@@ -48,12 +48,14 @@ export default function FinancePage() {
       </header>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="grid grid-cols-5 max-w-3xl">
-          <TabsTrigger value="overview" data-testid="finance-tab-overview">Overview</TabsTrigger>
-          <TabsTrigger value="journal" data-testid="finance-tab-journal">Journal</TabsTrigger>
-          <TabsTrigger value="review" data-testid="finance-tab-review">Review Queue</TabsTrigger>
-          <TabsTrigger value="coa" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
-          <TabsTrigger value="reports" data-testid="finance-tab-reports">Reports</TabsTrigger>
+        {/* Mobile-safe tab strip — on <md the tabs scroll horizontally instead
+            of cramming into a 5-col grid (which caused label overlap at 390px). */}
+        <TabsList className="w-full flex overflow-x-auto no-scrollbar md:grid md:grid-cols-5 md:max-w-3xl">
+          <TabsTrigger value="overview" className="flex-shrink-0" data-testid="finance-tab-overview">Overview</TabsTrigger>
+          <TabsTrigger value="journal" className="flex-shrink-0" data-testid="finance-tab-journal">Journal</TabsTrigger>
+          <TabsTrigger value="review" className="flex-shrink-0" data-testid="finance-tab-review">Review Queue</TabsTrigger>
+          <TabsTrigger value="coa" className="flex-shrink-0" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
+          <TabsTrigger value="reports" className="flex-shrink-0" data-testid="finance-tab-reports">Reports</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewPanel /></TabsContent>
         <TabsContent value="journal"><JournalPanel /></TabsContent>
@@ -115,6 +117,7 @@ function OverviewPanel() {
         <CardHeader><CardTitle className="text-base">Recent activity</CardTitle></CardHeader>
         <CardContent>
           {recent.length === 0 ? <p className="text-sm text-muted-foreground">No entries yet — post an income or expense to get going.</p> : (
+            <div className="overflow-x-auto -mx-4 md:mx-0">
             <Table>
               <TableHeader><TableRow>
                 <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Account</TableHead>
@@ -132,6 +135,7 @@ function OverviewPanel() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -210,6 +214,7 @@ function ReviewQueuePanel() {
             No receipts waiting for review — the queue is clear.
           </p>
         ) : (
+          <div className="overflow-x-auto -mx-4 md:mx-0">
           <Table>
             <TableHeader><TableRow>
               <TableHead>Date</TableHead>
@@ -278,6 +283,7 @@ function ReviewQueuePanel() {
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -711,6 +717,7 @@ function JournalPanel() {
       </CardHeader>
       <CardContent>
         {filteredEntries.length === 0 ? <p className="text-sm text-muted-foreground">No journal entries match.</p> : (
+          <div className="overflow-x-auto -mx-4 md:mx-0">
           <Table>
             <TableHeader><TableRow>
               <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Source</TableHead>
@@ -753,6 +760,7 @@ function JournalPanel() {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
       <Dialog open={!!editing} onOpenChange={o => !o && setEditing(null)}>
@@ -935,6 +943,7 @@ function CoaPanel() {
         <Button size="sm" onClick={() => setAddOpen(true)} data-testid="coa-add"><Plus size={14} className="mr-1" />Add account</Button>
       </CardHeader>
       <CardContent>
+        <div className="overflow-x-auto -mx-4 md:mx-0">
         <Table>
           <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Bank subtype</TableHead><TableHead className="text-right">Balance</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
           <TableBody>
@@ -975,6 +984,7 @@ function CoaPanel() {
             })}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
 
       {/* Add */}

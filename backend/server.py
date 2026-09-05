@@ -780,6 +780,7 @@ async def _run_due_date_reminder_scheduler():
                 await _fire_scheduled_customer_statements()
                 await _fire_overdue_payment_reminders()
                 await _fire_overdue_task_emails()
+                await _fire_overdue_task_director_digest()
                 await _fire_payday_payslip_generation()
                 # Phase A: recurring journal entries / bills
                 try:
@@ -986,6 +987,145 @@ async def _fire_overdue_task_emails():
             logger.info(f"Sent {sent_count} overdue-task emails")
     except Exception as e:
         logger.error(f"Overdue task email scheduler error: {e}")
+
+
+async def _fire_overdue_task_director_digest():
+    """Daily 08:00 UTC: send each director a SINGLE morning digest email listing
+    every overdue task in their scope. Complements `_fire_overdue_task_emails`
+    (which targets individual assignees). Idempotent — one row in
+    `task_director_digests` per (director, date) means the same director never
+    gets two digests in one day even if the scheduler ticks twice.
+
+    Scope rules:
+      - admin / system_admin / Executive Director / Adviser → all campuses
+      - Director / Regional Director → user.location_ids ∪ user.active_campus_id
+    Task→location resolves via `task.location_id` when present, else falls back
+    to the parent board's location_id.
+    """
+    try:
+        from datetime import date
+        from email_helpers import send_notification_email
+        today_iso = date.today().isoformat()
+        overdue = await db.tasks.find({
+            "due_date": {"$lt": today_iso, "$ne": ""},
+            "is_archived": {"$ne": True},
+            "status": {"$ne": "done"},
+            "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
+        }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
+             "location_id": 1, "board_id": 1}).to_list(2000)
+        if not overdue:
+            return
+
+        # Preload assignee names + board→location fallbacks in one pass
+        assignee_ids = set()
+        board_ids = set()
+        for t in overdue:
+            for uid in (t.get("assignees") or []):
+                assignee_ids.add(uid)
+            if t.get("assignee"):
+                assignee_ids.add(t["assignee"])
+            if t.get("board_id"):
+                board_ids.add(t["board_id"])
+        assignee_names = {}
+        if assignee_ids:
+            async for u in db.users.find({"id": {"$in": list(assignee_ids)}},
+                                          {"_id": 0, "id": 1, "name": 1}):
+                assignee_names[u["id"]] = u.get("name", "")
+        board_locs = {}
+        if board_ids:
+            async for b in db.boards.find({"id": {"$in": list(board_ids)}},
+                                           {"_id": 0, "id": 1, "location_id": 1}):
+                if b.get("location_id"):
+                    board_locs[b["id"]] = b["location_id"]
+
+        # Every director+ role receives the digest
+        director_roles = ["director", "Director", "Executive Director", "Adviser",
+                          "Regional Director", "admin", "system_admin"]
+        global_roles = {"admin", "system_admin", "Executive Director", "Adviser"}
+        directors = await db.users.find({
+            "role": {"$in": director_roles},
+            "status": {"$ne": "deleted"},
+            "email": {"$exists": True, "$ne": ""},
+        }, {"_id": 0, "id": 1, "email": 1, "name": 1, "role": 1,
+             "location_ids": 1, "active_campus_id": 1}).to_list(500)
+
+        sent = 0
+        for d in directors:
+            already = await db.task_director_digests.find_one({"user_id": d["id"], "date": today_iso})
+            if already:
+                continue
+            if d.get("role") in global_roles:
+                scope_ids = None  # everything
+            else:
+                scope_ids = set(d.get("location_ids") or [])
+                if d.get("active_campus_id"):
+                    scope_ids.add(d["active_campus_id"])
+                if not scope_ids:
+                    continue
+            mine = []
+            for t in overdue:
+                loc = t.get("location_id") or board_locs.get(t.get("board_id"))
+                if scope_ids is None or (loc and loc in scope_ids):
+                    mine.append(t)
+            if not mine:
+                continue
+
+            def _row(t):
+                days_late = (date.today() - date.fromisoformat(t["due_date"])).days
+                title = (t.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
+                asgn_ids = list(t.get("assignees") or [])
+                if t.get("assignee") and t["assignee"] not in asgn_ids:
+                    asgn_ids.append(t["assignee"])
+                asgn_str = ", ".join(assignee_names.get(u, u[:8]) for u in asgn_ids) or "—"
+                return (
+                    "<tr>"
+                    f"<td style='padding:6px 8px;border-bottom:1px solid #eee'>{title}</td>"
+                    f"<td style='padding:6px 8px;border-bottom:1px solid #eee;color:#dc2626;font-weight:600'>{days_late}d</td>"
+                    f"<td style='padding:6px 8px;border-bottom:1px solid #eee;font-family:monospace;font-size:11px'>{t['due_date']}</td>"
+                    f"<td style='padding:6px 8px;border-bottom:1px solid #eee'>{asgn_str}</td>"
+                    "</tr>"
+                )
+            rows_html = "".join(_row(t) for t in mine[:200])
+            first_name = ((d.get("name") or "").split()[0] if d.get("name") else "") or "there"
+            body = (
+                f"<p>Hi {first_name},</p>"
+                f"<p>Here is your morning digest of <strong>{len(mine)} overdue task(s)</strong> in your scope.</p>"
+                "<table style='border-collapse:collapse;width:100%;font-size:13px'>"
+                "<thead><tr style='background:#f8fafc;text-align:left'>"
+                "<th style='padding:6px 8px'>Task</th>"
+                "<th style='padding:6px 8px'>Late</th>"
+                "<th style='padding:6px 8px'>Due</th>"
+                "<th style='padding:6px 8px'>Assignee(s)</th>"
+                f"</tr></thead><tbody>{rows_html}</tbody></table>"
+                "<p style='margin-top:12px;color:#64748b;font-size:12px'>"
+                "Log in to review, reassign, or push these dates."
+                "</p>"
+            )
+            send_ok = False
+            try:
+                send_ok = await send_notification_email(
+                    d["email"],
+                    f"Morning digest — {len(mine)} overdue task(s) at your campus",
+                    body,
+                )
+                if send_ok:
+                    sent += 1
+            except Exception as e:
+                logger.warning(f"director digest to {d.get('email')}: {e}")
+            try:
+                await db.task_director_digests.insert_one({
+                    "id": f"tdd_{uuid.uuid4().hex[:8]}",
+                    "user_id": d["id"], "email": d["email"], "date": today_iso,
+                    "task_count": len(mine),
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "delivered": send_ok,
+                })
+            except Exception:
+                pass
+        if sent:
+            logger.info(f"Sent overdue-task digest to {sent} director(s)")
+    except Exception as e:
+        logger.error(f"Director digest scheduler error: {e}")
 
 
 async def _fire_payday_payslip_generation():

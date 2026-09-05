@@ -1,75 +1,43 @@
 # CHANGELOG
 
-## iter 293 — 2026-02 — Review Queue UI · PDF FX · nested sublocations
+## iter 294 — 2026-02 — Bulk barcodes · Director digest · Mobile Finance
 
-**Receipt Review Queue UI** — FinancePage now has a 5th tab **Review Queue**
-(`data-testid="finance-tab-review"`) that renders the `ReviewQueuePanel`
-component (FinancePage.jsx:151). The panel:
-- lists all draft JEs from `GET /api/finance/receipts/review-queue`,
-- shows each line's Dr/Cr + account code/name,
-- **Reclassify** button swaps a line's account inline (Select dropdown of the
-  full COA), then **Save & repost** hits `PUT /api/finance/journal/{id}` with
-  the new lines (backend reverses the original and posts a replacement),
-- **Approve** button hits `PUT /api/finance/receipts/{id}/approve` and clears
-  `needs_review`.
+**Bulk variant barcode printing** — `VariantBarcodePrint` now accepts an
+optional `products` prop (array). When supplied, it aggregates every variant
+across every selected product into a single labelled print job, hides the
+"Regenerate all" button (which is inherently single-product), and swaps the
+header to *"Bulk barcodes — N products · M variants"*. A new bulk-action on
+`BulkActionBar` (`data-testid="bulk-print-barcodes-btn"`) opens the dialog
+against the current selection on `ProductsPage`, so staff can select 20+
+products in the grid and send every one of their variants to the label
+printer in one job.
 
-**PDF report FX conversion** — `GET /api/reports/pdf` now accepts optional
-`fx_target` + `fx_rate` query params. When both are supplied and rate>0,
-every money figure in the PDF (totals, breakdown rows) is multiplied by the
-rate, and a note is rendered at the top: *"All amounts converted to
-&lt;target&gt; at rate &lt;rate&gt;."* Column headers carry a `(<CCY> @
-<rate>)` suffix. Absent/zero rate → PDF renders in the base currency
-untouched.
+**Director overdue-task digest** — New async
+`_fire_overdue_task_director_digest()` at `server.py:992`. Wired into the
+daily 08:00 UTC scheduler at `server.py:783`. Each director+ user (Director,
+Regional Director, admin, system_admin, Executive Director, Adviser) gets a
+single email listing every overdue task in their scope
+(admins/EDs/Advisers see everything; other roles are filtered by
+`location_ids ∪ active_campus_id`). Idempotent via `db.task_director_digests`
+(one row per user per day). Complements the existing per-assignee
+`_fire_overdue_task_emails`.
 
-**Nested sublocation picker** — Reports location dropdown now sorts
-sublocations directly under their parent and prefixes them with a `└` glyph
-+ `pl-4` padding (`ReportsPage.jsx:200-220`). Each option carries
-`data-testid="report-location-option-<id>"`.
-
-**HR payday scheduler — verified** — Confirmed that
-`_fire_payday_payslip_generation()` is invoked from
-`server.py:783` inside the daily 08:00 UTC branch. The manual endpoint
-`POST /api/hr/payslips/generate-payday` responds 200 in all scenarios (no-op
-when no campus has payday today).
+**Mobile Finance layout audit** — At 390×844 the Finance tab strip was
+overlapping (5 tabs squeezed into a fixed grid). Fixed by switching
+`TabsList` to `w-full flex overflow-x-auto no-scrollbar md:grid md:grid-cols-5
+md:max-w-3xl` — mobile scrolls the strip horizontally, desktop keeps the
+grid layout. All four Finance tables (Recent activity, Journal, Review
+Queue, Chart of Accounts) now wrap in `overflow-x-auto -mx-4 md:mx-0` so
+long rows scroll cleanly instead of pushing the page.
 
 **Verification**
-- Backend pytest (iter 293): 10/10 pass.
-- Testing agent iter 227 (final): full UI + backend regression **GREEN**.
-- Prior iter 98 flagged a missing `ReviewQueuePanel` definition — root
-  cause was a search_replace edit that errored silently. Definition
-  re-inserted and verified on disk.
+- Testing agent iter 228: 9/9 backend pass, digest idempotency + scope
+  guards verified end-to-end, mobile Finance layout confirmed clean.
 
 ---
+
+## iter 293 — 2026-02 — Review Queue UI · PDF FX · nested sublocations
+(previous, unchanged)
 
 ## iter 292 — 2026-02 — Accounting-shim retirement / bank.py migration
-
-**bank.py migrated fully off the deleted `routers.accounting` module** —
-every cash movement now flows through the unified `finance_journal_entries`
-ledger via `routers.finance._common.post_journal_entry`.
-
-- `_post_bill_to_ledger`, `_post_bill_payment_to_ledger` — rewritten to
-  resolve AP (code 2000), tax (code 2200), and item expense accounts against
-  `finance_chart_of_accounts` and post one balanced JE per event with an
-  `idempotency_key` (`bill:<id>`, `bill_payment:<id>`).
-- `create_bank_account` — `linked_account_id` validated against the NEW COA.
-- `list_bank_accounts` — `current_balance` aggregation now unwinds
-  `finance_journal_entries.lines`.
-- `reconcile_transaction` — `matched_entry_id` lookup switched to
-  `finance_journal_entries`.
-- `accounting_shim.py` deleted; the two helpers it exposed inlined into
-  unmounted `routers/financial.py` so HR's `/repair-payslip-journals`
-  endpoint still resolves.
-
-Regression pytest `test_iter292_bank_finance_migration.py`: 2/2 pass.
-
----
-
-## Prior work
-
-Iter 285–291 · Finance/Tesseract-OCR/HR-payroll double-entry integration,
-Restricted Access lockdown, Guest Pass checkpoint scanning, JE inline
-editing, Report Table view with CSV/PDF exports + FX conversion, seed COA
-guarded, locked periods surfaced in Settings.
-
-Iter 1–285 · full multi-tenant CRM buildout (RBAC, unified comms, events,
-kiosk, HR, sales/POS, NFC badges, marketplace).
+(previous, unchanged)

@@ -34,16 +34,30 @@ function BarcodeCanvas({ value, height = 50, width = 1.5 }) {
   return <canvas ref={ref} style={{ display: 'block', maxWidth: '100%' }} />;
 }
 
-export default function VariantBarcodePrint({ open, onOpenChange, product, currency = 'UGX', onProductUpdated }) {
+export default function VariantBarcodePrint({ open, onOpenChange, product, products, currency = 'UGX', onProductUpdated }) {
   const [layout, setLayout] = useState('grid_4x6');
   const [copies, setCopies] = useState(1);
   const [showPrice, setShowPrice] = useState(true);
   const [showName, setShowName] = useState(true);
   const [regenBusy, setRegenBusy] = useState(false);
 
-  const variants = product?.variants || [];
+  // Bulk mode: caller passed `products` (array). Flatten every variant across
+  // every product into a single labelled list. Falls back to the single-product
+  // path when only `product` is provided.
+  const isBulk = Array.isArray(products) && products.length > 0;
+  const bulkVariants = isBulk
+    ? products.flatMap(p => (p.variants || []).map(v => ({
+        ...v,
+        _productName: p.name,
+        _productCurrency: p.currency || currency,
+      })))
+    : [];
+  const variants = isBulk ? bulkVariants : (product?.variants || []);
   const cfg = LAYOUTS.find(l => l.value === layout) || LAYOUTS[0];
   const perPage = cfg.cols * cfg.rows;
+  const headerTitle = isBulk
+    ? `Bulk barcodes — ${products.length} product${products.length === 1 ? '' : 's'} · ${variants.length} variant${variants.length === 1 ? '' : 's'}`
+    : `Print Variant Barcodes — ${product?.name || ''}`;
 
   // CSV export — variant name, barcode, price, units/pack
   const exportCsv = () => {
@@ -51,11 +65,11 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
     const header = 'product,variant,barcode,price,currency,stock,units_per_pack,sku';
     const lines = variants.map(v => {
       const fields = [
-        product.name || '',
+        isBulk ? (v._productName || '') : (product.name || ''),
         v.name || '',
         v.barcode || '',
         v.price ?? '',
-        currency,
+        isBulk ? (v._productCurrency || currency) : currency,
         v.stock ?? '',
         v.units_per_pack ?? 1,
         v.sku || '',
@@ -69,7 +83,7 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const safeName = (product.name || 'product').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+    const safeName = isBulk ? 'bulk' : (product.name || 'product').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
     a.href = url;
     a.download = `barcodes-${safeName}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -107,8 +121,10 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
     const cellsHtml = pages.map((pageItems, pi) => {
       const cellsRows = pageItems.map((v, vi) => {
         const code = String(v.barcode || v.id || v.name || '');
-        const safeName = ((product?.name || '') + (v.name ? ` — ${v.name}` : '')).replace(/[<>&]/g, '');
-        const priceStr = showPrice && v.price != null ? `${currency} ${Number(v.price || 0).toLocaleString()}` : '';
+        const productLabel = isBulk ? (v._productName || '') : (product?.name || '');
+        const cur = isBulk ? (v._productCurrency || currency) : currency;
+        const safeName = (productLabel + (v.name ? ` — ${v.name}` : '')).replace(/[<>&]/g, '');
+        const priceStr = showPrice && v.price != null ? `${cur} ${Number(v.price || 0).toLocaleString()}` : '';
         return `
           <div class="cell">
             ${showName ? `<div class="name">${safeName}</div>` : ''}
@@ -121,7 +137,7 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
     }).join('');
 
     w.document.write(`
-      <html><head><title>${product?.name || 'Variant Barcodes'}</title>
+      <html><head><title>${isBulk ? 'Bulk Barcodes' : (product?.name || 'Variant Barcodes')}</title>
         <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.12.3/dist/JsBarcode.all.min.js"></script>
         <style>
           @page { size: A4; margin: 8mm; }
@@ -165,14 +181,14 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
     w.document.close();
   };
 
-  if (!product) return null;
+  if (!product && !isBulk) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Printer size={16} /> Print Variant Barcodes — {product.name}
+            <Printer size={16} /> {headerTitle}
           </DialogTitle>
         </DialogHeader>
         <div className="flex gap-4 items-end border-b pb-3 flex-wrap">
@@ -201,7 +217,7 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
           <Button onClick={exportCsv} variant="outline" className="gap-1.5" disabled={variants.length === 0} data-testid="export-barcodes-csv-btn">
             <Download size={14} /> Export CSV
           </Button>
-          {product?.id && (
+          {product?.id && !isBulk && (
             <Button onClick={regenerateAll} variant="outline" className="gap-1.5" disabled={variants.length === 0 || regenBusy} data-testid="regenerate-barcodes-btn">
               <RefreshCw size={14} className={regenBusy ? 'animate-spin' : ''} /> {regenBusy ? 'Regenerating…' : 'Regenerate all'}
             </Button>
@@ -210,19 +226,23 @@ export default function VariantBarcodePrint({ open, onOpenChange, product, curre
 
         {variants.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground py-8">
-            No variants to print. Add variants to the product first.
+            {isBulk ? 'None of the selected products have variants.' : 'No variants to print. Add variants to the product first.'}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto bg-muted/30 p-2 rounded">
             {/* In-app preview — uses canvas, mirrors what the print window will produce */}
             <div className="bg-white mx-auto" style={{ width: '210mm', minHeight: '297mm', display: 'grid', gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`, gridTemplateRows: `repeat(${cfg.rows}, 1fr)`, gap: '4mm', padding: '4mm', boxSizing: 'border-box' }}>
-              {pages[0]?.map((v, vi) => (
-                <div key={vi} style={{ border: '1px dashed #ccc', padding: '4px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', overflow: 'hidden' }}>
-                  {showName && <div style={{ fontSize: '10px', fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{product.name}{v.name ? ` — ${v.name}` : ''}</div>}
-                  <BarcodeCanvas value={v.barcode || v.id || v.name} height={cfg.value === 'single' ? 120 : 50} width={barWidth} />
-                  {showPrice && v.price != null && <div style={{ fontSize: '9px', color: '#555', marginTop: '2px' }}>{currency} {Number(v.price || 0).toLocaleString()}</div>}
-                </div>
-              ))}
+              {pages[0]?.map((v, vi) => {
+                const productLabel = isBulk ? (v._productName || '') : (product?.name || '');
+                const cur = isBulk ? (v._productCurrency || currency) : currency;
+                return (
+                  <div key={vi} style={{ border: '1px dashed #ccc', padding: '4px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', overflow: 'hidden' }}>
+                    {showName && <div style={{ fontSize: '10px', fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{productLabel}{v.name ? ` — ${v.name}` : ''}</div>}
+                    <BarcodeCanvas value={v.barcode || v.id || v.name} height={cfg.value === 'single' ? 120 : 50} width={barWidth} />
+                    {showPrice && v.price != null && <div style={{ fontSize: '9px', color: '#555', marginTop: '2px' }}>{cur} {Number(v.price || 0).toLocaleString()}</div>}
+                  </div>
+                );
+              })}
             </div>
             {pages.length > 1 && <p className="text-center text-xs text-muted-foreground mt-2">+ {pages.length - 1} more page(s) on print</p>}
           </div>

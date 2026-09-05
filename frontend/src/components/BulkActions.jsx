@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Trash2, Edit2, Download, Archive } from 'lucide-react';
+import { X, Trash2, Edit2, Download, Archive, Printer } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 
@@ -11,17 +11,23 @@ import { Badge } from './ui/badge';
  * @param {Function} onBulkDelete - Delete selected items
  * @param {Function} onBulkExport - Export selected as CSV
  * @param {Function} onBulkArchive - Archive selected (optional)
+ * @param {Function} onBulkPrintBarcodes - Bulk-print variant barcodes (optional)
  * @param {number} totalCount - Total items in list (for "select all" context)
  */
-export function BulkActionBar({ selectedIds, onClear, onBulkEdit, onBulkDelete, onBulkExport, onBulkArchive, totalCount }) {
+export function BulkActionBar({ selectedIds, onClear, onBulkEdit, onBulkDelete, onBulkExport, onBulkArchive, onBulkPrintBarcodes, totalCount }) {
   if (!selectedIds || selectedIds.size === 0) return null;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-lg" data-testid="bulk-action-bar">
+    <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-lg flex-wrap" data-testid="bulk-action-bar">
       <Badge className="text-xs">{selectedIds.size} selected</Badge>
       {onBulkEdit && (
         <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={onBulkEdit} data-testid="bulk-edit-btn">
           <Edit2 size={12} /> Edit
+        </Button>
+      )}
+      {onBulkPrintBarcodes && (
+        <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={onBulkPrintBarcodes} data-testid="bulk-print-barcodes-btn">
+          <Printer size={12} /> Print barcodes
         </Button>
       )}
       {onBulkExport && (
