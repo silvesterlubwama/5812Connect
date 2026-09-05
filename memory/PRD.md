@@ -67,6 +67,15 @@ social work, sales/POS/shipments, and self-service user portal.
   Integrations, Branding — so scrolling through unrelated cards is a
   thing of the past.
 
+### iter 308 additions
+- Staff badge fixed: QR moved to the right column, rendered big and
+  scannable (148 × 148 desktop), and now embeds the person's photo
+  as the centre logo via `react-qrcode-logo`. Both QR pixels and the
+  photo live on the same canvas, so every export throw (screen, PNG
+  download, `window.print()`, kiosk PDF) captures both cleanly.
+  Aligns `UnifiedBadge.jsx` with the already-correct
+  `PrintableBadges.jsx` and `WalletBadgePage.jsx`.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

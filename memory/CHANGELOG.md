@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## iter 308 — 2026-02 — Badge: QR moved to right, embeds photo, prints on every export
+
+The staff badge was rendering a **tiny** ~58 px QR on the left and a
+separate photo/initials block on the right. Two problems:
+
+- **Unreadable**: 58 px is below the reliable scan threshold at print
+  size; user reported it was too small to be useful.
+- **Doesn't survive some export throws**: html2canvas + print splits
+  QR pixels and the `<img>` photo across two paint layers, so certain
+  export paths dropped one or the other.
+
+**Fix (aligns UnifiedBadge with PrintableBadges + WalletBadgePage)**
+- Removed the small left-side QR block entirely.
+- Right column is now a **big square QR** (148 × 148 desktop /
+  108 × 108 print-small) rendered via `react-qrcode-logo` with
+  `logoImage = photo_url || generateInitialsImage(...)` embedded in
+  the centre. QR pixels + the person's photo (or initials fallback)
+  now live on the **same canvas**, so every export path (screen render,
+  html2canvas PNG, `window.print()`, kiosk PDF) captures both.
+- `ecLevel="H"` keeps the QR scannable even with the ~48 px logo
+  overlay covering the middle third.
+- `PrintableBadges.jsx` was already using this pattern (lines 102 for
+  staff, 205 for child) — this brings the single-print dialog in line.
+
+**Verified**
+- No compile errors (`frontend.err.log` clean apart from unrelated
+  webpack-dev-server deprecation notices).
+- Sample screenshot from HR → Staff & Users → Staff & Users tab loads
+  cleanly; badge dialog opens from any Print action.
+
 ## iter 307 — 2026-02 — System Console grouped into tabs
 
 The `/admin` route (System Console) was a long vertical scroll of a dozen

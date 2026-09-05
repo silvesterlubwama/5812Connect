@@ -335,8 +335,13 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                the photo bottom. Any leftover space at the bottom of the badge
                (footer area) is untouched — the QR never dips into it. */}
           <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1, alignItems: 'flex-start' }}>
-            {/* Left column — info top-aligned to photo top, QR bottom-aligned to photo bottom */}
-            <div style={{ flex: 1, minWidth: 0, height: isSmall ? '108px' : '148px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            {/* Left column — info fills the full fixed height.
+                iter308 — the QR moved into the right column and now
+                embeds the photo as its centre logo (via react-qrcode-logo).
+                That kills the previous "tiny QR + separate photo" split
+                where the QR was unreadable and neither survived some
+                html2canvas exports cleanly. */}
+            <div style={{ flex: 1, minWidth: 0, height: isSmall ? '108px' : '148px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: firstNameSize, fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
                 {lastName && <div style={{ fontSize: lastNameSize, fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
@@ -371,36 +376,16 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 ))}
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
-              {/* QR bottom-aligned to photo bottom. `flex-end` on the parent's
-                  justify-content puts this row at the bottom of the fixed-height
-                  column, so the QR's bottom edge sits flush with the photo's
-                  bottom edge (no more drift into the footer strip). */}
-              <div style={{
-                alignSelf: 'flex-start',
-                borderRadius: '6px',
-                background: kioskMode ? '#fff' : `${colors.accent}0f`,
-                padding: '4px',
-                width: isSmall ? '54px' : '68px',
-                height: isSmall ? '54px' : '68px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxSizing: 'border-box',
-              }}>
-                <QRCodeLogo
-                  value={qrData}
-                  size={isSmall ? 44 : 58}
-                  bgColor="transparent"
-                  fgColor={qrFg}
-                  ecLevel="H"
-                  qrStyle="dots"
-                />
-              </div>
             </div>
-            {/* Right column — photo (same fixed height as left column) */}
+            {/* Right column — big readable QR that embeds the person's
+                photo (or initials fallback) as its centre logo. Uses the
+                same react-qrcode-logo we already use on the Wallet badge
+                page, so the entire card exports cleanly via html2canvas
+                (QR pixels and photo live on the same canvas rather than
+                being split across a QR + separate <img>). */}
             <div style={{
               flexShrink: 0,
-              width: isSmall ? '72px' : '96px',
+              width: isSmall ? '108px' : '148px',
               height: isSmall ? '108px' : '148px',
               borderRadius: '10px',
               overflow: 'hidden',
@@ -410,13 +395,22 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              padding: '4px',
+              boxSizing: 'border-box',
             }}>
-              <img
-                src={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220)}
-                alt={person.name || 'photo'}
-                crossOrigin="anonymous"
-                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                onError={(e) => { e.currentTarget.src = generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220); }}
+              <QRCodeLogo
+                value={qrData}
+                size={isSmall ? 96 : 136}
+                bgColor="#ffffff"
+                fgColor="#0f172a"
+                ecLevel="H"
+                qrStyle="dots"
+                logoImage={person.photo_url || generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220)}
+                logoWidth={isSmall ? 34 : 48}
+                logoHeight={isSmall ? 34 : 48}
+                logoPadding={3}
+                logoPaddingStyle="circle"
+                removeQrCodeBehindLogo={true}
               />
             </div>
           </div>
