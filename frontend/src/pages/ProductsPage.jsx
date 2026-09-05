@@ -776,7 +776,7 @@ export default function ProductsPage() {
 
       <Tabs value={isPosKiosk ? 'pos' : activeTab} onValueChange={setActiveTab}>
         {!isPosKiosk && (
-          <TabsList>
+          <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto">
             <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
             <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
             <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>

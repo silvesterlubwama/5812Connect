@@ -460,7 +460,7 @@ export default function UnifiedPeoplePage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList data-testid="people-tabs">
+        <TabsList data-testid="people-tabs" className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto">
           <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>

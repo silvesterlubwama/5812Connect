@@ -1,0 +1,33 @@
+{
+  "summary": "Iter 295 verified end-to-end. Backend: 11/11 pytest cases pass for GET /api/tasks/director-digest-preview covering admin eligible+global, non-director ineligible, campus scoping (director w/ location_ids=['loc_002'] sees only loc_002 task while admin sees all 3), days-late DESC sort (5d>3d>1d), and regression sanity on /api/tasks, /api/finance/receipts/review-queue, /api/reports/pdf, /api/hr/payslips/generate-payday, /api/bank/accounts, /api/finance/journal. Frontend @ 390x844: DirectorDigestWidget renders on /dashboard with data-testid, count badge, view-all button, and correct 08:00 UTC copy. TabsList on /members (scrollW 376 > clientW 318, 3 tabs), /hr (716>318, 10 tabs, +md:flex-wrap preserved), /sales (412>334, 5 tabs) all have overflow-x-auto no-scrollbar with md:inline-flex escape hatch — horizontal scrolling works, no overlap.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter295_director_digest_preview.py",
+    "/app/test_reports/pytest/iter295_results.xml"
+  ],
+  "action_items": [
+    "A stale overdue task titled 'iter295 digest test task' is still in the DB from prior verification (agent note claimed cleanup but dashboard shows it in the digest count=1). Not blocking, but should be removed to keep admin dashboard clean.",
+    "The LiveCheckpointWidget was not present in DOM during the 390x844 dashboard load (likely conditional on active checkpoint) — order between LiveCheckpointWidget and DirectorDigestWidget was source-verified in DashboardPage.jsx lines 376 vs 381 (digest is after live checkpoint) but not runtime-verified because live-checkpoint rendered null in the test env."
+  ],
+  "critical_code_review_comments": [
+    "routers/tasks.py `director_digest_preview` uses `date.today()` (server local TZ) — same inconsistency called out in iter294 review. For alignment with the 08:00 UTC scheduler use `datetime.now(timezone.utc).date().isoformat()`.",
+    "DIRECTOR_ROLES / GLOBAL_ROLES sets are duplicated inline in routers/tasks.py and (implicitly) in server.py scheduler — extract to a single module (e.g. `roles.py`) to avoid drift.",
+    "DirectorDigestWidget polls only on mount — consider a 5-min refresh interval or WS invalidation so directors see new overdue tasks without a full reload.",
+    "backend/routers/tasks.py now 727 lines; the digest preview + task_director_digests concerns could move to a `routers/tasks_scheduler.py` module.",
+    "TabsList overflow pattern is now duplicated across UnifiedPeoplePage, HRPage, ProductsPage — same class string. Consider a small `<ScrollableTabsList>` wrapper to DRY and prevent regressions in future pages."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter295_director_digest_preview.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% for widget + 3 mobile tab pages verified"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (used, working)",
+  "seed_data_creation": "Test fixture seeds TEST_iter295_<hex>_dir (director role, location_ids=['loc_002']), TEST_iter295_<hex>_vol (volunteer role), and 3 overdue tasks at loc_001@5d, loc_002@3d, loc_001@1d. All cleaned up on teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 295 endpoints stable. Note the stale 'iter295 digest test task' still visible on admin dashboard — main agent may want to remove it. LiveCheckpointWidget did not render in the test env (no active checkpoint) so the vertical order was source-verified only. Backend test file `test_iter295_director_digest_preview.py` reuses hash_password from deps and uses lowercase email lookups matching auth.py identifier normalization."
+}

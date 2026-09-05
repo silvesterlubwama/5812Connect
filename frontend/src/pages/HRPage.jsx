@@ -268,7 +268,7 @@ export default function HRPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="flex-wrap">
+        <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto md:flex-wrap">
           <TabsTrigger value="salaries" data-testid="hr-tab-salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
           <TabsTrigger value="payslips" data-testid="hr-tab-payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
           <TabsTrigger value="contracts" data-testid="hr-tab-contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>

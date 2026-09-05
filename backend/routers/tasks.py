@@ -26,6 +26,108 @@ async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_us
         logger.warning(f"WS broadcast failed: {e}")
 
 
+# ─── Director digest preview ─────────────────────────────────
+# Live preview of the 08:00 UTC email that `_fire_overdue_task_director_digest`
+# in server.py will send. Same scope rules, no email side-effect. Returns
+# the exact task rows that would appear in the digest so directors can act
+# BEFORE the morning email fires.
+DIRECTOR_ROLES = {"director", "Director", "Executive Director", "Adviser",
+                  "Regional Director", "admin", "system_admin"}
+GLOBAL_ROLES = {"admin", "system_admin", "Executive Director", "Adviser"}
+
+
+@router.get("/tasks/director-digest-preview")
+async def director_digest_preview(current_user: dict = Depends(get_current_user)):
+    """Preview of today's overdue-task digest for the caller.
+
+    Only director-level roles get a non-empty response — everyone else gets
+    `{"eligible": false}` so the frontend can just skip rendering the widget.
+
+    Response:
+      { eligible, task_count, tasks[], scope, already_sent_today }
+    """
+    from datetime import date
+    if current_user.get("role") not in DIRECTOR_ROLES:
+        return {"eligible": False, "task_count": 0, "tasks": []}
+
+    today_iso = date.today().isoformat()
+    overdue = await db.tasks.find({
+        "due_date": {"$lt": today_iso, "$ne": ""},
+        "is_archived": {"$ne": True},
+        "status": {"$ne": "done"},
+        "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
+    }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
+         "location_id": 1, "board_id": 1, "priority": 1}).to_list(2000)
+
+    # Assignee-name lookup + board→location fallback in one preload
+    assignee_ids: set = set()
+    board_ids: set = set()
+    for t in overdue:
+        for uid in (t.get("assignees") or []):
+            assignee_ids.add(uid)
+        if t.get("assignee"):
+            assignee_ids.add(t["assignee"])
+        if t.get("board_id"):
+            board_ids.add(t["board_id"])
+    names: dict = {}
+    if assignee_ids:
+        async for u in db.users.find({"id": {"$in": list(assignee_ids)}},
+                                      {"_id": 0, "id": 1, "name": 1}):
+            names[u["id"]] = u.get("name", "")
+    board_locs: dict = {}
+    if board_ids:
+        async for b in db.boards.find({"id": {"$in": list(board_ids)}},
+                                       {"_id": 0, "id": 1, "location_id": 1}):
+            if b.get("location_id"):
+                board_locs[b["id"]] = b["location_id"]
+
+    # Scope: globals see everything, everyone else is filtered to their campuses
+    if current_user.get("role") in GLOBAL_ROLES:
+        scope_ids = None
+        scope_label = "global"
+    else:
+        scope_ids = set(current_user.get("location_ids") or [])
+        if current_user.get("active_campus_id"):
+            scope_ids.add(current_user["active_campus_id"])
+        scope_label = "campus"
+
+    rows: list = []
+    for t in overdue:
+        loc = t.get("location_id") or board_locs.get(t.get("board_id"))
+        if scope_ids is not None and (not loc or loc not in scope_ids):
+            continue
+        try:
+            days_late = (date.today() - date.fromisoformat(t["due_date"])).days
+        except Exception:
+            continue
+        asgn_ids = list(t.get("assignees") or [])
+        if t.get("assignee") and t["assignee"] not in asgn_ids:
+            asgn_ids.append(t["assignee"])
+        rows.append({
+            "id": t["id"],
+            "title": t.get("title") or "",
+            "due_date": t["due_date"],
+            "days_late": days_late,
+            "priority": t.get("priority") or "",
+            "location_id": loc or "",
+            "assignee_names": [names.get(u, "") for u in asgn_ids if names.get(u)],
+        })
+    rows.sort(key=lambda r: (-r["days_late"], r["title"].lower()))
+
+    # Did the 08:00 tick already send today? Handy hint for the UI copy.
+    already = await db.task_director_digests.find_one(
+        {"user_id": current_user["id"], "date": today_iso}, {"_id": 0, "id": 1}
+    )
+    return {
+        "eligible": True,
+        "scope": scope_label,
+        "task_count": len(rows),
+        "tasks": rows[:50],  # cap the payload — full list stays server-side
+        "already_sent_today": bool(already),
+        "date": today_iso,
+    }
+
+
 @router.get("/tasks")
 async def list_tasks(
     status: Optional[str] = None,

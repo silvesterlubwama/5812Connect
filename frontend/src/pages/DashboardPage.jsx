@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import DirectorDigestWidget from '../components/DirectorDigestWidget';
 
 const StatCard = ({ title, value, sub, icon: Icon, color, loading, onClick }) => (
   <Card className={`shadow-soft rounded-xl ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`} onClick={onClick}>
@@ -373,6 +374,11 @@ export default function DashboardPage() {
 
           {/* Live Checkpoint Map — Director+ only; auto-polls every 4s */}
           {hasDirectorAccess(user) && <LiveCheckpointWidget />}
+
+          {/* Director-only overdue-task digest preview — matches the 08:00 UTC
+              email exactly, using the same scope rules. Hides itself when the
+              caller isn't a director or when the queue is empty. */}
+          {hasDirectorAccess(user) && <DirectorDigestWidget />}
         </div>
 
         {/* Quick Actions + Group Chart */}
