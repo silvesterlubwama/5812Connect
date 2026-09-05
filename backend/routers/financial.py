@@ -34,6 +34,67 @@ async def _financial_campus_filter(user: dict) -> dict:
 router = APIRouter(prefix="/api", tags=["financial"])
 
 
+# ==========================================================
+# LEGACY ACCOUNTING HELPERS (inlined from the deleted
+# `routers.accounting_shim`). This whole module is currently
+# unmounted; these helpers exist only so that HR's manual repair
+# endpoint (`repair_payslip_journals`) and the retroactive
+# orphan-JE repair endpoint below can still touch the old
+# `accounting_*` collections without hitting an ImportError.
+# NEW finance work goes through `routers/finance/*`; do not add
+# callers of these helpers.
+# ==========================================================
+
+async def _next_entry_number(journal_id: str) -> str:
+    yr = datetime.now(timezone.utc).year
+    count = await db.accounting_entries.count_documents(
+        {"journal_id": journal_id, "number": {"$regex": f"/{yr}/"}}
+    )
+    return f"JE/{yr}/{count + 1:04d}"
+
+
+async def reverse_entry(entry_id: str, data: dict, current_user: dict):
+    """Post a mirror JE reversing `entry_id` in the legacy `accounting_entries`
+    collection. Debit/credit swapped on every line, original marked reversed."""
+    orig = await db.accounting_entries.find_one({"id": entry_id}, {"_id": 0})
+    if not orig:
+        raise ValueError(f"Entry {entry_id} not found")
+    if orig.get("is_reversed"):
+        return orig
+    rev_id = f"je_{uuid.uuid4().hex[:10]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rev_number = await _next_entry_number(orig["journal_id"])
+    reason = (data or {}).get("reason") or "Reversal"
+    rev = {
+        **{k: v for k, v in orig.items() if k not in ("id", "number", "created_at", "posted_at", "is_reversed", "reversed_by", "_id")},
+        "id": rev_id,
+        "number": rev_number,
+        "narration": f"REVERSAL of {orig.get('number')} — {reason}",
+        "auto_generated_from": "reversal",
+        "reverses_id": entry_id,
+        "created_at": now_iso,
+        "posted_at": now_iso,
+        "posted_by": current_user.get("id"),
+    }
+    await db.accounting_entries.insert_one(rev)
+    lines = await db.accounting_entry_lines.find({"entry_id": entry_id}, {"_id": 0}).to_list(500)
+    if lines:
+        rev_lines = []
+        for ln in lines:
+            new_line = {k: v for k, v in ln.items() if k != "_id"}
+            new_line["entry_id"] = rev_id
+            new_line["id"] = f"jel_{uuid.uuid4().hex[:10]}"
+            new_line["debit"], new_line["credit"] = ln.get("credit", 0), ln.get("debit", 0)
+            rev_lines.append(new_line)
+        await db.accounting_entry_lines.insert_many(rev_lines)
+    await db.accounting_entries.update_one(
+        {"id": entry_id},
+        {"$set": {"is_reversed": True, "reversed_by": rev_id, "reversed_at": now_iso, "reversal_reason": reason}},
+    )
+    logger.info(f"[financial legacy] Reversed {entry_id} → {rev_id}")
+    return rev
+
+
 # ========== SELF-SERVICE EDIT/DELETE WINDOW (iter220) ==========
 # By popular request: any user who created a financial record (donation,
 # expense) can edit or delete it within 7 days of entry without needing
@@ -283,7 +344,6 @@ async def _reverse_auto_posted_je(source_kind: str, source_id: str, current_user
     if not entry or entry.get("status") != "posted":
         return 0
     try:
-        from routers.accounting_shim import reverse_entry
         await reverse_entry(entry["id"], {"reason": f"Source {source_kind} deleted"}, current_user)
         return 1
     except Exception as ex:
@@ -367,7 +427,6 @@ async def _post_to_accounting(kind: str, doc: dict, current_user: dict) -> None:
     )
     if existing:
         return
-    from routers.accounting_shim import _next_entry_number
     entry_id = f"je_{uuid.uuid4().hex[:10]}"
     entry_number = await _next_entry_number(journal["id"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1762,7 +1821,6 @@ async def repair_orphaned_journals(current_user: dict = Depends(require_admin)):
     Returns per-kind counts of what was reversed / already-clean / skipped.
     Idempotent — safe to run multiple times.
     """
-    from routers.accounting_shim import reverse_entry
     reversed_count = 0
     already_reversed = 0
     orphan_ids: list = []

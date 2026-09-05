@@ -1,9 +1,10 @@
 """Bank accounts, statement import + reconciliation, vendors, bills (AP),
 recurring journal entries / bills.
 
-This module wires into the existing accounting ledger (`accounting_*` collections)
-— every cash movement from a bank account or a paid bill auto-posts a balanced
-journal entry via the existing `accounting_entries` / `accounting_entry_lines`.
+iter 292 — every cash movement (bill post, bill payment, bank
+reconciliation) now flows through the unified ledger
+(`finance_journal_entries`) via `routers.finance._common.post_journal_entry`.
+The legacy `accounting_*` collections are no longer written to.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from deps import (
@@ -37,15 +38,18 @@ async def list_bank_accounts(country: Optional[str] = None, current_user: dict =
     if country:
         query["country"] = country.upper()
     accounts = await db.bank_accounts.find(query, {"_id": 0}).sort("name", 1).to_list(200)
-    # Compute current balance from posted journal entries hitting the linked CoA account
+    # Compute current balance from the unified ledger (finance_journal_entries)
+    # for entries hitting the linked CoA account. Skips reversed JEs.
     for acc in accounts:
         linked = acc.get("linked_account_id")
         if linked:
             pipeline = [
-                {"$match": {"account_id": linked, "status": "posted"}},
-                {"$group": {"_id": None, "debit": {"$sum": "$debit"}, "credit": {"$sum": "$credit"}}},
+                {"$match": {"reversed": {"$ne": True}}},
+                {"$unwind": "$lines"},
+                {"$match": {"lines.account_id": linked}},
+                {"$group": {"_id": None, "debit": {"$sum": "$lines.debit"}, "credit": {"$sum": "$lines.credit"}}},
             ]
-            row = await db.accounting_entry_lines.aggregate(pipeline).to_list(1)
+            row = await db.finance_journal_entries.aggregate(pipeline).to_list(1)
             if row:
                 acc["current_balance"] = round(
                     float(acc.get("opening_balance") or 0) + (row[0]["debit"] - row[0]["credit"]), 2
@@ -70,11 +74,11 @@ async def create_bank_account(data: dict, current_user: dict = Depends(require_f
         raise HTTPException(status_code=400, detail=f"account_type must be in {sorted(BANK_ACCOUNT_TYPES)}")
     linked_account_id = data.get("linked_account_id")
     if linked_account_id:
-        linked = await db.accounting_accounts.find_one({"id": linked_account_id}, {"_id": 0, "type": 1})
+        linked = await db.finance_chart_of_accounts.find_one({"id": linked_account_id}, {"_id": 0, "type": 1, "is_cash": 1})
         if not linked:
             raise HTTPException(status_code=400, detail="linked_account_id not found in chart of accounts")
-        if not linked.get("type", "").startswith("asset_"):
-            raise HTTPException(status_code=400, detail="linked CoA account must be an asset (cash/bank)")
+        if linked.get("type") != "asset":
+            raise HTTPException(status_code=400, detail="linked COA account must be an asset (cash/bank)")
     doc = {
         "id": f"bnk_{uuid.uuid4().hex[:10]}",
         "name": name[:120],
@@ -660,7 +664,7 @@ async def reconcile_transaction(tx_id: str, data: dict, current_user: dict = Dep
     matched_entry_id = data.get("matched_entry_id")
     target_account_id = data.get("target_account_id")
     if matched_entry_id:
-        entry = await db.accounting_entries.find_one({"id": matched_entry_id}, {"_id": 0, "id": 1})
+        entry = await db.finance_journal_entries.find_one({"id": matched_entry_id}, {"_id": 0, "id": 1})
         if not entry:
             raise HTTPException(status_code=400, detail="matched_entry_id not found")
         entry_id = matched_entry_id
@@ -870,84 +874,75 @@ async def create_bill(data: dict, current_user: dict = Depends(require_finance_v
 
 
 async def _post_bill_to_ledger(bill: dict, current_user: dict):
-    """Post the bill: Dr each item's account / Cr Accounts Payable."""
+    """Post the bill via the unified finance ledger:
+       Dr each item's expense account (+ optional VAT input) / Cr Accounts Payable.
+
+    All accounts resolved against `finance_chart_of_accounts`. If the bill's
+    line items reference an account_id that isn't in the new COA (legacy data),
+    the JE is skipped rather than mis-posted."""
+    from routers.finance._common import post_journal_entry
     loc_id = bill.get("location_id")
     if not loc_id:
         return
-    ap_acc = await db.accounting_accounts.find_one(
-        {"location_id": loc_id, "type": "liability_payable", "active": True}, {"_id": 0}
+    # Accounts Payable — prefer seeded code 2000, fall back to name match
+    ap_acc = await db.finance_chart_of_accounts.find_one(
+        {"code": "2000", "active": True}, {"_id": 0}
+    ) or await db.finance_chart_of_accounts.find_one(
+        {"type": "liability", "name": {"$regex": "payable", "$options": "i"}, "active": True}, {"_id": 0}
     )
     if not ap_acc:
-        return  # AP account not in CoA — silent no-op
-    journal = (await db.accounting_journals.find_one(
-        {"location_id": loc_id, "kind": "purchases", "active": True}, {"_id": 0}
-    )) or (await db.accounting_journals.find_one(
-        {"location_id": loc_id, "kind": "miscellaneous", "active": True}, {"_id": 0}
-    )) or (await db.accounting_journals.find_one(
-        {"location_id": loc_id, "active": True}, {"_id": 0}
-    ))
-    if not journal:
+        logger.warning(f"Bill {bill.get('bill_number')}: no Accounts Payable account in COA — skipping JE post")
         return
-    from routers.accounting_shim import _next_entry_number
-    entry_id = f"je_{uuid.uuid4().hex[:10]}"
-    entry_number = await _next_entry_number(journal["id"])
-    now_iso = datetime.now(timezone.utc).isoformat()
-    # Aggregate item lines by account_id (handles multi-line bills cleanly)
-    lines_by_account = {}
+    # Aggregate item lines by account_id
+    lines_by_account: dict = {}
     for item in bill.get("items", []):
         acc_id = item.get("account_id")
         amt = float(item.get("qty", 0) or 0) * float(item.get("unit_price", 0) or 0)
         if not acc_id or amt <= 0:
             continue
         lines_by_account[acc_id] = lines_by_account.get(acc_id, 0) + amt
-    # Tax goes to a Tax Payable account if available, else just absorbed into the AP credit
-    tax_amount = float(bill.get("tax_amount") or 0)
-    tax_acc = None
-    if tax_amount > 0:
-        tax_acc = await db.accounting_accounts.find_one(
-            {"location_id": loc_id, "type": "liability_tax", "active": True}, {"_id": 0}
-        )
-    entry = {
-        "id": entry_id, "number": entry_number,
-        "journal_id": journal["id"], "journal_code": journal.get("code"),
-        "date": bill["bill_date"], "ref": bill["bill_number"],
-        "narration": f"Bill {bill['bill_number']} - {bill.get('vendor_name','')}",
-        "total_debit": round(bill.get("total") or 0, 2),
-        "total_credit": round(bill.get("total") or 0, 2),
-        "status": "posted",
-        "location_id": loc_id,
-        "currency": bill.get("currency"),
-        "auto_generated_from": "bill",
-        "source_id": bill["id"],
-        "created_at": now_iso, "posted_at": now_iso, "posted_by": current_user["id"],
-    }
-    await db.accounting_entries.insert_one(entry)
-    lines = []
+    if not lines_by_account:
+        return
+    je_lines: list = []
     for acc_id, amt in lines_by_account.items():
-        lines.append({
-            "id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-            "journal_id": journal["id"], "date": bill["bill_date"], "location_id": loc_id, "status": "posted",
-            "account_id": acc_id, "debit": round(amt, 2), "credit": 0,
-            "description": entry["narration"],
+        acc = await db.finance_chart_of_accounts.find_one({"id": acc_id}, {"_id": 0})
+        if not acc:
+            logger.warning(f"Bill {bill.get('bill_number')}: line account {acc_id} not in COA — skipping JE post")
+            return
+        je_lines.append({
+            "account_id": acc["id"], "account_code": acc.get("code"), "account_name": acc.get("name"),
+            "debit": round(amt, 2), "credit": 0,
         })
-    if tax_acc:
-        # When tax is broken out: Dr Tax / Cr AP (with the tax portion)
-        # But that creates an AP credit too — handled below
-        lines.append({
-            "id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-            "journal_id": journal["id"], "date": bill["bill_date"], "location_id": loc_id, "status": "posted",
-            "account_id": tax_acc["id"], "debit": round(tax_amount, 2), "credit": 0,
-            "description": f"VAT input @ {round(tax_amount,2)}",
-        })
-    # Single AP credit = full bill total
-    lines.append({
-        "id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-        "journal_id": journal["id"], "date": bill["bill_date"], "location_id": loc_id, "status": "posted",
-        "account_id": ap_acc["id"], "debit": 0, "credit": round(bill.get("total") or 0, 2),
-        "description": f"AP - {bill.get('vendor_name','')}",
+    tax_amount = float(bill.get("tax_amount") or 0)
+    if tax_amount > 0:
+        tax_acc = await db.finance_chart_of_accounts.find_one(
+            {"code": "2200", "active": True}, {"_id": 0}
+        ) or await db.finance_chart_of_accounts.find_one(
+            {"type": "liability", "name": {"$regex": "tax", "$options": "i"}, "active": True}, {"_id": 0}
+        )
+        if tax_acc:
+            je_lines.append({
+                "account_id": tax_acc["id"], "account_code": tax_acc.get("code"), "account_name": tax_acc.get("name"),
+                "debit": round(tax_amount, 2), "credit": 0,
+            })
+    debit_total = round(sum(l["debit"] for l in je_lines), 2)
+    if debit_total <= 0:
+        return
+    je_lines.append({
+        "account_id": ap_acc["id"], "account_code": ap_acc.get("code"), "account_name": ap_acc.get("name"),
+        "debit": 0, "credit": debit_total,
     })
-    if lines:
-        await db.accounting_entry_lines.insert_many(lines)
+    await post_journal_entry(
+        date=bill["bill_date"],
+        description=f"Bill {bill['bill_number']} - {bill.get('vendor_name','')}"[:300],
+        lines=je_lines,
+        source="bill",
+        reference=bill["id"],
+        location_id=loc_id,
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"bill:{bill['id']}",
+    )
 
 
 @router.put("/bills/{bid}")
@@ -1018,56 +1013,54 @@ async def pay_bill(bid: str, data: dict, current_user: dict = Depends(require_fi
 
 
 async def _post_bill_payment_to_ledger(bill: dict, payment: dict, bank_acc: dict, current_user: dict):
+    """Post the bill payment via the unified ledger: Dr AP / Cr Bank."""
+    from routers.finance._common import post_journal_entry
     loc_id = bill.get("location_id")
-    ap_acc = await db.accounting_accounts.find_one(
-        {"location_id": loc_id, "type": "liability_payable", "active": True}, {"_id": 0}
+    if not loc_id:
+        return
+    ap_acc = await db.finance_chart_of_accounts.find_one(
+        {"code": "2000", "active": True}, {"_id": 0}
+    ) or await db.finance_chart_of_accounts.find_one(
+        {"type": "liability", "name": {"$regex": "payable", "$options": "i"}, "active": True}, {"_id": 0}
     )
     if not ap_acc:
+        logger.warning(f"Bill payment {payment.get('id')}: no AP account in COA — skipping")
         return
-    journal = (await db.accounting_journals.find_one(
-        {"location_id": loc_id, "kind": "purchases", "active": True}, {"_id": 0}
-    )) or (await db.accounting_journals.find_one(
-        {"location_id": loc_id, "active": True}, {"_id": 0}
-    ))
-    if not journal:
+    linked_id = bank_acc.get("linked_account_id")
+    bank_ledger_acc = await db.finance_chart_of_accounts.find_one({"id": linked_id}, {"_id": 0}) if linked_id else None
+    if not bank_ledger_acc:
+        logger.warning(f"Bill payment {payment.get('id')}: bank account not linked to COA — skipping")
         return
-    from routers.accounting_shim import _next_entry_number
-    entry_id = f"je_{uuid.uuid4().hex[:10]}"
-    entry_number = await _next_entry_number(journal["id"])
-    now_iso = datetime.now(timezone.utc).isoformat()
-    amount = float(payment["amount"])
-    entry = {
-        "id": entry_id, "number": entry_number,
-        "journal_id": journal["id"], "journal_code": journal.get("code"),
-        "date": payment["date"], "ref": payment["reference"] or f"PAY-{bill['bill_number']}",
-        "narration": f"Payment of bill {bill['bill_number']} - {bill.get('vendor_name','')}",
-        "total_debit": amount, "total_credit": amount, "status": "posted",
-        "location_id": loc_id, "currency": bill.get("currency"),
-        "auto_generated_from": "bill_payment", "source_id": payment["id"],
-        "created_at": now_iso, "posted_at": now_iso, "posted_by": current_user["id"],
-    }
-    await db.accounting_entries.insert_one(entry)
-    await db.accounting_entry_lines.insert_many([
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": payment["date"], "location_id": loc_id, "status": "posted",
-         "account_id": ap_acc["id"], "debit": amount, "credit": 0,
-         "description": f"AP cleared - {bill.get('vendor_name','')}"},
-        {"id": f"jel_{uuid.uuid4().hex[:10]}", "entry_id": entry_id, "entry_number": entry_number,
-         "journal_id": journal["id"], "date": payment["date"], "location_id": loc_id, "status": "posted",
-         "account_id": bank_acc["linked_account_id"], "debit": 0, "credit": amount,
-         "description": f"Paid via {bank_acc.get('name','')}"},
-    ])
+    amount = round(float(payment["amount"]), 2)
+    if amount <= 0:
+        return
+    await post_journal_entry(
+        date=payment["date"],
+        description=f"Payment of bill {bill['bill_number']} - {bill.get('vendor_name','')}"[:300],
+        lines=[
+            {"account_id": ap_acc["id"], "account_code": ap_acc.get("code"), "account_name": ap_acc.get("name"),
+             "debit": amount, "credit": 0},
+            {"account_id": bank_ledger_acc["id"], "account_code": bank_ledger_acc.get("code"),
+             "account_name": bank_ledger_acc.get("name"), "debit": 0, "credit": amount},
+        ],
+        source="bill_payment",
+        reference=payment["id"],
+        location_id=loc_id,
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"bill_payment:{payment['id']}",
+    )
 
 
 @router.delete("/bills/{bid}")
 async def void_bill(bid: str, current_user: dict = Depends(require_finance_admin)):
-    """Void a bill (does NOT delete the underlying JE — reverse that manually)."""
+    """Void a bill (does NOT delete the underlying JE — reverse it via /api/finance/journal/{id}/reverse)."""
     await db.bills.update_one({"id": bid}, {"$set": {
         "status": "void",
         "voided_at": datetime.now(timezone.utc).isoformat(),
         "voided_by": current_user["id"],
     }})
-    return {"voided": True, "note": "If a JE was posted, reverse it manually via /accounting/entries/{id}/reverse"}
+    return {"voided": True, "note": "If a JE was posted, reverse it via /api/finance/journal/{id}/reverse"}
 
 
 # ============================================================

@@ -1,23 +1,47 @@
-# 58:12 Global Connect — Remaining Backlog
+# ROADMAP — 58:12 Global Connect CRM
 
-## COMPLETED (Iteration 78)
-- [x] Finance RBAC: sub-location managers restricted to their data, finance dept sees campus
-- [x] Finance categories management dialog (proper UI with add/delete)
-- [x] Barcode generation endpoint (Code128 SVG per variant)
-- [x] Sub-location dropdown on donation/expense entry forms
-- [x] Admin People editor link from People page (Shield icon → /admin?user=id)
-- [x] Sales kiosk auto-lock (5min inactivity) + fullscreen mode
+## P0 (blockers) — none open
 
-## Technical Debt (Future)
-- server.py modularization (900+ lines)
-- MongoDB index optimization
-- Bcrypt version pinning
-- Persistent pytest test suite
-- Route ordering automated tests
+The last P0 (bank.py shim retirement) landed in iter 292.
 
-## Nice-to-Have (Future)
-- Offline QR scanning (cache members for kiosk)
-- PWA service worker for wallet badges
-- Multi-language translation files
-- Mobile responsiveness audit
-- Full barcode printing page (layout, bulk print button)
+## P1 — Next up
+
+### Receipt Review Queue UI
+- Backend already exposes `GET /api/finance/receipts/review-queue` and
+  `POST /api/finance/receipts/{id}/approve`.
+- Build a panel on `/app/frontend/src/pages/FinancePage.jsx` that lists
+  draft/needs_review receipts, lets a reviewer see the OCR fields, reclassify
+  the account, and click Approve.
+- After approve, the receipt should call `post_journal_entry` and disappear
+  from the queue.
+
+### HR auto-payslip cron on payday
+- Endpoint `/api/hr/payslips/generate-payday` is idempotent.
+- Wire it into a scheduled hook (`webhook-crond.sh` daily, or an
+  APScheduler job in `deps.py`'s scheduler) that fires on payday and no-ops
+  the rest of the month.
+
+## P2 — Polish
+
+- PDF export templates in `routers/finance/reports.py` must consume the
+  `fx_target` / `fx_rate` params (verify current template does the conversion).
+- Sublocations in the Finance Reports location dropdown render as flat "(sub)"
+  entries — visually nest them or indent children under their parent.
+- Full variant barcode printing page (layout + bulk print).
+- Mobile responsiveness audit across all pages.
+
+## Backlog / Future
+
+- `server.py` modularization (currently ~1600 lines).
+- PWA offline mode + service worker for Wallet passes.
+- Multi-language translation files.
+- Bcrypt version pinning; MongoDB index optimization pass.
+- Scheduled cron jobs for overdue-task email digests.
+
+## Explicit user boundary
+
+> "Never suggest Wave H5 SDK again unless I call for it. Do not suggest
+> unrequested enhancements moving forward."
+
+Do not propose Wave H5 or unrequested enhancements. Stick to P1 / P2 / Backlog
+above.
