@@ -113,7 +113,7 @@ const NAV_SECTIONS = [
     collapsible: true,
     roles: ADMIN_ROLES,
     items: [
-      { to: '/admin', icon: User, label: 'Staff & Users' },
+      { to: '/admin', icon: Settings, label: 'System Console' },
       { to: '/locations', icon: MapPin, label: 'Campuses' },
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
       { to: '/email-templates', icon: Mail, label: 'Email Templates' },

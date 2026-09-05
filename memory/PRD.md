@@ -55,6 +55,13 @@ social work, sales/POS/shipments, and self-service user portal.
 - Removed the ghost `db.payslips` collection + its three dead indexes.
   `db.hr_payslips` is now unambiguously the single payroll collection.
 
+### iter 306 additions
+- Staff/user admin (list, create, edit, reset-pw, badge, bulk) moved
+  into HR & Payroll as a new **Staff & Users** tab. The `/admin` route
+  now renders only system-level tools (integrations, backups, branding,
+  security, module access, finance danger zone) under the new label
+  **System Console**. Sidebar item + icon updated to match.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

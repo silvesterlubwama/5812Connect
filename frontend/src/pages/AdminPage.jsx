@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download, Clock, AlertTriangle } from 'lucide-react';
+import { Users, Search, RefreshCw, Shield, Key, Trash2, Edit, UserCog, Printer, X, Plus, Download, Clock, AlertTriangle, Settings } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -26,7 +26,19 @@ import DevicePairingDialog from '../components/DevicePairingDialog';
 
 const ROLES = ['Executive Director', 'Adviser', 'Director', 'Manager', 'Coordinator', 'Staff', 'HR', 'Volunteer', 'Member', 'Parent', 'Customer', 'Guest'];
 
-export default function AdminPage() {
+export default function AdminPage({ mode = 'system' }) {
+  // iter306 — this page renders in two modes:
+  //   mode='system'  → the /admin route: shows only system-level cards
+  //                    (integrations, backup, branding, security infra,
+  //                    module access, finance danger zone…). Header labelled
+  //                    "System Console" to reflect what the tools actually do.
+  //   mode='staff'   → embedded inside the HR page as the "Staff & Users"
+  //                    tab: shows only the staff/user directory + edit +
+  //                    reset-password + badge + bulk actions. HR owns the
+  //                    people admin surface now that HR & Payroll is the
+  //                    day-to-day admin's home.
+  const showStaff = mode === 'staff';
+  const showSystem = mode === 'system';
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -229,23 +241,35 @@ export default function AdminPage() {
   };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className={mode === 'staff' ? 'space-y-5' : 'p-6 space-y-5'}>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> Staff Administration</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{users.length} staff members</p>
+          {showSystem ? (
+            <>
+              <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> System Console</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">Platform-wide settings — integrations, backups, branding, security infrastructure, module access.</p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-2xl font-semibold font-heading flex items-center gap-2"><Shield size={24} /> Staff & Users</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">{users.length} staff members</p>
+            </>
+          )}
         </div>
-        <div className="flex gap-2 flex-wrap">
+        {showStaff && (
+          <div className="flex gap-2 flex-wrap">
           {selectedIds.size > 0 && <Button variant="outline" onClick={() => setShowBulk(true)} className="gap-2"><UserCog size={16} /> Bulk ({selectedIds.size})</Button>}
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setShowImport(true); setImportResult(null); setImportJson(''); }}><Download size={14} /> Import</Button>
           <Button size="sm" className="gap-1.5" onClick={() => { setShowCreateUser(true); setCreatedUser(null); setCreateForm({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false, will_sign_in: true }); }} data-testid="create-user-btn"><Plus size={14} /> New User</Button>
           <Button variant="outline" size="sm" onClick={fetchUsers}><RefreshCw size={14} /></Button>
         </div>
+        )}
       </div>
 
       {/* Access Expiring Soon banner — visible to admins+ if any explicit grant expires within 7 days */}
-      <ExpiringGrantsBanner />
+      {showSystem && <ExpiringGrantsBanner />}
 
+      {showStaff && (<>
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -296,11 +320,14 @@ export default function AdminPage() {
       <UserCreateDialog open={showCreateUser} onOpenChange={o => { setShowCreateUser(o); if (!o) setCreatedUser(null); }} form={createForm} setForm={setCreateForm} locations={locations} createdUser={createdUser} onCreateUser={handleCreateUser} />
       <UserImportDialog open={showImport} onOpenChange={o => { setShowImport(o); if (!o) { setImportResult(null); setImportJson(''); } }} importJson={importJson} setImportJson={setImportJson} importLoading={importLoading} importResult={importResult} onImport={handleImportUsers} onImportFile={handleImportFile} />
       <UserEditDialog open={showEdit} onOpenChange={setShowEdit} selectedUser={selectedUser} editForm={editForm} setEditForm={setEditForm} locations={locations} saving={saving} onSave={saveEdit} memberDocs={memberDocs} setMemberDocs={setMemberDocs} docRequests={docRequests} setDocRequests={setDocRequests} docsLoading={docsLoading} currentUserRole={currentUser?.role} />
+      </>)}
 
       {/* Danger Zone — destructive maintenance surface, admin only */}
-      {(currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
+      {showSystem && (currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
         <FinanceResetCard />
       )}
+
+      {showStaff && (<>
 
       {/* Reset Password Dialog */}
       <Dialog open={showResetPw} onOpenChange={setShowResetPw}>
@@ -351,7 +378,8 @@ export default function AdminPage() {
       </Dialog>
 
       {/* Module Access Management — admin only — finance, HR, sales, banking, accounting, social work, restricted */}
-      {['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
+      </>)}
+      {showSystem && ['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
         <>
           <ModuleAccessManager />
           <SecurityCheckpointsManager />

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import AdminPage from './AdminPage';
 import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -279,6 +280,7 @@ export default function HRPage() {
           <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
           <TabsTrigger value="time-off" data-testid="hr-tab-time-off"><Clock size={13} className="mr-1" /> Time Off</TabsTrigger>
           <TabsTrigger value="onboarding" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
+          {isAdmin && <TabsTrigger value="staff" data-testid="hr-tab-staff"><Users size={13} className="mr-1" /> Staff & Users</TabsTrigger>}
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -547,6 +549,15 @@ export default function HRPage() {
             }
           }} />
         </TabsContent>
+        {isAdmin && (
+          <TabsContent value="staff" className="mt-4" data-testid="hr-tab-staff-content">
+            {/* iter306 — staff/user admin lives inside HR now. AdminPage
+                in mode="staff" renders just the directory + edit/reset/
+                badge/bulk dialogs. The /admin route keeps the system-level
+                cards (integrations, backup, branding, etc.). */}
+            <AdminPage mode="staff" />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Add/Edit Salary Dialog */}

@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## iter 306 — 2026-02 — Staff admin moved into HR; `/admin` renamed to System Console
+
+The `/admin` route was labelled "Staff & Users" in the sidebar but the page
+actually mixed two very different responsibilities: the day-to-day people
+directory (add user, edit, reset password, print badge, bulk role change)
+and platform infrastructure (integrations, backup, branding, security
+companies, remote access, module access, finance danger zone). Day-to-day
+admins living in HR & Payroll had to bounce out to a scary-looking Admin
+page just to reset a password.
+
+**What changed**
+- `AdminPage.jsx` accepts a new `mode` prop:
+  - `mode='system'` (default, used by the `/admin` route) — renders only
+    the system-level cards, with header **"System Console"** and blurb
+    "Platform-wide settings — integrations, backups, branding, security
+    infrastructure, module access."
+  - `mode='staff'` — renders only the staff directory + associated
+    dialogs (Create, Edit, Reset Password, Badge, Bulk).
+- `HRPage.jsx` gains a **Staff & Users** tab (admin/system_admin only)
+  that renders `<AdminPage mode="staff" />`. HR & Payroll is now the
+  one-stop shop for the people admin.
+- Sidebar label under Admin group renamed from "Staff & Users" →
+  **"System Console"** and its icon flipped from `User` to `Settings`
+  to match what the page actually is.
+
+**Verified via screenshots**
+- `/admin` header renders "System Console" and shows Danger Zone,
+  Module Access, Security Checkpoints, Security Companies, Unlinked
+  Social Cases, Kiosk Links & Setup (system-only stack).
+- `/hr` → **Staff & Users** tab renders "Staff & Users · 0 staff
+  members" with search + role filter + Import + New User buttons
+  intact.
+- No compile errors after the mode-prop rewrite.
+
 ## iter 305 — 2026-02 — Ghost `payslips` collection removed
 
 `db.payslips` had three indexes registered in `db_indexes.py` but zero
