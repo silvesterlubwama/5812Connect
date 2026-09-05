@@ -183,12 +183,14 @@ class TestPush:
 # ---------- (i) Birthday/anniversary — static code verification ----------
 class TestBirthdayAnniversary:
     def test_fire_birthday_function_exists(self):
-        src = Path("/app/backend/server.py").read_text()
-        assert "_fire_birthday_anniversary_notifications" in src
-        assert 'kind": "birthday"' in src or "'kind': 'birthday'" in src or '"kind": "birthday"' in src
-        assert 'kind": "anniversary"' in src or '"kind": "anniversary"' in src
+        # iter302 — extracted to scheduler.py; server.py still re-exports the symbol.
+        server_src = Path("/app/backend/server.py").read_text()
+        sched_src = Path("/app/backend/scheduler.py").read_text()
+        assert "_fire_birthday_anniversary_notifications" in server_src
+        assert 'kind": "birthday"' in sched_src or "'kind': 'birthday'" in sched_src or '"kind": "birthday"' in sched_src
+        assert 'kind": "anniversary"' in sched_src or '"kind": "anniversary"' in sched_src
         # Regex on date_of_birth
-        assert "date_of_birth" in src and "regex" in src.lower()
+        assert "date_of_birth" in sched_src and "regex" in sched_src.lower()
 
 
 # ---------- (a) Indexes — sessions.jti unique ----------

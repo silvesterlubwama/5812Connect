@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## iter 302 — 2026-02 — server.py modularization
+
+Split the monolithic `server.py` (1910 lines) into focused sibling modules
+so future feature work stays fast to navigate.
+
+**What moved**
+- `scheduler.py` (786 lines) — every `_fire_*` cron helper, the hourly
+  `_run_due_date_reminder_scheduler`, `_run_fare_alerts_loop`,
+  `_run_flight_status_refresh_loop`, and `_send_push_to_user` +
+  `_last_auto_backup_date` state. All 11 scheduler-adjacent functions.
+- `db_indexes.py` (316 lines) — the entire `_ensure_indexes()` idempotent
+  startup index-creation routine (~140 indexes across ~50 collections).
+- `seed_data.py` (77 lines) — `_seed_initial_data()` default-admin,
+  default-locations, default-notifications, silvester auto-promote logic.
+
+**server.py after the split**: 777 lines (was 1910). Only wires app-level
+concerns (routes, middleware, startup/shutdown, health probes, 2FA + NFC
++ biometric + google-oauth stubs, campus switcher, notifications/push).
+
+**Compatibility**: `server.py` re-imports every extracted symbol so
+`from server import _fire_overdue_task_director_digest` still resolves for
+existing tests and any external callers. Only two grep-based tests
+required a path bump (looking in `scheduler.py` alongside `server.py`).
+
+**Verified**
+- Backend restart: `Indexes ensured (idempotent)` on cold boot.
+- `/api/health`: healthy, scheduler.running=true.
+- Auth login: `admin@5812global.org / Admin@1234` returns JWT.
+- Direct scheduler invocation: `_fire_overdue_task_emails` +
+  `_fire_overdue_task_director_digest` execute without error.
+- Test suite: 57/57 (index sweep + digest presence + birthday helper).
+
 ## iter 301 — 2026-02 — Bcrypt pin locked + MongoDB hot-path index sweep
 
 **Bcrypt pinning**

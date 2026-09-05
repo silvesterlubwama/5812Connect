@@ -33,17 +33,14 @@ social work, sales/POS/shipments, and self-service user portal.
   (iter 299) — camera-capture card posting multipart to
   `/api/finance/receipts/scan`.
 
-### Remaining backlog (agreed with user)
-- `server.py` modularization (~1900 lines).
-
 ### iter 302 additions
-- Scheduled cron jobs verified: `_run_due_date_reminder_scheduler` ticks
-  hourly, and every day at 08:00 UTC it fires overdue-task assignee
-  emails, director digests, payday payslips, scheduled statements,
-  overdue payment reminders, and recurring journal entries. Manually
-  invoked and confirmed the entry points execute cleanly.
-- Removed P1/P2 items that were never explicitly requested (Wallet
-  .pkpass, kiosk badge full-screen mode, portal "everything synced" pill).
+- `server.py` split from 1910 → 777 lines. Extracted to `scheduler.py`
+  (background cron + push helpers), `db_indexes.py` (`_ensure_indexes`),
+  and `seed_data.py` (`_seed_initial_data`). All function names still
+  re-exported from `server` so external imports stay green.
+
+### Remaining backlog (agreed with user)
+- (nothing user-requested currently open)
 
 ## Boundaries from user
 > No Wave H5 SDK unless explicitly called for.

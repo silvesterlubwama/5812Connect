@@ -4,7 +4,7 @@
 
 ## Approved backlog (user-requested only)
 
-- **Server split** — break `server.py` (~1900 lines) into smaller routers.
+_(no items currently open — server split finished in iter302)_
 
 ## Explicit user boundaries
 

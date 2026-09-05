@@ -41,12 +41,15 @@ def headers(token):
 
 # ---------- Director digest — source presence ----------
 def test_digest_function_defined_and_called():
+    # iter302 — scheduler code extracted from server.py to scheduler.py.
+    # Definition lives in scheduler.py; the 08:00 UTC caller does too.
     out = subprocess.check_output(
-        ["grep", "-n", "_fire_overdue_task_director_digest", "/app/backend/server.py"],
+        ["grep", "-n", "_fire_overdue_task_director_digest",
+         "/app/backend/scheduler.py", "/app/backend/server.py"],
         text=True,
     )
     assert "async def _fire_overdue_task_director_digest" in out, out
-    # Caller present in 08:00 UTC block
+    # Caller present in 08:00 UTC block (still inside scheduler.py)
     assert "await _fire_overdue_task_director_digest()" in out, out
 
 
