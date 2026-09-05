@@ -1,4 +1,7 @@
-# Fix bcrypt 4.x + passlib 1.7.4 compatibility
+# iter301 — bcrypt is pinned to 3.2.2 in requirements.txt (compatible with
+# passlib==1.7.4 which is unmaintained but stable). This defensive shim keeps
+# hashing/verification functional if a future dependency upgrade pulls in
+# bcrypt 4.x (which dropped the `__about__` attribute passlib introspects).
 import bcrypt
 if not hasattr(bcrypt, '__about__'):
     class _About:
@@ -1745,6 +1748,90 @@ async def _ensure_indexes():
         # Kanban boards secondary collection (some code paths use kanban_boards, some boards)
         await db.kanban_boards.create_index("id", unique=True)
         await db.kanban_boards.create_index([("location_id", 1), ("is_global", 1)])
+        # ===== iter301 — hot-path index optimization pass =====
+        # `guests` — heavy read collection: id lookup, family scoping, dedup by email/phone,
+        # kiosk pin lookup, campus scoping for admin dashboards.
+        await db.guests.create_index("id", unique=True)
+        await db.guests.create_index([("location_id", 1), ("status", 1)])
+        await db.guests.create_index("family_id")
+        await db.guests.create_index("user_id")
+        await db.guests.create_index("email")
+        await db.guests.create_index("phone")
+        await db.guests.create_index("pin")
+        await db.guests.create_index([("is_parent", 1), ("family_id", 1)])
+        # `families` — id lookup + case-insensitive family_name dedup + campus scoping.
+        await db.families.create_index("id", unique=True)
+        await db.families.create_index([("location_id", 1), ("family_name", 1)])
+        # `shipments` — id lookup, dashboard scoping, sub-doc token lookup already indexed above.
+        await db.shipments.create_index("id", unique=True)
+        await db.shipments.create_index([("status", 1), ("created_at", -1)])
+        await db.shipments.create_index([("location_id", 1), ("created_at", -1)])
+        # `social_cases` — subject-centric queries + case listing per location.
+        await db.social_cases.create_index("id", unique=True)
+        await db.social_cases.create_index("subject_id")
+        await db.social_cases.create_index([("location_id", 1), ("status", 1), ("created_at", -1)])
+        await db.social_review_forms.create_index("id", unique=True)
+        await db.social_review_forms.create_index([("child_id", 1), ("review_date", -1)])
+        await db.social_review_forms.create_index([("location_id", 1), ("review_date", -1)])
+        # `products` — id lookup, campus scoping, search by name/barcode, low-stock aggregation.
+        await db.products.create_index("id", unique=True)
+        await db.products.create_index([("location_id", 1), ("name", 1)])
+        await db.products.create_index("name")
+        await db.products.create_index("barcode")
+        await db.products.create_index("variants.barcode")
+        # `hr_payslips` — payroll queries by staff_id+period, location+period, status.
+        await db.hr_payslips.create_index("id", unique=True)
+        await db.hr_payslips.create_index([("staff_id", 1), ("period", -1)])
+        await db.hr_payslips.create_index([("location_id", 1), ("period", -1)])
+        await db.hr_payslips.create_index([("status", 1), ("period", -1)])
+        await db.hr_payslips.create_index("salary_id")
+        # `hr_timesheets` / `hr_salaries` / `hr_time_off` — portal + payroll hot paths.
+        await db.hr_timesheets.create_index([("staff_id", 1), ("period", -1)])
+        await db.hr_timesheets.create_index([("location_id", 1), ("status", 1)])
+        await db.hr_salaries.create_index([("staff_id", 1), ("active", 1)])
+        await db.hr_salaries.create_index([("location_id", 1), ("active", 1)])
+        await db.hr_time_off.create_index([("staff_id", 1), ("start_date", -1)])
+        await db.hr_time_off.create_index([("location_id", 1), ("status", 1), ("start_date", -1)])
+        # `resources` / `venues` / `bookings` / `public_bookings` — schedule lookups.
+        await db.resources.create_index("id", unique=True)
+        await db.resources.create_index([("location_id", 1), ("name", 1)])
+        await db.venues.create_index("id", unique=True)
+        await db.venues.create_index([("location_id", 1), ("name", 1)])
+        await db.bookings.create_index("id", unique=True)
+        await db.bookings.create_index([("resource_id", 1), ("start_time", 1)])
+        await db.bookings.create_index([("location_id", 1), ("start_time", 1)])
+        await db.public_bookings.create_index("id", unique=True)
+        await db.public_bookings.create_index([("location_id", 1), ("date", -1)])
+        await db.public_bookings.create_index("token")
+        # `approval_requests` — subject-kind + status + campus, plus fund-request lookup.
+        await db.approval_requests.create_index("id", unique=True)
+        await db.approval_requests.create_index([("subject_kind", 1), ("status", 1), ("created_at", -1)])
+        await db.approval_requests.create_index([("location_id", 1), ("status", 1)])
+        # `customer_accounts` — statement + POS lookups.
+        await db.customer_accounts.create_index("id", unique=True)
+        await db.customer_accounts.create_index("user_id")
+        await db.customer_accounts.create_index("customer_id")
+        await db.customer_accounts.create_index([("location_id", 1), ("name", 1)])
+        # `event_registrations` / `enrollments` / `conferences` — dashboard aggregates.
+        await db.event_registrations.create_index([("event_id", 1), ("status", 1)])
+        await db.event_registrations.create_index("member_id")
+        await db.enrollments.create_index([("location_id", 1), ("status", 1)])
+        await db.enrollments.create_index("member_id")
+        await db.conferences.create_index("id", unique=True)
+        await db.conferences.create_index([("location_id", 1), ("start_date", -1)])
+        # `donors` — name search + campus scoping.
+        await db.donors.create_index("id", unique=True)
+        await db.donors.create_index([("location_id", 1), ("name", 1)])
+        await db.donors.create_index("email")
+        # `announcements` / `documents` — location-scoped feeds.
+        await db.announcements.create_index([("location_id", 1), ("created_at", -1)])
+        await db.documents.create_index([("owner_id", 1), ("created_at", -1)])
+        await db.documents.create_index([("location_id", 1), ("created_at", -1)])
+        # `case_notes` — reader lookup per case.
+        await db.case_notes.create_index([("case_id", 1), ("created_at", -1)])
+        # `call_logs` — per-user CDR view + date-range PBX report.
+        await db.call_logs.create_index([("user_id", 1), ("start_time", -1)])
+        await db.call_logs.create_index([("location_id", 1), ("start_time", -1)])
         logger.info("Indexes ensured (idempotent)")
     except Exception as e:
         logger.warning(f"Index ensure: {e}")

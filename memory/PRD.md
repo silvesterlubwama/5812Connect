@@ -22,10 +22,22 @@ social work, sales/POS/shipments, and self-service user portal.
   Portal `Scan a receipt` card wired to the existing Finance OCR
   pipeline. Manual Payslip UI shortcut confirmed present.
 
+### iter 301 additions
+- Bcrypt/passlib pin locked with documented compat shim.
+- MongoDB hot-path index sweep: guests, families, shipments, social_cases,
+  social_review_forms, products, hr_payslips/timesheets/salaries/time_off,
+  resources/venues/bookings/public_bookings, approval_requests,
+  customer_accounts, event_registrations/enrollments/conferences, donors,
+  announcements, documents, case_notes, call_logs.
+- Portal Receipt Scan UI confirmed already live in `PortalProfile.jsx`
+  (iter 299) — camera-capture card posting multipart to
+  `/api/finance/receipts/scan`.
+
 ### Remaining backlog (agreed with user)
 - **Next (c)** `server.py` modularization (~1750 lines).
-- Portal receipt-scan (deferred — took defaults).
-- Portal audit sweep (spot-check name/DOB/phone/address flows end-to-end).
+- Native Apple Wallet `.pkpass` once Apple Developer cert is provisioned.
+- Kiosk Badge full-screen mode for lobby TVs.
+- Portal "everything synced" indicator pill.
 
 ## Boundaries from user
 > No Wave H5 SDK unless explicitly called for.
