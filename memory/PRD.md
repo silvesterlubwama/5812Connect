@@ -12,12 +12,15 @@ social work, sales/POS/shipments, and self-service user portal.
 ### DONE
 - Unified finance ledger (JEs) + AP + bank reconcile + Receipt Review Queue.
 - MongoDB hot-path indexes across finance/HR/access collections.
-- PWA offline data + wallet pass cache + prefetch on login.
+- PWA offline data + wallet pass cache + prefetch on login + offline pill.
 - Director digest email + preview widget with inline snooze.
-- **iter 298:** Portal self-service badges (own + child), weekly Mon–Sun
-  timesheet grid, wage_type on salaries (salary/hourly/daily/weekly/biweekly/
-  monthly) with hourly_rate + daily_rate fields, offline pill re-labeled
-  "Offline · Cached".
+- Portal self-service badges (own + child), weekly Mon–Sun timesheet,
+  wage_type on salaries.
+- **iter 299:** Badge PNG download (html2canvas capture — photo + QR
+  actually saved) + proper Print flow with print-only CSS. Portal profile
+  now edits DOB + gender (whitelisted server-side, verified end-to-end).
+  Portal `Scan a receipt` card wired to the existing Finance OCR
+  pipeline. Manual Payslip UI shortcut confirmed present.
 
 ### Remaining backlog (agreed with user)
 - **Next (c)** `server.py` modularization (~1750 lines).

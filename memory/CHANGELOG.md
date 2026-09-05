@@ -1,44 +1,38 @@
 # CHANGELOG
 
-## iter 298 — 2026-02 — Portal self-service · weekly timesheets · wage types · offline pill
+## iter 299 — 2026-02 — Portal receipt scan · profile audit · badge PNG · manual-payslip verify
 
-**Portal self-service badges** — Two new endpoints under `/api/portal/`:
-- `POST /portal/my-wallet-badge` — issues (or returns) the caller's own badge
-  token so they can view + Add-to-Wallet from `/badge/<token>`. Idempotent.
-- `POST /portal/children/{child_id}/wallet-badge` — parent-only endpoint that
-  issues a child's badge as long as `current_user.id` is in `child.parent_ids`
-  (falls back to `members.id` lookup for members-linked parents).
+**Badge PNG / Print fix** — `WalletBadgePage` rewritten. Old copy told users
+to "Add to Home Screen" which only saved the URL — the QR + photo weren't
+actually captured on the phone. Now:
+- **Save to Photos** button captures the whole styled badge card (photo + QR
+  pixels + country outline + logo) to a PNG via `html2canvas` at 2× scale and
+  triggers a download so mobile browsers drop it straight into the camera roll.
+- **Print** button opens the OS print dialog; a `@media print` block hides
+  the action bar and slate background so only the card prints.
+- Auto-print via `?print=1` still works untouched.
+- Added `html2canvas@1.4.1` to `frontend/package.json`.
+- `data-testid`s: `badge-card`, `badge-download-png`, `badge-print`.
 
-Frontend hookups:
-- `PortalProfile` — new "My Wallet Badge" card with `View & Download`
-  (`data-testid="portal-open-my-badge"`); opens `/badge/<token>` in a new tab
-  where existing Add-to-Wallet / auto-print / save-image works.
-- `PortalFamily` — every child row now shows a `Badge` button
-  (`data-testid="child-badge-<id>"`).
+**Portal audit — name/DOB/phone/address/gender end-to-end** — Backend
+`PUT /api/portal/profile` whitelist grown to include `date_of_birth`, `dob`,
+`birthday`, `gender`, `emergency_phone`, `address_line2`, `city`, `country`;
+`dob` / `birthday` alias to `date_of_birth`. `PortalProfile` form now
+carries `date_of_birth` (`profile-dob-input`) + `gender`
+(`profile-gender-input`). Verified end-to-end via curl:
+`PUT /portal/profile {dob:'1985-04-12', gender:'male'}` → response persists
+both fields on the `users` row (and mirrors to the linked `members` row).
 
-**Weekly Mon–Sun timesheet grid** — `PortalProfile` timesheet dialog replaced
-with a 7-cell button grid (M/T/W/T/F/S/S) that auto-computes `days_worked`
-from checked days, sends the ISO-week identifier as `period` (`YYYY-Www`),
-and includes an `entries[]` daily breakdown so payroll can spot short weeks
-and daily-wage staff get accurate gross. Verified via curl:
-`POST /hr/timesheets {period:'2026-W09', days_worked:3, entries:[3 dates]}`
-→ status=submitted.
+**Portal Receipt Scan** — new card on `PortalProfile` with a mobile-camera
+`Scan` button (`portal-scan-receipt-input`) that POSTs the image to
+`/api/finance/receipts/scan`. The existing OCR pipeline drafts a JE that
+lands in the Finance Review Queue for approval — no new backend work
+required.
 
-**Wage types** — `hr_salaries` now has `wage_type` (one of
-salary/hourly/daily/weekly/biweekly/monthly), `hourly_rate`, `daily_rate`.
-`_proration_factor` extended: daily → 1/22, hourly → 1/(22×8). Payroll
-generation still respects `pay_frequency` for cadence; wage_type describes
-how the base amount is expressed.
-
-**Offline pill** — Existing offline detection copy updated: pill now reads
-"Offline · Cached" with a hover title explaining the SW is serving the last
-online snapshot. `data-testid="offline-pill"`.
-
-**Verification (curl end-to-end)**
-- `POST /portal/my-wallet-badge` → token issued, status=active.
-- `POST /hr/timesheets` weekly → period=2026-W09, days_worked=3, entries=3.
-- `POST /hr/salaries wage_type=daily daily_rate=50000` → fields persist.
-- All test rows cleaned up.
+**Manual Payslip UI shortcut — already exists** — Verified `HRPage.jsx:392`
+already exposes a `Manual Payslip` button (`data-testid="manual-payslip-btn"`)
+that opens the manual-payslip dialog at line 734 and posts to the existing
+`/api/hr/payslips/manual`. No change needed.
 
 ---
-(prior iter 292–297 entries unchanged)
+(prior entries iter 292–298 unchanged)

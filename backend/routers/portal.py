@@ -91,11 +91,20 @@ async def portal_profile(current_user: dict = Depends(get_current_user)):
 
 @router.put("/profile")
 async def update_portal_profile(data: dict, current_user: dict = Depends(get_current_user)):
-    """Update own profile fields (phone, address, emergency_contact, notes)"""
-    allowed = {"phone", "address", "emergency_contact", "notes", "name"}
+    """Update own profile fields. Whitelisted: contact info + basic identity."""
+    allowed = {"phone", "address", "emergency_contact", "notes", "name",
+               "date_of_birth", "dob", "birthday", "gender", "emergency_phone",
+               "address_line2", "city", "country"}
     update = {k: v for k, v in data.items() if k in allowed and v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # Normalise DOB aliases → date_of_birth
+    for alias in ("dob", "birthday"):
+        if alias in update and "date_of_birth" not in update:
+            update["date_of_birth"] = update.pop(alias)
+        else:
+            update.pop(alias, None)
 
     # Update user record
     update["updated_at"] = datetime.now(timezone.utc).isoformat()

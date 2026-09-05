@@ -4,18 +4,17 @@
 
 ## Approved backlog
 
-- **Server split** — break the ~1750-line `server.py` into smaller router files.
-- **Portal receipt scan from own portal** — user asked to defer (took defaults).
-  Once revisited: add a mobile-camera `Scan Receipt` button on `/portal/profile`
-  or a new `/portal/expenses` action that hits the existing `/api/finance/receipts/scan` endpoint.
-- **Portal audit sweep** — spot-check every existing Portal page (Family,
-  Documents, Events, Expenses, Sales, Tasks) to confirm profile-fix flows
-  (name/DOB/phone/address) end-to-end.
+- **Server split** — break `server.py` (~1750 lines) into smaller routers.
+- **Full portal audit sweep** — spot-check every remaining Portal page
+  (Family / Documents / Events / Expenses / Sales / Tasks) end-to-end;
+  iter 299 covered Profile only.
+- **Wallet .pkpass (proper Apple Wallet)** — currently offering PNG + Print
+  because .pkpass requires an Apple Developer signing certificate we don't
+  have. Deferred until certificates are provisioned.
 
 ## Explicit user boundaries
 
 > "Never suggest Wave H5 SDK again unless I call for it. Do not suggest
 > unrequested enhancements moving forward."
 
-> Iter 296+: **Multi-language translation files** (option e) are on hold
-> until the user explicitly requests them.
+> **Multi-language translation files** on hold until explicitly requested.

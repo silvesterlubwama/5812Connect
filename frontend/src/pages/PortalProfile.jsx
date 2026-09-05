@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Phone, Mail, MapPin, AlertTriangle, Save, Receipt, Clock, Send, Download } from 'lucide-react';
+import { User, Phone, Mail, MapPin, AlertTriangle, Save, Receipt, Clock, Send, Download, Camera } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -19,7 +19,7 @@ export default function PortalProfile() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', address: '', emergency_contact: '', notes: '' });
+  const [form, setForm] = useState({ name: '', phone: '', address: '', emergency_contact: '', notes: '', date_of_birth: '', gender: '' });
   const [checkins, setCheckins] = useState({ checkins: [], access_logs: [] });
   const [payslips, setPayslips] = useState([]);
   const [timesheets, setTimesheets] = useState([]);
@@ -112,6 +112,8 @@ export default function PortalProfile() {
           address: m?.address || '',
           emergency_contact: m?.emergency_contact || '',
           notes: m?.notes || '',
+          date_of_birth: m?.date_of_birth || u?.date_of_birth || '',
+          gender: m?.gender || u?.gender || '',
         });
       } catch { toast.error('Failed to load profile'); }
       finally { setLoading(false); }
@@ -200,11 +202,47 @@ export default function PortalProfile() {
         <CardContent className="p-4 flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">My Wallet Badge</p>
-            <p className="text-xs text-muted-foreground">Open a printable, wallet-ready badge. Add-to-Wallet or save the image to your phone from the badge page.</p>
+            <p className="text-xs text-muted-foreground">Open a printable, wallet-ready badge. Save Image to your phone or Print from the badge page.</p>
           </div>
           <Button size="sm" className="gap-1.5" onClick={openMyBadge} disabled={badgeLoading} data-testid="portal-open-my-badge">
             <Download size={14} /> {badgeLoading ? 'Preparing…' : 'View & Download'}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Scan Receipt — iter299: mobile-camera capture that POSTs the image to
+          /api/finance/receipts/scan; server OCRs it and drafts a JE in the
+          Finance Review Queue. */}
+      <Card className="shadow-soft rounded-xl" data-testid="portal-scan-receipt-card">
+        <CardContent className="p-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">Scan a receipt</p>
+            <p className="text-xs text-muted-foreground">Snap a photo — finance reviews it before posting.</p>
+          </div>
+          <label className="inline-flex items-center gap-1.5 h-9 rounded-md bg-primary text-primary-foreground px-3 text-sm font-medium cursor-pointer">
+            <Camera size={14} />
+            <span>Scan</span>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              capture="environment"
+              className="hidden"
+              data-testid="portal-scan-receipt-input"
+              onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                  const r = await api.post('/finance/receipts/scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                  toast.success(`Receipt sent to finance · ${r.data?.vendor || 'draft'} ${r.data?.total ? '· ' + r.data.total : ''}`);
+                } catch (err) {
+                  toast.error(err?.response?.data?.detail || 'Scan failed');
+                }
+                e.target.value = '';
+              }}
+            />
+          </label>
         </CardContent>
       </Card>
 
@@ -260,6 +298,27 @@ export default function PortalProfile() {
                 <Input value={form.emergency_contact} onChange={e => setForm({ ...form, emergency_contact: e.target.value })} data-testid="profile-emergency-input" />
               ) : (
                 <p className="text-sm">{member?.emergency_contact || '—'}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5">Date of birth</Label>
+              {editing ? (
+                <Input type="date" value={form.date_of_birth} onChange={e => setForm({ ...form, date_of_birth: e.target.value })} data-testid="profile-dob-input" />
+              ) : (
+                <p className="text-sm">{form.date_of_birth || member?.date_of_birth || profile?.date_of_birth || '—'}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5">Gender</Label>
+              {editing ? (
+                <select value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })} data-testid="profile-gender-input" className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="">—</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                </select>
+              ) : (
+                <p className="text-sm capitalize">{form.gender || member?.gender || profile?.gender || '—'}</p>
               )}
             </div>
           </div>
