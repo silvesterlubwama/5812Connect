@@ -205,10 +205,10 @@ async def _ensure_indexes():
             [("user_id", 1), ("date", 1)], unique=True, name="tdd_user_date"
         )
         await db.task_director_digests.create_index("date", expireAfterSeconds=7776000)  # 90d TTL
-        # HR / payroll — location + period lookups
-        await db.payslips.create_index("id", unique=True)
-        await db.payslips.create_index([("location_id", 1), ("period", 1)])
-        await db.payslips.create_index([("employee_id", 1), ("period", 1)])
+        # HR / payroll — location + period lookups.
+        # iter305: the canonical collection is `hr_payslips` (see routers/hr.py).
+        # The legacy `payslips` name was a ghost — no reads or writes ever
+        # targeted it. Only its `hr_payslips` counterparts are indexed here.
         await db.hr_employees.create_index("id", unique=True)
         await db.hr_employees.create_index([("location_id", 1), ("status", 1)])
         await db.hr_employees.create_index("user_id")

@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## iter 305 — 2026-02 — Ghost `payslips` collection removed
+
+`db.payslips` had three indexes registered in `db_indexes.py` but zero
+readers or writers anywhere in the app — every real payslip write goes
+to `db.hr_payslips` (see `routers/hr.py`, 30+ refs). The empty collection
+plus its dead indexes made routine debugging noisier ("wait, which one
+does HR use?").
+
+**What changed**
+- `db_indexes.py`: dropped the three `db.payslips.create_index(…)` calls,
+  left an inline note so future readers know `hr_payslips` is canonical.
+- `tests/test_iter296_indexes.py`: dropped the matching ghost assertion.
+- Dropped the empty `payslips` collection from the running MongoDB.
+
+**Verified**
+- Test suite: 55/55 (down from 56 by one removed ghost check).
+- `/api/hr/payslips` and `/api/hr/payslips/mine` still respond (empty
+  lists, as before — no real payslips exist yet in the test DB).
+- `hr_payslips` still carries its five `iter301` indexes intact.
+
 ## iter 304 — 2026-02 — Notifications consolidation
 
 Merged the two overlapping notifications routers into a single canonical

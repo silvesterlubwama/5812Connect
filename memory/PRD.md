@@ -51,6 +51,10 @@ social work, sales/POS/shipments, and self-service user portal.
   `_create_notification` import in `routers/financial.py` by exposing
   it as an alias. `server.py` now 488 lines.
 
+### iter 305 additions
+- Removed the ghost `db.payslips` collection + its three dead indexes.
+  `db.hr_payslips` is now unambiguously the single payroll collection.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

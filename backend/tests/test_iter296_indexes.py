@@ -44,7 +44,6 @@ def _key_specs(coll):
     ("bills", (("vendor_id", 1),)),
     ("recurring_entries", (("active", 1), ("next_run_date", 1))),
     ("task_director_digests", (("user_id", 1), ("date", 1))),
-    ("payslips", (("location_id", 1), ("period", 1))),
     ("hr_employees", (("location_id", 1), ("status", 1))),
     ("guest_passes", (("location_id", 1), ("status", 1), ("valid_from", -1))),
     # iter301 — hot-path index optimization pass
