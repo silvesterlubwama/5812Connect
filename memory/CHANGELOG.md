@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## iter 304 — 2026-02 — Notifications consolidation
+
+Merged the two overlapping notifications routers into a single canonical
+file at `routers/notifications.py`.
+
+**Before**: `server.py` owned the in-app feed (`list`, `unread-count`,
+`mark-read`, `create`, `delete`) with role-scoped filtering, while
+`routers/notifications.py` owned VAPID + push-subscribe with a **different**
+notification schema (`user_id`/`body`/`read` vs `target_role`/`message`/
+`read_by`). Which version answered `GET /api/notifications` depended on
+FastAPI include-order — brittle and confusing.
+
+**After**: one router owns every `/api/notifications/*` path, using the
+role-scoped schema server.py had. Includes:
+- `GET /api/notifications` (role-scoped list with computed `read` flag)
+- `GET /api/notifications/unread-count`
+- `POST /api/notifications` (create)
+- `PUT /api/notifications/read-all`
+- `PUT /api/notifications/{id}/read`
+- `DELETE /api/notifications/{id}`
+- `GET /api/notifications/vapid-key` (returns both `public_key` and
+  `publicKey` keys so old + new clients keep working)
+- `POST /api/notifications/subscribe`, `DELETE /api/notifications/subscribe`
+- Internal helper `create_notification()` + `_create_notification` alias
+  (the alias unblocks the previously-broken import in `routers/financial.py`
+  that was importing `_create_notification` — now it actually resolves).
+
+**server.py after this pass**: 488 lines (was 535 after iter303, 1910
+originally). ~74% smaller than the pre-refactor monolith.
+
+**Verified end-to-end** via HTTP:
+- List returns 2 notifs with computed `read` boolean.
+- Unread-count correct.
+- VAPID key returns both key names.
+- Create → mark-read → delete round-trip works cleanly.
+- Test suite: 57/57.
+
 ## iter 303 — 2026-02 — Route split (part 2)
 
 Continued the server.py trim by moving five endpoint groups out into

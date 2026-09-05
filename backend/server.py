@@ -261,58 +261,12 @@ from models import (
 
 
 # ========== LOCATION MODELS (moved to routers/locations.py) ==========
-
-class NotificationCreate(BaseModel):
-    title: str
-    message: str
-    type: str = "info"
-    target_role: Optional[str] = None
-    link: Optional[str] = None
+# NotificationCreate + all `/api/notifications/*` endpoints moved to
+# `routers/notifications.py` in iter304 (see the consolidated router).
 
 
 # ========== LOCATIONS (extracted to routers/locations.py) ==========
 # Location models also moved to routers/locations.py
-
-
-@api_router.get("/notifications")
-async def list_notifications(current_user: dict = Depends(get_current_user)):
-    role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
-    notifs = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
-    user_id = current_user["id"]
-    for n in notifs:
-        n["read"] = user_id in n.get("read_by", [])
-    return notifs
-
-@api_router.get("/notifications/unread-count")
-async def unread_notification_count(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}], "read_by": {"$ne": user_id}}
-    return {"count": await db.notifications.count_documents(query)}
-
-@api_router.put("/notifications/read-all")
-async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
-    await db.notifications.update_many(query, {"$addToSet": {"read_by": user_id}})
-    return {"message": "All marked as read"}
-
-@api_router.put("/notifications/{notif_id}/read")
-async def mark_notification_read(notif_id: str, current_user: dict = Depends(get_current_user)):
-    await db.notifications.update_one({"id": notif_id}, {"$addToSet": {"read_by": current_user["id"]}})
-    return {"message": "Marked as read"}
-
-@api_router.post("/notifications")
-async def create_notification(data: NotificationCreate, current_user: dict = Depends(get_current_user)):
-    doc = {"id": f"notif_{str(uuid.uuid4())[:8]}", **data.model_dump(), "read_by": [], "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"]}
-    await db.notifications.insert_one(doc); doc.pop("_id", None)
-    return doc
-
-@api_router.delete("/notifications/{notif_id}")
-async def delete_notification(notif_id: str, current_user: dict = Depends(get_current_user)):
-    await db.notifications.delete_one({"id": notif_id}); return {"message": "Notification deleted"}
 
 
 # ========== INCLUDE ALL ROUTERS ==========

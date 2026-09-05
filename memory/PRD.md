@@ -44,6 +44,13 @@ social work, sales/POS/shipments, and self-service user portal.
   and push subscribe endpoints moved into their own router files.
   `server.py` now 535 lines (was 1910 before iter302).
 
+### iter 304 additions
+- Notifications routers consolidated into `routers/notifications.py`.
+  Every `/api/notifications/*` path now lives in one file with the
+  role-scoped schema. Fixed the silently-broken
+  `_create_notification` import in `routers/financial.py` by exposing
+  it as an alias. `server.py` now 488 lines.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 
