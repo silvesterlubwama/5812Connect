@@ -47,6 +47,9 @@ async def record_transfer(data: dict, current_user: dict = Depends(require_staff
     amount = float(data.get("amount") or 0)
     fee_amount = float(data.get("fee_amount") or 0)
     fee_account_id = (data.get("fee_account_id") or "").strip()
+    location_id = (data.get("location_id") or "").strip()
+    if not location_id:
+        raise HTTPException(status_code=400, detail="location_id is required — every transfer must be tagged to a campus or sub-location")
     if not from_id or not to_id:
         raise HTTPException(status_code=400, detail="from_account_id and to_account_id are required")
     if from_id == to_id:
@@ -84,7 +87,7 @@ async def record_transfer(data: dict, current_user: dict = Depends(require_staff
         lines=lines,
         source="transfer",
         reference=data.get("reference"),
-        location_id=data.get("location_id"),
+        location_id=location_id,
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )

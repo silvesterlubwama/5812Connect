@@ -371,39 +371,74 @@ async def reject_guest_request(request_id: str, current_user: dict = Depends(get
 
 @router.post("/access/scan")
 async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)):
-    """Scan a resident or staff in/out of a restricted location"""
+    """Scan a resident / staff pass / guest pass in-or-out of a restricted
+    location. Guests are recognised in two ways:
+      1) An active `guest_passes` row (created when a guest_request is
+         approved) — matched by pass id (QR value) OR by name/phone.
+      2) A raw approved `guest_requests` row (back-compat path).
+    """
     member_id = data.get("member_id")
     location_id = data.get("location_id")
     action = data.get("action", "in")  # in or out
     guest_request_id = data.get("guest_request_id")
+    guest_pass_id = data.get("guest_pass_id") or data.get("pass_id") or data.get("qr_value")
     guest_name = data.get("guest_name")
+    guest_phone = data.get("guest_phone")
 
-    # Verify the person has access
-    is_resident = await db.residents.find_one({"member_id": member_id, "location_id": location_id, "status": "active"})
-    has_staff_pass = await db.staff_access.find_one({"staff_id": member_id, "location_id": location_id, "status": "active"})
-    guest_query = {
-        "location_id": location_id,
-        "status": "approved",
-        "visit_date": datetime.now(timezone.utc).date().isoformat(),
-    }
-    if guest_request_id:
-        guest_query["id"] = guest_request_id
-    if guest_name:
-        guest_query["guest_name"] = guest_name
-    is_approved_guest = await db.guest_requests.find_one(guest_query)
+    is_resident = await db.residents.find_one({"member_id": member_id, "location_id": location_id, "status": "active"}) if member_id else None
+    has_staff_pass = await db.staff_access.find_one({"staff_id": member_id, "location_id": location_id, "status": "active"}) if member_id else None
 
-    if not is_resident and not has_staff_pass and not is_approved_guest:
+    # ---- Guest pass (preferred) ----
+    guest_pass = None
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    if guest_pass_id:
+        guest_pass = await db.guest_passes.find_one({
+            "$or": [{"id": guest_pass_id}, {"qr_value": guest_pass_id}],
+            "location_id": location_id,
+            "status": "active",
+            "valid_from": {"$lte": today_iso},
+            "valid_until": {"$gte": today_iso},
+        })
+    if not guest_pass and (guest_name or guest_phone):
+        name_or_phone = []
+        if guest_name: name_or_phone.append({"guest_name": guest_name})
+        if guest_phone: name_or_phone.append({"guest_phone": guest_phone})
+        guest_pass = await db.guest_passes.find_one({
+            "$or": name_or_phone,
+            "location_id": location_id,
+            "status": "active",
+            "valid_from": {"$lte": today_iso},
+            "valid_until": {"$gte": today_iso},
+        })
+
+    # ---- Back-compat: legacy path checking guest_requests directly ----
+    is_approved_guest = None
+    if not guest_pass:
+        guest_query = {
+            "location_id": location_id,
+            "status": "approved",
+            "visit_date": today_iso,
+        }
+        if guest_request_id:
+            guest_query["id"] = guest_request_id
+        if guest_name:
+            guest_query["guest_name"] = guest_name
+        is_approved_guest = await db.guest_requests.find_one(guest_query)
+
+    if not is_resident and not has_staff_pass and not guest_pass and not is_approved_guest:
         raise HTTPException(status_code=403, detail="No access authorization for this restricted location")
 
+    access_type = "resident" if is_resident else ("staff" if has_staff_pass else "guest")
     scan = {
         "id": f"scan_{str(uuid.uuid4())[:8]}",
         "member_id": member_id,
         "location_id": location_id,
         "action": action,
         "scanned_by": current_user["id"],
-        "access_type": "resident" if is_resident else ("staff" if has_staff_pass else "guest"),
-        "guest_request_id": guest_request_id,
-        "guest_name": guest_name,
+        "access_type": access_type,
+        "guest_request_id": guest_request_id or (guest_pass or {}).get("guest_request_id"),
+        "guest_pass_id": (guest_pass or {}).get("id"),
+        "guest_name": guest_name or (guest_pass or {}).get("guest_name"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await db.access_scans.insert_one(scan)

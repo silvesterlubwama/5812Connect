@@ -200,6 +200,9 @@ async def scan_receipt(
         raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
+    location_id = (location_id or current_user.get("active_campus_id") or "").strip()
+    if not location_id:
+        raise HTTPException(status_code=400, detail="location_id is required — pick a campus or sub-location before scanning the receipt")
 
     text = _ocr(content, file.content_type or "")
     extracted = {
@@ -244,7 +247,7 @@ async def scan_receipt(
         ],
         source="receipt_scan",
         reference=f"RCP-{uuid.uuid4().hex[:8]}",
-        location_id=location_id or current_user.get("active_campus_id"),
+        location_id=location_id,
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )

@@ -15,6 +15,21 @@ Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank 
 - **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
 - **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
 
+## Iteration 291 (Feb 2026) — Session #5: Location-mandatory finance + JE editing + guest-pass scan
+
+### 🔴 Restricted-access — checkpoint scan wired to guest passes
+- `POST /api/access/scan` now accepts `guest_pass_id` / `pass_id` / `qr_value` and matches an active `guest_passes` row scoped to the same location and within the pass's valid_from/valid_until window. Falls back to matching by `guest_name` / `guest_phone`. Still keeps the legacy `guest_requests` path for back-compat. Scan doc now records `guest_pass_id` alongside `guest_request_id` for audit.
+- Location edit form already exposed both toggles (`is-restricted-toggle` + `allows-residents-toggle`) — verified, no change needed.
+
+### 🔴 Finance — every entry must belong to a location
+- `POST /api/finance/transactions/expense`, `/income`, `/transfers`, `/journal`, `/receipts/scan` now reject requests without `location_id` (HTTP 400 with a clear message). Sub-location tagging is finally enforceable at the API boundary.
+
+### 🟠 Finance — sub-location roll-up on reports
+- `_balances_by_account` in `reports.py` now BFS-walks 3 levels of `parent_id` when a parent campus is picked, so P&L / Trial Balance / Balance Sheet / Cash Flow at "Uganda" include every sub-location under it. Curl-verified.
+
+### 🟠 Finance — JE editing until period is closed
+- New `PUT /api/finance/journal/{je_id}` (director+). Metadata-only edits (description / reference / date) update in place and append to `edit_history`. Changing `lines` reverses the JE and posts a fresh replacement with `supersedes=<old_id>` so the audit trail preserves both sides. Refuses to edit into or out of a locked fiscal period (HTTP 400).
+
 ## Iteration 291 (Feb 2026) — Session #4: Receipt UI + Locked Periods UI + Auto-Issue UI + Legacy purge
 
 ### 🟢 Receipt Scan UI (mobile-first)
