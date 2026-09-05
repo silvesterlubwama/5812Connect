@@ -39,6 +39,11 @@ social work, sales/POS/shipments, and self-service user portal.
   and `seed_data.py` (`_seed_initial_data`). All function names still
   re-exported from `server` so external imports stay green.
 
+### iter 303 additions
+- Route split part 2: campus switcher, 2FA, biometric+NFC, Google auth,
+  and push subscribe endpoints moved into their own router files.
+  `server.py` now 535 lines (was 1910 before iter302).
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

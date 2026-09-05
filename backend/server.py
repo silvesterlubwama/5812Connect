@@ -270,74 +270,9 @@ class NotificationCreate(BaseModel):
     link: Optional[str] = None
 
 
-# ========== CAMPUS SWITCHER ==========
-
-@api_router.put("/user/active-campus")
-async def set_active_campus(data: dict, current_user: dict = Depends(get_current_user)):
-    """Set active campus for data filtering. Admins/EDs/Advisers can switch to any campus.
-    Multi-campus users can switch among their assigned campuses."""
-    from deps import has_campus_switcher
-    campus_id = data.get("campus_id")
-    if not campus_id:
-        raise HTTPException(status_code=400, detail="campus_id is required")
-    if has_campus_switcher(current_user) or is_system_admin(current_user):
-        pass  # Can switch to any campus
-    else:
-        # iter 260 — Compute the allowed campus set WITHOUT collapsing across
-        # siblings. Previous logic added parent campuses to `user_locs` and
-        # then enumerated every non-restricted child of `user_locs`, which
-        # granted a Director assigned to Haiti + Kenya access to sibling
-        # campuses (Uganda, United) under the same top-level parent. Now we
-        # keep two disjoint sets: `direct` (what the user was actually
-        # assigned) and `parents` (the campus each of those rolls up to,
-        # allowed as pin targets but NOT used to expand sibling siblings).
-        direct = set(current_user.get("location_ids") or [])
-        if current_user.get("location_id"):
-            direct.add(current_user["location_id"])
-        parents: set = set()
-        if direct:
-            parent_docs = await db.locations.find(
-                {"id": {"$in": list(direct)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
-                {"_id": 0, "parent_id": 1},
-            ).to_list(50)
-            for p in parent_docs:
-                if p.get("parent_id"):
-                    parents.add(p["parent_id"])
-        # Expand ONLY the user's direct campuses to their sub-locations
-        # (rooms/buildings). Sub-locations under parent campuses are not
-        # added — those belong to sibling campuses the user was never
-        # assigned to.
-        subs = []
-        if direct:
-            subs = await db.locations.find(
-                {"parent_id": {"$in": list(direct)}},
-                {"_id": 0, "id": 1, "is_restricted": 1},
-            ).to_list(200)
-        allowed = set(direct) | parents
-        for s in subs:
-            if not s.get("is_restricted") or s["id"] in direct:
-                allowed.add(s["id"])
-        if campus_id not in allowed:
-            loc = await db.locations.find_one({"id": campus_id}, {"_id": 0, "type": 1})
-            if not loc:
-                raise HTTPException(status_code=404, detail="Campus not found")
-            raise HTTPException(status_code=403, detail="You are not assigned to this campus or its sub-locations")
-    await db.users.update_one({"id": current_user["id"]}, {"$set": {"active_campus_id": campus_id}})
-    return {"active_campus_id": campus_id}
-
-
-@api_router.put("/user/active-campus/clear")
-async def clear_active_campus(current_user: dict = Depends(get_current_user)):
-    """Clear campus filter to show all data."""
-    await db.users.update_one({"id": current_user["id"]}, {"$unset": {"active_campus_id": ""}})
-    return {"active_campus_id": None}
-
-
 # ========== LOCATIONS (extracted to routers/locations.py) ==========
 # Location models also moved to routers/locations.py
 
-
-# ========== NOTIFICATIONS ==========
 
 @api_router.get("/notifications")
 async def list_notifications(current_user: dict = Depends(get_current_user)):
@@ -378,196 +313,6 @@ async def create_notification(data: NotificationCreate, current_user: dict = Dep
 @api_router.delete("/notifications/{notif_id}")
 async def delete_notification(notif_id: str, current_user: dict = Depends(get_current_user)):
     await db.notifications.delete_one({"id": notif_id}); return {"message": "Notification deleted"}
-
-
-# ========== WEB PUSH ==========
-
-@api_router.post("/push/subscribe")
-async def subscribe_push(data: dict, current_user: dict = Depends(get_current_user)):
-    subscription = data.get("subscription")
-    if not subscription or not subscription.get("endpoint"):
-        raise HTTPException(status_code=400, detail="Invalid push subscription")
-    await db.push_subscriptions.update_one({"user_id": current_user["id"]}, {"$set": {"user_id": current_user["id"], "subscription": subscription, "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-    return {"message": "Push subscription saved"}
-
-@api_router.delete("/push/subscribe")
-async def unsubscribe_push(current_user: dict = Depends(get_current_user)):
-    await db.push_subscriptions.delete_many({"user_id": current_user["id"]})
-    return {"message": "Push subscription removed"}
-
-@api_router.get("/push/vapid-key")
-async def get_vapid_key():
-    return {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", "")}
-
-async def send_push_to_user(user_id: str, title: str, body: str, url: str = "/"):
-    try:
-        from pywebpush import webpush
-        subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(10)
-        vapid_private = os.environ.get("VAPID_PRIVATE_KEY", "")
-        vapid_email = os.environ.get("VAPID_CLAIMS_EMAIL", "admin@5812global.org")
-        if not vapid_private: return
-        import json
-        payload = json.dumps({"title": title, "body": body, "url": url, "tag": f"5812-{user_id[:8]}"})
-        for sub in subs:
-            try:
-                webpush(subscription_info=sub["subscription"], data=payload, vapid_private_key=vapid_private, vapid_claims={"sub": f"mailto:{vapid_email}"})
-            except Exception as e:
-                if "410" in str(e) or "404" in str(e):
-                    await db.push_subscriptions.delete_one({"user_id": user_id, "subscription.endpoint": sub["subscription"].get("endpoint")})
-    except Exception as e:
-        logger.warning(f"Push failed: {e}")
-
-
-# ========== BIOMETRIC / NFC ==========
-
-@api_router.post("/biometric/register")
-async def register_biometric(data: dict, current_user: dict = Depends(get_current_user)):
-    member_id = data.get("member_id") or current_user["id"]
-    credential_id = data.get("credential_id")
-    public_key = data.get("public_key")
-    authenticator_type = data.get("type", "platform")
-    if not credential_id: raise HTTPException(status_code=400, detail="credential_id required")
-    doc = {"id": f"bio_{str(uuid.uuid4())[:8]}", "member_id": member_id, "credential_id": credential_id, "public_key": public_key, "type": authenticator_type, "created_at": datetime.now(timezone.utc).isoformat(), "last_used": None}
-    await db.biometric_credentials.insert_one(doc); doc.pop("_id", None)
-    return doc
-
-@api_router.post("/biometric/verify")
-async def verify_biometric(data: dict):
-    credential_id = data.get("credential_id")
-    if not credential_id: raise HTTPException(status_code=400, detail="credential_id required")
-    cred = await db.biometric_credentials.find_one({"credential_id": credential_id}, {"_id": 0})
-    if not cred: raise HTTPException(status_code=404, detail="Credential not found")
-    await db.biometric_credentials.update_one({"credential_id": credential_id}, {"$set": {"last_used": datetime.now(timezone.utc).isoformat()}})
-    member = await db.members.find_one({"id": cred["member_id"]}, {"_id": 0, "id": 1, "name": 1, "role": 1})
-    return {"verified": True, "member": member, "credential_type": cred.get("type")}
-
-@api_router.post("/nfc/register")
-async def register_nfc(data: dict, current_user: dict = Depends(get_current_user)):
-    member_id = data.get("member_id"); serial_number = data.get("serial_number")
-    if not member_id or not serial_number: raise HTTPException(status_code=400, detail="member_id and serial_number required")
-    existing = await db.nfc_tags.find_one({"serial_number": serial_number})
-    if existing: raise HTTPException(status_code=409, detail="NFC tag already registered")
-    doc = {"id": f"nfc_{str(uuid.uuid4())[:8]}", "member_id": member_id, "serial_number": serial_number, "registered_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat()}
-    await db.nfc_tags.insert_one(doc); doc.pop("_id", None)
-    return doc
-
-@api_router.post("/nfc/scan")
-async def scan_nfc(data: dict):
-    serial_number = data.get("serial_number")
-    if not serial_number: raise HTTPException(status_code=400, detail="serial_number required")
-    tag = await db.nfc_tags.find_one({"serial_number": serial_number}, {"_id": 0})
-    if not tag: raise HTTPException(status_code=404, detail="NFC tag not registered")
-    member = await db.members.find_one({"id": tag["member_id"]}, {"_id": 0, "id": 1, "name": 1, "role": 1, "group": 1})
-    if not member: raise HTTPException(status_code=404, detail="Member not found")
-    return {"member": member, "tag_id": tag["id"]}
-
-
-# ========== APP SETTINGS (extracted to routers/settings.py) ==========
-
-
-# ========== GOOGLE OAUTH ==========
-
-@api_router.post("/auth/google")
-async def google_auth(data: dict):
-    """Authenticate via Google OAuth token."""
-    google_token = data.get("token") or data.get("credential")
-    if not google_token:
-        raise HTTPException(status_code=400, detail="Google token required")
-    try:
-        from emergentintegrations.llm.google_auth import verify_google_token
-        google_user = verify_google_token(google_token)
-    except ImportError:
-        # Fallback: decode JWT manually
-        import base64
-        parts = google_token.split(".")
-        if len(parts) >= 2:
-            payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
-            google_user = {"email": payload.get("email"), "name": payload.get("name"), "picture": payload.get("picture")}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid Google token")
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Google auth failed: {str(e)}")
-    email = google_user.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="No email from Google")
-    user = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user:
-        user = {
-            "id": str(uuid.uuid4()), "name": google_user.get("name", email.split("@")[0]),
-            "email": email, "phone": "", "password_hash": "",
-            "role": "Guest", "status": "pending", "avatar": google_user.get("picture", ""),
-            "auth_provider": "google",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.users.insert_one({**user})
-        user.pop("_id", None)
-    else:
-        if google_user.get("picture"):
-            await db.users.update_one({"email": email}, {"$set": {"avatar": google_user["picture"]}})
-    token = create_token(user["id"])
-    return {"token": token, "user": {k: v for k, v in user.items() if k != "password_hash"}}
-
-
-# ========== 2FA (TOTP) ==========
-
-@api_router.post("/auth/2fa/setup")
-async def setup_2fa(current_user: dict = Depends(get_current_user)):
-    import pyotp
-    secret = pyotp.random_base32()
-    totp = pyotp.TOTP(secret)
-    uri = totp.provisioning_uri(name=current_user.get("email", ""), issuer_name="58:12 Global Connect")
-    await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_secret": secret, "totp_enabled": False}})
-    try:
-        import qrcode, base64
-        from io import BytesIO
-        img = qrcode.make(uri)
-        buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
-        qr_base64 = base64.b64encode(buf.read()).decode()
-        return {"secret": secret, "uri": uri, "qr_code": f"data:image/png;base64,{qr_base64}"}
-    except Exception:
-        return {"secret": secret, "uri": uri}
-
-
-@api_router.post("/auth/2fa/verify")
-async def verify_2fa(data: dict, current_user: dict = Depends(get_current_user)):
-    import pyotp
-    code = data.get("code", "")
-    user = await db.users.find_one({"id": current_user["id"]}, {"_id": 0, "totp_secret": 1})
-    secret = user.get("totp_secret") if user else None
-    if not secret:
-        raise HTTPException(status_code=400, detail="2FA not set up")
-    totp = pyotp.TOTP(secret)
-    if totp.verify(code):
-        await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_enabled": True}})
-        return {"verified": True, "message": "2FA enabled successfully"}
-    raise HTTPException(status_code=400, detail="Invalid code")
-
-
-@api_router.post("/auth/2fa/validate")
-async def validate_2fa_login(data: dict):
-    """Validate 2FA code during login."""
-    import pyotp
-    user_id = data.get("user_id")
-    code = data.get("code", "")
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "totp_secret": 1, "totp_enabled": 1})
-    if not user or not user.get("totp_enabled"):
-        return {"valid": True}
-    totp = pyotp.TOTP(user["totp_secret"])
-    if totp.verify(code):
-        return {"valid": True}
-    raise HTTPException(status_code=400, detail="Invalid 2FA code")
-
-
-@api_router.delete("/auth/2fa")
-async def disable_2fa(current_user: dict = Depends(get_current_user)):
-    await db.users.update_one({"id": current_user["id"]}, {"$set": {"totp_enabled": False, "totp_secret": None}})
-    return {"message": "2FA disabled"}
-
-
-# ========== GDPR, INVENTORY, FINANCIAL APIs (extracted to routers/settings.py) ==========
-
-
-# ========== FINANCIAL API MANAGEMENT (extracted to routers/settings.py) ==========
 
 
 # ========== INCLUDE ALL ROUTERS ==========
@@ -693,6 +438,18 @@ try:
     app.include_router(shipments_router)
     app.include_router(fare_alerts_router)
     app.include_router(security_companies_router)
+
+    # iter303 — endpoint blocks extracted from server.py
+    from routers.campus_switcher import router as campus_switcher_router
+    from routers.two_factor import router as two_factor_router
+    from routers.biometric_nfc import router as biometric_nfc_router
+    from routers.google_auth import router as google_auth_router
+    from routers.push import router as push_router
+    app.include_router(campus_switcher_router)
+    app.include_router(two_factor_router)
+    app.include_router(biometric_nfc_router)
+    app.include_router(google_auth_router)
+    app.include_router(push_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

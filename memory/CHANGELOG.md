@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## iter 303 — 2026-02 — Route split (part 2)
+
+Continued the server.py trim by moving five endpoint groups out into
+dedicated router files under `/app/backend/routers/`.
+
+**What moved**
+- `routers/campus_switcher.py` — `PUT /api/user/active-campus`,
+  `PUT /api/user/active-campus/clear`.
+- `routers/two_factor.py` — `POST /api/auth/2fa/setup|verify|validate`,
+  `DELETE /api/auth/2fa`.
+- `routers/biometric_nfc.py` — `POST /api/biometric/register|verify`,
+  `POST /api/nfc/register|scan`.
+- `routers/google_auth.py` — `POST /api/auth/google`.
+- `routers/push.py` — `POST /api/push/subscribe`,
+  `DELETE /api/push/subscribe`, `GET /api/push/vapid-key`.
+- Deleted the legacy `send_push_to_user` helper (was unused after iter302).
+
+**server.py after this pass**: 535 lines (was 777 after iter302, 1910
+originally). ~72% smaller than the pre-refactor monolith.
+
+**Verified**
+- All 13 extracted routes resolve via `app.routes`.
+- `/api/push/vapid-key`, `/api/auth/2fa/setup`, `/api/auth/2fa` (delete),
+  `/api/user/active-campus[/clear]`, `/api/nfc/scan` — all return correct
+  HTTP responses end-to-end via the preview URL.
+- Test suite unchanged at 57/57.
+
 ## iter 302 — 2026-02 — server.py modularization
 
 Split the monolithic `server.py` (1910 lines) into focused sibling modules
