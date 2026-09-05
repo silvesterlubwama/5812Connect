@@ -1,38 +1,35 @@
 # CHANGELOG
 
-## iter 299 — 2026-02 — Portal receipt scan · profile audit · badge PNG · manual-payslip verify
+## iter 300 — 2026-02 — Portal audit sweep — verified & one dead-state cleanup
 
-**Badge PNG / Print fix** — `WalletBadgePage` rewritten. Old copy told users
-to "Add to Home Screen" which only saved the URL — the QR + photo weren't
-actually captured on the phone. Now:
-- **Save to Photos** button captures the whole styled badge card (photo + QR
-  pixels + country outline + logo) to a PNG via `html2canvas` at 2× scale and
-  triggers a download so mobile browsers drop it straight into the camera roll.
-- **Print** button opens the OS print dialog; a `@media print` block hides
-  the action bar and slate background so only the card prints.
-- Auto-print via `?print=1` still works untouched.
-- Added `html2canvas@1.4.1` to `frontend/package.json`.
-- `data-testid`s: `badge-card`, `badge-download-png`, `badge-print`.
+Walked every Portal page end-to-end and confirmed both the frontend and
+backend endpoints are wired correctly.
 
-**Portal audit — name/DOB/phone/address/gender end-to-end** — Backend
-`PUT /api/portal/profile` whitelist grown to include `date_of_birth`, `dob`,
-`birthday`, `gender`, `emergency_phone`, `address_line2`, `city`, `country`;
-`dob` / `birthday` alias to `date_of_birth`. `PortalProfile` form now
-carries `date_of_birth` (`profile-dob-input`) + `gender`
-(`profile-gender-input`). Verified end-to-end via curl:
-`PUT /portal/profile {dob:'1985-04-12', gender:'male'}` → response persists
-both fields on the `users` row (and mirrors to the linked `members` row).
+**Endpoint parity (all 200 as admin)**
+- `GET /api/portal/dashboard` · `GET/PUT /api/portal/profile`
+- `POST /api/portal/my-wallet-badge` · `POST /api/portal/children/{id}/wallet-badge`
+- `GET /api/portal/tasks` · `PUT /api/portal/tasks/{id}/status`
+- `GET/POST /api/portal/expenses` · `POST /api/portal/cash-request`
+- `GET /api/portal/events` · `POST /api/portal/events/{id}/rsvp`
+- `GET /api/portal/checkins` · `GET /api/portal/documents` · `POST /api/portal/documents/upload`
+- `GET /api/portal/sales`
+- `GET/PUT /api/portal/family` · `POST /api/portal/family/children` · `POST /api/portal/family/guardians`
+  (last three return 404 "No family found" when the caller has no family — expected).
 
-**Portal Receipt Scan** — new card on `PortalProfile` with a mobile-camera
-`Scan` button (`portal-scan-receipt-input`) that POSTs the image to
-`/api/finance/receipts/scan`. The existing OCR pipeline drafts a JE that
-lands in the Finance Review Queue for approval — no new backend work
-required.
+**Frontend parity per page**
+- `PortalProfile` — edits name/phone/address/emergency/DOB/gender (iter 299), scans receipts (iter 299), issues own Wallet badge (iter 298), submits weekly Mon–Sun timesheet (iter 298), requests PTO. All wired.
+- `PortalFamily` — CRUD works: add child, edit child (`childrenApi.update`), issue child badge, add guardian, remove guardian, update family. All wired.
+- `PortalDocuments` — list + upload + fulfil requests (`documentsApi` + `portalApi.documents`). Wired.
+- `PortalEvents` — list + RSVP. Wired.
+- `PortalExpenses` — list + create expense + cash-request dialog (`reason` field already correctly named). Wired.
+- `PortalSales` — read-only sales history. Wired.
+- `PortalTasks` — list + status transitions via `portalApi.updateTaskStatus`. Wired.
 
-**Manual Payslip UI shortcut — already exists** — Verified `HRPage.jsx:392`
-already exposes a `Manual Payslip` button (`data-testid="manual-payslip-btn"`)
-that opens the manual-payslip dialog at line 734 and posts to the existing
-`/api/hr/payslips/manual`. No change needed.
+**Cleanup**
+- Removed unused `tsForm` state from `PortalProfile.jsx` — leftover from
+  the iter 298 refactor to the `tsWeek` Mon–Sun grid.
+
+**No functional bugs found. No new features required — all Portal edits stick end-to-end.**
 
 ---
-(prior entries iter 292–298 unchanged)
+(prior entries iter 292–299 unchanged)

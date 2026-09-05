@@ -27,7 +27,6 @@ export default function PortalProfile() {
   const [showTimesheet, setShowTimesheet] = useState(false);
   const [showPto, setShowPto] = useState(false);
   const [ptoForm, setPtoForm] = useState({ start_date: new Date().toISOString().slice(0, 10), end_date: new Date().toISOString().slice(0, 10), reason: '' });
-  const [tsForm, setTsForm] = useState({ period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
   const [viewingPayslip, setViewingPayslip] = useState(null);
   const [myBadge, setMyBadge] = useState(null);   // { token } once issued
   const [badgeLoading, setBadgeLoading] = useState(false);
