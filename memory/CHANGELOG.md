@@ -15,6 +15,20 @@ Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank 
 - **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
 - **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
 
+## Iteration 291 (Feb 2026) — Session #7: JE line reclassify + Kiosk guest-pass + toggles verified
+
+### 🟢 JE line reclassifying (account swap)
+- Edit dialog got a **Reclassify lines** button. Toggling into line-edit mode reveals an Account `<Select>` per line (populated from CoA) plus editable memo. Debit/credit amounts stay read-only (balance preserved). Save button flips to **Reverse & repost** so users know the audit trail path.
+- Backend `PUT /api/finance/journal/{je_id}` now re-fetches after setting `supersedes` so the response actually carries the link. Curl-verified: original JE flips to `reversed=True`, new JE carries `supersedes=<old_id>`.
+
+### 🟢 Guest-pass scanning on kiosk
+- `KioskPage` `handleScan` mirrors AccessPage behaviour: values starting with `gp_` are sent as `guest_pass_id`. Front-desk kiosks now scan approved guests straight through the same validation path as security checkpoints.
+
+### 🔍 Restricted-access toggles — verified end-to-end
+- Created a sub-location with `is_restricted=true` + `allows_residents=false` → both fields persist on GET.
+- Flipped `allows_residents` to `true` via PUT → change persists.
+- Guest-pass scan path invoked correctly on the restricted location (validation reached the guest_passes table lookup).
+
 ## Iteration 291 (Feb 2026) — Session #6: JE edit UI · Guest-pass scan payload · accounting.py deleted · Sales spot-check
 
 ### 🟢 JE Edit UI on Journal tab

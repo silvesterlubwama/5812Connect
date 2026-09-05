@@ -118,7 +118,8 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
         created_by_name=current_user.get("name"),
     )
     await db.finance_journal_entries.update_one({"id": new_je["id"]}, {"$set": {"supersedes": je_id}})
-    return new_je
+    # Re-fetch so the response includes the supersedes link the caller expects.
+    return await db.finance_journal_entries.find_one({"id": new_je["id"]}, {"_id": 0})
 
 
 @router.post("/{je_id}/reverse")

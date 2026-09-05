@@ -583,7 +583,20 @@ export default function KioskPage() {
         if (!memberId) throw new Error('Biometric credential not recognized');
       }
 
-      const res = await accessApi.scan({ member_id: memberId, location_id: selectedLocation, action: scanAction });
+      // iter 291 — front-desk kiosk mirrors the checkpoint behaviour:
+      // if the scanned value looks like a guest-pass QR (`gp_XXXXXX`), send
+      // it as `guest_pass_id` so the backend validates against
+      // `guest_passes` (approved-request → time-boxed pass) rather than a
+      // member badge. Falls through to the normal member scan otherwise.
+      const scanPayload = { location_id: selectedLocation, action: scanAction };
+      const scanned = (scanMemberId || '').trim();
+      if (scanned.startsWith('gp_')) {
+        scanPayload.guest_pass_id = scanned;
+        scanPayload.member_id = 'guest';
+      } else {
+        scanPayload.member_id = memberId;
+      }
+      const res = await accessApi.scan(scanPayload);
       setScanResult({ success: true, ...res.data });
       setTodayStats(prev => ({ ...prev, scans: prev.scans + 1 }));
       setRecentScans(prev => [{ id: Date.now(), member_id: memberId, action: scanAction, timestamp: new Date().toISOString(), ...res.data }, ...prev.slice(0, 9)]);

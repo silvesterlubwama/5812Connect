@@ -417,7 +417,8 @@ function JournalPanel() {
   const [expanded, setExpanded] = useState({});
   const [reversing, setReversing] = useState(null); // je object being reversed
   const [editing, setEditing] = useState(null); // je object being edited (metadata only)
-  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '' });
+  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', lines: null });
+  const [editAccounts, setEditAccounts] = useState([]); // CoA cache for the line-editor account swap
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   // Filters — kept in the URL query string on submit so the exact list can be shared
@@ -442,17 +443,49 @@ function JournalPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { reload().catch(() => {}); }, [filters.date_from, filters.date_to, filters.source, filters.include_reversed]);
 
-  // When a JE is selected for editing, pre-fill the metadata form.
+  // When a JE is selected for editing, pre-fill the metadata form and pull
+  // the current CoA once for the account-swap dropdown.
   useEffect(() => {
-    if (editing) setEditForm({ description: editing.description || '', reference: editing.reference || '', date: editing.date || '' });
+    if (!editing) return;
+    setEditForm({ description: editing.description || '', reference: editing.reference || '', date: editing.date || '', lines: null });
+    if (editAccounts.length === 0) {
+      api.get('/finance/chart-of-accounts').then(r => setEditAccounts(r.data || [])).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
+
+  // Enter line-edit mode = clone the JE's lines into editForm.lines so
+  // users can swap accounts / tweak memos without touching the amounts.
+  const startLineEdit = () => {
+    if (!editing) return;
+    setEditForm(f => ({ ...f, lines: (editing.lines || []).map(ln => ({ ...ln })) }));
+  };
+  const cancelLineEdit = () => setEditForm(f => ({ ...f, lines: null }));
+  const swapAccount = (idx, acctId) => {
+    const acct = editAccounts.find(a => a.id === acctId);
+    if (!acct) return;
+    setEditForm(f => ({
+      ...f,
+      lines: f.lines.map((ln, i) => i === idx ? { ...ln, account_id: acct.id, account_code: acct.code, account_name: acct.name } : ln),
+    }));
+  };
+  const setLineMemo = (idx, memo) => setEditForm(f => ({ ...f, lines: f.lines.map((ln, i) => i === idx ? { ...ln, memo } : ln) }));
 
   const saveEdit = async () => {
     if (!editing) return;
     setBusy(true);
     try {
-      await api.put(`/finance/journal/${editing.id}`, editForm);
-      toast.success('Entry updated');
+      const payload = { description: editForm.description, reference: editForm.reference, date: editForm.date };
+      if (editForm.lines) {
+        // Backend reverse-and-repost path expects the full lines array —
+        // strip client-only fields, keep the balanced debit/credit values.
+        payload.lines = editForm.lines.map(ln => ({
+          account_id: ln.account_id, account_code: ln.account_code, account_name: ln.account_name,
+          debit: Number(ln.debit || 0), credit: Number(ln.credit || 0), memo: ln.memo || '',
+        }));
+      }
+      await api.put(`/finance/journal/${editing.id}`, payload);
+      toast.success(editForm.lines ? 'Entry replaced (audit trail preserved)' : 'Entry updated');
       setEditing(null);
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
@@ -585,20 +618,65 @@ function JournalPanel() {
         )}
       </CardContent>
       <Dialog open={!!editing} onOpenChange={o => !o && setEditing(null)}>
-        <DialogContent className="max-w-md" data-testid="journal-edit-dialog">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="journal-edit-dialog">
           <DialogHeader><DialogTitle>Edit journal entry</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">Metadata edits (description, reference, date) update in place with an audit trail. Refused if the fiscal period is locked.</p>
+          <p className="text-xs text-muted-foreground">Metadata edits (description / reference / date) update in place with an audit trail. Reclassifying lines reverses this entry and posts a fresh one linked via <code>supersedes</code>. Both paths refuse when the fiscal period is locked.</p>
           <div className="space-y-3 pt-2">
             <div><Label className="text-xs">Description</Label><Input value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} data-testid="journal-edit-description" /></div>
-            <div><Label className="text-xs">Reference / receipt #</Label><Input value={editForm.reference} onChange={e => setEditForm({ ...editForm, reference: e.target.value })} data-testid="journal-edit-reference" /></div>
-            <div><Label className="text-xs">Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="journal-edit-date" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-xs">Reference / receipt #</Label><Input value={editForm.reference} onChange={e => setEditForm({ ...editForm, reference: e.target.value })} data-testid="journal-edit-reference" /></div>
+              <div><Label className="text-xs">Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="journal-edit-date" /></div>
+            </div>
+
+            <div className="pt-2 border-t">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-muted-foreground">Lines</span>
+                {editForm.lines ? (
+                  <Button size="sm" variant="ghost" onClick={cancelLineEdit} className="h-6 text-xs" data-testid="journal-edit-lines-cancel">Discard line changes</Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={startLineEdit} className="h-6 text-xs" data-testid="journal-edit-lines-start">Reclassify lines</Button>
+                )}
+              </div>
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/40 text-muted-foreground">
+                    <tr><th className="text-left px-2 py-1.5">Account</th><th className="text-right px-2 py-1.5 w-20">Debit</th><th className="text-right px-2 py-1.5 w-20">Credit</th><th className="text-left px-2 py-1.5 w-40">Memo</th></tr>
+                  </thead>
+                  <tbody>
+                    {(editForm.lines || editing?.lines || []).map((ln, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-2 py-1.5">
+                          {editForm.lines ? (
+                            <Select value={ln.account_id} onValueChange={v => swapAccount(i, v)}>
+                              <SelectTrigger className="h-7 text-xs" data-testid={`journal-edit-line-account-${i}`}><SelectValue /></SelectTrigger>
+                              <SelectContent>{editAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name} <span className="text-muted-foreground">({a.type})</span></SelectItem>)}</SelectContent>
+                            </Select>
+                          ) : (
+                            <span className="font-mono">{ln.account_code} — {ln.account_name}</span>
+                          )}
+                        </td>
+                        <td className="text-right font-mono px-2 py-1.5">{ln.debit ? money(ln.debit) : ''}</td>
+                        <td className="text-right font-mono px-2 py-1.5">{ln.credit ? money(ln.credit) : ''}</td>
+                        <td className="px-2 py-1.5">
+                          {editForm.lines ? (
+                            <Input value={ln.memo || ''} onChange={e => setLineMemo(i, e.target.value)} className="h-7 text-xs" data-testid={`journal-edit-line-memo-${i}`} />
+                          ) : (ln.memo || '—')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {editForm.lines && <p className="text-[11px] text-amber-700 mt-2">Saving with line changes will REVERSE this entry and post a replacement. Debit and credit totals stay untouched — swap accounts / edit memos only.</p>}
+            </div>
+
             {editing?.edit_history?.length > 0 && (
               <p className="text-[11px] text-muted-foreground">Previously edited {editing.edit_history.length}×</p>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)} disabled={busy}>Cancel</Button>
-            <Button onClick={saveEdit} disabled={busy} data-testid="journal-edit-save">{busy ? 'Saving…' : 'Save'}</Button>
+            <Button onClick={saveEdit} disabled={busy} data-testid="journal-edit-save">{busy ? 'Saving…' : editForm.lines ? 'Reverse & repost' : 'Save'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
