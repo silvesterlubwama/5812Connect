@@ -1,42 +1,39 @@
 # CHANGELOG
 
-## iter 296 — 2026-02 — Finance/AP/HR/access MongoDB indexes + bcrypt pin verify
+## iter 297 — 2026-02 — PWA offline data · Wallet cache · Digest Snooze
 
-**MongoDB hot-path indexes** — Every collection introduced/heavily used since
-iter 285 (finance ledger, AP, HR, guest passes, director digest) was still
-running on a single `_id_` index. `_ensure_indexes()` in `server.py` now
-creates 40+ additional indexes on:
-- `finance_journal_entries` — id, `(location_id, reversed, date)`,
-  `(source, reference)`, `lines.account_id`, `date`, plus a partial-unique
-  `idempotency_key` index scoped to `reversed=false` so replays after
-  reversal remain safe.
-- `finance_chart_of_accounts` — `id`, `code` (unique), `(type, active)`.
-- `bank_accounts`, `vendors`, `bills`, `bank_transactions`,
-  `recurring_entries`, `reconciliation_rules`.
-- `task_director_digests` — `(user_id, date)` unique for once-per-day
-  idempotency; 90-day TTL on `date`.
-- `payslips`, `hr_employees`, `hr_contracts`.
-- `guest_passes`, `guest_access_requests`, `checkpoint_events`.
-- `kanban_boards` (alias collection).
+**PWA offline data cache** — `sw.js` bumped to `5812-crm-v4` and grew a
+third named cache `5812-offline-data-v1`. New `isOfflineDataRequest()`
+allow-list covers `/api/auth/me`, `/api/dashboard/stats`, `/api/locations`,
+`/api/tasks`, `/api/events*`, `/api/access/checkpoints`, and the
+director-digest-preview — all served stale-while-revalidate so today's
+roster + user dashboard render immediately with zero signal. On login a
+new `prefetch-offline-set` message tells the SW to preload the entire
+bundle (auth token forwarded so the SW can authenticate the preload).
 
-**Bcrypt pinning — verified** — `bcrypt==3.2.2` + `passlib==1.7.4` already
-locked to exact versions in `requirements.txt`; installed versions match.
-Login end-to-end validated after the index rollout.
+**Wallet pass cache on login** — The same offline-prefetch hook also
+preloads the current user's `/api/members/<id>/qr-code` and
+`/profile-photo`, so their badge scans at the checkpoint even when the
+signal is out. Existing per-badge `prefetch-wallet-pass` from
+`WalletBadgePage` still works and now piggybacks on the same cache.
 
-**Header-button "overflow" on People / HR / Sales — false positive** — The
-buttons flagged in the previous audit are `TabsTrigger` elements inside the
-horizontally-scrolling `TabsList` that iter 295 introduced. They are
-accessible via scroll (visually and functionally correct); no fix needed.
+**Digest Snooze** — `DirectorDigestWidget` rows gained a small
+snooze icon (`MoonStar`, `data-testid="digest-snooze-<id>"`). One click
+POSTs to the existing `/api/tasks/<id>/snooze` with `days=1` — the task
+drops out of tomorrow's digest. Optimistic UI + background reload keep
+the widget count in sync. Directors are already in the endpoint's
+`privileged` role set (`routers/tasks.py:373-375`), so no backend changes
+needed.
 
 **Verification**
-- New pytest `tests/test_iter296_indexes.py`: 21 parametrised assertions
-  covering every index plus the partial-unique + TTL guards.
-- Bank/finance migration regression pytest re-run and still green.
-- Curl smoke: `/api/finance/journal`, `/api/finance/chart-of-accounts`,
-  `/api/bank/{accounts,bills,vendors}`, `/api/tasks/director-digest-preview`,
-  `/api/health` — all 200.
+- Curl end-to-end: seeded overdue task → digest count=1 → snooze POST →
+  digest count=0 → cleanup. All 200.
+- Testing agent iter 230: full regression pass.
 
 ---
+
+## iter 296 — 2026-02 — Finance/AP/HR/access MongoDB indexes + bcrypt pin verify
+(previous, unchanged)
 
 ## iter 295 — 2026-02 — Digest widget · Mobile tabs on People/HR/Sales
 (previous, unchanged)

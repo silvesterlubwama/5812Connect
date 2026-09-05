@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { AlertCircle, Mail, ArrowRight } from 'lucide-react';
+import { AlertCircle, Mail, ArrowRight, MoonStar } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 import api from '../services/api';
 
 /**
@@ -14,22 +15,41 @@ import api from '../services/api';
  *   • the caller isn't a director+ role (backend returns eligible=false)
  *   • there are zero overdue tasks in the caller's scope
  * Otherwise the widget shows a red-accented count, the top few late tasks,
- * and a link to Tasks. Directors can spot fires before their morning email
- * even arrives.
+ * a "Snooze 1 day" button per row (so it drops out of tomorrow's digest),
+ * and a link to Tasks.
  */
 export default function DirectorDigestWidget() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [snoozingId, setSnoozingId] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = () => {
     api.get('/tasks/director-digest-preview')
-      .then(r => { if (!cancelled) setData(r.data); })
-      .catch(() => { if (!cancelled) setErr(true); });
-    return () => { cancelled = true; };
-  }, []);
+      .then(r => setData(r.data))
+      .catch(() => setErr(true));
+  };
+  useEffect(() => { load(); }, []);
 
   if (err || !data || !data.eligible || data.task_count === 0) return null;
+
+  const snooze1Day = async (id) => {
+    setSnoozingId(id);
+    try {
+      await api.post(`/tasks/${id}/snooze`, { days: 1 });
+      toast.success('Snoozed 1 day — drops out of tomorrow’s digest');
+      // Optimistically remove from the visible list; reload for authoritative count
+      setData(d => d && ({
+        ...d,
+        task_count: d.task_count - 1,
+        tasks: (d.tasks || []).filter(t => t.id !== id),
+      }));
+      // Background refetch in case the count differs (multiple assignees etc.)
+      setTimeout(load, 400);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Snooze failed');
+    }
+    setSnoozingId(null);
+  };
 
   const shown = (data.tasks || []).slice(0, 5);
   return (
@@ -60,6 +80,15 @@ export default function DirectorDigestWidget() {
                   <span className="text-muted-foreground"> · {t.assignee_names.slice(0, 3).join(', ')}</span>
                 )}
               </span>
+              <button
+                onClick={() => snooze1Day(t.id)}
+                disabled={snoozingId === t.id}
+                data-testid={`digest-snooze-${t.id}`}
+                title="Snooze 1 day — drops out of tomorrow’s digest"
+                className="shrink-0 text-muted-foreground hover:text-rose-700 disabled:opacity-40"
+              >
+                <MoonStar size={13} />
+              </button>
             </li>
           ))}
         </ul>

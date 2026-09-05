@@ -2,15 +2,15 @@
 
 ## P0 / P1 — none open
 
-## P2 / Future — Approved backlog
+## Approved backlog
 
-- **PWA offline support + Service Worker for Wallet passes** — next up per user (d).
-- **`server.py` modularization** — after PWA per user (c).
+- **Next (c)** `server.py` modularization — split ~1750-line server.py into
+  smaller router files.
 
 ## Explicit user boundaries
 
 > "Never suggest Wave H5 SDK again unless I call for it. Do not suggest
 > unrequested enhancements moving forward."
 
-> Iter 296: **Multi-language translation files** are on hold until the user
-> explicitly calls for them. Do not propose or begin i18n work.
+> Iter 296+: **Multi-language translation files** (option e) are on hold
+> until the user explicitly calls for them. Do not propose or begin i18n work.

@@ -1,6 +1,7 @@
 /* eslint-disable no-restricted-globals */
-const CACHE_NAME = '5812-crm-v3';
+const CACHE_NAME = '5812-crm-v4';
 const WALLET_CACHE = '5812-wallet-v1';
+const OFFLINE_DATA_CACHE = '5812-offline-data-v1';
 const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/logo192.png', '/logo512.png'];
 const DB_NAME = '5812-offline-queue';
 const STORE_NAME = 'messages';
@@ -47,11 +48,11 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// ---- Activate: purge old caches, keep wallet cache ----
+// ---- Activate: purge old caches, keep wallet + offline-data caches ----
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => Promise.all(
-      keys.filter((k) => k !== CACHE_NAME && k !== WALLET_CACHE).map((k) => caches.delete(k))
+      keys.filter((k) => k !== CACHE_NAME && k !== WALLET_CACHE && k !== OFFLINE_DATA_CACHE).map((k) => caches.delete(k))
     )).then(() => self.clients.claim())
   );
 });
@@ -64,6 +65,22 @@ function isWalletRequest(url) {
       || p.startsWith('/api/wallet-badge/')
       || p.startsWith('/api/members/') && p.includes('/qr-code')
       || p.startsWith('/api/members/') && p.includes('/profile-photo');
+}
+
+// ---- Offline-data detection: today's roster + user's own dashboard essentials ----
+// These endpoints are cached "stale-while-revalidate" so staff can view today's
+// roster and their own tasks with zero signal at the door. Cache is bounded to
+// a small allowlist so we don't grow unboundedly.
+function isOfflineDataRequest(url) {
+  const p = url.pathname;
+  return p === '/api/dashboard/stats'
+      || p === '/api/dashboard'
+      || p.startsWith('/api/events')
+      || p === '/api/tasks'
+      || p === '/api/auth/me'
+      || p === '/api/locations'
+      || p.startsWith('/api/access/checkpoints')
+      || p === '/api/tasks/director-digest-preview';
 }
 
 // ---- Fetch: wallet-first for passes, network-first for API, cache-first for static ----
@@ -82,6 +99,24 @@ self.addEventListener('fetch', (event) => {
             return response;
           }).catch(() => cached);
           return cached || fetchPromise;
+        })
+      )
+    );
+    return;
+  }
+
+  // Offline-data: stale-while-revalidate against OFFLINE_DATA_CACHE so today's
+  // roster + user's dashboard render immediately even when the network is out.
+  if (isOfflineDataRequest(url)) {
+    event.respondWith(
+      caches.open(OFFLINE_DATA_CACHE).then((cache) =>
+        cache.match(request).then((cached) => {
+          const fetchPromise = fetch(request).then((response) => {
+            if (response.ok) cache.put(request, response.clone());
+            return response;
+          }).catch(() => cached || new Response(JSON.stringify({ error: 'Offline', offline: true }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
+          // Return cached instantly, revalidate in background
+          return cached ? (fetchPromise, cached) : fetchPromise;
         })
       )
     );
@@ -192,6 +227,25 @@ self.addEventListener('message', (event) => {
       }));
       const clients = await self.clients.matchAll();
       clients.forEach(c => c.postMessage({ type: 'wallet-pass-cached', count: urls.length }));
+    });
+  }
+  if (event.data?.type === 'prefetch-offline-set') {
+    // Pre-cache the offline "today's roster + my dashboard" bundle on login so
+    // even a signal-less checkpoint scan still renders the last-known state.
+    const urls = event.data.urls || [];
+    const token = event.data.token;
+    caches.open(OFFLINE_DATA_CACHE).then(async (cache) => {
+      let cached = 0;
+      await Promise.all(urls.map(async (u) => {
+        try {
+          const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+          const req = new Request(u, { headers });
+          const res = await fetch(req);
+          if (res.ok) { await cache.put(u, res.clone()); cached += 1; }
+        } catch (e) {}
+      }));
+      const clients = await self.clients.matchAll();
+      clients.forEach(c => c.postMessage({ type: 'offline-set-cached', count: cached, requested: urls.length }));
     });
   }
 });

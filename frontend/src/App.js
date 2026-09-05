@@ -90,6 +90,7 @@ import SalesPortalPage from './pages/SalesPortalPage';
 import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StaffRoute } from './components/RouteGuards';
+import usePwaOfflinePrefetch from './hooks/usePwaOfflinePrefetch';
 
 const KIOSK_ONLY_ROLES = new Set(['Security Contractor', 'security_contractor']);
 
@@ -119,6 +120,7 @@ function ConditionalSoftphone() {
 
 function AppRoutes() {
   const location = useLocation();
+  usePwaOfflinePrefetch();
   // Check URL fragment for session_id from Google Auth callback
   if (location.hash?.includes('session_id=')) {
     return <AuthCallback />;
