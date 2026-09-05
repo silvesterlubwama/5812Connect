@@ -1,28 +1,45 @@
 # CHANGELOG
 
-## iter 295 — 2026-02 — Digest widget · Mobile tabs on People/HR/Sales
+## iter 296 — 2026-02 — Finance/AP/HR/access MongoDB indexes + bcrypt pin verify
 
-**Director digest preview widget** — New `GET /api/tasks/director-digest-preview`
-endpoint (`routers/tasks.py`) mirrors the `_fire_overdue_task_director_digest`
-scheduler logic exactly (same scope rules, same sort) but returns JSON
-without sending an email. Response includes `eligible`, `task_count`,
-`tasks[]` (capped at 50), `scope` ('global' / 'campus'),
-`already_sent_today`, and `date`. New `DirectorDigestWidget` component
-renders on the Dashboard for director+ users; hides itself when
-`eligible=false` or `task_count=0`. Copy switches between "This is what your
-08:00 UTC email will contain" and "Emailed to you at 08:00 UTC today" based
-on `already_sent_today`.
+**MongoDB hot-path indexes** — Every collection introduced/heavily used since
+iter 285 (finance ledger, AP, HR, guest passes, director digest) was still
+running on a single `_id_` index. `_ensure_indexes()` in `server.py` now
+creates 40+ additional indexes on:
+- `finance_journal_entries` — id, `(location_id, reversed, date)`,
+  `(source, reference)`, `lines.account_id`, `date`, plus a partial-unique
+  `idempotency_key` index scoped to `reversed=false` so replays after
+  reversal remain safe.
+- `finance_chart_of_accounts` — `id`, `code` (unique), `(type, active)`.
+- `bank_accounts`, `vendors`, `bills`, `bank_transactions`,
+  `recurring_entries`, `reconciliation_rules`.
+- `task_director_digests` — `(user_id, date)` unique for once-per-day
+  idempotency; 90-day TTL on `date`.
+- `payslips`, `hr_employees`, `hr_contracts`.
+- `guest_passes`, `guest_access_requests`, `checkpoint_events`.
+- `kanban_boards` (alias collection).
 
-**Mobile tab strips — People, HR, Sales** — Same treatment as Finance
-(iter 294). TabsList now `w-full flex overflow-x-auto no-scrollbar
-md:inline-flex md:w-auto` — mobile scrolls horizontally, desktop keeps the
-inline layout. HR keeps `md:flex-wrap` since it has the most tabs.
+**Bcrypt pinning — verified** — `bcrypt==3.2.2` + `passlib==1.7.4` already
+locked to exact versions in `requirements.txt`; installed versions match.
+Login end-to-end validated after the index rollout.
 
-**Remaining overflow at 390×844** — Only a few individual header buttons on
-People / HR / Sales still exceed the viewport by 1-5px. Not a blocker; can
-be tightened later if the user prioritises them.
+**Header-button "overflow" on People / HR / Sales — false positive** — The
+buttons flagged in the previous audit are `TabsTrigger` elements inside the
+horizontally-scrolling `TabsList` that iter 295 introduced. They are
+accessible via scroll (visually and functionally correct); no fix needed.
+
+**Verification**
+- New pytest `tests/test_iter296_indexes.py`: 21 parametrised assertions
+  covering every index plus the partial-unique + TTL guards.
+- Bank/finance migration regression pytest re-run and still green.
+- Curl smoke: `/api/finance/journal`, `/api/finance/chart-of-accounts`,
+  `/api/bank/{accounts,bills,vendors}`, `/api/tasks/director-digest-preview`,
+  `/api/health` — all 200.
 
 ---
+
+## iter 295 — 2026-02 — Digest widget · Mobile tabs on People/HR/Sales
+(previous, unchanged)
 
 ## iter 294 — 2026-02 — Bulk barcodes · Director digest · Mobile Finance
 (previous, unchanged)

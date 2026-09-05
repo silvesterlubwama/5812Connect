@@ -1663,19 +1663,88 @@ async def _ensure_indexes():
         await db.fare_alerts.create_index("created_by")
         await db.fare_alerts.create_index([("active", 1), ("date", 1)])
         await db.shipments.create_index("passengers.portal_token")
-        # Backfill portal_token on any existing passenger docs
+        # ===== iter296 — unified finance ledger + AP/AR hot-path indexes =====
+        # `finance_journal_entries` is queried by:
+        #  - location_id + reversed (report scope filter),
+        #  - source + reference (source-doc lookups + cascade reversal),
+        #  - idempotency_key (unique among active JEs — prevents double posts),
+        #  - lines.account_id (account-in-use check, balance rollup),
+        #  - date (period + PnL windowing).
+        await db.finance_journal_entries.create_index("id", unique=True)
+        await db.finance_journal_entries.create_index([("location_id", 1), ("reversed", 1), ("date", -1)])
+        await db.finance_journal_entries.create_index([("source", 1), ("reference", 1)])
+        await db.finance_journal_entries.create_index("lines.account_id")
+        await db.finance_journal_entries.create_index([("date", -1)])
+        # Idempotency lookup: partial-unique on active rows only. MongoDB partial
+        # filters don't support `$ne`, so we scope on `reversed: false` explicitly
+        # (post_journal_entry always writes `reversed=false` on new rows). Reversal
+        # marks the doc `reversed=true`, dropping it out of the unique constraint
+        # so a subsequent replay with the same idempotency_key can succeed.
         try:
-            import secrets as _secrets
-            async for s in db.shipments.find({"passengers": {"$elemMatch": {"portal_token": {"$exists": False}}}}, {"_id": 1, "passengers": 1}):
-                changed = False
-                for p in s.get("passengers") or []:
-                    if not p.get("portal_token"):
-                        p["portal_token"] = _secrets.token_urlsafe(20)
-                        changed = True
-                if changed:
-                    await db.shipments.update_one({"_id": s["_id"]}, {"$set": {"passengers": s["passengers"]}})
-        except Exception as ex:
-            logger.warning(f"portal_token backfill: {ex}")
+            await db.finance_journal_entries.create_index(
+                "idempotency_key",
+                unique=True,
+                partialFilterExpression={
+                    "idempotency_key": {"$exists": True, "$type": "string"},
+                    "reversed": {"$eq": False},
+                },
+                name="fje_idempotency_active",
+            )
+        except Exception as _e:
+            logger.info(f"finance_journal_entries idempotency index: {_e}")
+        # Chart of Accounts: coded lookups + active filter
+        await db.finance_chart_of_accounts.create_index("id", unique=True)
+        await db.finance_chart_of_accounts.create_index("code", unique=True)
+        await db.finance_chart_of_accounts.create_index([("type", 1), ("active", 1)])
+        # Bank accounts / bills / vendors
+        await db.bank_accounts.create_index("id", unique=True)
+        await db.bank_accounts.create_index([("location_id", 1), ("closed", 1)])
+        await db.bank_accounts.create_index("linked_account_id")
+        await db.vendors.create_index("id", unique=True)
+        await db.vendors.create_index([("location_id", 1), ("name", 1)])
+        await db.vendors.create_index("email")
+        await db.bills.create_index("id", unique=True)
+        await db.bills.create_index([("location_id", 1), ("status", 1), ("bill_date", -1)])
+        await db.bills.create_index("vendor_id")
+        await db.bills.create_index("bill_number")
+        # Bank transactions (statement import + reconciliation)
+        await db.bank_transactions.create_index("id", unique=True)
+        await db.bank_transactions.create_index([("bank_account_id", 1), ("date", -1)])
+        await db.bank_transactions.create_index([("status", 1), ("date", -1)])
+        # Recurring entries — scheduler ticks every hour, hot query is
+        # {active: True, next_run_date: {$lte: today}}
+        await db.recurring_entries.create_index("id", unique=True)
+        await db.recurring_entries.create_index([("active", 1), ("next_run_date", 1)])
+        await db.recurring_entries.create_index("location_id")
+        # Reconciliation rules (bank-statement auto-match)
+        await db.reconciliation_rules.create_index([("location_id", 1), ("active", 1), ("priority", 1)])
+        # Director-digest idempotency — one row per user per date
+        await db.task_director_digests.create_index(
+            [("user_id", 1), ("date", 1)], unique=True, name="tdd_user_date"
+        )
+        await db.task_director_digests.create_index("date", expireAfterSeconds=7776000)  # 90d TTL
+        # HR / payroll — location + period lookups
+        await db.payslips.create_index("id", unique=True)
+        await db.payslips.create_index([("location_id", 1), ("period", 1)])
+        await db.payslips.create_index([("employee_id", 1), ("period", 1)])
+        await db.hr_employees.create_index("id", unique=True)
+        await db.hr_employees.create_index([("location_id", 1), ("status", 1)])
+        await db.hr_employees.create_index("user_id")
+        await db.hr_contracts.create_index([("employee_id", 1), ("start_date", -1)])
+        # Guest passes / access requests / checkpoint events — hot at security desk
+        await db.guest_passes.create_index("id", unique=True)
+        await db.guest_passes.create_index([("location_id", 1), ("status", 1), ("valid_from", -1)])
+        await db.guest_passes.create_index("code")
+        await db.guest_access_requests.create_index("id", unique=True)
+        await db.guest_access_requests.create_index([("location_id", 1), ("status", 1), ("created_at", -1)])
+        # (secondary checkpoint_events collection — some code paths write here)
+        try:
+            await db.checkpoint_events.create_index([("checkpoint_id", 1), ("created_at", -1)])
+        except Exception:
+            pass
+        # Kanban boards secondary collection (some code paths use kanban_boards, some boards)
+        await db.kanban_boards.create_index("id", unique=True)
+        await db.kanban_boards.create_index([("location_id", 1), ("is_global", 1)])
         logger.info("Indexes ensured (idempotent)")
     except Exception as e:
         logger.warning(f"Index ensure: {e}")

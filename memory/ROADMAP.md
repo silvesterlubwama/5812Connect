@@ -2,20 +2,15 @@
 
 ## P0 / P1 — none open
 
-## P2 — Polish
+## P2 / Future — Approved backlog
 
-- **Fine-tune remaining mobile overflows** on People / HR / Sales header
-  buttons (each page still has 1-3 buttons that exceed 390px by a few px).
-  Tab strips are already fixed as of iter 295.
+- **PWA offline support + Service Worker for Wallet passes** — next up per user (d).
+- **`server.py` modularization** — after PWA per user (c).
 
-## Future / Backlog
-
-- `server.py` modularization (~1614 lines → split into smaller routers).
-- PWA offline mode + service worker for Wallet passes.
-- Multi-language translation files.
-- Bcrypt version pinning; MongoDB index optimization pass.
-
-## Explicit user boundary
+## Explicit user boundaries
 
 > "Never suggest Wave H5 SDK again unless I call for it. Do not suggest
 > unrequested enhancements moving forward."
+
+> Iter 296: **Multi-language translation files** are on hold until the user
+> explicitly calls for them. Do not propose or begin i18n work.
