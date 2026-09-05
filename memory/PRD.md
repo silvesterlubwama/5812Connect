@@ -34,10 +34,16 @@ social work, sales/POS/shipments, and self-service user portal.
   `/api/finance/receipts/scan`.
 
 ### Remaining backlog (agreed with user)
-- **Next (c)** `server.py` modularization (~1750 lines).
-- Native Apple Wallet `.pkpass` once Apple Developer cert is provisioned.
-- Kiosk Badge full-screen mode for lobby TVs.
-- Portal "everything synced" indicator pill.
+- `server.py` modularization (~1900 lines).
+
+### iter 302 additions
+- Scheduled cron jobs verified: `_run_due_date_reminder_scheduler` ticks
+  hourly, and every day at 08:00 UTC it fires overdue-task assignee
+  emails, director digests, payday payslips, scheduled statements,
+  overdue payment reminders, and recurring journal entries. Manually
+  invoked and confirmed the entry points execute cleanly.
+- Removed P1/P2 items that were never explicitly requested (Wallet
+  .pkpass, kiosk badge full-screen mode, portal "everything synced" pill).
 
 ## Boundaries from user
 > No Wave H5 SDK unless explicitly called for.
