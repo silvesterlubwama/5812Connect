@@ -18,6 +18,7 @@ from .chart_of_accounts import router as _coa_router
 from .journal import router as _journal_router
 from .transactions import router as _tx_router
 from .transfers import router as _transfers_router
+from .receipts import router as _receipts_router
 from .reports import router as _reports_router
 from .admin import router as _admin_router
 from .setup import router as _setup_router
@@ -27,6 +28,7 @@ router.include_router(_coa_router)
 router.include_router(_journal_router)
 router.include_router(_tx_router)
 router.include_router(_transfers_router)
+router.include_router(_receipts_router)
 router.include_router(_reports_router)
 router.include_router(_admin_router)
 router.include_router(_setup_router)

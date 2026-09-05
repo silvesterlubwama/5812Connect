@@ -3,6 +3,15 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 291 (Feb 2026) — session #3
+
+**Restricted access staff picker + Receipt scan (Tesseract, no AI) + Report tables.**
+
+- **Receipt scan** — new `/api/finance/receipts/scan` (`routers/finance/receipts.py`). Multipart upload → Tesseract OCR → regex pass for vendor / date / amount / currency → posts a DRAFT balanced JE (Dr default expense / Cr default cash) with `needs_review=True` and `source='receipt_scan'`. Finance staff work the queue via `GET /api/finance/receipts/review-queue` and clear items with `PUT /api/finance/receipts/{je_id}/approve`. Zero AI — pure Tesseract + regex. `tesseract-ocr` and `poppler-utils` installed on the pod; `pytesseract` + `pdf2image` added to the venv.
+- **Restricted-access staff picker fix** — new `/api/access/eligible-staff/{location_id}` (`routers/access_eligible.py`). Was returning [] whenever the caller wasn't pinned to the sub-location's parent campus because the old path re-used `/api/admin/users/directory` (caller-scoped). New endpoint scopes to the *pass* location's parent campus and always includes admins/directors. Curl-verified against `loc_001`.
+- **HR Payroll ↔ finance ledger already wired** — earlier loss-audit missed `routers/finance/postings.py::post_payroll_payslip` (called from `hr.py::_aggregate_payroll_expense`). Confirmed working: when a payslip flips to `status='paid'`, a balanced Dr 5000 Salaries & Wages / Cr 1010 Bank JE posts with `source='payroll'`, `location_id=payslip.location_id` (or `payroll_location_id` override), and `idempotency_key=payslip:{id}`. Sub-location payroll flows correctly because `payslip.location_id` inherits from the salary record.
+- **Report tables** — non-summary ReportsPage panel replaced raw JSON preview with proper formatted tables per report type. Trial Balance / P&L / Balance Sheet / Cash Flow each get purpose-built columns, FX-applied numbers, totals, colour-coded balances. `data-testid="report-table-*"` attached per report type.
+
 ## Recently Resolved — Iteration 291 (Feb 2026) — session #2 continuation
 
 **Loss audit + Cash & Bank regression fix + Reports page overhaul.**

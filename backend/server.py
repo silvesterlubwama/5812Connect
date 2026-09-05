@@ -575,6 +575,7 @@ try:
     from routers.websocket import router as ws_router
     from routers.notifications import router as notifications_router
     from routers.access import router as access_router
+    from routers.access_eligible import router as access_eligible_router
     from routers.reports import router as reports_router
     from routers.documents import router as documents_router
     from routers.auth import router as auth_router
@@ -613,6 +614,7 @@ try:
     app.include_router(ws_router)
     app.include_router(notifications_router)
     app.include_router(access_router)
+    app.include_router(access_eligible_router)
     app.include_router(reports_router)
     app.include_router(documents_router)
     app.include_router(auth_router)

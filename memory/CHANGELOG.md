@@ -15,6 +15,29 @@ Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank 
 - **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
 - **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
 
+## Iteration 291 (Feb 2026) — Session #3: Restricted access · Receipt OCR · Report tables
+
+### 🟢 Receipt scan (no AI — pure Tesseract + regex)
+- New `POST /api/finance/receipts/scan` in `routers/finance/receipts.py`. Multipart image/PDF upload → Tesseract OCR → regex extraction for vendor / date / amount / currency → posts a DRAFT balanced JE (Dr default expense / Cr default cash) flagged `needs_review=True` with `source='receipt_scan'`. Finance reviewers work the queue via `GET /api/finance/receipts/review-queue` and clear items with `PUT /api/finance/receipts/{je_id}/approve`.
+- Deps installed on pod: `tesseract-ocr`, `libtesseract-dev`, `poppler-utils`. Python venv: `pytesseract`, `pdf2image`.
+- Regex passes handle UGX/USD/KES/EUR/GBP/etc, `12,345.67` / `12.345,67` / `12 345.67` decimal styles, and 4 date formats (ISO / dd-mm-yyyy / dd-Mon-yyyy / Mon dd, yyyy).
+
+### 🟢 Restricted-access staff picker fix
+- New `GET /api/access/eligible-staff/{location_id}` in `routers/access_eligible.py`. Old flow re-used `/api/admin/users/directory` which is CALLER-scoped, so issuing a staff pass for a sub-location whose parent campus the caller wasn't pinned to returned `[]`. New endpoint scopes to the pass location's parent campus (never empty) and always includes admins/directors. Also unions in the `members` collection.
+- Curl-verified: `loc_001` returned 3 eligible staff.
+
+### 🟢 HR Payroll ↔ finance ledger — confirmed working
+- Loss-audit missed `routers/finance/postings.py::post_payroll_payslip` (called from `hr.py::_aggregate_payroll_expense`). When a payslip flips to `status='paid'`, a balanced Dr 5000 / Cr 1010 JE posts with `location_id=payslip.location_id` (or `payroll_location_id` override). Sub-location payroll flows correctly through the salary → payslip → JE chain. Idempotent via `payslip:{id}` key.
+
+### 🟢 Report tables
+- Non-summary `ReportsPage` panel replaced raw JSON preview with proper formatted tables:
+  - **Trial Balance** — code / account / type / debit / credit / balance columns, TOTAL row with balanced/off indicator.
+  - **P&L** — Revenue section → Total Revenue (emerald), Expenses section → Total Expenses (rose), Net Income big-bold row (colour by sign).
+  - **Balance Sheet** — Assets / Liabilities / Equity sections each with sub-total row.
+  - **Cash Flow** — Date / Description / Amount rows with net-change footer.
+- All numbers passed through `applyFx()` so tables re-render in target currency when FX inputs are populated. `data-testid="report-table-*"` per report.
+- Curl + screenshot verified.
+
 ## Iteration 291 (Feb 2026) — Env rebuild + 6 P0 fixes
 
 Preview `/app` wiped mid-session; user provided GitHub repo, container bootstrapped from scratch (mongod + supervisord + backend/frontend), Iter 290 work re-applied, then new batch layered on.

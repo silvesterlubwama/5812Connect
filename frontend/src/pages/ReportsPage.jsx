@@ -242,10 +242,12 @@ export default function ReportsPage() {
 
       {report && reportType !== 'summary' && (
         <Card className="shadow-soft rounded-xl">
-          <CardHeader className="pb-2"><CardTitle className="text-sm">{REPORT_TYPES.find(t => t.value === reportType)?.label}{fxSuffix}</CardTitle></CardHeader>
-          <CardContent>
-            <pre className="text-xs overflow-auto max-h-96 bg-muted p-3 rounded" data-testid="report-json">{JSON.stringify(report, null, 2)}</pre>
-            <p className="text-xs text-muted-foreground mt-2">Export via CSV or PDF for a formatted view. Rich tables coming in a follow-up pass.</p>
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm">{REPORT_TYPES.find(t => t.value === reportType)?.label}{fxSuffix}</CardTitle>
+            {dateFrom || dateTo ? <span className="text-xs text-muted-foreground">{dateFrom || '…'} → {dateTo || 'today'}</span> : null}
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <ReportTable reportType={reportType} report={report} applyFx={applyFx} />
           </CardContent>
         </Card>
       )}
@@ -260,4 +262,125 @@ export default function ReportsPage() {
       )}
     </div>
   );
+}
+
+// ─── REPORT TABLE ────────────────────────────────────────────
+// Turns the four finance-reports shapes (trial-balance / pnl / balance-sheet
+// / cashflow) into on-screen tables so users can actually read the numbers
+// without opening the CSV/PDF export. Currency conversion (`applyFx`) is
+// applied at render time so the same table doubles as the print preview
+// when a target currency + rate has been entered.
+function ReportTable({ reportType, report, applyFx }) {
+  const fmt = (n) => Number(applyFx(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (!report) return null;
+
+  if (reportType === 'trial-balance') {
+    const rows = report.rows || [];
+    return (
+      <table className="w-full text-sm border-collapse" data-testid="report-table-trial-balance">
+        <thead>
+          <tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
+            <th className="text-left px-3 py-2 font-medium">Code</th>
+            <th className="text-left px-3 py-2 font-medium">Account</th>
+            <th className="text-left px-3 py-2 font-medium">Type</th>
+            <th className="text-right px-3 py-2 font-medium">Debit</th>
+            <th className="text-right px-3 py-2 font-medium">Credit</th>
+            <th className="text-right px-3 py-2 font-medium">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <tr><td colSpan={6} className="text-center text-muted-foreground py-6 text-xs">No entries in this period</td></tr>}
+          {rows.map((r, i) => (
+            <tr key={r.account_id || i} className="border-t hover:bg-muted/20">
+              <td className="px-3 py-1.5 font-mono text-xs">{r.code}</td>
+              <td className="px-3 py-1.5">{r.name}</td>
+              <td className="px-3 py-1.5 text-xs text-muted-foreground capitalize">{r.type}</td>
+              <td className="px-3 py-1.5 text-right font-mono">{fmt(r.debit)}</td>
+              <td className="px-3 py-1.5 text-right font-mono">{fmt(r.credit)}</td>
+              <td className={`px-3 py-1.5 text-right font-mono font-medium ${Number(r.balance) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(r.balance)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="border-t-2 font-semibold bg-muted/20">
+            <td colSpan={3} className="px-3 py-2 text-right">TOTAL</td>
+            <td className="px-3 py-2 text-right font-mono">{fmt(report.total_debit)}</td>
+            <td className="px-3 py-2 text-right font-mono">{fmt(report.total_credit)}</td>
+            <td className={`px-3 py-2 text-right font-mono ${report.balanced ? 'text-emerald-700' : 'text-rose-700'}`}>{report.balanced ? '✓ balanced' : '✗ off'}</td>
+          </tr>
+        </tfoot>
+      </table>
+    );
+  }
+
+  if (reportType === 'pnl') {
+    return (
+      <table className="w-full text-sm border-collapse" data-testid="report-table-pnl">
+        <tbody>
+          <tr className="bg-muted/40 text-xs uppercase font-medium"><td colSpan={3} className="px-3 py-2">Revenue</td></tr>
+          {(report.revenue || []).map((r, i) => (
+            <tr key={`rev-${i}`} className="border-t"><td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td><td className="px-3 py-1.5">{r.name}</td><td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td></tr>
+          ))}
+          <tr className="border-t bg-emerald-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Revenue</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_revenue)}</td></tr>
+          <tr className="bg-muted/40 text-xs uppercase font-medium"><td colSpan={3} className="px-3 py-2 pt-4">Expenses</td></tr>
+          {(report.expenses || []).map((r, i) => (
+            <tr key={`exp-${i}`} className="border-t"><td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td><td className="px-3 py-1.5">{r.name}</td><td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td></tr>
+          ))}
+          <tr className="border-t bg-rose-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Expenses</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_expenses)}</td></tr>
+          <tr className={`border-t-2 font-bold text-base ${Number(report.net_income) >= 0 ? 'bg-emerald-100' : 'bg-rose-100'}`}><td colSpan={2} className="px-3 py-2">Net Income</td><td className="px-3 py-2 text-right font-mono">{fmt(report.net_income)}</td></tr>
+        </tbody>
+      </table>
+    );
+  }
+
+  if (reportType === 'balance-sheet') {
+    const section = (label, rows, total, tone) => (
+      <>
+        <tr className="bg-muted/40 text-xs uppercase font-medium"><td colSpan={3} className="px-3 py-2">{label}</td></tr>
+        {(rows || []).map((r, i) => (
+          <tr key={`${label}-${i}`} className="border-t"><td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td><td className="px-3 py-1.5">{r.name}</td><td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td></tr>
+        ))}
+        <tr className={`border-t font-medium bg-${tone}-50`}><td colSpan={2} className="px-3 py-2">Total {label}</td><td className="px-3 py-2 text-right font-mono">{fmt(total)}</td></tr>
+      </>
+    );
+    return (
+      <table className="w-full text-sm border-collapse" data-testid="report-table-balance-sheet">
+        <tbody>
+          {section('Assets', report.assets, report.total_assets, 'sky')}
+          {section('Liabilities', report.liabilities, report.total_liabilities, 'amber')}
+          {section('Equity', report.equity, report.total_equity, 'emerald')}
+        </tbody>
+      </table>
+    );
+  }
+
+  if (reportType === 'cashflow') {
+    const lines = report.lines || [];
+    return (
+      <table className="w-full text-sm border-collapse" data-testid="report-table-cashflow">
+        <thead>
+          <tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
+            <th className="text-left px-3 py-2 font-medium">Date</th>
+            <th className="text-left px-3 py-2 font-medium">Description</th>
+            <th className="text-right px-3 py-2 font-medium">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.length === 0 && <tr><td colSpan={3} className="text-center text-muted-foreground py-6 text-xs">{report.note || 'No cash movement in this period'}</td></tr>}
+          {lines.map((l, i) => (
+            <tr key={i} className="border-t">
+              <td className="px-3 py-1.5 font-mono text-xs">{l.date}</td>
+              <td className="px-3 py-1.5">{l.description}</td>
+              <td className={`px-3 py-1.5 text-right font-mono ${Number(l.amount) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(l.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="border-t-2 font-semibold bg-muted/20"><td colSpan={2} className="px-3 py-2 text-right">Net Change</td><td className={`px-3 py-2 text-right font-mono ${Number(report.net_change) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(report.net_change)}</td></tr>
+        </tfoot>
+      </table>
+    );
+  }
+
+  return <pre className="text-xs bg-muted p-3 rounded overflow-auto">{JSON.stringify(report, null, 2)}</pre>;
 }
