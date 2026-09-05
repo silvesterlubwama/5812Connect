@@ -25,11 +25,16 @@ async def list_resource_types(current_user: dict = Depends(get_current_user)):
     types = await db.resource_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
     if not types:
         defaults = [
-            {"id": "rtype_room", "name": "room", "label": "Room", "icon": "door-open"},
+            {"id": "rtype_room", "name": "room", "label": "Room/Space", "icon": "door-open"},
+            {"id": "rtype_venue", "name": "venue", "label": "Venue", "icon": "building"},
             {"id": "rtype_auditorium", "name": "auditorium", "label": "Auditorium", "icon": "building"},
             {"id": "rtype_conference", "name": "conference", "label": "Conference Room", "icon": "users"},
             {"id": "rtype_hall", "name": "hall", "label": "Hall", "icon": "warehouse"},
             {"id": "rtype_equipment", "name": "equipment", "label": "Equipment", "icon": "wrench"},
+            {"id": "rtype_sports", "name": "sports_equipment", "label": "Sports Equipment", "icon": "football"},
+            {"id": "rtype_media", "name": "media_equipment", "label": "Media Equipment", "icon": "camera"},
+            {"id": "rtype_educational", "name": "educational", "label": "Educational Material", "icon": "book"},
+            {"id": "rtype_consumable", "name": "consumable", "label": "Consumable Material", "icon": "package"},
             {"id": "rtype_vehicle", "name": "vehicle", "label": "Vehicle", "icon": "car"},
             {"id": "rtype_outdoor", "name": "outdoor", "label": "Outdoor Space", "icon": "tree"},
         ]

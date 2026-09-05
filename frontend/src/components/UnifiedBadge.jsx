@@ -328,15 +328,15 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             </div>
           </div>
 
-          {/* Body — Iter 277 layout:
-               Two columns. Left column stacks info at the TOP and the QR
-               pinned to the BOTTOM (justify-space-between) so the QR's
-               bottom line aligns with the photo's bottom edge. Right
-               column is the photo. Long names no longer disappear behind
-               the QR because the QR now lives underneath the info block. */}
-          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1, alignItems: 'stretch' }}>
-            {/* Left column — info top, QR bottom */}
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          {/* Body — Iter 291 layout:
+               Two columns. Left column has a FIXED height equal to the photo
+               height, so `justify-content: space-between` puts the info block
+               top-aligned with the photo top AND the QR bottom-aligned with
+               the photo bottom. Any leftover space at the bottom of the badge
+               (footer area) is untouched — the QR never dips into it. */}
+          <div style={{ flex: 1, display: 'flex', padding: isSmall ? '8px 10px 8px 10px' : '10px 14px 12px 14px', gap: isSmall ? '8px' : '12px', position: 'relative', zIndex: 1, alignItems: 'flex-start' }}>
+            {/* Left column — info top-aligned to photo top, QR bottom-aligned to photo bottom */}
+            <div style={{ flex: 1, minWidth: 0, height: isSmall ? '108px' : '148px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: firstNameSize, fontWeight: 800, lineHeight: 1.1, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{firstName}</div>
                 {lastName && <div style={{ fontSize: lastNameSize, fontWeight: 500, color: subTextColor, marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastName}</div>}
@@ -371,8 +371,10 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 ))}
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
-              {/* QR pinned to the bottom of the left column so its bottom
-                  edge sits flush with the photo's bottom edge. */}
+              {/* QR bottom-aligned to photo bottom. `flex-end` on the parent's
+                  justify-content puts this row at the bottom of the fixed-height
+                  column, so the QR's bottom edge sits flush with the photo's
+                  bottom edge (no more drift into the footer strip). */}
               <div style={{
                 alignSelf: 'flex-start',
                 borderRadius: '6px',
@@ -384,7 +386,6 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 alignItems: 'center',
                 justifyContent: 'center',
                 boxSizing: 'border-box',
-                marginTop: '6px',
               }}>
                 <QRCodeLogo
                   value={qrData}
@@ -396,7 +397,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 />
               </div>
             </div>
-            {/* Right column — photo */}
+            {/* Right column — photo (same fixed height as left column) */}
             <div style={{
               flexShrink: 0,
               width: isSmall ? '72px' : '96px',
@@ -409,7 +410,6 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              alignSelf: 'flex-start',
             }}>
               <img
                 src={person.photo_url || generateInitialsImage(person.name, colors.accent, kioskMode ? '#fff' : '#1a1a2e', 220)}

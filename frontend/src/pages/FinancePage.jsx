@@ -69,6 +69,7 @@ function OverviewPanel() {
   const [bs, setBs] = useState(null);
   const [recent, setRecent] = useState([]);
   const [addOpen, setAddOpen] = useState(null); // 'expense' | 'income'
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const reload = async () => {
     const [p, b, r] = await Promise.all([
@@ -80,8 +81,13 @@ function OverviewPanel() {
   };
   useEffect(() => { reload().catch(() => {}); }, []);
 
+  // iter 289 re-applied — sum EVERY active cash/bank/mobile-money account
+  // (any asset flagged `is_cash: true`), not just accounts whose code starts
+  // with "10". Bank accounts created via the Banking module get `is_cash` set
+  // by their `bank_subtype`, and old-code aggregation missed Mobile Money +
+  // savings accounts + any 5-digit chart pushed into the sub-1000 range.
   const cashOnHand = useMemo(
-    () => (bs?.assets || []).filter(a => (a.code || '').startsWith('10')).reduce((s, a) => s + Number(a.amount || 0), 0),
+    () => (bs?.assets || []).filter(a => a.is_cash || (a.code || '').startsWith('10')).reduce((s, a) => s + Number(a.amount || 0), 0),
     [bs],
   );
 
@@ -97,6 +103,7 @@ function OverviewPanel() {
       <div className="flex gap-2 flex-wrap">
         <Button onClick={() => setAddOpen('expense')} data-testid="finance-add-expense" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record expense</Button>
         <Button onClick={() => setAddOpen('income')} data-testid="finance-add-income" size="sm" variant="outline"><Plus size={14} className="mr-1" />Record income</Button>
+        <Button onClick={() => setTransferOpen(true)} data-testid="finance-add-transfer" size="sm" variant="outline"><RefreshCw size={14} className="mr-1" />Record transfer</Button>
         <BackfillButtons onDone={reload} />
       </div>
 
@@ -126,7 +133,96 @@ function OverviewPanel() {
       </Card>
 
       <QuickPostDialog mode={addOpen} onClose={() => setAddOpen(null)} onDone={() => { setAddOpen(null); reload(); }} />
+      <TransferDialog open={transferOpen} onClose={() => setTransferOpen(false)} onDone={() => { setTransferOpen(false); reload(); }} />
     </div>
+  );
+}
+
+// ─── TRANSFER DIALOG ─────────────────────────────────────────
+// Optional txn-fee field lets users record a bank/wire fee inline. When a
+// fee is present the JE has 3 lines: Dr destination `amount`, Dr fee-expense
+// `fee`, Cr source (amount + fee) — source loses everything, destination
+// receives net amount, fee flows to the chosen expense account.
+function TransferDialog({ open, onClose, onDone }) {
+  const [accounts, setAccounts] = useState([]);
+  const [form, setForm] = useState({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '' });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      const r = await api.get('/finance/chart-of-accounts');
+      setAccounts(r.data || []);
+    })().catch(() => {});
+    setForm({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '' });
+  }, [open]);
+
+  const assetAccounts = accounts.filter(a => a.type === 'asset' && a.active !== false);
+  const expenseAccounts = accounts.filter(a => a.type === 'expense' && a.active !== false);
+
+  const submit = async () => {
+    if (!form.from_account_id || !form.to_account_id || !form.amount) { toast.error('Source, destination and amount are required'); return; }
+    if (form.from_account_id === form.to_account_id) { toast.error('Source and destination must be different'); return; }
+    const fee = Number(form.fee_amount || 0);
+    if (fee > 0 && !form.fee_account_id) { toast.error('Pick a fee expense account when entering a fee'); return; }
+    setBusy(true);
+    try {
+      await api.post('/finance/transfers', {
+        from_account_id: form.from_account_id,
+        to_account_id: form.to_account_id,
+        amount: Number(form.amount),
+        date: form.date,
+        description: form.description,
+        reference: form.reference,
+        fee_amount: fee,
+        fee_account_id: form.fee_account_id,
+      });
+      toast.success('Transfer recorded');
+      onDone();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Record transfer</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div><Label>Amount</Label><Input data-testid="transfer-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
+          <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+          <div>
+            <Label>From (source)</Label>
+            <Select value={form.from_account_id} onValueChange={v => setForm({ ...form, from_account_id: v })}>
+              <SelectTrigger data-testid="transfer-from"><SelectValue placeholder="Cash/bank source" /></SelectTrigger>
+              <SelectContent>{assetAccounts.filter(a => a.id !== form.to_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>To (destination)</Label>
+            <Select value={form.to_account_id} onValueChange={v => setForm({ ...form, to_account_id: v })}>
+              <SelectTrigger data-testid="transfer-to"><SelectValue placeholder="Cash/bank destination" /></SelectTrigger>
+              <SelectContent>{assetAccounts.filter(a => a.id !== form.from_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label>Fee (optional)</Label><Input data-testid="transfer-fee" type="number" step="0.01" value={form.fee_amount} onChange={e => setForm({ ...form, fee_amount: e.target.value })} placeholder="e.g. 500" /></div>
+            <div>
+              <Label>Fee expense account</Label>
+              <Select value={form.fee_account_id} onValueChange={v => setForm({ ...form, fee_account_id: v })}>
+                <SelectTrigger data-testid="transfer-fee-account"><SelectValue placeholder="—" /></SelectTrigger>
+                <SelectContent>{expenseAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div><Label>Reference / receipt #</Label><Input data-testid="transfer-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
+          <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Optional note (e.g. bank run, till top-up)" /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy} data-testid="transfer-submit">{busy ? 'Posting…' : 'Post transfer'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -178,7 +274,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   const isExpense = mode === 'expense';
   const isIncome = mode === 'income';
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm] = useState({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '' });
+  const [form, setForm] = useState({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '', reference: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -199,12 +295,12 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     try {
       const url = isExpense ? '/finance/transactions/expense' : '/finance/transactions/income';
       const payload = isExpense
-        ? { amount: Number(form.amount), expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id, date: form.date, description: form.description }
-        : { amount: Number(form.amount), revenue_account_id: form.account_id, deposited_to_account_id: form.paid_from_id, date: form.date, description: form.description };
+        ? { amount: Number(form.amount), expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id, date: form.date, description: form.description, reference: form.reference }
+        : { amount: Number(form.amount), revenue_account_id: form.account_id, deposited_to_account_id: form.paid_from_id, date: form.date, description: form.description, reference: form.reference };
       await api.post(url, payload);
       toast.success(`${isExpense ? 'Expense' : 'Income'} recorded`);
       onDone();
-      setForm({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '' });
+      setForm({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '', reference: '' });
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
     setBusy(false);
   };
@@ -230,6 +326,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
               <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
+          <div><Label>Reference / receipt #</Label><Input data-testid="quick-post-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
           <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What was this for?" /></div>
         </div>
         <DialogFooter>

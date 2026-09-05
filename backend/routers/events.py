@@ -215,6 +215,11 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
+    # iter 291 — default location_id to the creator's active campus if not
+    # supplied. Without this the event is invisible to /api/events (which
+    # applies get_campus_filter) — the "created but not showing" bug.
+    if not event.get("location_id"):
+        event["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
     # Auto-set country from location if not provided
     if not event.get("country") and event.get("location_id"):
         loc = await db.locations.find_one({"id": event["location_id"]}, {"_id": 0, "country": 1})

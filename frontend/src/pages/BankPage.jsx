@@ -43,6 +43,7 @@ export default function BankPage() {
 
   // Dialog states
   const [showAcctForm, setShowAcctForm] = useState(false);
+  const [editingAcctId, setEditingAcctId] = useState(null);
   const [acctForm, setAcctForm] = useState({ name: '', bank_name: '', account_number: '', account_type: 'checking', currency: 'UGX', country: 'UG', branch: '', opening_balance: '0', linked_account_id: '' });
   const [showVendorForm, setShowVendorForm] = useState(false);
   const [vendorForm, setVendorForm] = useState({ name: '', tin: '', vat_registered: false, email: '', phone: '', payment_terms_days: 30, currency: 'UGX', country: 'UG' });
@@ -101,10 +102,47 @@ export default function BankPage() {
 
   const createAccount = async () => {
     try {
-      await api.post('/bank/accounts', { ...acctForm, opening_balance: parseFloat(acctForm.opening_balance) || 0, location_id: user?.active_campus_id });
-      toast.success('Bank account created');
+      if (editingAcctId) {
+        await api.put(`/bank/accounts/${editingAcctId}`, {
+          name: acctForm.name, bank_name: acctForm.bank_name, account_number: acctForm.account_number,
+          account_type: acctForm.account_type, branch: acctForm.branch, linked_account_id: acctForm.linked_account_id,
+        });
+        toast.success('Bank account updated');
+      } else {
+        await api.post('/bank/accounts', { ...acctForm, opening_balance: parseFloat(acctForm.opening_balance) || 0, location_id: user?.active_campus_id });
+        toast.success('Bank account created');
+      }
       setShowAcctForm(false);
+      setEditingAcctId(null);
       setAcctForm({ name: '', bank_name: '', account_number: '', account_type: 'checking', currency: 'UGX', country: 'UG', branch: '', opening_balance: '0', linked_account_id: '' });
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const openEditAccount = (a) => {
+    setEditingAcctId(a.id);
+    setAcctForm({
+      name: a.name || '', bank_name: a.bank_name || '', account_number: a.account_number || '',
+      account_type: a.account_type || 'checking', currency: a.currency || 'UGX', country: a.country || 'UG',
+      branch: a.branch || '', opening_balance: String(a.opening_balance ?? 0),
+      linked_account_id: a.linked_account_id || '',
+    });
+    setShowAcctForm(true);
+  };
+
+  const toggleAccountActive = async (a) => {
+    try {
+      await api.put(`/bank/accounts/${a.id}`, { active: !a.active });
+      toast.success(a.active ? 'Account closed' : 'Account reopened');
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const deleteAccount = async (a) => {
+    if (!window.confirm(`Delete "${a.name}"? If any transactions exist it will be closed instead.`)) return;
+    try {
+      const r = await api.delete(`/bank/accounts/${a.id}`);
+      toast.success(r.data?.deactivated ? 'Account had transactions — closed (deactivated)' : 'Account deleted');
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -281,19 +319,26 @@ export default function BankPage() {
           {accounts.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No bank accounts yet.</p> : (
             <div className="space-y-2">
               {accounts.map(a => (
-                <Card key={a.id} className="rounded-xl" data-testid={`bank-account-${a.id}`}>
+                <Card key={a.id} className={`rounded-xl ${a.active === false ? 'opacity-60' : ''}`} data-testid={`bank-account-${a.id}`}>
                   <CardContent className="p-3 flex items-center justify-between flex-wrap gap-2">
                     <div>
-                      <p className="font-medium">{a.name}</p>
+                      <p className="font-medium">{a.name}{a.active === false && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100">CLOSED</Badge>}</p>
                       <p className="text-xs text-muted-foreground">{a.bank_name} · {a.branch || '—'} · {a.account_number || '—'}</p>
                       <div className="flex items-center gap-1 mt-1">
                         <Badge variant="outline" className="text-[10px]">{a.account_type}</Badge>
                         <Badge variant="outline" className="text-[10px]">{a.country}</Badge>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-muted-foreground uppercase">Balance</p>
-                      <p className="text-lg font-bold">{fmt(a.current_balance, a.currency)}</p>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground uppercase">Balance</p>
+                        <p className="text-lg font-bold">{fmt(a.current_balance, a.currency)}</p>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEditAccount(a)} data-testid={`bank-account-edit-${a.id}`}>Edit</Button>
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => toggleAccountActive(a)} data-testid={`bank-account-close-${a.id}`}>{a.active === false ? 'Reopen' : 'Close'}</Button>
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={() => deleteAccount(a)} data-testid={`bank-account-del-${a.id}`}><Trash2 size={12} /></Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -492,9 +537,9 @@ export default function BankPage() {
       </Tabs>
 
       {/* NEW ACCOUNT DIALOG */}
-      <Dialog open={showAcctForm} onOpenChange={setShowAcctForm}>
+      <Dialog open={showAcctForm} onOpenChange={(o) => { setShowAcctForm(o); if (!o) setEditingAcctId(null); }}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>New Bank Account</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingAcctId ? 'Edit Bank Account' : 'New Bank Account'}</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label className="text-xs">Display name *</Label><Input value={acctForm.name} onChange={e => setAcctForm({...acctForm, name: e.target.value})} placeholder="Stanbic Operations" data-testid="bank-form-name" /></div>
             <div className="grid grid-cols-2 gap-3">
@@ -534,7 +579,7 @@ export default function BankPage() {
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowAcctForm(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={createAccount} disabled={!acctForm.name || !acctForm.linked_account_id} data-testid="bank-form-submit">Create</Button>
+              <Button className="flex-1" onClick={createAccount} disabled={!acctForm.name || !acctForm.linked_account_id} data-testid="bank-form-submit">{editingAcctId ? 'Save' : 'Create'}</Button>
             </div>
           </div>
         </DialogContent>

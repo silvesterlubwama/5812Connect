@@ -3,6 +3,62 @@
 ## Overview
 Multi-tenant CRM for 58:12 Global — child welfare, campus ops, HR/payroll, comms, access control, financial management, sales portal.
 
+## Recently Resolved — Iteration 291 (Feb 2026) — session #2 continuation
+
+**Loss audit + Cash & Bank regression fix + Reports page overhaul.**
+
+### 🔍 Loss audit results
+After the preview pod wipe + GitHub restore, verified what actually survived vs the iter 289 handoff. **Survived:** Purchase Orders, Locked-period guard, Holidays engine, Copy-public-link pill, Country map-pin, Sheet History strip, Event Types inline edit, CoA `is_cash`/`bank_subtype` + Balances column, Reset-Finance purge helper. **Genuinely lost:**
+- Cash & Bank aggregation using `is_cash` flag (was still `.startsWith('10')`) — **FIXED** in this pass.
+- HR Payroll → `finance_journal_entries` posting (hr.py has zero `post_journal_entry` calls). Still to do.
+- Auto-Issue Tickets Dialog on Events (never present in the repo). Still to do.
+- Legacy `accounting.py` router (1529 lines still writing to `accounting_accounts`) — should have been dropped in iter 284; still lingers.
+- **AccountingPage.jsx** still exists and calls `/api/accounting/*` — iter 282 was supposed to route it through FinancePage. Still lingers.
+
+### 🟢 Reports page overhaul (`ReportsPage.jsx` rewritten)
+- **Report type switcher** — five reports now available in one page: Summary, Trial Balance, P&L, Balance Sheet, Cash Flow. Uses `/api/finance/reports/{trial-balance|pnl|balance-sheet|cashflow}` under the hood.
+- **Optional FX conversion at export time** — user enters target currency (e.g. USD) + rate. All numeric fields in the CSV/PDF pass through `applyFx(n)` which multiplies by `rate` when target is set. Empty target → base currency.
+- **CSV export** — client-side generator that turns the current report shape into a flat table. Each report type gets a purpose-built column layout. FX suffix appended to headers.
+- **PDF export** — passes `fx_target` + `fx_rate` query params to the existing `/api/reports/pdf` endpoint (backend PDF template already carries the org logo from the security-company-logos infra).
+- **Location dropdown scope** — "All Locations" is hidden for non-admin users. Restricted users get auto-pinned to their `active_campus_id`/`location_id`/`location_ids[0]` so the dropdown never surfaces a campus they can't see.
+- **Sublocation labels** — locations flagged with `parent_id` render with a "(sub)" suffix so the dropdown makes the hierarchy visible without a nested tree widget.
+- **Empty state** — dropdown now shows "No locations found" instead of collapsing silently when the fetch returns an empty list.
+
+## Recently Resolved — Iteration 291 (Feb 2026)
+**Env rebuilt from GitHub + Iter 290 replay + 6 new P0 fixes.**
+
+Session context: preview pod `/app` was wiped mid-session. User pointed me at their GitHub repo (`silvesterlubwama/5812Connect`), I bootstrapped MongoDB + supervisor + backend/frontend from scratch, then re-applied iter 290 work (lost) and layered new fixes on top.
+
+- **Resource types dropdown** — `ResourcesPage.jsx` create dialog, stat cards, and card badges now merge fetched types with the hardcoded defaults (dedupe by value) so custom types added via the Type Manager appear immediately. Backend seed expanded 7 → 12 types (venue, consumable, sports_equipment, media_equipment, educational added).
+- **Inter-account transfers on the unified ledger** — new `POST /api/finance/transfers` posts a balanced JE via `post_journal_entry`: Debit destination, Credit source. Optional inline **transaction fee** (a 3rd line hits a user-picked expense account; source loses `amount + fee`, destination receives `amount`). Optional **reference / receipt #** attached to the JE. `FinancePage` Overview got a "Record transfer" button + `TransferDialog`.
+- **Reference / receipt # on all entries** — `QuickPostDialog` (expense/income) now has a "Reference / receipt #" input that the backend already accepts. Every JE (expense, income, transfer) can now carry a transaction ID.
+- **Events "created but not showing" bug** — `POST /api/events` was inserting with `location_id: null` when the payload omitted it, and `list_events` applies `get_campus_filter` which excludes null-location docs. Fix: default `location_id` to `current_user.active_campus_id || location_id || ""` before insert. Curl-verified: event now appears in the calendar & list.
+- **Unified Badge layout** — left column now has a fixed height matching the photo. `justify-content: space-between` puts personal details flush with photo top AND QR flush with photo bottom (no longer drifting past the photo into the footer strip). Previous version restored, requested tweaks applied.
+- **Notifications dismiss on view** — Layout.jsx: `markRead(id)` now removes the notification from the panel (was just flipping `read: true`). `markAllRead` empties the list. Notifications disappear the moment they're clicked.
+- **Bank accounts admin CRUD** — BankPage.jsx accounts now show Edit / Close / Delete buttons per account. "Close" flips `active: false` (soft-delete, keeps history). "Delete" tries hard delete but silently degrades to close if any transactions exist. The New/Edit dialog is the same form in two modes.
+
+### Curl-verified
+- `POST /api/events` (no location_id) → returns `location_id: "loc_001"` from admin's active campus; event visible in `GET /api/events`
+- `POST /api/finance/transfers` with fee → 3-line balanced JE with `source: "transfer"` and reference attached
+- `POST /api/resource-types` → new type visible in next fetch and in ResourcesPage create dropdown
+
+## STILL PENDING from user's Feb 5 batch — carried forward:
+
+### 🔴 P0 (Blocker)
+- **Restricted access wiring**: per-location toggles ("can have residents" / "restricted staff"), staff picker fix (dialog not populating), wire to Kiosks + Security Checkpoints + Guest Access requests
+- **Marketplace + location stores** posting verification (audit whether marketplace sales still write to correct location JEs)
+
+### 🟠 P1
+- **Every finance entry MUST require location** (currently optional on some endpoints); sublocation-aware totals in reports
+- **Receipt upload → auto-post (no AI)**: Tesseract OCR + regex/keyword logic to extract vendor/date/amount/currency → creates draft JE tagged `needs_review`
+- **Report exports**: user-supplied FX rate to render P&L / Balance Sheet in a target currency; CSV + PDF exports with org logo; fix "all locations" appearing as a selectable option that shouldn't be; fix sublocation dropdown returning empty when data exists; fix crash when switching report types
+- **HR auto-payslip generation on payday** (cron)
+
+### 🟡 P2
+- Locked Period Guard (already partially implemented in `post_journal_entry`, wire UI)
+- Full variant barcode printing UI
+- Finance categories management dialog
+
 ## Recently Resolved — Iteration 285 (Feb 2026)
 **Resource save actually works · Form matches resource kind.**
 

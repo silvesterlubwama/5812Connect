@@ -75,7 +75,12 @@ export default function ResourcesPage() {
       ]);
       setResources(resRes.data);
       setLocations(locRes.data);
-      if (typRes.data?.length > 0) setResourceTypes(typRes.data.map(t => ({ value: t.name, label: t.label, id: t.id })));
+      // Merge fetched types on top of built-in defaults so custom types added
+      // via the Type Manager become selectable immediately (dedupe by `value`).
+      const fetched = (typRes.data || []).map(t => ({ value: t.name, label: t.label, id: t.id }));
+      const byVal = new Map();
+      [...RESOURCE_TYPES, ...fetched].forEach(t => { byVal.set(t.value, { ...(byVal.get(t.value) || {}), ...t }); });
+      setResourceTypes(Array.from(byVal.values()));
       // Load stock for all consumables in parallel
       const consumables = (resRes.data || []).filter(r => r.is_consumable);
       const stockResults = await Promise.all(consumables.map(r => resourcesApi.stock(r.id).catch(() => null)));
@@ -184,7 +189,7 @@ export default function ResourcesPage() {
     return true;
   });
 
-  const byType = RESOURCE_TYPES.map(t => ({ ...t, count: resources.filter(r => r.type === t.value).length }));
+  const byType = resourceTypes.map(t => ({ ...t, count: resources.filter(r => r.type === t.value).length }));
 
   return (
     <div className="p-6 space-y-6">
@@ -268,7 +273,7 @@ export default function ResourcesPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1 mb-2">
-                  <Badge variant="outline" className="text-xs capitalize">{RESOURCE_TYPES.find(t => t.value === r.type)?.label || r.type}</Badge>
+                  <Badge variant="outline" className="text-xs capitalize">{resourceTypes.find(t => t.value === r.type)?.label || r.type}</Badge>
                   {r.is_bookable && <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300">Bookable</Badge>}
                   {r.staff_only && <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300">Staff Only</Badge>}
                   {!r.is_bookable && <Badge variant="outline" className="text-xs bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300">Not Bookable</Badge>}
@@ -360,7 +365,7 @@ export default function ResourcesPage() {
                 <Select value={form.type} onValueChange={v => setForm({...form, type: v, is_consumable: v === 'consumable'})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {RESOURCE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                    {resourceTypes.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

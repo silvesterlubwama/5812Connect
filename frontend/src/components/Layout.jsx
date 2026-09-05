@@ -320,8 +320,8 @@ export default function Layout() {
 
   useEffect(() => { fetchUnreadCount(); const interval = setInterval(fetchUnreadCount, 30000); return () => clearInterval(interval); }, [fetchUnreadCount]);
   const handleNotifOpen = () => { setNotifOpen(true); fetchNotifs(); };
-  const markAllRead = async () => { try { await notificationsApi.markAllRead(); setNotifs(prev => prev.map(n => ({ ...n, read: true }))); setUnreadCount(0); } catch (e) { console.warn(e.message || e); } };
-  const markRead = async (id) => { try { await notificationsApi.markRead(id); setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { console.warn(e.message || e); } };
+  const markAllRead = async () => { try { await notificationsApi.markAllRead(); setNotifs([]); setUnreadCount(0); } catch (e) { console.warn(e.message || e); } };
+  const markRead = async (id) => { try { await notificationsApi.markRead(id); setNotifs(prev => prev.filter(n => n.id !== id)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { console.warn(e.message || e); } };
 
   useEffect(() => {
     const handler = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); } if (e.key === 'Escape') setSearchOpen(false); };

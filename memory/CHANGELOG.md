@@ -1,5 +1,40 @@
 # 58:12 Connect — Changelog
 
+## Iteration 291 (Feb 2026) — Session #2 continuation: Loss audit + Cash & Bank fix + Reports overhaul
+
+### 🔍 Loss audit
+Verified what survived vs the pre-wipe handoff. **Genuinely lost**: Cash & Bank `is_cash` aggregation (fixed here), HR Payroll → `finance_journal_entries` (todo), Auto-Issue Tickets Dialog (todo), stale `accounting.py`/`AccountingPage.jsx` cleanup (todo). Everything else from iter 279-285 survived in GitHub.
+
+### 🟢 Cash & Bank aggregation regression
+- `FinancePage.jsx` Overview `cashOnHand` now includes `a.is_cash` in addition to `10xx`-code accounts. Mobile Money + Savings + any bank flagged via `bank_subtype` now count. This is a re-apply of the lost iter 289 fix.
+
+### 🟢 ReportsPage.jsx overhaul
+- **5 report types in one page** — Summary, Trial Balance, P&L, Balance Sheet, Cash Flow. Switch via `/api/finance/reports/*` under the hood.
+- **Optional FX conversion at export** — target currency + rate inputs; all numbers passed through `applyFx()` when target set. Empty target → base currency (no conversion).
+- **CSV export** — client-side generator, per-report-type column layout, FX suffix on headers.
+- **PDF export** — passes `fx_target`/`fx_rate` params to `/api/reports/pdf` (backend PDF already embeds org logo).
+- **Location dropdown scoped by role** — "All Locations" hidden for non-admin users; restricted users auto-pinned to their assigned campus. Sublocations render with "(sub)" suffix. Empty state now says "No locations found".
+
+## Iteration 291 (Feb 2026) — Env rebuild + 6 P0 fixes
+
+Preview `/app` wiped mid-session; user provided GitHub repo, container bootstrapped from scratch (mongod + supervisord + backend/frontend), Iter 290 work re-applied, then new batch layered on.
+
+### 🔴 P0
+- **Resource types** — create dropdown + stat cards + card badges wired to state (merged with defaults). Backend seed expanded to 12 types.
+- **Finance transfers** — `POST /api/finance/transfers` + FinancePage → Overview "Record transfer" button. Optional inline **transaction fee** posts a 3-line JE (Dr destination, Dr fee-expense, Cr source (amount+fee)). Optional **reference / receipt #** attached.
+- **Expense/income reference** — `QuickPostDialog` gained a `Reference / receipt #` input passed through to the ledger.
+- **Events "created but not showing"** — `create_event` now defaults `location_id` to the creator's `active_campus_id` before insert. Was inserting nulls that `get_campus_filter` excluded on list.
+- **UnifiedBadge layout** — left column has fixed height matching photo, `justify-content: space-between` flush-aligns info top with photo top and QR bottom with photo bottom.
+- **Notifications dismiss on click** — `markRead` now removes the notif from the panel; `markAllRead` empties it. Panel drains instead of piling up read entries.
+- **Bank accounts CRUD UI** — Edit / Close / Delete buttons on each account card. Dialog reused for edit mode. Delete gracefully degrades to close when transactions exist.
+
+### 🧪 Curl-verified
+- New event without `location_id` now defaults to admin's `loc_001` and is visible in list
+- Transfer JE lines: Dr destination `amount`, Dr fee-expense `fee`, Cr source `amount+fee`, `source='transfer'`, reference attached
+- Notification `mark_read` decreases unread count and frontend removes it from list
+
+## Iteration 290 (Feb 2026) — LOST during preview pod wipe; re-applied in 291.
+
 ## Iteration 256 (Feb 2026) — HS-only classifier + Prune removal + Cloudflare 520 hardening
 
 ### 🔴 P0 — HS-only classification (PVoC removed)
