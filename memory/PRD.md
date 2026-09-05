@@ -62,6 +62,11 @@ social work, sales/POS/shipments, and self-service user portal.
   security, module access, finance danger zone) under the new label
   **System Console**. Sidebar item + icon updated to match.
 
+### iter 307 additions
+- System Console grouped into 5 tabs — Access, Security, Data & Backup,
+  Integrations, Branding — so scrolling through unrelated cards is a
+  thing of the past.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

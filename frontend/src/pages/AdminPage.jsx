@@ -6,6 +6,7 @@ import { Badge } from '../components/ui/badge';
 import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
 import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi, socialWorkOrphansApi } from '../services/api';
@@ -266,8 +267,7 @@ export default function AdminPage({ mode = 'system' }) {
         )}
       </div>
 
-      {/* Access Expiring Soon banner — visible to admins+ if any explicit grant expires within 7 days */}
-      {showSystem && <ExpiringGrantsBanner />}
+      {/* Access Expiring Soon banner — moved into System Console tabs below */}
 
       {showStaff && (<>
       <div className="flex flex-col sm:flex-row gap-3">
@@ -322,10 +322,7 @@ export default function AdminPage({ mode = 'system' }) {
       <UserEditDialog open={showEdit} onOpenChange={setShowEdit} selectedUser={selectedUser} editForm={editForm} setEditForm={setEditForm} locations={locations} saving={saving} onSave={saveEdit} memberDocs={memberDocs} setMemberDocs={setMemberDocs} docRequests={docRequests} setDocRequests={setDocRequests} docsLoading={docsLoading} currentUserRole={currentUser?.role} />
       </>)}
 
-      {/* Danger Zone — destructive maintenance surface, admin only */}
-      {showSystem && (currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
-        <FinanceResetCard />
-      )}
+      {/* Danger Zone — moved into the Data & Backup tab below */}
 
       {showStaff && (<>
 
@@ -377,21 +374,52 @@ export default function AdminPage({ mode = 'system' }) {
         </DialogContent>
       </Dialog>
 
-      {/* Module Access Management — admin only — finance, HR, sales, banking, accounting, social work, restricted */}
+      {/* System Console — grouped into tabs so scrolling doesn't get tiring */}
       </>)}
       {showSystem && ['admin', 'system_admin', 'Executive Director'].includes(currentUser?.role) && (
-        <>
-          <ModuleAccessManager />
-          <SecurityCheckpointsManager />
-          <SecurityCompaniesManager />
-          <OrphanCaseRepairCard />
-          <KioskLinksManager />
-          <BackupRestoreManager />
-          <IntegrationsManager />
-          <BrandingEditor />
-          <RemoteAccessManager />
-          <DevicePairingDialog />
-        </>
+        <Tabs defaultValue="access" className="w-full">
+          <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto md:flex-wrap" data-testid="system-console-tabs">
+            <TabsTrigger value="access" data-testid="sysconsole-tab-access"><Key size={13} className="mr-1" /> Access</TabsTrigger>
+            <TabsTrigger value="security" data-testid="sysconsole-tab-security"><Shield size={13} className="mr-1" /> Security</TabsTrigger>
+            <TabsTrigger value="data" data-testid="sysconsole-tab-data"><Download size={13} className="mr-1" /> Data & Backup</TabsTrigger>
+            <TabsTrigger value="integrations" data-testid="sysconsole-tab-integrations"><Plus size={13} className="mr-1" /> Integrations</TabsTrigger>
+            <TabsTrigger value="branding" data-testid="sysconsole-tab-branding"><Edit size={13} className="mr-1" /> Branding</TabsTrigger>
+          </TabsList>
+
+          {/* Access: expiring-grants banner + per-module access grants. */}
+          <TabsContent value="access" className="mt-4 space-y-4">
+            <ExpiringGrantsBanner />
+            <ModuleAccessManager />
+          </TabsContent>
+
+          {/* Security: checkpoints, vendor firms, kiosks, remote access, device pairing. */}
+          <TabsContent value="security" className="mt-4 space-y-4">
+            <SecurityCheckpointsManager />
+            <SecurityCompaniesManager />
+            <KioskLinksManager />
+            <RemoteAccessManager />
+            <DevicePairingDialog />
+          </TabsContent>
+
+          {/* Data & Backup: snapshot/restore, orphan case repair, finance danger zone. */}
+          <TabsContent value="data" className="mt-4 space-y-4">
+            <BackupRestoreManager />
+            <OrphanCaseRepairCard />
+            {(currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
+              <FinanceResetCard />
+            )}
+          </TabsContent>
+
+          {/* Integrations: 3rd-party API keys (Resend, Wave, Alpha Vantage, etc.). */}
+          <TabsContent value="integrations" className="mt-4 space-y-4">
+            <IntegrationsManager />
+          </TabsContent>
+
+          {/* Branding: logo, colours, sender name shown on emails + badges. */}
+          <TabsContent value="branding" className="mt-4 space-y-4">
+            <BrandingEditor />
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );

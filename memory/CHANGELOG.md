@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## iter 307 — 2026-02 — System Console grouped into tabs
+
+The `/admin` route (System Console) was a long vertical scroll of a dozen
+different cards — module access, security checkpoints, security
+companies, orphan-case repair, kiosk links, backup/restore, integrations,
+branding, remote access, device pairing, finance danger zone. Finding a
+specific setting meant scrolling through unrelated ones.
+
+**What changed**
+- `AdminPage.jsx` (`mode='system'`) now renders **5 tabs** using the
+  existing shadcn `Tabs` primitive:
+  - **Access** (default) — expiring-grants banner + Module Access
+    manager.
+  - **Security** — Security Checkpoints, Security Companies, Kiosk
+    Links & Setup, Remote Access, Device Pairing (USB Devices & Roles).
+  - **Data & Backup** — Backup/Restore Manager, Orphan Case Repair,
+    Finance Reset (danger zone).
+  - **Integrations** — 3rd-party API keys (Resend, Wave, Alpha
+    Vantage, etc.).
+  - **Branding** — logo, colours, sender name.
+- Expiring-grants banner and the Finance danger-zone card were both
+  moved off the top-level render into the appropriate tabs (Access
+  and Data & Backup respectively).
+
+**Verified** via desktop screenshots: header still reads "System
+Console", 5 tabs render horizontally, tab-switching works (Access →
+Module Access; Security → Checkpoints + Companies + Kiosk + USB
+Devices). No compile errors.
+
 ## iter 306 — 2026-02 — Staff admin moved into HR; `/admin` renamed to System Console
 
 The `/admin` route was labelled "Staff & Users" in the sidebar but the page
