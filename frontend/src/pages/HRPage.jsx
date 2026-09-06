@@ -54,7 +54,13 @@ export default function HRPage() {
   const [historyEntries, setHistoryEntries] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [templateForm, setTemplateForm] = useState({ name: '', content: '' });
-  const [payPeriod, setPayPeriod] = useState(new Date().toISOString().slice(0, 7));
+  // Payslip generation is now payday-driven (fetched from hr_settings). The
+  // period we submit to /payslips/generate is the canonical period label the
+  // backend returns (monthly=YYYY-MM, weekly/biweekly=window string).
+  const [upcomingPaydays, setUpcomingPaydays] = useState([]);   // [{ date, period }]
+  const [selectedPayday, setSelectedPayday] = useState('');     // canonical period label
+  const [paydayFrequency, setPaydayFrequency] = useState('monthly');
+  const [paydaysLoading, setPaydaysLoading] = useState(false);
   // Payslip edit + history dialogs (iter209b)
   const [editingPayslip, setEditingPayslip] = useState(null);
   const [editPayslipForm, setEditPayslipForm] = useState({});
@@ -87,8 +93,6 @@ export default function HRPage() {
   const [settingsForm, setSettingsForm] = useState({ hr_enabled: false, pay_frequency: 'monthly', currency: 'UGX', pay_day: 28 });
   const [lineItem, setLineItem] = useState({ name: '', type: 'allowance', amount: '', is_percentage: false });
   const [saving, setSaving] = useState(false);
-  // ── Danger Zone: HR module reset (iter225) ─────────────────────────────
-  const [resetModal, setResetModal] = useState(null); // { open, scope, campus_scope, ledger, phase, preview, busy, confirmText }
   const isAdmin = ['admin', 'system_admin'].includes(user?.role);
 
   const fetchAll = useCallback(async () => {
@@ -190,15 +194,35 @@ export default function HRPage() {
   };
 
   const handleGeneratePayslips = async () => {
+    if (!selectedPayday) { toast.error('Choose a payday first'); return; }
     setSaving(true);
     try {
-      const res = await api.post('/hr/payslips/generate', { period: payPeriod, location_id: activeCampus });
+      const res = await api.post('/hr/payslips/generate', { period: selectedPayday, location_id: activeCampus });
       setPayslips(prev => [...res.data.payslips, ...prev]);
       setShowPayslipGen(false);
       toast.success(`Generated ${res.data.generated} payslips`);
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
   };
+
+  // Fetch upcoming paydays whenever the Generate dialog opens so the picker
+  // always reflects the campus's current HR settings (frequency + weekday snap).
+  useEffect(() => {
+    if (!showPayslipGen || !activeCampus) return;
+    setPaydaysLoading(true);
+    api.get('/hr/payslips/upcoming-paydays', { params: { count: 6, location_id: activeCampus } })
+      .then(r => {
+        const list = r.data?.paydays || [];
+        setUpcomingPaydays(list);
+        setPaydayFrequency(r.data?.frequency || 'monthly');
+        setSelectedPayday(prev => (list.find(p => p.period === prev) ? prev : (list[0]?.period || '')));
+      })
+      .catch(() => {
+        setUpcomingPaydays([]);
+        toast.error('Could not load paydays — check HR settings for this campus');
+      })
+      .finally(() => setPaydaysLoading(false));
+  }, [showPayslipGen, activeCampus]);
 
   const handleIssueContract = async () => {
     setSaving(true);
@@ -245,18 +269,6 @@ export default function HRPage() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} data-testid="hr-settings-btn"><Settings size={14} /></Button>
           <Button variant="outline" size="sm" onClick={fetchAll}><RefreshCw size={14} /></Button>
-          {isAdmin && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 text-red-600 border-red-300 hover:bg-red-50"
-              data-testid="hr-reset-btn"
-              title="Danger Zone: reset HR data"
-              onClick={() => setResetModal({ open: true, scope: 'payslips', campus_scope: 'active', ledger: 'reverse', phase: 'config', preview: null, busy: false, confirmText: '' })}
-            >
-              <Trash2 size={14} /> Reset
-            </Button>
-          )}
         </div>
       </div>
 
@@ -726,16 +738,45 @@ export default function HRPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Generate Payslips Dialog */}
+      {/* Generate Payslips Dialog — payday-driven per campus HR settings */}
       <Dialog open={showPayslipGen} onOpenChange={setShowPayslipGen}>
-        <DialogContent className="max-w-xs">
+        <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Generate Payslips</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
-            <div className="space-y-1.5"><Label>Pay Period *</Label><Input type="month" value={payPeriod} onChange={e => setPayPeriod(e.target.value)} data-testid="pay-period-input" /></div>
+            <div className="space-y-1.5">
+              <Label>Payday *</Label>
+              {paydaysLoading ? (
+                <div className="h-9 rounded-md border border-input bg-muted/40 animate-pulse" />
+              ) : upcomingPaydays.length === 0 ? (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
+                  No paydays available. Enable HR and set pay frequency + next pay date in <strong>HR Settings</strong>.
+                </p>
+              ) : (
+                <Select value={selectedPayday} onValueChange={setSelectedPayday}>
+                  <SelectTrigger data-testid="pay-period-select"><SelectValue placeholder="Choose payday…" /></SelectTrigger>
+                  <SelectContent>
+                    {upcomingPaydays.map(p => {
+                      const d = new Date(p.date + 'T00:00:00');
+                      const label = d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+                      return (
+                        <SelectItem key={p.period} value={p.period} data-testid={`payday-opt-${p.date}`}>
+                          {label}{paydayFrequency !== 'monthly' ? ` · ${p.period.split(' ')[1] || ''}` : ''}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                Paydays follow the campus <strong>{paydayFrequency}</strong> schedule. Adjust in HR Settings.
+              </p>
+            </div>
             <p className="text-xs text-muted-foreground">{salaries.length} active salary records will be processed.</p>
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setShowPayslipGen(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleGeneratePayslips} disabled={saving}>{saving ? 'Generating...' : 'Generate'}</Button>
+              <Button className="flex-1" onClick={handleGeneratePayslips} disabled={saving || !selectedPayday} data-testid="generate-payslips-submit">
+                {saving ? 'Generating...' : 'Generate'}
+              </Button>
             </div>
           </div>
         </DialogContent>
@@ -1229,122 +1270,7 @@ export default function HRPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── DANGER ZONE: HR RESET DIALOG (iter225) ─────────────────── */}
-      <Dialog open={!!resetModal?.open} onOpenChange={(o) => !o && setResetModal(null)}>
-        <DialogContent className="max-w-md" data-testid="hr-reset-dialog">
-          <DialogHeader>
-            <DialogTitle className="text-red-700 flex items-center gap-2"><Trash2 size={16} /> Reset HR Module</DialogTitle>
-          </DialogHeader>
-          {resetModal && (
-            <div className="space-y-3 text-sm">
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-                <strong>Danger zone.</strong> This permanently wipes HR data. Deleted records are dropped to the Recycle Bin, but ledger postings must be either reversed (with an offsetting entry) or hard-deleted.
-              </div>
-
-              <div>
-                <Label className="text-xs">What to reset</Label>
-                <Select value={resetModal.scope} onValueChange={(v) => setResetModal({ ...resetModal, scope: v })}>
-                  <SelectTrigger data-testid="reset-scope-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="payslips" data-testid="reset-scope-payslips">Payslips only</SelectItem>
-                    <SelectItem value="all" data-testid="reset-scope-all">Entire HR module (payslips + salaries + contracts + timesheets + leave + docs)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label className="text-xs">Campus scope</Label>
-                <Select value={resetModal.campus_scope} onValueChange={(v) => setResetModal({ ...resetModal, campus_scope: v })}>
-                  <SelectTrigger data-testid="reset-campus-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active" data-testid="reset-campus-active">Active campus only</SelectItem>
-                    {user?.role === 'system_admin' && <SelectItem value="all" data-testid="reset-campus-all">All campuses (system_admin only)</SelectItem>}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label className="text-xs">Ledger action for paid payroll</Label>
-                <Select value={resetModal.ledger} onValueChange={(v) => setResetModal({ ...resetModal, ledger: v })}>
-                  <SelectTrigger data-testid="reset-ledger-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="reverse" data-testid="reset-ledger-reverse">Reverse (post offsetting JEs — auditable)</SelectItem>
-                    <SelectItem value="delete" data-testid="reset-ledger-delete">Delete (hard-remove expenses + JEs — no trail)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {resetModal.preview && (
-                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs space-y-1">
-                  <p className="font-semibold text-amber-800">Preview (nothing deleted yet)</p>
-                  {Object.entries(resetModal.preview.counts || {}).map(([k, v]) => (
-                    <p key={k}><span className="text-muted-foreground">{k}:</span> <strong>{v}</strong></p>
-                  ))}
-                </div>
-              )}
-
-              {resetModal.preview && (
-                <div>
-                  <Label className="text-xs">Type <code className="bg-red-100 px-1 rounded">RESET-HR</code> to confirm</Label>
-                  <Input
-                    value={resetModal.confirmText}
-                    onChange={(e) => setResetModal({ ...resetModal, confirmText: e.target.value })}
-                    placeholder="RESET-HR"
-                    data-testid="reset-confirm-input"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setResetModal(null)} data-testid="reset-cancel-btn">Cancel</Button>
-            {!resetModal?.preview ? (
-              <Button
-                variant="destructive"
-                disabled={resetModal?.busy}
-                data-testid="reset-preview-btn"
-                onClick={async () => {
-                  if (!resetModal) return;
-                  setResetModal({ ...resetModal, busy: true });
-                  try {
-                    const params = { scope: resetModal.scope, campus_scope: resetModal.campus_scope, ledger: resetModal.ledger };
-                    const res = await api.delete('/hr/reset', { params });
-                    setResetModal({ ...resetModal, busy: false, preview: res.data });
-                  } catch (e) {
-                    setResetModal({ ...resetModal, busy: false });
-                    toast.error(e.response?.data?.detail || 'Preview failed');
-                  }
-                }}
-              >
-                {resetModal?.busy ? 'Loading…' : 'Preview count'}
-              </Button>
-            ) : (
-              <Button
-                variant="destructive"
-                disabled={resetModal?.busy || resetModal?.confirmText !== 'RESET-HR'}
-                data-testid="reset-apply-btn"
-                onClick={async () => {
-                  if (!resetModal) return;
-                  setResetModal({ ...resetModal, busy: true });
-                  try {
-                    const params = { scope: resetModal.scope, campus_scope: resetModal.campus_scope, ledger: resetModal.ledger, confirm: 'RESET-HR' };
-                    const res = await api.delete('/hr/reset', { params });
-                    const summary = Object.entries(res.data.deleted || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-                    toast.success(`HR reset complete. ${summary}`);
-                    setResetModal(null);
-                    await fetchAll();
-                  } catch (e) {
-                    setResetModal({ ...resetModal, busy: false });
-                    toast.error(e.response?.data?.detail || 'Reset failed');
-                  }
-                }}
-              >
-                {resetModal?.busy ? 'Resetting…' : 'Permanently reset'}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ─── HR RESET DIALOG moved to Admin → System Console → Data & Backup ─── */}
     </div>
   );
 }

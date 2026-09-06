@@ -414,6 +414,89 @@ async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = 
     return await db.hr_payslips.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+@router.get("/payslips/upcoming-paydays")
+async def upcoming_paydays(
+    count: int = 6,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(require_director),
+):
+    """Return the next `count` paydays for a campus, honouring hr_settings
+    (pay_frequency, next_pay_date/pay_day, payday_weekday).
+
+    Response: {
+      frequency: 'monthly'|'weekly'|'biweekly',
+      payday_weekday: int|null,
+      paydays: [{ date: 'YYYY-MM-DD', period: '<canonical period label>' }, ...]
+    }
+
+    The `period` field is the canonical identifier used by
+    `/payslips/generate` — monthly → 'YYYY-MM', weekly/biweekly →
+    'YYYY-MM-DD_YYYY-MM-DD (Www)'. The frontend passes it back verbatim.
+    """
+    loc = location_id or current_user.get("active_campus_id")
+    if not loc:
+        raise HTTPException(status_code=400, detail="No campus set")
+    count = max(1, min(int(count or 6), 24))
+
+    s = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0}) or {}
+    freq_raw = s.get("pay_frequency") or "monthly"
+    freq = freq_raw.lower().replace(" ", "").replace("_", "-")
+    payday_weekday = s.get("payday_weekday")
+    today = datetime.now(timezone.utc).date()
+
+    # Anchor payday: next_pay_date wins; else pay_day day-of-month in current month
+    anchor_iso = (s.get("next_pay_date") or "").strip()
+    anchor_d: Optional[dt_date] = None
+    if anchor_iso:
+        try:
+            anchor_d = dt_date.fromisoformat(anchor_iso)
+        except Exception:
+            anchor_d = None
+    if anchor_d is None and s.get("pay_day"):
+        try:
+            anchor_d = today.replace(day=int(s["pay_day"]))
+        except Exception:
+            anchor_d = None
+    if anchor_d is None:
+        anchor_d = today.replace(day=min(28, today.day))
+
+    paydays: List[dt_date] = []
+
+    if freq == "monthly":
+        # Roll anchor into the current or nearest upcoming month
+        d = anchor_d
+        while d < today:
+            d = _next_payday_after("monthly", d)
+        paydays.append(d)
+        for _ in range(count - 1):
+            paydays.append(_next_payday_after("monthly", paydays[-1]))
+    else:
+        step = 14 if freq in {"biweekly", "bi-weekly", "fortnightly"} else 7
+        d = anchor_d
+        # Snap first so we walk aligned with the payday weekday preference
+        if payday_weekday is not None:
+            d = _snap_to_weekday(d, payday_weekday)
+        # Walk to the first payday >= today
+        while d < today:
+            d = d + td(days=step)
+            if payday_weekday is not None:
+                d = _snap_to_weekday(d, payday_weekday)
+        for _ in range(count):
+            paydays.append(d)
+            d = d + td(days=step)
+            if payday_weekday is not None:
+                d = _snap_to_weekday(d, payday_weekday)
+
+    return {
+        "frequency": freq,
+        "payday_weekday": payday_weekday,
+        "paydays": [
+            {"date": p.isoformat(), "period": _period_label(freq, p)}
+            for p in paydays
+        ],
+    }
+
+
 @router.post("/payslips/generate")
 async def generate_payslips(data: dict, current_user: dict = Depends(require_director)):
     """Generate payslips for a pay period. Body:
@@ -1186,24 +1269,37 @@ async def reset_hr_module(
         if role != "system_admin":
             raise HTTPException(status_code=403, detail="Only system_admin can reset across all campuses")
         loc_filter: dict = {}
+        payslips_filter: dict = {}
         loc_ids_for_expenses: list = []  # empty means all
     else:
         active = current_user.get("active_campus_id") or ""
         if not active:
             raise HTTPException(status_code=400, detail="No active campus set")
         loc_filter = {"location_id": active}
+        # iter-hr-reset-fix: payslips can be stamped with either `location_id`
+        # (draft, from salary record) or `payroll_location_id` (once paid, set
+        # by pay-batch). The old reset only checked `location_id`, so any
+        # payslip that was paid against a different payroll location was
+        # invisible to the reset preview + delete. Match either field now.
+        payslips_filter = {"$or": [
+            {"location_id": active},
+            {"payroll_location_id": active},
+        ]}
         loc_ids_for_expenses = [active]
 
     apply_changes = (confirm or "").strip() == "RESET-HR"
 
+    def _filter_for(coll_name: str) -> dict:
+        return payslips_filter if coll_name == "hr_payslips" else loc_filter
+
     # ── Preview: count what would be affected ────────────────────────────
     counts: dict = {}
     if scope == "payslips":
-        counts["hr_payslips"] = await db.hr_payslips.count_documents(loc_filter)
+        counts["hr_payslips"] = await db.hr_payslips.count_documents(payslips_filter)
     else:
         for coll in HR_ALL_COLLECTIONS:
             try:
-                counts[coll] = await db[coll].count_documents(loc_filter)
+                counts[coll] = await db[coll].count_documents(_filter_for(coll))
             except Exception:
                 counts[coll] = 0
 
@@ -1278,8 +1374,9 @@ async def reset_hr_module(
     collections_to_wipe = ["hr_payslips"] if scope == "payslips" else HR_ALL_COLLECTIONS
     for coll in collections_to_wipe:
         try:
+            filt = _filter_for(coll)
             # Recycle bin dump before delete so admins can recover if needed
-            async for doc in db[coll].find(loc_filter, {"_id": 0}):
+            async for doc in db[coll].find(filt, {"_id": 0}):
                 doc["_deleted_from"] = coll
                 doc["deleted_at"] = datetime.now(timezone.utc).isoformat()
                 doc["deleted_by"] = current_user["id"]
@@ -1288,7 +1385,7 @@ async def reset_hr_module(
                     await db.deleted_items.insert_one(doc)
                 except Exception:
                     pass
-            r = await db[coll].delete_many(loc_filter)
+            r = await db[coll].delete_many(filt)
             result["deleted"][coll] = r.deleted_count
         except Exception as ex:
             logger.error(f"HR reset failed to wipe {coll}: {ex}")

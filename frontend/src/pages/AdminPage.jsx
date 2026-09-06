@@ -406,7 +406,10 @@ export default function AdminPage({ mode = 'system' }) {
             <BackupRestoreManager />
             <OrphanCaseRepairCard />
             {(currentUser?.role === 'admin' || currentUser?.role === 'system_admin') && (
-              <FinanceResetCard />
+              <>
+                <FinanceResetCard />
+                <HrResetCard />
+              </>
             )}
           </TabsContent>
 
@@ -1202,3 +1205,159 @@ function FinanceResetCard() {
     </Card>
   );
 }
+
+// ============== HR RESET CARD (moved out of HR page — iter-hr-reset-move) ==============
+// Same danger-zone flow that used to live on HRPage. Two-step preview → confirm.
+// Sitting next to Finance reset so ops folks don't stumble onto it inside HR.
+function HrResetCard() {
+  const { user } = useAuth();
+  const [modal, setModal] = useState(null); // { open, scope, campus_scope, ledger, preview, busy, confirmText }
+
+  const openModal = () => setModal({
+    open: true, scope: 'payslips', campus_scope: 'active',
+    ledger: 'reverse', preview: null, busy: false, confirmText: '',
+  });
+
+  const runPreview = async () => {
+    if (!modal) return;
+    setModal({ ...modal, busy: true });
+    try {
+      const params = { scope: modal.scope, campus_scope: modal.campus_scope, ledger: modal.ledger };
+      const res = await api.delete('/hr/reset', { params });
+      setModal({ ...modal, busy: false, preview: res.data });
+    } catch (e) {
+      setModal({ ...modal, busy: false });
+      toast.error(e.response?.data?.detail || 'Preview failed');
+    }
+  };
+
+  const runApply = async () => {
+    if (!modal) return;
+    setModal({ ...modal, busy: true });
+    try {
+      const params = { scope: modal.scope, campus_scope: modal.campus_scope, ledger: modal.ledger, confirm: 'RESET-HR' };
+      const res = await api.delete('/hr/reset', { params });
+      const summary = Object.entries(res.data.deleted || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+      toast.success(`HR reset complete. ${summary}`);
+      setModal(null);
+    } catch (e) {
+      setModal({ ...modal, busy: false });
+      toast.error(e.response?.data?.detail || 'Reset failed');
+    }
+  };
+
+  return (
+    <Card className="border-red-300/60 bg-red-50/40" data-testid="admin-hr-danger-zone">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-2 text-red-700">
+          <AlertTriangle size={16} />
+          <h3 className="font-semibold text-sm">Danger Zone</h3>
+        </div>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex-1 min-w-[240px]">
+            <p className="text-sm font-medium">Reset HR Module</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Wipes payslips (or the entire HR module including salaries, contracts, timesheets, leave, and documents). Records land in the Recycle Bin; paid payroll ledger entries can be reversed as offsetting JEs or hard-deleted.
+            </p>
+          </div>
+          <Button
+            variant="outline" size="sm"
+            className="text-red-700 border-red-300 hover:bg-red-100"
+            onClick={openModal}
+            data-testid="hr-reset-open"
+          >
+            <Trash2 size={14} className="mr-1" /> Reset HR
+          </Button>
+        </div>
+
+        <Dialog open={!!modal?.open} onOpenChange={(o) => !o && setModal(null)}>
+          <DialogContent className="max-w-md" data-testid="hr-reset-dialog">
+            <DialogHeader>
+              <DialogTitle className="text-red-700 flex items-center gap-2"><Trash2 size={16} /> Reset HR Module</DialogTitle>
+              <DialogDescription>Preview counts first, then type <code>RESET-HR</code> to apply.</DialogDescription>
+            </DialogHeader>
+            {modal && (
+              <div className="space-y-3 text-sm">
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+                  <strong>Danger zone.</strong> Deleted records go to the Recycle Bin. Paid-payroll ledger postings must be either reversed (offsetting JE) or hard-deleted.
+                </div>
+
+                <div>
+                  <Label className="text-xs">What to reset</Label>
+                  <Select value={modal.scope} onValueChange={(v) => setModal({ ...modal, scope: v, preview: null, confirmText: '' })}>
+                    <SelectTrigger data-testid="reset-scope-select"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="payslips" data-testid="reset-scope-payslips">Payslips only</SelectItem>
+                      <SelectItem value="all" data-testid="reset-scope-all">Entire HR module (payslips + salaries + contracts + timesheets + leave + docs)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Campus scope</Label>
+                  <Select value={modal.campus_scope} onValueChange={(v) => setModal({ ...modal, campus_scope: v, preview: null, confirmText: '' })}>
+                    <SelectTrigger data-testid="reset-campus-select"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active" data-testid="reset-campus-active">Active campus only</SelectItem>
+                      {user?.role === 'system_admin' && <SelectItem value="all" data-testid="reset-campus-all">All campuses (system_admin only)</SelectItem>}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Ledger action for paid payroll</Label>
+                  <Select value={modal.ledger} onValueChange={(v) => setModal({ ...modal, ledger: v, preview: null, confirmText: '' })}>
+                    <SelectTrigger data-testid="reset-ledger-select"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="reverse" data-testid="reset-ledger-reverse">Reverse (post offsetting JEs — auditable)</SelectItem>
+                      <SelectItem value="delete" data-testid="reset-ledger-delete">Delete (hard-remove expenses + JEs — no trail)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {modal.preview && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs space-y-1">
+                    <p className="font-semibold text-amber-800">Preview (nothing deleted yet)</p>
+                    {Object.entries(modal.preview.counts || {}).map(([k, v]) => (
+                      <p key={k}><span className="text-muted-foreground">{k}:</span> <strong>{v}</strong></p>
+                    ))}
+                  </div>
+                )}
+
+                {modal.preview && (
+                  <div>
+                    <Label className="text-xs">Type <code className="bg-red-100 px-1 rounded">RESET-HR</code> to confirm</Label>
+                    <Input
+                      value={modal.confirmText}
+                      onChange={(e) => setModal({ ...modal, confirmText: e.target.value })}
+                      placeholder="RESET-HR"
+                      data-testid="reset-confirm-input"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" onClick={() => setModal(null)} data-testid="reset-cancel-btn">Cancel</Button>
+              {!modal?.preview ? (
+                <Button variant="destructive" disabled={modal?.busy} onClick={runPreview} data-testid="reset-preview-btn">
+                  {modal?.busy ? 'Loading…' : 'Preview count'}
+                </Button>
+              ) : (
+                <Button
+                  variant="destructive"
+                  disabled={modal?.busy || modal?.confirmText !== 'RESET-HR'}
+                  onClick={runApply}
+                  data-testid="reset-apply-btn"
+                >
+                  {modal?.busy ? 'Resetting…' : 'Permanently reset'}
+                </Button>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
+  );
+}
+
