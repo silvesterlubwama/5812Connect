@@ -180,17 +180,24 @@ async def list_tasks(
 
     or_clauses = []
     if active_campus:
-        # STRICT scope — only boards in this campus; escapes are disabled
+        # STRICT scope — only boards in this campus PLUS boards the user
+        # owns/is tagged on/has an assigned task on (iter-tasks-calendar).
+        # Without these escapes, a user with an active campus set never sees
+        # tasks on their personal/global boards on the Calendar page.
         if user_locs_list:
             or_clauses.append({"location_id": {"$in": user_locs_list}})
-        else:
-            return []
+        or_clauses.append({"tagged_members": user_id})
+        or_clauses.append({"created_by": user_id})
+        if task_board_ids:
+            or_clauses.append({"id": {"$in": [b for b in task_board_ids if b]}})
     else:
         or_clauses.append({"tagged_members": user_id})
         or_clauses.append({"created_by": user_id})
         if user_locs_list:
             or_clauses.append({"location_id": {"$in": user_locs_list}})
         or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
+    if not or_clauses:
+        return []
     candidate_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0, "id": 1, "tagged_members": 1, "created_by": 1, "is_restricted": 1, "is_private": 1}).to_list(500)
     allowed_board_ids = set()
     for b in candidate_boards:
@@ -199,11 +206,13 @@ async def list_tasks(
                 allowed_board_ids.add(b["id"])
         else:
             allowed_board_ids.add(b["id"])
-    # Add boards user has tasks on (only when NOT narrowing by active campus)
-    if not active_campus:
-        for bid in task_board_ids:
-            if bid:
-                allowed_board_ids.add(bid)
+    # Add boards user has tasks on — always, even when scoped to an active
+    # campus. Previously this escape only ran in the un-scoped branch, which
+    # is what caused user-created tasks to vanish from the Calendar when the
+    # switcher was pinned to a different campus.
+    for bid in task_board_ids:
+        if bid:
+            allowed_board_ids.add(bid)
     # Apply the board scope to the task query (only if user requested no specific board)
     if not board_id:
         if not allowed_board_ids:

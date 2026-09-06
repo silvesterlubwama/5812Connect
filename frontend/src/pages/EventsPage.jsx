@@ -301,9 +301,12 @@ export default function EventsPage() {
         setEvents(prev => prev.map(ev => ev.id === editingEvent.id ? res.data : ev));
         toast.success('Event updated');
       } else {
-        // Refresh to include recurring children
-        fetchEvents();
+        // iter-event-lag: optimistic insert so the newly-created event
+        // shows up in the list instantly. `fetchEvents()` still runs after
+        // so recurring children (generated server-side) merge in on refresh.
+        setEvents(prev => [res.data, ...prev.filter(e => e.id !== res.data.id)]);
         toast.success(`Event "${res.data.title}" created!`);
+        fetchEvents();
       }
       setShowAdd(false); setEditingEvent(null); setNewEvent({ ...emptyEvent });
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save event'); }
@@ -496,7 +499,24 @@ export default function EventsPage() {
       {/* Add/Edit Event Dialog */}
       <Dialog open={showAdd} onOpenChange={v => { if (!v) { setShowAdd(false); setEditingEvent(null); } }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editingEvent ? 'Edit Event' : 'Create New Event'}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{editingEvent ? 'Edit Event' : 'Create New Event'}</DialogTitle>
+            {!editingEvent && (() => {
+              // iter-loc-placeholder: subtle "Creating in: <campus>" badge so
+              // multi-campus admins can see up-front where the record will
+              // land. Uses the mainLocation (falls back to activeCampus) —
+              // matches the backend `default_creation_location` rule.
+              const targetId = newEvent.location_id || mainLocation;
+              const targetLoc = locations.find(l => l.id === targetId);
+              if (!targetLoc) return null;
+              return (
+                <div className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[11px] text-primary w-fit" data-testid="event-create-target-badge">
+                  <span className="opacity-70">Creating in:</span>
+                  <span className="font-medium">{targetLoc.name}</span>
+                </div>
+              );
+            })()}
+          </DialogHeader>
           <form onSubmit={handleAdd} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Event Title *</Label><Input data-testid="event-title-input" placeholder="Event name" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} required /></div>
             <div className="grid grid-cols-2 gap-4">
