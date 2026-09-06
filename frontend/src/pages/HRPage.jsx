@@ -983,10 +983,10 @@ export default function HRPage() {
               <div className="grid grid-cols-2 gap-3 -mt-2">
                 <div className="space-y-1.5">
                   <Label>Pay Run Weekday</Label>
-                  <Select value={String(settingsForm.payday_weekday ?? '')} onValueChange={v => setSettingsForm({...settingsForm, payday_weekday: v === '' ? null : parseInt(v)})}>
+                  <Select value={settingsForm.payday_weekday == null ? '__none__' : String(settingsForm.payday_weekday)} onValueChange={v => setSettingsForm({...settingsForm, payday_weekday: v === '__none__' ? null : parseInt(v)})}>
                     <SelectTrigger data-testid="payday-weekday-picker"><SelectValue placeholder="Not set — use anchor date" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Not set — use anchor date</SelectItem>
+                      <SelectItem value="__none__">Not set — use anchor date</SelectItem>
                       <SelectItem value="0">Monday</SelectItem>
                       <SelectItem value="1">Tuesday</SelectItem>
                       <SelectItem value="2">Wednesday</SelectItem>
