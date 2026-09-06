@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## iter 312 — 2026-02 — Badge photo right-most + task bell deep-links
+
+### Badge layout — final pass
+- Right column order flipped to **[QR | Photo]** so the photo is the
+  right-most element on the badge (matching user request).
+- Photo now uses `object-fit: contain` on an accent-tinted background so
+  the face is always visible in full — no cropping, no letterbox gaps
+  showing an unrelated colour. Container widened for legibility (108 px
+  on the large badge, 76 px on small).
+- QR bumped to `ecLevel="Q"` and a slightly larger tile (88 × 88 large /
+  64 × 64 small) so it still scans reliably after photocopy/print
+  reduction. Still plain squares — every scanner in the field reads it.
+
+### Task bell deep-links
+- `scheduler.py`: every task-related push + in-app write now points at
+  `/tasks?task=<task_id>` (previously bare `/tasks`).
+  - `_run_due_date_reminder_scheduler` (Task Due Tomorrow + Task Due
+    Today) — push URL deep-linked.
+  - `_fire_overdue_task_emails` — push URL deep-linked, and each
+    recipient now also gets a bell-row via `create_notification` (was
+    push+email only; the bell had nothing for overdue tasks). Uses the
+    existing `task_overdue_emails` 3-day idempotency window so no
+    duplicates.
+- `TasksPage.jsx` reads `?task=<id>` via `useSearchParams`, finds the
+  task across `allTasks` + per-list `tasks`, switches boards if needed,
+  and opens the card detail dialog automatically. Query param is
+  cleaned after the drawer opens so browser-back doesn't loop-open.
+- **Verified end-to-end**: overdue task fired → notification row
+  `link: "/tasks?task=task_iter312"`, type `warning`.
+
 ## iter 311 — 2026-02 — Event bell deep-links + badge photo/QR side-by-side (printable)
 
 ### Event bell deep-links

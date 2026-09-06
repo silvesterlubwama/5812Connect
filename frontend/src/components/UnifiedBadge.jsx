@@ -407,13 +407,13 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
             </div>
-            {/* Right column — iter311: photo (portrait, bigger) SIDE BY SIDE
-                with a plain scannable QR (square, slightly smaller). Photo is
-                preloaded into a data URL via `photoSrc` below so it captures
-                cleanly into html2canvas exports (previously the raw <img>
-                cross-origin src would render on screen but come out blank in
-                the Save-as-PNG and print outputs). QR is intentionally plain
-                (no embedded logo) so any scanner reads it reliably. */}
+            {/* Right column — iter312: order is QR then photo, i.e.
+                [info | QR | photo] from left to right. Photo is now the
+                right-most element (as the user asked) and uses
+                `object-fit: contain` on an accent-tinted background so
+                the face never crops. QR is plain + slightly larger and
+                bumped to ecLevel "Q" so it stays legible even after
+                photocopy/print at reduced sizes. */}
             <div style={{
               flexShrink: 0,
               display: 'flex',
@@ -421,33 +421,11 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               gap: isSmall ? '4px' : '6px',
               height: isSmall ? '108px' : '148px',
             }}>
-              {/* Photo — main portrait */}
+              {/* QR — plain, no embedded logo. Sits to the LEFT of the
+                  photo so the photo occupies the outer edge of the badge. */}
               <div style={{
-                width: isSmall ? '68px' : '96px',
-                height: isSmall ? '108px' : '148px',
-                borderRadius: '10px',
-                overflow: 'hidden',
-                background: '#fff',
-                border: `2px solid ${colors.accent}`,
-                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                <img
-                  src={photoSrc}
-                  alt={person.name || 'photo'}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                  onError={(e) => { e.currentTarget.src = generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220); }}
-                />
-              </div>
-              {/* QR — plain, no embedded logo, slightly smaller so it reads as
-                  the secondary element next to the photo. Sits on a white
-                  padded card so it prints on any badge background. */}
-              <div style={{
-                width: isSmall ? '60px' : '84px',
-                height: isSmall ? '60px' : '84px',
+                width: isSmall ? '64px' : '88px',
+                height: isSmall ? '64px' : '88px',
                 borderRadius: '8px',
                 background: '#ffffff',
                 border: `2px solid ${colors.accent}`,
@@ -461,11 +439,35 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 48 : 68}
+                  size={isSmall ? 52 : 72}
                   bgColor="#ffffff"
                   fgColor="#0f172a"
-                  ecLevel="M"
+                  ecLevel="Q"
                   qrStyle="squares"
+                />
+              </div>
+              {/* Photo — right-most; larger + `contain` so the face is
+                  always visible in full. The accent-tinted background
+                  fills any letterbox gap when the source photo isn't
+                  the same aspect ratio as the container. */}
+              <div style={{
+                width: isSmall ? '76px' : '108px',
+                height: isSmall ? '108px' : '148px',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                background: `${colors.accent}22`,
+                border: `2px solid ${colors.accent}`,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <img
+                  src={photoSrc}
+                  alt={person.name || 'photo'}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                  onError={(e) => { e.currentTarget.src = generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220); }}
                 />
               </div>
             </div>

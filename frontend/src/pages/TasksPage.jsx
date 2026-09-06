@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Archive, RefreshCw, MapPin, Wifi, Trash2, Download, Upload, Globe, X, LayoutGrid, CalendarDays, CheckSquare, Settings, Users } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -55,9 +56,37 @@ export default function TasksPage() {
   const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'calendar'
   const [allTasks, setAllTasks] = useState([]);
   const [selectedTaskIds, setSelectedTaskIds] = useState(new Set());
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const isAdmin = ['admin', 'system_admin', 'executive director', 'director'].includes((user?.role || '').toLowerCase());
   const canEdit = isAdmin || ['manager', 'coordinator', 'staff'].includes((user?.role || '').toLowerCase());
+
+  // iter312 — deep-link support: `/tasks?task=<id>` (e.g. from an overdue-
+  // task bell notification) auto-opens that task's card once its board has
+  // finished loading. We consume the param on first match so switching
+  // boards doesn't keep re-opening it. Requires `allTasks` to be populated
+  // (loaded by the calendar view effect) — falls back to iterating the
+  // per-list `tasks` object if allTasks hasn't run yet.
+  useEffect(() => {
+    const wanted = searchParams.get('task');
+    if (!wanted) return;
+    let match = (allTasks || []).find(t => t.id === wanted);
+    if (!match) {
+      for (const listId of Object.keys(tasks)) {
+        const found = (tasks[listId] || []).find(t => t.id === wanted);
+        if (found) { match = found; break; }
+      }
+    }
+    if (!match) return;
+    if (match.board_id && match.board_id !== activeBoardId) {
+      setActiveBoardId(match.board_id);
+      return; // let the board reload; the effect will re-fire once tasks arrive
+    }
+    setOpenCard(match);
+    const next = new URLSearchParams(searchParams);
+    next.delete('task');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, allTasks, tasks, activeBoardId, setSearchParams]);
 
   // Staff filtered by board's location (if set), otherwise all staff
   const STAFF_ROLES = ['admin', 'system_admin', 'executive director', 'adviser', 'director',

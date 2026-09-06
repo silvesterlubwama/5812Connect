@@ -62,7 +62,7 @@ async def _run_due_date_reminder_scheduler():
                 if task.get("assignee") and task["assignee"] not in assignees:
                     assignees.append(task["assignee"])
                 for uid in assignees:
-                    await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', "/tasks")
+                    await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', f"/tasks?task={task['id']}")
 
             # Tasks due today
             today_tasks = await db.tasks.find({
@@ -77,7 +77,7 @@ async def _run_due_date_reminder_scheduler():
                 if task.get("assignee") and task["assignee"] not in assignees:
                     assignees.append(task["assignee"])
                 for uid in assignees:
-                    await _send_push_to_user(uid, "Task Due Today", f'"{task["title"]}" is due today!', "/tasks")
+                    await _send_push_to_user(uid, "Task Due Today", f'"{task["title"]}" is due today!', f"/tasks?task={task['id']}")
 
             total = len(due_tasks) + len(today_tasks)
             if total:
@@ -252,12 +252,28 @@ async def _fire_overdue_task_emails():
                 user = await db.users.find_one({"id": uid}, {"_id": 0, "email": 1, "name": 1})
                 if not user or not user.get("email"):
                     continue
-                # Always send push regardless of email outcome
+                # Always send push + write an in-app notification (deep-linked
+                # to the specific task card so clicking the bell jumps straight
+                # to it). Idempotency for the in-app row is enforced by the
+                # existing `task_overdue_emails` insert below — the email row
+                # is only inserted once per 3-day window, so we mirror the
+                # in-app write into the same gate to prevent duplicates in
+                # the bell dropdown.
+                deep_link = f"/tasks?task={task['id']}"
                 try:
-                    await _send_push_to_user(uid, "Task Overdue", f'"{task["title"]}" is past due', "/tasks")
+                    await _send_push_to_user(uid, "Task Overdue", f'"{task["title"]}" is past due', deep_link)
                 except Exception:
                     pass
                 days_late = (date.today() - date.fromisoformat(task["due_date"])).days
+                try:
+                    from routers.notifications import create_notification
+                    await create_notification(
+                        f"Task overdue: {task.get('title') or ''}",
+                        f"{days_late} day(s) past due (due {task['due_date']})",
+                        uid, "warning", deep_link,
+                    )
+                except Exception as ne:
+                    logger.warning(f"task overdue in-app notify for {uid}: {ne}")
                 title = (task.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
                 desc = (task.get("description") or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
                 body = (

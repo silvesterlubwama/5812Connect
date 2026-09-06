@@ -104,6 +104,14 @@ social work, sales/POS/shipments, and self-service user portal.
   preloaded into a base64 data URL so it survives html2canvas +
   `window.print()` exports (previously blank in downloads/prints).
 
+### iter 312 additions
+- Badge order finalised as **[Info | QR | Photo]** with photo
+  right-most, `object-fit: contain` on tinted background (no crops),
+  QR bumped to ecLevel Q for reliable print/scan.
+- Task bell deep-links: every task-related push + in-app write now
+  points at `/tasks?task=<id>`; TasksPage auto-opens the specific task
+  drawer via `useSearchParams`.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 
