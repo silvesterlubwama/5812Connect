@@ -1,7 +1,7 @@
 """Volunteer scheduling endpoints."""
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime, timezone
-from deps import get_current_user, db, get_campus_filter
+from deps import get_current_user, db, get_campus_filter, default_creation_location
 from typing import Optional
 import uuid
 
@@ -46,10 +46,10 @@ async def available_staff(current_user: dict = Depends(get_current_user)):
 @router.post("/volunteer/shifts")
 async def create_shift(data: dict, current_user: dict = Depends(get_current_user)):
     shift_id = f"shift_{str(uuid.uuid4())[:8]}"
-    # Default location to the caller's active campus so shifts created without
-    # one still fall inside the campus filter (previously null → invisible to
-    # non-admins even at their own campus).
-    location_id = data.get("location_id") or current_user.get("active_campus_id")
+    # iter-main-loc: default to the caller's MAIN campus (not switched active
+    # campus) so shifts created without an explicit location don't scatter
+    # across whichever campus they've switched to via the campus switcher.
+    location_id = default_creation_location(current_user, data.get("location_id"))
     doc = {
         "id": shift_id,
         "title": data.get("title", "Volunteer Shift"),

@@ -145,6 +145,11 @@ export default function EventsPage() {
   const { user } = useAuth();
   const activeCampus = localStorage.getItem('5812_active_campus') || user?.location_id || '';
   const isGlobalView = !activeCampus;
+  // iter-main-loc: seed created events with the user's MAIN location — not
+  // whichever campus they've switched their view to. Multi-campus users
+  // reported events landing on random switched-to campuses and vanishing
+  // from their default view. Explicit override in the form still wins.
+  const mainLocation = user?.location_id || activeCampus || '';
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -162,7 +167,7 @@ export default function EventsPage() {
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeColor, setNewTypeColor] = useState('#6366f1');
   const [editingEvent, setEditingEvent] = useState(null);
-  const emptyEvent = { title: '', type: 'meeting', date: '', end_date: '', time: '', end_time: '', location: '', location_id: activeCampus, venue_id: '', capacity: 100, description: '', is_public: false, is_free: true, price: '', visibility: 'internal', is_recurring: false, recurrence_pattern: '', recurrence_type: 'weekly', recurrence_interval: 1, recurrence_end_date: '', recurrence_day: 1, recurrence_days_of_week: [], recurrence_week_of_month: null, occurrences: 12, country: '', ticket_tiers: [], waitlist_enabled: true };
+  const emptyEvent = { title: '', type: 'meeting', date: '', end_date: '', time: '', end_time: '', location: '', location_id: mainLocation, venue_id: '', capacity: 100, description: '', is_public: false, is_free: true, price: '', visibility: 'internal', is_recurring: false, recurrence_pattern: '', recurrence_type: 'weekly', recurrence_interval: 1, recurrence_end_date: '', recurrence_day: 1, recurrence_days_of_week: [], recurrence_week_of_month: null, occurrences: 12, country: '', ticket_tiers: [], waitlist_enabled: true };
   const [newEvent, setNewEvent] = useState({ ...emptyEvent });
   const [selectedIds, setSelectedIds] = useState(new Set());
   // Venue availability

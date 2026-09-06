@@ -146,24 +146,47 @@ export default function AdminPage({ mode = 'system' }) {
       const p = res.data;
       setEditForm({
         name: p.name || '', email: p.email || '', phone: p.phone || '',
+        // Preserve the true underlying role — including system_admin — so that
+        // saveEdit doesn't accidentally demote a system_admin back to 'admin'
+        // when the admin-tier toggle is left on (bug: iter-user-hydrate).
         role: (p.role === 'admin' || p.role === 'system_admin') ? (p.secondary_roles?.[0] || 'Staff') : (p.role || 'Member'),
-        status: p.status || 'active', department: p.department || '', notes: p.notes || '',
+        underlying_role: p.role || '',    // hidden — used by saveEdit to preserve system_admin
+        status: p.status || 'active', department: p.department || '',
+        departments: p.departments || [],
+        notes: p.notes || '',
+        // Flags — hydrate every toggle rendered in the "Flags" tab so their
+        // Switch components reflect the real DB state and a save round-trip
+        // doesn't silently overwrite fields the admin never touched.
         is_parent: p.is_parent || false, is_customer: p.is_customer || false, is_donor: p.is_donor || false,
+        is_guest: p.is_guest || false, is_medical: p.is_medical || false, is_resident: p.is_resident || false,
+        has_restricted_access: p.has_restricted_access || false,
+        resident_location_id: p.resident_location_id || '',
         is_admin: p.role === 'admin' || p.role === 'system_admin', secondary_roles: p.secondary_roles || [],
         pin: p.pin || '', gender: p.gender || '', date_of_birth: p.date_of_birth || '',
         national_id: p.national_id || '', address: p.address || '', emergency_contact: p.emergency_contact || '',
         group: p.group || '', location_id: p.location_id || '',
         location_ids: p.location_ids || (p.location_id ? [p.location_id] : []),
         program: p.program || '', member_id: p.member_id || '', title: p.title || '',
+        // PBX + badge + security-contractor fields (bug fix: previously
+        // dropped from hydration so edits nuked existing values on save).
+        extension: p.extension || '', extension_pin: p.extension_pin || '', forward_to: p.forward_to || '',
+        security_company_id: p.security_company_id || '', security_rank: p.security_rank || '',
+        badge_id: p.badge_id || '', photo_url: p.photo_url || '',
       });
     } catch {
       setEditForm({ name: user.name || '', email: user.email || '', phone: user.phone || '',
         role: (user.role === 'admin' || user.role === 'system_admin') ? 'Staff' : (user.role || 'Member'),
+        underlying_role: user.role || '',
         status: user.status || 'active', department: user.department || '', notes: user.notes || '',
         is_parent: user.is_parent || false, is_customer: user.is_customer || false, is_donor: user.is_donor || false,
+        is_guest: user.is_guest || false, is_medical: user.is_medical || false, is_resident: user.is_resident || false,
+        has_restricted_access: user.has_restricted_access || false,
+        resident_location_id: user.resident_location_id || '',
         is_admin: user.role === 'admin' || user.role === 'system_admin', pin: user.pin || '',
         gender: '', date_of_birth: '', national_id: '', address: '', emergency_contact: '',
-        group: '', location_id: user.location_id || '', program: '', member_id: '',
+        group: '', location_id: user.location_id || '', location_ids: user.location_ids || [], program: '', member_id: '',
+        extension: user.extension || '', extension_pin: '', forward_to: user.forward_to || '',
+        security_company_id: '', security_rank: '', badge_id: user.badge_id || '', photo_url: user.photo_url || '',
       });
     }
     setShowEdit(true);
@@ -185,8 +208,20 @@ export default function AdminPage({ mode = 'system' }) {
     try {
       const payload = { ...editForm };
       delete payload.member_id;
-      if (payload.is_admin) payload.role = 'admin';
+      // iter-user-hydrate: preserve system_admin. The role Select shows a
+      // downgraded label (Staff / secondary role) for admin-tier users, so
+      // we must fold `is_admin` back into the admin-tier role explicitly,
+      // and refuse to demote a system_admin unless the admin-tier toggle
+      // is being turned off deliberately.
+      const wasSystemAdmin = payload.underlying_role === 'system_admin';
+      const wasAdmin = payload.underlying_role === 'admin' || wasSystemAdmin;
+      if (payload.is_admin) {
+        // Keep whatever admin tier they were on. Regular admin stays admin,
+        // system_admin stays system_admin — no accidental demotion.
+        payload.role = wasSystemAdmin ? 'system_admin' : (wasAdmin ? payload.underlying_role : 'admin');
+      }
       delete payload.is_admin;
+      delete payload.underlying_role;
       if (!payload.location_ids?.length && payload.location_id) payload.location_ids = [payload.location_id];
       const res = await adminApi.updateUser(selectedUser.id, payload);
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, ...res.data } : u));

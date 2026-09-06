@@ -36,6 +36,24 @@ logger = logging.getLogger(__name__)
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
+
+def default_creation_location(user: dict, provided: str = None) -> str:
+    """Location to stamp on newly-created records.
+
+    Main-first policy (iter-main-loc): when a user has multiple assigned
+    campuses, records must land at their MAIN campus (`user.location_id`)
+    rather than scattering across whichever campus they've switched their
+    view to via the campus switcher. An explicit value from the caller
+    always wins. Falls back to `active_campus_id` only when main is unset.
+
+    Use everywhere backend code needs a default `location_id` for user-
+    created data (events, expenses, tasks, products, approvals, shifts,
+    HR records, etc.).
+    """
+    if provided:
+        return provided
+    return user.get("location_id") or user.get("active_campus_id") or ""
+
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 

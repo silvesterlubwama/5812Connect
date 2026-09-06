@@ -1,7 +1,7 @@
 """Product CRUD + variant management — extracted from financial.py"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view
+from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view, default_creation_location
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -103,8 +103,7 @@ async def list_products(current_user: dict = Depends(get_current_user)):
 @router.post("/products")
 async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
     doc = {"id": f"prod_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
-    if not doc.get("location_id"):
-        doc["location_id"] = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    doc["location_id"] = default_creation_location(current_user, doc.get("location_id"))
     await db.products.insert_one(doc); doc.pop("_id", None); return doc
 
 @router.put("/products/{product_id}")
@@ -390,7 +389,7 @@ async def create_pricelist(data: dict, current_user: dict = Depends(get_current_
         "discount_pct": float(data.get("discount_pct") or 0),
         "product_prices": data.get("product_prices") or [],
         "active": True,
-        "location_id": current_user.get("active_campus_id") or current_user.get("location_id"),
+        "location_id": default_creation_location(current_user, data.get("location_id")),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }

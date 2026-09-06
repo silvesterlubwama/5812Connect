@@ -3,7 +3,7 @@ Generic request system: any record can be sent through a configurable approval c
 Steps execute sequentially; each step has approver(s) and an outcome.
 Supports delegation."""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_director, _audit, logger, get_campus_filter
+from deps import db, get_current_user, require_director, _audit, logger, get_campus_filter, default_creation_location
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import uuid
@@ -52,7 +52,7 @@ async def create_workflow(data: dict, current_user: dict = Depends(require_direc
         "kind": (data.get("kind") or "custom").strip(),
         "steps": cleaned_steps,
         "active": True,
-        "location_id": data.get("location_id") or current_user.get("active_campus_id"),
+        "location_id": default_creation_location(current_user, data.get("location_id")),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
@@ -190,7 +190,7 @@ async def create_request(data: dict, current_user: dict = Depends(get_current_us
         "step_states": step_states,
         "submitted_by": current_user["id"],
         "submitted_by_name": current_user.get("name", ""),
-        "location_id": current_user.get("active_campus_id") or current_user.get("location_id"),
+        "location_id": default_creation_location(current_user),
         "created_at": now,
     }
     await db.approval_requests.insert_one(doc)
