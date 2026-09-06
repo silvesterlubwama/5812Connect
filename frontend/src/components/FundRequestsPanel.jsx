@@ -1,7 +1,7 @@
 /**
  * FundRequestsPanel — staff-facing fund request workflow.
  *
- * Embedded as a tab on FinancialPage so it lives alongside donations/expenses
+ * Embedded as a tab on FinancePage so it lives alongside donations/expenses
  * but is reachable by EVERY staff member regardless of finance access. Staff
  * sees "My Requests" + can submit a new one; finance staff see "All requests"
  * + can mark them paid (which auto-creates the matching expense entry).
