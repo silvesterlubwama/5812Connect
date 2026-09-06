@@ -28,13 +28,32 @@ def _biweekly_period(start: dt_date, days: int = 14) -> str:
     return f"{_iso(start)}_{_iso(end)} (W{iso_week:02d})"
 
 
-def _paydays_for_frequency(pay_frequency: str, anchor_iso: str, month: dt_date) -> List[dt_date]:
+def _snap_to_weekday(d: dt_date, weekday: int) -> dt_date:
+    """Shift `d` forward to the next occurrence of `weekday` (0=Mon...6=Sun).
+    Returns `d` unchanged if it already lands on that weekday. iter309."""
+    if weekday is None or weekday == "":
+        return d
+    try:
+        wd = int(weekday)
+    except (TypeError, ValueError):
+        return d
+    if wd < 0 or wd > 6:
+        return d
+    delta = (wd - d.weekday()) % 7
+    return d + td(days=delta)
+
+
+def _paydays_for_frequency(pay_frequency: str, anchor_iso: str, month: dt_date, payday_weekday=None) -> List[dt_date]:
     """List every payday in the calendar month `month` for the given frequency.
     - monthly:  1 date (day-of-month clamp to month end).
     - bi-weekly: every 14 days from anchor; typically 2, sometimes 3 in a month.
     - weekly:  every 7 days from anchor; 4 or 5 per month.
     `anchor_iso` should be the reference payday stored in hr_settings
     (`next_pay_date` when available, else `pay_day` day-of-month).
+    `payday_weekday` (0=Mon...6=Sun) snaps every computed payday to the next
+    occurrence of that weekday. Used for weekly/bi-weekly cadences where the
+    admin wants the actual pay run to always land on the same day of the week
+    (e.g. "pay for the last two Mon-Sun weeks always runs on Wednesday").
     """
     freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
     month_start = month.replace(day=1)
@@ -65,7 +84,10 @@ def _paydays_for_frequency(pay_frequency: str, anchor_iso: str, month: dt_date) 
         d = d + td(days=step)
     out: List[dt_date] = []
     while d < next_month_start:
-        out.append(d)
+        # iter309 — snap to configured weekday before recording.
+        snapped = _snap_to_weekday(d, payday_weekday) if payday_weekday is not None else d
+        if snapped < next_month_start:
+            out.append(snapped)
         d = d + td(days=step)
     return out
 
@@ -109,12 +131,14 @@ def _period_is_multi_pay(period: str) -> bool:
     return "_" in period or "(W" in period
 
 
-def _next_payday_after(pay_frequency: str, this_payday: dt_date) -> dt_date:
+def _next_payday_after(pay_frequency: str, this_payday: dt_date, payday_weekday=None) -> dt_date:
     freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
     if freq in {"bi-weekly", "biweekly", "fortnightly"}:
-        return this_payday + td(days=14)
+        base = this_payday + td(days=14)
+        return _snap_to_weekday(base, payday_weekday) if payday_weekday is not None else base
     if freq == "weekly":
-        return this_payday + td(days=7)
+        base = this_payday + td(days=7)
+        return _snap_to_weekday(base, payday_weekday) if payday_weekday is not None else base
     # monthly: same day next month (clamp to month end)
     y, m = this_payday.year, this_payday.month + 1
     if m > 12:
@@ -178,7 +202,7 @@ async def get_hr_settings(location_id: str, current_user: dict = Depends(require
 @router.put("/settings/{location_id}")
 async def update_hr_settings(location_id: str, data: dict, current_user: dict = Depends(require_director)):
     allowed = {"hr_enabled", "pay_frequency", "currency", "country", "tax_rules", "benefits",
-               "deduction_types", "pay_day", "next_pay_date", "compliance_lines",
+               "deduction_types", "pay_day", "payday_weekday", "next_pay_date", "compliance_lines",
                "aggregated_payroll_expense", "payslip_message"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -722,8 +746,8 @@ async def generate_payday_payslips(current_user: dict = Depends(require_director
                 anchor = today.replace(day=int(s["pay_day"])).isoformat()
             except Exception:
                 anchor = ""
-        # All paydays in this month for this campus
-        paydays = _paydays_for_frequency(freq, anchor, today)
+        # All paydays in this month for this campus (snapped to payday_weekday if set)
+        paydays = _paydays_for_frequency(freq, anchor, today, payday_weekday=s.get("payday_weekday"))
         if today not in paydays:
             continue
         period = _period_label(freq, today)
@@ -732,7 +756,7 @@ async def generate_payday_payslips(current_user: dict = Depends(require_director
         all_generated.extend(res["payslips"])
         fired_periods.append({"location_id": loc_id, "period": period, "frequency": freq})
         # Roll next_pay_date forward so the next scheduled tick picks it up.
-        next_pd = _next_payday_after(freq, today)
+        next_pd = _next_payday_after(freq, today, payday_weekday=s.get("payday_weekday"))
         await db.hr_settings.update_one(
             {"location_id": loc_id},
             {"$set": {"next_pay_date": next_pd.isoformat()}},
@@ -1464,12 +1488,13 @@ async def auto_generate_payslips(current_user: dict = Depends(require_director))
         # Process every payday from the anchor forward up to today so a missed
         # cron day still catches up.
         cursor = anchor_date
+        payday_weekday = campus_settings.get("payday_weekday")
         while cursor <= today:
             period = _period_label(freq, cursor)
             res = await _generate_payslips_for(period, loc_id, current_user)
             generated_total += res["generated"]
             fired.append({"location_id": loc_id, "period": period, "date": cursor.isoformat(), "count": res["generated"]})
-            cursor = _next_payday_after(freq, cursor)
+            cursor = _next_payday_after(freq, cursor, payday_weekday=payday_weekday)
         # Store the first payday that is strictly in the future.
         await db.hr_settings.update_one(
             {"location_id": loc_id},

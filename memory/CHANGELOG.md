@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## iter 309 — 2026-02 — HR pay-run weekday + wallet badge parity
+
+### HR pay-run weekday
+Admins can now snap every weekly/bi-weekly pay run to a specific weekday.
+Example use case from the field: "The last two Mon-Sun weeks always
+pay on the following Wednesday."
+
+- Backend `routers/hr.py`
+  - New `_snap_to_weekday(d, weekday)` helper (0=Mon…6=Sun).
+  - `_paydays_for_frequency(...)` and `_next_payday_after(...)` gained
+    an optional `payday_weekday=` kwarg — when set, every computed
+    payday is snapped forward to that weekday.
+  - `payday_weekday` added to the allow-list of hr_settings fields.
+  - Payday auto-fire (`generate-payday`) and back-fill both read the
+    campus setting and forward it to the helpers.
+- Frontend `HRPage.jsx`
+  - Settings dialog now shows a **Pay Run Weekday** picker with
+    Monday…Sunday options + an "Not set" default. Only visible when
+    `pay_frequency` is weekly or bi-weekly (monthly still uses
+    `pay_day` day-of-month).
+- Verified: unit-tested the snap math (`biweekly + Wed` → 2025-02-05,
+  2025-02-19; `weekly + Fri` from a Monday → 2025-02-14). Backend
+  restarts clean, indexes ensured.
+
+### Wallet badge parity
+`WalletBadgePage.jsx` was still rendering its ad-hoc layout (initials
+"SL" in the QR centre, small photo circle above the name) instead of
+the new `UnifiedBadge` layout. Replaced the custom badge markup with
+`<UnifiedBadge person={...} />` so every place a 58:12 badge renders
+now uses the same component — Wallet, print dialog, PrintableBadges
+bulk sheet, kiosk display. Future badge changes ripple everywhere
+automatically.
+
 ## iter 308 — 2026-02 — Badge: QR moved to right, embeds photo, prints on every export
 
 The staff badge was rendering a **tiny** ~58 px QR on the left and a

@@ -974,6 +974,34 @@ export default function HRPage() {
               </div>
               <div className="space-y-1.5"><Label>Next Pay Date</Label><Input type="date" value={settingsForm.next_pay_date || ''} onChange={e => setSettingsForm({...settingsForm, next_pay_date: e.target.value})} data-testid="next-pay-date" /></div>
             </div>
+            {/* iter309 — weekly/bi-weekly payday-on-weekday.
+                Hidden for monthly cadence because monthly still uses
+                `pay_day` (day-of-month). For weekly/biweekly the admin
+                picks the weekday the run should always land on, e.g.
+                "the last two Mon-Sun weeks always pay on Wednesday". */}
+            {['weekly', 'biweekly', 'bi-weekly', 'fortnightly'].includes((settingsForm.pay_frequency || '').toLowerCase()) && (
+              <div className="grid grid-cols-2 gap-3 -mt-2">
+                <div className="space-y-1.5">
+                  <Label>Pay Run Weekday</Label>
+                  <Select value={String(settingsForm.payday_weekday ?? '')} onValueChange={v => setSettingsForm({...settingsForm, payday_weekday: v === '' ? null : parseInt(v)})}>
+                    <SelectTrigger data-testid="payday-weekday-picker"><SelectValue placeholder="Not set — use anchor date" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Not set — use anchor date</SelectItem>
+                      <SelectItem value="0">Monday</SelectItem>
+                      <SelectItem value="1">Tuesday</SelectItem>
+                      <SelectItem value="2">Wednesday</SelectItem>
+                      <SelectItem value="3">Thursday</SelectItem>
+                      <SelectItem value="4">Friday</SelectItem>
+                      <SelectItem value="5">Saturday</SelectItem>
+                      <SelectItem value="6">Sunday</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">
+                    Snap every payday to this weekday. Example: bi-weekly + Wednesday means the last two Mon-Sun weeks pay on the following Wednesday.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Country compliance picker */}
             <div className="border-t pt-3 space-y-2">

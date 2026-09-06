@@ -76,6 +76,17 @@ social work, sales/POS/shipments, and self-service user portal.
   Aligns `UnifiedBadge.jsx` with the already-correct
   `PrintableBadges.jsx` and `WalletBadgePage.jsx`.
 
+### iter 309 additions
+- HR pay-run weekday: `payday_weekday` (0=Mon…6=Sun) added to
+  `hr_settings` for weekly/bi-weekly cadences. Every computed payday
+  snaps to the next occurrence of that weekday (e.g. "bi-weekly + Wed"
+  makes the last two Mon-Sun weeks pay on the following Wednesday).
+  New weekday picker in the HR settings dialog, only shown for
+  weekly / bi-weekly.
+- Wallet badge now renders through `<UnifiedBadge />` so every badge
+  surface (Wallet, print dialog, bulk sheet, kiosk display) uses the
+  identical component. No more layout drift between surfaces.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 
