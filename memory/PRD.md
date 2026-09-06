@@ -95,6 +95,15 @@ social work, sales/POS/shipments, and self-service user portal.
   helper; recipient projection now includes `id` so the loop has a
   user_id to insert against. Verified end-to-end.
 
+### iter 311 additions
+- Event-bell deep-links: new-event notification link is now
+  `/calendar?event=<id>`; CalendarPage auto-opens the matching event
+  drawer and cleans the query param.
+- Badge photo + QR now sit **side by side** (photo portrait, QR
+  slightly smaller square, plain — no embedded logo). Photo is
+  preloaded into a base64 data URL so it survives html2canvas +
+  `window.print()` exports (previously blank in downloads/prints).
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

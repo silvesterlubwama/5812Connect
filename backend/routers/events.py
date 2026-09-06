@@ -253,7 +253,7 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
                         if not r.get("id"):
                             continue
                         try:
-                            await create_notification(title, message, r["id"], "info", "/calendar")
+                            await create_notification(title, message, r["id"], "info", f"/calendar?event={event['id']}")
                         except Exception as ne:
                             logger.warning(f"Event notify insert failed for {r.get('email')}: {ne}")
             except Exception as e:

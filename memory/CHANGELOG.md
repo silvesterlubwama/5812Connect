@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## iter 311 — 2026-02 — Event bell deep-links + badge photo/QR side-by-side (printable)
+
+### Event bell deep-links
+- `routers/events.py` now writes the new-event bell link as
+  `/calendar?event=<event_id>` instead of the generic `/calendar` root.
+- `CalendarPage.jsx` gained a `useSearchParams` effect: on first render
+  (and once `rawEvents` is populated) it looks for `?event=<id>`, finds
+  the matching event, sets `selected` (auto-opening the drawer), jumps
+  the cursor to the event's month, and cleans the query param via
+  `setSearchParams(..., { replace: true })` so browser-back doesn't
+  loop-open.
+- **Verified**: creating an event now produces a notification whose
+  link ends `/calendar?event=evt_xxxxxxxx`, and clicking it opens the
+  event drawer directly.
+
+### Badge photo + QR side-by-side (and it now prints)
+User feedback was clear: the QR should NOT embed the photo — it should
+sit next to the photo as its own thing. Also, the previous separate-
+image approach was rendering on screen but coming out blank in
+Save-as-PNG / Print because html2canvas can't fetch cross-origin
+images at render time.
+
+**Fix**
+- Rewrote the right column as **photo (portrait) + QR (square, slightly
+  smaller) side by side**. Large badge: photo 96×148, QR 84×84. Small
+  badge: photo 68×108, QR 60×60.
+- QR is now **plain** (no embedded logo, `ecLevel="M"`, `qrStyle="squares"`)
+  so any scanner reads it reliably.
+- Added a `photoDataUrl` state + `useEffect` in `UnifiedBadge` that
+  fetches the profile photo, converts it to a base64 data URL, and
+  feeds it as the `<img>` src. That makes the pixel bytes available
+  on the same origin as the render context, so **html2canvas exports
+  and `window.print()` now include both the QR and the photo**. Falls
+  back to the generated initials image if the fetch fails.
+
 ## iter 310 — 2026-02 — Fix silently-broken event & conference notifications
 
 `routers/events.py` and `routers/conferences.py` both had a background-

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Download, Printer, Smartphone, Wifi } from 'lucide-react';
 import { Button } from './ui/button';
 import DOMPurify from 'dompurify';
@@ -82,11 +82,17 @@ function CountryWatermark({ country, countryCode, width, height, color }) {
  * Used as logo fallback when no photo_url is available.
  */
 function generateInitialsImage(name, bgColor = '#fbbf24', textColor = '#1a1a2e', size = 128) {
+  // iter311 — fill the whole canvas as a rect (not a circle) so the
+  // initials still look right when the image is placed into a portrait
+  // photo slot with `object-fit: cover`. The old arc-based fill left
+  // transparent corners and turned into a stretched oval inside a
+  // taller-than-wide container.
   const initials = (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const canvas = document.createElement('canvas');
   canvas.width = size; canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); ctx.fillStyle = bgColor; ctx.fill();
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, size, size);
   ctx.fillStyle = textColor; ctx.font = `bold ${size * 0.42}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(initials, size / 2, size / 2);
   return canvas.toDataURL('image/png');
@@ -147,6 +153,30 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const headerBg = kioskMode ? '#f0f0f5' : undefined; // kiosk uses light header
   const headerBorder = kioskMode ? `2px solid ${colors.accent}` : `2px solid ${colors.accent}`;
   const logoFilter = kioskMode ? 'none' : 'brightness(0) invert(1)';
+
+  // iter311 — preload the (possibly cross-origin) profile photo into a
+  // base64 data URL. html2canvas + `window.print()` both need the pixel
+  // bytes to be available on the same origin as the render context;
+  // without this the photo shows on-screen but comes out blank in the
+  // Save-as-PNG / Print outputs. Falls back to the generated initials
+  // image if the fetch fails (or is blocked by CORS).
+  const [photoDataUrl, setPhotoDataUrl] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!person.photo_url) { setPhotoDataUrl(null); return; }
+    fetch(person.photo_url, { mode: 'cors', credentials: 'omit' })
+      .then(r => r.ok ? r.blob() : Promise.reject(r.status))
+      .then(blob => new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = () => rej(fr.error);
+        fr.readAsDataURL(blob);
+      }))
+      .then(url => { if (!cancelled) setPhotoDataUrl(url); })
+      .catch(() => { if (!cancelled) setPhotoDataUrl(null); });
+    return () => { cancelled = true; };
+  }, [person.photo_url]);
+  const photoSrc = photoDataUrl || generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220);
 
   // Rendering the badge to PNG relies on html-to-image so the QR canvas
   // and the (possibly cross-origin) profile photo are baked into a single
@@ -377,41 +407,67 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
             </div>
-            {/* Right column — big readable QR that embeds the person's
-                photo (or initials fallback) as its centre logo. Uses the
-                same react-qrcode-logo we already use on the Wallet badge
-                page, so the entire card exports cleanly via html2canvas
-                (QR pixels and photo live on the same canvas rather than
-                being split across a QR + separate <img>). */}
+            {/* Right column — iter311: photo (portrait, bigger) SIDE BY SIDE
+                with a plain scannable QR (square, slightly smaller). Photo is
+                preloaded into a data URL via `photoSrc` below so it captures
+                cleanly into html2canvas exports (previously the raw <img>
+                cross-origin src would render on screen but come out blank in
+                the Save-as-PNG and print outputs). QR is intentionally plain
+                (no embedded logo) so any scanner reads it reliably. */}
             <div style={{
               flexShrink: 0,
-              width: isSmall ? '108px' : '148px',
-              height: isSmall ? '108px' : '148px',
-              borderRadius: '10px',
-              overflow: 'hidden',
-              background: '#fff',
-              border: `2px solid ${colors.accent}`,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '4px',
-              boxSizing: 'border-box',
+              alignItems: 'flex-start',
+              gap: isSmall ? '4px' : '6px',
+              height: isSmall ? '108px' : '148px',
             }}>
-              <QRCodeLogo
-                value={qrData}
-                size={isSmall ? 96 : 136}
-                bgColor="#ffffff"
-                fgColor="#0f172a"
-                ecLevel="H"
-                qrStyle="dots"
-                logoImage={person.photo_url || generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220)}
-                logoWidth={isSmall ? 34 : 48}
-                logoHeight={isSmall ? 34 : 48}
-                logoPadding={3}
-                logoPaddingStyle="circle"
-                removeQrCodeBehindLogo={true}
-              />
+              {/* Photo — main portrait */}
+              <div style={{
+                width: isSmall ? '68px' : '96px',
+                height: isSmall ? '108px' : '148px',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                background: '#fff',
+                border: `2px solid ${colors.accent}`,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <img
+                  src={photoSrc}
+                  alt={person.name || 'photo'}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                  onError={(e) => { e.currentTarget.src = generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220); }}
+                />
+              </div>
+              {/* QR — plain, no embedded logo, slightly smaller so it reads as
+                  the secondary element next to the photo. Sits on a white
+                  padded card so it prints on any badge background. */}
+              <div style={{
+                width: isSmall ? '60px' : '84px',
+                height: isSmall ? '60px' : '84px',
+                borderRadius: '8px',
+                background: '#ffffff',
+                border: `2px solid ${colors.accent}`,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                padding: '4px',
+                boxSizing: 'border-box',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <QRCodeLogo
+                  value={qrData}
+                  size={isSmall ? 48 : 68}
+                  bgColor="#ffffff"
+                  fgColor="#0f172a"
+                  ecLevel="M"
+                  qrStyle="squares"
+                />
+              </div>
             </div>
           </div>
 

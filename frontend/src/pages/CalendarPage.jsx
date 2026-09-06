@@ -3,6 +3,7 @@
 // visibility toggle for task scope, an event/task detail drawer, quick create,
 // and shareable public feed URLs (JSON + iCal).
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -78,10 +79,33 @@ export default function CalendarPage() {
   const [showShare, setShowShare] = useState(false);
   const [showRecurring, setShowRecurring] = useState(false);
   const [showImportCal, setShowImportCal] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => localStorage.setItem('5812_cal_view', view), [view]);
   useEffect(() => localStorage.setItem('5812_cal_task_scope', taskScope), [taskScope]);
   useEffect(() => localStorage.setItem('5812_cal_holidays', showHolidays ? 'on' : 'off'), [showHolidays]);
+
+  // iter311 — deep-link support: `/calendar?event=<id>` (e.g. from the bell
+  // "New event: …" notification) auto-opens the matching event drawer once
+  // the event list has finished loading. We consume the param on first
+  // match so navigating around the calendar doesn't keep re-opening it.
+  useEffect(() => {
+    const wanted = searchParams.get('event');
+    if (!wanted || !rawEvents.length) return;
+    const match = rawEvents.find(e => e.id === wanted);
+    if (!match) return;
+    setSelected(match);
+    // Jump the calendar cursor to the event's month so it's visible under the drawer.
+    if (match.date) {
+      try {
+        const d = new Date(match.date);
+        if (!isNaN(d.getTime())) setCursor(d);
+      } catch { /* bad date — ignore */ }
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('event');
+    setSearchParams(next, { replace: true });
+  }, [rawEvents, searchParams, setSearchParams]);
 
   // Pull public holidays for the current + next year so month/week/day views
   // are always populated regardless of which month the user paged to. This
