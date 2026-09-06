@@ -290,7 +290,13 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     if data.get("role") in ADMIN_TIER and not is_system_admin(current_user):
         raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{data['role']}' role")
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
-                      "address", "emergency_contact", "department", "departments", "notes",
+                      "address", "emergency_contact", "department", "departments",
+                      # iter-departments: multi-department tagging (parallels
+                      # location_ids). Users can be members of >1 department
+                      # inside a campus (e.g., a social worker who's both HR
+                      # and Social Work). `department_ids` is the array;
+                      # `department` (singular) is preserved for legacy views.
+                      "department_ids", "notes",
                       "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
                       "location_id", "location_ids", "title", "extension", "extension_pin", "forward_to",
                       "gender", "date_of_birth", "group", "program",

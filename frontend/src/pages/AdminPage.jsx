@@ -20,6 +20,7 @@ import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
 import KioskLinksManager from '../components/KioskLinksManager';
 import BackupRestoreManager from '../components/BackupRestoreManager';
+import { DepartmentsManager } from '../components/admin/DepartmentsManager';
 import IntegrationsManager from '../components/IntegrationsManager';
 import BrandingEditor from '../components/BrandingEditor';
 import RemoteAccessManager from '../components/RemoteAccessManager';
@@ -415,6 +416,7 @@ export default function AdminPage({ mode = 'system' }) {
         <Tabs defaultValue="access" className="w-full">
           <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto md:flex-wrap" data-testid="system-console-tabs">
             <TabsTrigger value="access" data-testid="sysconsole-tab-access"><Key size={13} className="mr-1" /> Access</TabsTrigger>
+            <TabsTrigger value="departments" data-testid="sysconsole-tab-departments"><Users size={13} className="mr-1" /> Departments</TabsTrigger>
             <TabsTrigger value="security" data-testid="sysconsole-tab-security"><Shield size={13} className="mr-1" /> Security</TabsTrigger>
             <TabsTrigger value="data" data-testid="sysconsole-tab-data"><Download size={13} className="mr-1" /> Data & Backup</TabsTrigger>
             <TabsTrigger value="integrations" data-testid="sysconsole-tab-integrations"><Plus size={13} className="mr-1" /> Integrations</TabsTrigger>
@@ -425,6 +427,12 @@ export default function AdminPage({ mode = 'system' }) {
           <TabsContent value="access" className="mt-4 space-y-4">
             <ExpiringGrantsBanner />
             <ModuleAccessManager />
+          </TabsContent>
+
+          {/* Departments: cost-centre dimension. Not a physical location —
+              used for staff tagging, split-funded salaries, and dept P&L. */}
+          <TabsContent value="departments" className="mt-4 space-y-4">
+            <DepartmentsManager />
           </TabsContent>
 
           {/* Security: checkpoints, vendor firms, kiosks, remote access, device pairing. */}

@@ -311,6 +311,12 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "staff_name": staff.get("name", ""),
         "staff_role": staff.get("role", ""),
         "department": staff.get("department", ""),
+        # iter-departments: cost-centre dimension. `department_ids` is the
+        # multi-department tag (e.g., HR + Social Work). `department_splits`
+        # is the funding split — [{department_id, pct}] summing to 100 —
+        # honoured by payroll expense poster and department P&L reports.
+        "department_ids": data.get("department_ids") or [],
+        "department_splits": data.get("department_splits") or [],
         "location_id": data.get("location_id") or staff.get("location_id") or current_user.get("active_campus_id", ""),
         "base_salary": float(data.get("base_salary", 0)),
         "wage_type": wage_type,
@@ -324,6 +330,12 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
+    # Validate splits sum to 100 (allow empty/none)
+    splits = doc.get("department_splits") or []
+    if splits:
+        total_pct = sum(float(s.get("pct") or 0) for s in splits)
+        if abs(total_pct - 100.0) > 0.01:
+            raise HTTPException(status_code=400, detail=f"department_splits must sum to 100 (got {total_pct:g})")
     await db.hr_salaries.insert_one(doc)
     doc.pop("_id", None)
     await _audit(current_user["id"], "create", "salary", doc["id"], {"staff": staff.get("name")})
@@ -335,8 +347,14 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
     existing = await db.hr_salaries.find_one({"id": salary_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Salary not found")
-    allowed = {"base_salary", "currency", "pay_frequency", "effective_date", "line_items", "status"}
+    allowed = {"base_salary", "currency", "pay_frequency", "effective_date", "line_items", "status",
+               # iter-departments: allow retagging & re-splitting on edit.
+               "department_ids", "department_splits"}
     update = {k: v for k, v in data.items() if k in allowed}
+    if "department_splits" in update and update["department_splits"]:
+        total_pct = sum(float(s.get("pct") or 0) for s in update["department_splits"])
+        if abs(total_pct - 100.0) > 0.01:
+            raise HTTPException(status_code=400, detail=f"department_splits must sum to 100 (got {total_pct:g})")
     if "base_salary" in update:
         update["base_salary"] = float(update["base_salary"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()

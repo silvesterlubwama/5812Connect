@@ -307,6 +307,14 @@ Object.assign(financialApi, {
   deleteSponsor: (id) => api.delete(`/financial/sponsors/${id}`),
 });
 
+// ---- DEPARTMENTS (cost-centre dimension) ----
+export const departmentsApi = {
+  list: (params) => api.get('/departments', { params }),
+  create: (data) => api.post('/departments', data),
+  update: (id, data) => api.put(`/departments/${id}`, data),
+  delete: (id, opts = {}) => api.delete(`/departments/${id}`, { params: opts.hard ? { hard: true } : undefined }),
+};
+
 // ---- PRODUCTS & SALES ----
 export const productsApi = {
   list: () => api.get('/products'),

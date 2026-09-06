@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Textarea } from '../ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
-import { documentsApi, securityCompaniesApi } from '../../services/api';
+import { documentsApi, securityCompaniesApi, departmentsApi } from '../../services/api';
 import api from '../../services/api';
 import { toast } from 'sonner';
 import { useUnsavedWarning, useFormDirty } from '../../hooks/useUnsavedWarning';
@@ -357,10 +357,18 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2"><Label>Department</Label>
-                {(() => { const pl = locations.find(l => l.id === (editForm.location_ids || [])[0] || l.id === editForm.location_id); const depts = pl?.departments || [];
-                  return depts.length > 0 ? (<Select value={editForm.department || ''} onValueChange={v => setEditForm({...editForm, department: v})}><SelectTrigger><SelectValue placeholder="Select dept" /></SelectTrigger><SelectContent>{depts.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}<SelectItem value="_other">Other...</SelectItem></SelectContent></Select>) : (<Input value={editForm.department || ''} onChange={e => setEditForm({...editForm, department: e.target.value})} placeholder="Department" />);
-                })()}
+              <div className="space-y-2"><Label>Departments <span className="text-[10px] text-muted-foreground">(tag one or more)</span></Label>
+                <UserDepartmentPicker
+                  campusIds={editForm.location_ids || (editForm.location_id ? [editForm.location_id] : [])}
+                  value={editForm.department_ids || []}
+                  onChange={(ids, primaryName) => setEditForm({
+                    ...editForm,
+                    department_ids: ids,
+                    // Keep legacy `department` (singular string) in sync with
+                    // the first pick so pre-migration reports keep working.
+                    department: primaryName || editForm.department || '',
+                  })}
+                />
               </div>
               <div className="space-y-2"><Label>PIN Code (also voicemail PIN)</Label><Input maxLength={6} placeholder="4-6 digit PIN" value={editForm.pin || ''} onChange={e => setEditForm({...editForm, pin: e.target.value})} /></div>
             </div>
@@ -631,5 +639,87 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
       </DialogContent>
     </Dialog>
     </>
+  );
+}
+
+
+// ============== USER DEPARTMENT PICKER ==============
+// Chip-based multi-select mirroring the location_ids picker above. Fetches
+// departments scoped to the user's assigned campuses (falls back to all if
+// none are picked yet). Emits both the id array AND a suggested primary
+// name so legacy `department` field stays populated.
+function UserDepartmentPicker({ campusIds, value, onChange }) {
+  const [departments, setDepartments] = React.useState([]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await departmentsApi.list({ include_inactive: false });
+        if (!cancelled) setDepartments(res.data || []);
+      } catch {
+        if (!cancelled) setDepartments([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const filtered = React.useMemo(() => {
+    if (!campusIds || campusIds.length === 0) return departments;
+    const set = new Set(campusIds);
+    return departments.filter(d => set.has(d.location_id));
+  }, [departments, campusIds]);
+
+  const remove = (id) => {
+    const next = (value || []).filter(x => x !== id);
+    const firstName = next.length ? (departments.find(d => d.id === next[0])?.name || '') : '';
+    onChange(next, firstName);
+  };
+
+  const add = (id) => {
+    if (!id || (value || []).includes(id)) return;
+    const next = [...(value || []), id];
+    const firstName = departments.find(d => d.id === next[0])?.name || '';
+    onChange(next, firstName);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1.5 min-h-[26px]">
+        {(value || []).map(id => {
+          const d = departments.find(x => x.id === id);
+          if (!d) return null;
+          return (
+            <Badge
+              key={id}
+              variant="secondary"
+              className="gap-1 text-xs cursor-pointer"
+              onClick={() => remove(id)}
+              data-testid={`user-dept-chip-${id}`}
+              style={d.color ? { borderColor: d.color, color: d.color } : undefined}
+            >
+              {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}
+              {d.name} <X size={10} />
+            </Badge>
+          );
+        })}
+        {(!value || value.length === 0) && (
+          <span className="text-[11px] text-muted-foreground italic pt-0.5">No departments tagged</span>
+        )}
+      </div>
+      <Select value="" onValueChange={add}>
+        <SelectTrigger data-testid="user-dept-select"><SelectValue placeholder={filtered.length ? 'Add department…' : 'No departments in this campus yet'} /></SelectTrigger>
+        <SelectContent>
+          {filtered.filter(d => !(value || []).includes(d.id)).map(d => (
+            <SelectItem key={d.id} value={d.id} data-testid={`user-dept-opt-${d.id}`}>
+              <span className="inline-flex items-center gap-1.5">
+                {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}
+                {d.name}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }

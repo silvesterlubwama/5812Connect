@@ -7,6 +7,40 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 320)
+
+### iter 320 — Departments (Option B — cost-centre dimension)
+- **New collection `departments`** — per-campus/sub-location cost centres.
+  Not a physical location. Modelled to solve three linked problems:
+  (a) tag staff who serve multiple functions, (b) split-funded salaries
+  (e.g., social worker paid 60% HR / 40% Social Work), (c) department
+  P&L reporting without polluting the location tree.
+- **Users** now carry `department_ids: []` (multi-department tag), in
+  parallel with `location_ids: []` (multi-campus tag). Legacy singular
+  `department` string kept in sync with first pick.
+- **Salaries** carry `department_ids` + `department_splits` (static per
+  record, freely editable). Splits validated to sum to 100 both sides.
+- **Expenses** carry `department_id` (single) + optional `department_ids`
+  / `department_splits` for cross-charging.
+- **Frontend** — Admin → System Console → Departments tab (CRUD),
+  UserEditDialog chip picker, HR salary form chip picker + splits UI
+  (Split-evenly button + live total validator), FinancialPage expense
+  form dept dropdown from real API.
+- **Reusable `CrossCampusMoveDialog`** — Events / Boards / Products
+  move via `location_id`; Tasks move via board picker (grouped by
+  campus). Admin-only action on each surface.
+
+### iter 319 additions
+- Payslip generation is payday-driven (respects HR settings frequency
+  + weekday snap). New `GET /api/hr/payslips/upcoming-paydays` feeds a
+  Select of upcoming paydays.
+- HR reset moved to Admin → System Console → Data & Backup; reset
+  filter now catches `payroll_location_id` in addition to `location_id`.
+- `main-location` policy: `deps.default_creation_location(user, provided)`
+  is now wired into events / products / approvals / funds / scheduling
+  creation. Multi-campus users' records land at their MAIN campus by
+  default, not their switched-active campus.
+
 ## Current status (as of iter 298)
 
 ### DONE

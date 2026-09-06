@@ -11,7 +11,7 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi } from '../services/api';
+import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi, departmentsApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -164,7 +164,17 @@ export default function FinancialPage() {
     title: '', amount: '', currency: 'UGX', category: 'general', date: new Date().toISOString().split('T')[0], notes: '', sublocation_id: '',
     vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '',
     paid_from_account_id: '',
+    // iter-departments: real cost-centre link on every expense. `department`
+    // (name) stays populated for legacy sheet exports & backwards-compat.
+    department_id: '',
   }));
+  // iter-departments: real departments (cost centres) available for tagging.
+  const [availableDepartments, setAvailableDepartments] = useState([]);
+  useEffect(() => {
+    departmentsApi.list({ include_inactive: false })
+      .then(r => setAvailableDepartments(r.data || []))
+      .catch(() => setAvailableDepartments([]));
+  }, []);
 
   // Default non-admin users to their campus
   useEffect(() => {
@@ -279,7 +289,7 @@ export default function FinancialPage() {
       const res = await financialApi.createExpense({ ...expenseForm, amount: parseFloat(expenseForm.amount) });
       setExpenses(prev => [res.data, ...prev]);
       setShowExpense(false);
-      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '', sublocation_id: '', vendor: '', receipt_number: '', account: '', department: '', budget_category: '', usd_equivalent: '', paid_from_account_id: '' });
+      setExpenseForm({ title: '', amount: '', currency: 'UGX', category: 'general', date: today, notes: '', sublocation_id: '', vendor: '', receipt_number: '', account: '', department: '', department_id: '', budget_category: '', usd_equivalent: '', paid_from_account_id: '' });
       toast.success('Expense recorded!');
       fetchAll();
       chartAccountsApi.mine().then(r => setMyChartAccounts(r.data || [])).catch(() => {});
@@ -1132,13 +1142,37 @@ export default function FinancialPage() {
                     </Select>
                   </div>
                   <div className="space-y-1"><Label className="text-xs">Department</Label>
-                    <Select value={expenseForm.department || '_none'} onValueChange={v => setExpenseForm({...expenseForm, department: v === '_none' ? '' : v})}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">—</SelectItem>
-                        {['FARM','SHELTER','OUTREACH','ADMIN/OPS','SECURITY','EDUCATION','MAINTENANCE','MEDIA','HR','FINANCE'].map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    {availableDepartments.length > 0 ? (
+                      <Select
+                        value={expenseForm.department_id || '_none'}
+                        onValueChange={v => {
+                          const dept = availableDepartments.find(d => d.id === v);
+                          setExpenseForm({
+                            ...expenseForm,
+                            department_id: v === '_none' ? '' : v,
+                            // Keep legacy `department` (name string) in sync so
+                            // sheet exports + old reports keep working during
+                            // the transition period.
+                            department: v === '_none' ? '' : (dept?.name || ''),
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs" data-testid="expense-department-select"><SelectValue placeholder="Select department..." /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">—</SelectItem>
+                          {availableDepartments.map(d => (
+                            <SelectItem key={d.id} value={d.id}>
+                              <span className="inline-flex items-center gap-1.5">
+                                {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}
+                                {d.name}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input className="h-8 text-xs" placeholder="e.g. HR (or add in Admin → Departments)" value={expenseForm.department} onChange={e => setExpenseForm({...expenseForm, department: e.target.value})} />
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">

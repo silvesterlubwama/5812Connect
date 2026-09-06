@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Switch } from '../components/ui/switch';
 import api from '../services/api';
-import { adminApi, locationsApi } from '../services/api';
+import { adminApi, locationsApi, departmentsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -47,7 +47,10 @@ export default function HRPage() {
   const [showDocReq, setShowDocReq] = useState(false);
   const [showIssueContract, setShowIssueContract] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
+  const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [], department_ids: [], department_splits: [] });
+  // iter-departments: list of departments visible in the current campus, used
+  // by the salary form's multi-department picker + funding-splits editor.
+  const [availableDepartments, setAvailableDepartments] = useState([]);
   const [editingSalaryId, setEditingSalaryId] = useState(null);
   const [editReason, setEditReason] = useState('');
   const [historySalary, setHistorySalary] = useState(null);
@@ -74,6 +77,11 @@ export default function HRPage() {
     api.get('/financial/chart-accounts', { params: { active_only: false, limit: 200 } })
       .then(r => setCashAccountOptions(r.data || [])).catch(() => {});
     api.get('/locations').then(r => setLocationOptions(r.data || [])).catch(() => {});
+    // iter-departments: load cost-centre list so the salary form's picker
+    // and splits editor always reflect the current department catalogue.
+    departmentsApi.list({ include_inactive: false })
+      .then(r => setAvailableDepartments(r.data || []))
+      .catch(() => setAvailableDepartments([]));
   }, []);
   // Auto-select the staff member on the contract dialog when the user hit "Fix"
   // from the onboarding checklist (iter215). Cleared after read so the next
@@ -134,25 +142,40 @@ export default function HRPage() {
   const handleCreateSalary = async () => {
     setSaving(true);
     try {
+      // iter-departments: validate splits (if any) sum to 100 before hitting
+      // the API so the user sees a clear inline error instead of a 400.
+      const splits = salaryForm.department_splits || [];
+      if (splits.length && Math.abs(splits.reduce((s, x) => s + (parseFloat(x.pct) || 0), 0) - 100) > 0.01) {
+        toast.error('Department splits must total 100%.');
+        setSaving(false);
+        return;
+      }
       if (editingSalaryId) {
         const res = await api.put(`/hr/salaries/${editingSalaryId}`, {
           base_salary: parseFloat(salaryForm.base_salary),
           currency: salaryForm.currency,
           pay_frequency: salaryForm.pay_frequency,
           line_items: salaryForm.line_items,
+          department_ids: salaryForm.department_ids || [],
+          department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
           reason: editReason,
         });
         setSalaries(prev => prev.map(x => x.id === editingSalaryId ? res.data : x));
         toast.success('Salary updated');
       } else {
-        const res = await api.post('/hr/salaries', { ...salaryForm, base_salary: parseFloat(salaryForm.base_salary), location_id: activeCampus });
+        const res = await api.post('/hr/salaries', {
+          ...salaryForm,
+          base_salary: parseFloat(salaryForm.base_salary),
+          location_id: activeCampus,
+          department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
+        });
         setSalaries(prev => [res.data, ...prev]);
         toast.success('Salary record created');
       }
       setShowSalary(false);
       setEditingSalaryId(null);
       setEditReason('');
-      setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [] });
+      setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [], department_ids: [], department_splits: [] });
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
   };
@@ -166,6 +189,11 @@ export default function HRPage() {
       currency: s.currency || 'UGX',
       pay_frequency: s.pay_frequency || 'monthly',
       line_items: s.line_items || [],
+      // iter-departments: hydrate multi-dept tag + funding splits so an
+      // Edit → Save round-trip doesn't silently wipe them (same class of
+      // hydration bug we fixed on UserEditDialog).
+      department_ids: s.department_ids || [],
+      department_splits: s.department_splits || [],
     });
     setShowSalary(true);
   };
@@ -619,6 +647,104 @@ export default function HRPage() {
                 <Button size="sm" className="h-8" onClick={addLineItem}>+</Button>
               </div>
             </div>
+            {/* iter-departments: multi-department tagging + funding splits.
+                Departments are cost centres, not physical locations. Split
+                percentages must sum to 100 (enforced client-side + server-side). */}
+            <div className="space-y-2">
+              <Label>Departments <span className="text-[10px] text-muted-foreground">(cost centres)</span></Label>
+              <div className="flex flex-wrap gap-1.5 min-h-[24px]">
+                {(salaryForm.department_ids || []).map(id => {
+                  const d = availableDepartments.find(x => x.id === id);
+                  if (!d) return null;
+                  return (
+                    <Badge key={id} variant="secondary" className="gap-1 text-xs cursor-pointer"
+                      style={d.color ? { borderColor: d.color, color: d.color } : undefined}
+                      onClick={() => setSalaryForm(prev => ({
+                        ...prev,
+                        department_ids: (prev.department_ids || []).filter(x => x !== id),
+                        department_splits: (prev.department_splits || []).filter(s => s.department_id !== id),
+                      }))}
+                      data-testid={`salary-dept-chip-${id}`}
+                    >
+                      {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}
+                      {d.name} ×
+                    </Badge>
+                  );
+                })}
+                {(!salaryForm.department_ids || salaryForm.department_ids.length === 0) && (
+                  <span className="text-[11px] text-muted-foreground italic pt-0.5">Untagged — funded from campus general fund</span>
+                )}
+              </div>
+              <Select value="" onValueChange={id => {
+                if (!id || (salaryForm.department_ids || []).includes(id)) return;
+                setSalaryForm(prev => ({ ...prev, department_ids: [...(prev.department_ids || []), id] }));
+              }}>
+                <SelectTrigger data-testid="salary-dept-select" className="h-8 text-xs">
+                  <SelectValue placeholder={availableDepartments.length ? 'Add department…' : 'No departments defined yet (Admin → Departments)'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDepartments.filter(d => !(salaryForm.department_ids || []).includes(d.id)).map(d => (
+                    <SelectItem key={d.id} value={d.id}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}
+                        {d.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {salaryForm.department_ids && salaryForm.department_ids.length > 1 && (
+              <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Funding split</Label>
+                  <button
+                    type="button"
+                    className="text-[11px] text-primary underline"
+                    onClick={() => {
+                      // Even split across all tagged departments
+                      const n = salaryForm.department_ids.length;
+                      const even = +(100 / n).toFixed(2);
+                      const last = +(100 - even * (n - 1)).toFixed(2);
+                      const splits = salaryForm.department_ids.map((id, i) => ({ department_id: id, pct: i === n - 1 ? last : even }));
+                      setSalaryForm(prev => ({ ...prev, department_splits: splits }));
+                    }}
+                    data-testid="salary-split-even-btn"
+                  >
+                    Split evenly
+                  </button>
+                </div>
+                {salaryForm.department_ids.map(id => {
+                  const d = availableDepartments.find(x => x.id === id);
+                  const split = (salaryForm.department_splits || []).find(s => s.department_id === id);
+                  return (
+                    <div key={id} className="flex items-center gap-2 text-xs">
+                      {d?.color && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: d.color }} />}
+                      <span className="flex-1 truncate">{d?.name || id}</span>
+                      <Input
+                        type="number" min={0} max={100} step="0.01"
+                        className="h-7 w-20 text-xs"
+                        value={split ? String(split.pct) : ''}
+                        onChange={e => {
+                          const pct = e.target.value;
+                          setSalaryForm(prev => {
+                            const others = (prev.department_splits || []).filter(s => s.department_id !== id);
+                            return { ...prev, department_splits: [...others, { department_id: id, pct: pct === '' ? 0 : parseFloat(pct) }] };
+                          });
+                        }}
+                        data-testid={`salary-split-input-${id}`}
+                      />
+                      <span className="text-muted-foreground">%</span>
+                    </div>
+                  );
+                })}
+                {(() => {
+                  const total = (salaryForm.department_splits || []).reduce((s, x) => s + (parseFloat(x.pct) || 0), 0);
+                  const ok = Math.abs(total - 100) < 0.01;
+                  return <p className={`text-[11px] ${ok ? 'text-emerald-600' : 'text-red-600'}`}>Total: {total.toFixed(2)}% {ok ? '✓' : '(must be 100)'}</p>;
+                })()}
+              </div>
+            )}
             {editingSalaryId && (
               <div className="space-y-1.5">
                 <Label className="text-xs">Reason for change (optional)</Label>

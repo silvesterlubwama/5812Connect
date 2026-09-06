@@ -1,5 +1,95 @@
 # CHANGELOG
 
+## iter 320 — 2026-02 — Departments as cost centres (Option B) + Cross-Campus Move
+
+### Backend
+- New `routers/departments.py` (`GET/POST/PUT/DELETE /api/departments`).
+  Model: `{id, name, description, location_id (req), sublocation_id?,
+  color, budget, active}`. Campus-scoped list via `get_campus_filter`.
+  Manager+ can create in own campuses; system_admin bypasses. Hard-delete
+  refused while any user is tagged.
+- `deps.default_creation_location(user, provided)` — main-first policy
+  helper. Wired into `events.create_event`, `products.create_product` +
+  pricelists, `approvals` workflows + requests, `funds` requests, and
+  `scheduling` shifts. Multi-campus records now land at the user's MAIN
+  campus by default, never scattered across whichever campus they've
+  switched to.
+- `admin.py ACCOUNT_FIELDS` now whitelists `department_ids` — multi-dept
+  tagging on users (parallels `location_ids`).
+- `hr.create_salary` + `update_salary` accept `department_ids` and
+  `department_splits` `[{department_id, pct}]`. Splits validated to sum
+  to 100 client-side + server-side (400 on mismatch). Static per salary
+  record; freely re-editable, each new payslip inherits current split.
+- `financial.ExpenseCreate` now takes structured `department_id` /
+  `department_ids` / `department_splits`; legacy `department` string
+  preserved for spreadsheet importer + old reports.
+
+### Frontend
+- **New reusable** `CrossCampusMoveDialog` (Events / Boards / Products
+  via `location_id`; Tasks via board-picker grouped by campus). Admin
+  action wired into EventsPage detail, ProductsPage row menu, TasksPage
+  board header, and CardDetailDialog "Move to another board / campus".
+- **New** `components/admin/DepartmentsManager` — chip-based CRUD living
+  in Admin → System Console → Departments tab. Colour swatch, optional
+  sub-location, budget, active toggle, soft/hard delete.
+- `UserEditDialog` — new `UserDepartmentPicker` sub-component replaces
+  the free-text Department field with a chip-based multi-select filtered
+  to the user's assigned campuses; keeps legacy `department` string in
+  sync with first pick. Hydration bug also fixed: `is_medical`,
+  `is_resident`, `has_restricted_access`, `resident_location_id`,
+  `is_guest`, `extension`, `security_*`, `badge_id`, `photo_url` now
+  seed into `editForm` on open, and hidden `underlying_role` preserves
+  system_admin across admin-tier toggles.
+- `HRPage` salary form — multi-dept chip picker + funding-splits editor
+  (Split-evenly button + per-department % input + live total validator
+  turns red/green on 100). Hydrates on edit, resets to `{ department_ids:
+  [], department_splits: [] }` on close.
+- `FinancialPage` expense form — Department dropdown pulled from the
+  real `departmentsApi` (falls back to legacy text input when no
+  departments exist yet). Stores `department_id` (id) alongside legacy
+  `department` (name string) so reports keep working.
+- `TasksPage` — board header chip now reads "Board lives in: <campus>"
+  with a `MapPin` glyph; Create Board dialog shows a live "Creating in:
+  X" pill. `addCard` fully optimistic (temp id → swap on server response
+  → rollback + toast on failure).
+- `EventsPage` — Add Event dialog carries a "Creating in: <campus>" pill;
+  `handleAdd` now inserts optimistically before `fetchEvents()`.
+- **HR reset** moved out of HRPage and into Admin → System Console →
+  Data & Backup (`HrResetCard`), sitting next to `FinanceResetCard`.
+  Reset filter for `hr_payslips` now catches records stamped with
+  either `location_id` or `payroll_location_id` (`$or`).
+- **Payslip generation** is now payday-driven — new backend endpoint
+  `GET /api/hr/payslips/upcoming-paydays` returns the next N paydays
+  computed from `hr_settings` (frequency + anchor + weekday snap). The
+  Generate dialog is a Select of those paydays instead of a plain month
+  input, so weekly / bi-weekly cadences work end-to-end.
+- **HR settings Pay Run Weekday** `<Select.Item value="">` crash fixed
+  (Radix forbids empty-string values) — sentinel `__none__` mapped back
+  to `null`.
+- **Tasks-on-Calendar** — `list_tasks` no longer drops the "own boards /
+  tagged boards / assigned-task boards" escapes when an active campus
+  is pinned. Multi-campus admins now see their due-dated tasks on the
+  Calendar again.
+
+### End-to-end verified on preview
+- 60/40 salary split created, persisted, and re-edited to 70/30 via
+  `PUT /api/hr/salaries/{id}` — round-trip proven on live DB.
+- Bad split (55/40) rejected server-side with a clear 400 detail.
+- User `department_ids` tag round-trips through `PUT /api/admin/users/{id}`
+  and `GET /api/admin/users/{id}`.
+- Cross-campus move round-trips for Events, Boards, Products, Tasks
+  (task moves via `board_id + list_id` swap on `PUT /api/tasks/{id}`).
+
+### Recommended next slice (deferred, not yet built)
+1. **Split-aware payroll auto-expense**: when a paid payslip auto-posts
+   its expense JE, split the amount across the salary's
+   `department_splits` so each department's P&L takes its share.
+2. **Department P&L report**: budget vs actual, run-rate, drill-down.
+3. **Bulk tag** action on user list (assign N users to a department).
+4. **Warning on department deactivation** when live salaries or expenses
+   still reference it.
+
+
 ## iter 314 — 2026-02 — Badge QR: nudged down + shrunk one step
 
 Screenshot iteration feedback: the QR at 108 × 108 was too wide, chopping

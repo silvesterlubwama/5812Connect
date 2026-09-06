@@ -161,7 +161,14 @@ class ExpenseCreate(BaseModel):
     receipt_number: Optional[str] = None  # Reff./Receipt# for reconciliation
     account: Optional[str] = None  # Payment source label (legacy free-text/enum)
     paid_from_account_id: Optional[str] = None  # FK → financial_accounts.id (which cash/bank account funded this expense)
-    department: Optional[str] = None  # FARM, SHELTER, OUTREACH, ADMIN/OPS, SECURITY, EDUCATION, MAINTENANCE
+    department: Optional[str] = None  # LEGACY free-text label (FARM / HR / etc.). Kept for backwards-compat with the sheet importer.
+    # iter-departments: real cost-centre link. `department_id` is the primary
+    # tag; `department_ids` (plural) lets an expense straddle two departments
+    # (e.g., joint training between Social Work and HR); `department_splits`
+    # optionally allocates the amount proportionally for department P&L.
+    department_id: Optional[str] = None
+    department_ids: Optional[List[str]] = None
+    department_splits: Optional[List[dict]] = None
     budget_category: Optional[str] = None  # Uganda Farm, Petty Cash, Wages & Salaries, Bank Fees, etc.
     usd_equivalent: Optional[float] = None  # For multi-currency tracking
     exchange_rate: Optional[float] = None  # UGX per USD
