@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## iter 314 — 2026-02 — Badge QR: nudged down + shrunk one step
+
+Screenshot iteration feedback: the QR at 108 × 108 was too wide, chopping
+the tail of long first names ("Silvester" → "Silvest…"). It also sat
+vertically centred, which meant the QR floated above the photo's bottom
+edge instead of feeling anchored to it.
+
+- QR shrunk **108 → 92 (large)** and **78 → 68 (small)** so the left
+  column gets ~16 px more breathing room. Long first names now fit
+  without the ellipsis.
+- QR alignment moved from `center` to `flex-end` with a small
+  `marginBottom`, so it lands **flush with the photo's bottom** —
+  reads as anchored to the badge rather than floating.
+- Screenshot-verified: "Admin" first name now shows in full, QR sits
+  lower next to the photo.
+
 ## iter 313 — 2026-02 — Expense deep-links + badge polish (crown → star, QR cleaner)
 
 ### Expense bell deep-links

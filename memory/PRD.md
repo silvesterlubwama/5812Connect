@@ -122,6 +122,13 @@ social work, sales/POS/shipments, and self-service user portal.
   centred, larger (108 × 108 large / 78 × 78 small), and ecLevel H so
   it still scans after photocopy.
 
+### iter 314 additions
+- Badge QR shrunk one step (108 → 92 large / 78 → 68 small) so long
+  first names no longer get ellipsised on the left column. Alignment
+  flipped from `center` to `flex-end` with a small bottom margin so
+  the QR sits flush with the photo's bottom edge — anchored, not
+  floating.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

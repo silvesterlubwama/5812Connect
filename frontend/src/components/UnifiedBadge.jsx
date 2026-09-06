@@ -422,26 +422,30 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             <div style={{
               flexShrink: 0,
               display: 'flex',
-              alignItems: 'center',
+              // iter314 — was center; nudged to `flex-end` so the QR (which is
+              // shorter than the photo) drops toward the bottom of the column
+              // and gives the left-column name more breathing room.
+              alignItems: 'flex-end',
               gap: isSmall ? '6px' : '10px',
               height: isSmall ? '108px' : '148px',
             }}>
-              {/* QR — transparent card, badge-coloured bg, high-contrast
-                  pixels. `ecLevel="H"` gives ~30% pixel redundancy so it
-                  still scans reliably even after photocopy at reduced
-                  size. Kiosk / light-header mode inverts to dark pixels
-                  on the light header bg so contrast survives. */}
               <div style={{
-                width: isSmall ? '78px' : '108px',
-                height: isSmall ? '78px' : '108px',
+                // iter314 — shrunk one step (108 → 92 large / 78 → 68 small) so
+                // long first names ("Silvester", "Emmanuel") no longer get
+                // ellipsised on the left column.
+                width: isSmall ? '68px' : '92px',
+                height: isSmall ? '68px' : '92px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
+                // Small bottom margin so the QR sits flush with the photo's
+                // bottom edge rather than the column's absolute bottom.
+                marginBottom: isSmall ? '4px' : '6px',
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 78 : 108}
+                  size={isSmall ? 68 : 92}
                   bgColor={kioskMode ? '#ffffff' : bgColor}
                   fgColor={kioskMode ? '#0f172a' : '#ffffff'}
                   ecLevel="H"
