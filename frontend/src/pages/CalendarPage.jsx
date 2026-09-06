@@ -58,7 +58,12 @@ export default function CalendarPage() {
   const today = new Date();
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState(() => localStorage.getItem('5812_cal_view') || 'month');
-  const [taskScope, setTaskScope] = useState(() => localStorage.getItem('5812_cal_task_scope') || 'mine');
+  // iter-tasks-on-calendar: default to 'campus' so every task with a
+  // due date in the user's scope shows up. The old 'mine' default hid
+  // tasks whenever `assignee_id`/`assignees`/`created_by`/`reporter_id`
+  // didn't match the logged-in user — surprising users who assumed
+  // adding a due date was enough to see it on the calendar.
+  const [taskScope, setTaskScope] = useState(() => localStorage.getItem('5812_cal_task_scope') || 'campus');
   const [rawEvents, setRawEvents] = useState([]);
   const [rawTasks, setRawTasks] = useState([]);
   const [holidays, setHolidays] = useState([]);

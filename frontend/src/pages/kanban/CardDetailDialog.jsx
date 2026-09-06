@@ -133,7 +133,16 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
           <div className="col-span-2 space-y-5">
             {labels.length > 0 && (
               <div className="flex flex-wrap gap-1">
-                {labels.map((lbl, i) => <span key={lbl.name || lbl.color || i} className="px-2.5 py-0.5 rounded text-xs font-medium text-white" style={{ background: lbl.color || '#3b82f6' }}>{lbl.name || lbl}</span>)}
+                {labels.map((lbl, i) => {
+                  // iter-labels-render-guard: a label is either a legacy
+                  // string colour ('#3b82f6') or the newer `{name, color}`
+                  // object. Falling back to `lbl` directly used to render
+                  // the object as a React child → React error #31.
+                  const isStr = typeof lbl === 'string';
+                  const color = isStr ? lbl : (lbl?.color || '#3b82f6');
+                  const name = isStr ? '' : (lbl?.name || '');
+                  return <span key={name || color || i} className="px-2.5 py-0.5 rounded text-xs font-medium text-white" style={{ background: color }}>{name}</span>;
+                })}
               </div>
             )}
 

@@ -43,9 +43,10 @@ export function KanbanCard({ task, listId, staffUsers, isDragging, isDragOver, o
       {/* Labels */}
       {(task.labels || []).length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
-          {task.labels.slice(0, 5).map((lbl, i) => (
-            <span key={lbl.color || lbl || i} className="h-1.5 w-6 rounded-full" style={{ background: lbl.color || lbl || '#3b82f6' }} />
-          ))}
+          {task.labels.slice(0, 5).map((lbl, i) => {
+            const color = typeof lbl === 'string' ? lbl : (lbl?.color || '#3b82f6');
+            return <span key={`${color}-${i}`} className="h-1.5 w-6 rounded-full" style={{ background: color }} />;
+          })}
         </div>
       )}
 

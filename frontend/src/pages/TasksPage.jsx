@@ -316,14 +316,13 @@ export default function TasksPage() {
     setTasks(prev => ({ ...prev, [listId]: [...(prev[listId] || []), tempCard] }));
     try {
       const res = await tasksApi.create({ title, board_id: activeBoardId, list_id: listId, list_name: list?.name || '', status: 'todo', position: pos, assignees: [], labels: [], checklist: [], attachments: [] });
-      // Swap temp → real
+      // Swap temp → real. Trust the server response — a delayed refetch used
+      // to run here but was racing against the local swap and wiping the
+      // just-created card out of the UI ("added and disappeared").
       setTasks(prev => ({
         ...prev,
         [listId]: (prev[listId] || []).map(t => t.id === tempId ? res.data : t),
       }));
-      // Refetch once after settle so WS-driven fields (e.g. server-side
-      // computed cover URL) land, without blocking the UX.
-      setTimeout(() => { fetchBoardDetail(); }, 300);
       toast.success('Card added');
     } catch {
       // Roll back the optimistic insert so the UI doesn't lie
@@ -333,7 +332,7 @@ export default function TasksPage() {
       }));
       toast.error('Failed to add card');
     }
-  }, [activeBoardId, board, tasks, fetchBoardDetail]);
+  }, [activeBoardId, board, tasks]);
 
   const archiveCard = useCallback(async (task) => {
     const { tasksExtApi } = await import('../services/api');
