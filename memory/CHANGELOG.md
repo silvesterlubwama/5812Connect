@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## iter 313 — 2026-02 — Expense deep-links + badge polish (crown → star, QR cleaner)
+
+### Expense bell deep-links
+- `routers/financial.py` — approve + reject writes now use link
+  `/portal/expenses?expense=<id>` (was bare `/portal/expenses`).
+- `PortalExpenses.jsx` reads `?expense=<id>` via `useSearchParams`,
+  scrolls that expense row into view (`scrollIntoView` centered), and
+  briefly ring-highlights it (3.5 s amber ring + amber-50 bg) so the
+  user sees exactly what changed. Query param cleared once consumed.
+- **Verified end-to-end**: approving an expense fires notification
+  with link `/portal/expenses?expense=exp_xxxxxx`.
+
+### Badge polish
+- **Crown replaced with a friendly 5-point Star** in
+  `BadgeTypeIcon('director')` — the coronet outline read as "king" on
+  admin badges, which people found intimidating for what is really a
+  team-lead role.
+- **QR now sits on the badge background** (no white card, no accent
+  border, no shadow). Uses `bgColor={bgColor}` + `fgColor="#ffffff"`
+  in normal mode so the QR pixels look like part of the badge, not a
+  sticker. Kiosk mode still uses white bg + dark pixels because the
+  kiosk header is light.
+- **QR vertically centred** in the right column (`alignItems: 'center'`)
+  so it no longer rides high against the top edge.
+- **QR bigger + higher redundancy**: 108 × 108 (large) / 78 × 78 (small)
+  with `ecLevel="H"` (~30 % pixel redundancy) so it stays scannable
+  even after photocopy at reduced size — every mobile scanner and the
+  existing kiosk hardware picks it up.
+
 ## iter 312 — 2026-02 — Badge photo right-most + task bell deep-links
 
 ### Badge layout — final pass

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Receipt, Send, DollarSign } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -25,6 +26,25 @@ export default function PortalExpenses() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ title: '', amount: '', category: 'general', notes: '', currency: 'UGX' });
   const [cashForm, setCashForm] = useState({ amount: '', reason: '', currency: 'UGX' });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [highlightId, setHighlightId] = useState(null);
+  const rowRefs = useRef({});
+
+  // iter313 — deep-link support: `/portal/expenses?expense=<id>` (from an
+  // approve/reject bell notification) scrolls the specific expense into
+  // view and briefly ring-highlights it so the user can see what changed.
+  useEffect(() => {
+    const wanted = searchParams.get('expense');
+    if (!wanted || !expenses.length) return;
+    const row = rowRefs.current[wanted];
+    if (row?.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightId(wanted);
+    const t = setTimeout(() => setHighlightId(null), 3500);
+    const next = new URLSearchParams(searchParams);
+    next.delete('expense');
+    setSearchParams(next, { replace: true });
+    return () => clearTimeout(t);
+  }, [expenses, searchParams, setSearchParams]);
 
   const fetchExpenses = async () => {
     setLoading(true);
@@ -116,7 +136,15 @@ export default function PortalExpenses() {
           ) : (
             <div className="divide-y">
               {expenses.map(exp => (
-                <div key={exp.id} className="flex items-center justify-between py-3" data-testid={`expense-${exp.id}`}>
+                <div
+                  key={exp.id}
+                  ref={el => { if (el) rowRefs.current[exp.id] = el; }}
+                  className={
+                    'flex items-center justify-between py-3 rounded-md px-2 -mx-2 transition-shadow ' +
+                    (highlightId === exp.id ? 'ring-2 ring-amber-400 bg-amber-50/50' : '')
+                  }
+                  data-testid={`expense-${exp.id}`}
+                >
                   <div>
                     <p className="text-sm font-medium">{exp.title}</p>
                     <p className="text-xs text-muted-foreground">{exp.date} — {exp.category}{exp.is_cash_request && ' (Cash Request)'}</p>

@@ -112,6 +112,16 @@ social work, sales/POS/shipments, and self-service user portal.
   points at `/tasks?task=<id>`; TasksPage auto-opens the specific task
   drawer via `useSearchParams`.
 
+### iter 313 additions
+- Expense bell deep-links: approve/reject notifications now link to
+  `/portal/expenses?expense=<id>`; PortalExpenses scrolls the row into
+  view and briefly ring-highlights it.
+- Badge polish: crown/coronet icon on director/admin badges replaced
+  with a friendly 5-point Star (less monarchic). QR now sits on the
+  badge background (no white card / border / shadow), vertically
+  centred, larger (108 × 108 large / 78 × 78 small), and ecLevel H so
+  it still scans after photocopy.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

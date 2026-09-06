@@ -704,7 +704,7 @@ async def approve_expense(expense_id: str, data: dict = None, current_user: dict
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification
-            await _create_notification("Expense Approved", f"Your expense '{expense.get('title')}' ({expense.get('amount', 0):,.0f} {expense.get('currency', 'UGX')}) has been approved by {current_user.get('name', 'admin')}.", expense.get("created_by"), "success", "/portal/expenses")
+            await _create_notification("Expense Approved", f"Your expense '{expense.get('title')}' ({expense.get('amount', 0):,.0f} {expense.get('currency', 'UGX')}) has been approved by {current_user.get('name', 'admin')}.", expense.get("created_by"), "success", f"/portal/expenses?expense={expense_id}")
         except Exception:
             pass
     return {**expense, **update}
@@ -724,7 +724,7 @@ async def reject_expense(expense_id: str, data: dict = None, current_user: dict 
     if expense.get("created_by"):
         try:
             from routers.notifications import _create_notification
-            await _create_notification("Expense Rejected", f"Your expense '{expense.get('title')}' was rejected. Reason: {data.get('comment', 'No reason given')}", expense.get("created_by"), "error", "/portal/expenses")
+            await _create_notification("Expense Rejected", f"Your expense '{expense.get('title')}' was rejected. Reason: {data.get('comment', 'No reason given')}", expense.get("created_by"), "error", f"/portal/expenses?expense={expense_id}")
         except Exception:
             pass
     return {**expense, **update}

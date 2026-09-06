@@ -27,7 +27,13 @@ function BadgeTypeIcon({ type, size = 14, color }) {
   const s = size;
   switch (type) {
     case 'staff': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
-    case 'director': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/><path d="M4 22h16"/></svg>;
+    case 'director':
+      // iter313 — was a crown / coronet (m2 4 3 12h14…) which read as
+      // "king" on admin badges. Users found it intimidating for a role
+      // that's really "team lead / oversight". Swapped for a friendly
+      // 5-point Star (matches lucide's Star) — universal shorthand for
+      // "senior / trusted" without the monarchic overtones.
+      return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
     case 'volunteer': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>;
     case 'child': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>;
     case 'parent': return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>;
@@ -407,31 +413,27 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 {type === 'child' && person.location_name && <div style={{ fontSize: '7px', color: kioskMode ? '#777' : '#999', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.location_name}{person.campus_phone ? ` | ${person.campus_phone}` : ''}</div>}
               </div>
             </div>
-            {/* Right column — iter312: order is QR then photo, i.e.
-                [info | QR | photo] from left to right. Photo is now the
-                right-most element (as the user asked) and uses
-                `object-fit: contain` on an accent-tinted background so
-                the face never crops. QR is plain + slightly larger and
-                bumped to ecLevel "Q" so it stays legible even after
-                photocopy/print at reduced sizes. */}
+            {/* Right column — iter313: [QR | Photo]. Photo right-most,
+                QR to its left. Both centered vertically in the column so
+                the QR doesn't ride high against the top edge. QR sits
+                directly on the badge background (no white card / no
+                border / no shadow) with white pixels on the dark badge
+                bg — looks like part of the card, not a sticker. */}
             <div style={{
               flexShrink: 0,
               display: 'flex',
-              alignItems: 'flex-start',
-              gap: isSmall ? '4px' : '6px',
+              alignItems: 'center',
+              gap: isSmall ? '6px' : '10px',
               height: isSmall ? '108px' : '148px',
             }}>
-              {/* QR — plain, no embedded logo. Sits to the LEFT of the
-                  photo so the photo occupies the outer edge of the badge. */}
+              {/* QR — transparent card, badge-coloured bg, high-contrast
+                  pixels. `ecLevel="H"` gives ~30% pixel redundancy so it
+                  still scans reliably even after photocopy at reduced
+                  size. Kiosk / light-header mode inverts to dark pixels
+                  on the light header bg so contrast survives. */}
               <div style={{
-                width: isSmall ? '64px' : '88px',
-                height: isSmall ? '64px' : '88px',
-                borderRadius: '8px',
-                background: '#ffffff',
-                border: `2px solid ${colors.accent}`,
-                boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                padding: '4px',
-                boxSizing: 'border-box',
+                width: isSmall ? '78px' : '108px',
+                height: isSmall ? '78px' : '108px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -439,17 +441,17 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 52 : 72}
-                  bgColor="#ffffff"
-                  fgColor="#0f172a"
-                  ecLevel="Q"
+                  size={isSmall ? 78 : 108}
+                  bgColor={kioskMode ? '#ffffff' : bgColor}
+                  fgColor={kioskMode ? '#0f172a' : '#ffffff'}
+                  ecLevel="H"
                   qrStyle="squares"
                 />
               </div>
-              {/* Photo — right-most; larger + `contain` so the face is
-                  always visible in full. The accent-tinted background
-                  fills any letterbox gap when the source photo isn't
-                  the same aspect ratio as the container. */}
+              {/* Photo — right-most, larger, `contain` so faces are
+                  never cropped. Accent-tinted background fills any
+                  aspect-ratio gap when the source photo isn't the
+                  same portrait as the container. */}
               <div style={{
                 width: isSmall ? '76px' : '108px',
                 height: isSmall ? '108px' : '148px',
