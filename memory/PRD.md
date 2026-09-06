@@ -87,6 +87,14 @@ social work, sales/POS/shipments, and self-service user portal.
   surface (Wallet, print dialog, bulk sheet, kiosk display) uses the
   identical component. No more layout drift between surfaces.
 
+### iter 310 additions
+- Fixed silently-broken event & conference notifications: both routers
+  were importing a `send_bulk_notifications` symbol that never existed,
+  so ImportError was swallowed and no bell-icon rows ever appeared.
+  Swapped for a per-user loop over the real `create_notification`
+  helper; recipient projection now includes `id` so the loop has a
+  user_id to insert against. Verified end-to-end.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

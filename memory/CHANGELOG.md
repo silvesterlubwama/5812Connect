@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## iter 310 — 2026-02 — Fix silently-broken event & conference notifications
+
+`routers/events.py` and `routers/conferences.py` both had a background-
+task import of `send_bulk_notifications` from `routers.notifications` —
+but that function has never existed. The `ImportError` was swallowed by
+the surrounding `try/except`, so **no in-app notifications were ever
+fired when an event or conference was created**. Users saw nothing in
+their bell icon.
+
+**Fix**
+- Swapped `send_bulk_notifications` for a per-user loop over the
+  existing `create_notification(title, message, user_id, notif_type,
+  link)` helper — the same one already used by `financial.py` and
+  `notifications.py`'s own POST endpoint. Real signature, real callers.
+- Added `"id": 1` to the recipient projection so the per-user loop has
+  a `user_id` to pass into `create_notification`. External emails
+  (conferences only) still land in `recipients` for downstream email
+  senders but are skipped by the in-app loop when they carry no `id`.
+- Preserved the background-task structure (`asyncio.create_task` +
+  outer/inner try-except) and the recipient role filter
+  (admin/system_admin/Executive Director/Director/Manager).
+
+**Verified end-to-end**
+- `POST /api/events` → unread-count bumped from N → N+1.
+- Latest `/api/notifications` row: title "New event: iter310 notify
+  test", message "2026-02-15 • 10:00 • Kampala Central".
+
 ## iter 309 — 2026-02 — HR pay-run weekday + wallet badge parity
 
 ### HR pay-run weekday

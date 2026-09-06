@@ -161,27 +161,30 @@ async def create_conference(
     # Send email invites (in background)
     if data.send_email_invites and (data.user_ids or data.external_emails):
         try:
-            from routers.notifications import send_bulk_notifications
+            from routers.notifications import create_notification
             # Get internal user emails
             recipients = []
             if data.user_ids:
-                users = await db.users.find({"id": {"$in": data.user_ids}}, {"_id": 0, "email": 1, "name": 1}).to_list(100)
+                users = await db.users.find({"id": {"$in": data.user_ids}}, {"_id": 0, "id": 1, "email": 1, "name": 1}).to_list(100)
                 recipients.extend(users)
-            # Add external emails
+            # Add external emails (kept in the list for downstream email
+            # senders that may pick this up; they carry no `id` so the
+            # in-app-notification loop below skips them.)
             for email in data.external_emails:
                 recipients.append({"email": email, "name": email.split("@")[0]})
             if recipients:
-                await send_bulk_notifications({
-                    "recipients": recipients,
-                    "type": "conference_invite",
-                    "data": {
-                        "conference_title": data.title,
-                        "host_name": host.get("name") if host else "Unknown",
-                        "scheduled_at": data.scheduled_at.isoformat() if data.scheduled_at else "Now",
-                        "join_link": join_link,
-                        "meeting_code": meeting_code,
-                    },
-                })
+                title = f"Conference invite: {data.title}"
+                host_name = host.get("name") if host else "Unknown"
+                sched = data.scheduled_at.isoformat() if data.scheduled_at else "Now"
+                message = f"Hosted by {host_name} • {sched} • Code: {meeting_code}"
+                for r in recipients:
+                    if not r.get("id"):
+                        continue
+                    try:
+                        await create_notification(title, message, r["id"], "info", join_link or "/comms")
+                    except Exception as ne:
+                        import logging
+                        logging.getLogger(__name__).warning(f"Conference notify insert failed for {r.get('email')}: {ne}")
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Conference invite email failed: {e}")

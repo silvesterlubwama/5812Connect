@@ -230,20 +230,32 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
     # Fire notifications in the background so the API response returns
     # immediately (iter 281 — was blocking event creation on Resend I/O).
     try:
-        from routers.notifications import send_bulk_notifications
+        from routers.notifications import create_notification
         import asyncio
 
         async def _notify_bg():
             try:
                 recipients = await db.users.find(
                     {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}, "email": {"$exists": True, "$ne": ""}},
-                    {"_id": 0, "email": 1, "name": 1}
+                    {"_id": 0, "id": 1, "email": 1, "name": 1}
                 ).to_list(200)
                 if recipients:
-                    await send_bulk_notifications({
-                        "recipients": recipients, "type": "event_reminder",
-                        "data": {"event_title": event.get("title"), "date": event.get("date"), "time": event.get("time"), "location": event.get("location")},
-                    })
+                    title = f"New event: {event.get('title', '')}"
+                    parts = []
+                    if event.get("date"):
+                        parts.append(str(event["date"]))
+                    if event.get("time"):
+                        parts.append(str(event["time"]))
+                    if event.get("location"):
+                        parts.append(str(event["location"]))
+                    message = " • ".join(parts) if parts else "Event details available in the calendar."
+                    for r in recipients:
+                        if not r.get("id"):
+                            continue
+                        try:
+                            await create_notification(title, message, r["id"], "info", "/calendar")
+                        except Exception as ne:
+                            logger.warning(f"Event notify insert failed for {r.get('email')}: {ne}")
             except Exception as e:
                 logger.warning(f"Event notify failed: {e}")
 
