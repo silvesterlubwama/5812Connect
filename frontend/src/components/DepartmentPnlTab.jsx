@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, TrendingUp, Wallet } from 'lucide-react';
+import { Building2, TrendingUp, Wallet, X } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Button } from './ui/button';
 import { departmentsApi } from '../services/api';
 
 /**
@@ -14,6 +16,10 @@ import { departmentsApi } from '../services/api';
  * run-rate cards. Sub-location and location rollups are computed
  * server-side (sum of child-department budgets + expenses) and rendered
  * as a compact strip above the department grid.
+ *
+ * iter-drilldown: Clicking a card opens a modal listing every
+ * contributing expense + payroll allocation + tagged donation for the
+ * selected window, so admins can audit exactly what rolled up.
  */
 export function DepartmentPnlTab() {
   const [data, setData] = useState(null);
@@ -22,7 +28,9 @@ export function DepartmentPnlTab() {
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const [dateFrom, setDateFrom] = useState(monthAgo);
   const [dateTo, setDateTo] = useState(today);
-  const [selected, setSelected] = useState(null);
+  const [drillDept, setDrillDept] = useState(null); // {id,name,color}
+  const [drillData, setDrillData] = useState(null);
+  const [drillBusy, setDrillBusy] = useState(false);
 
   const load = () => {
     setBusy(true);
@@ -32,6 +40,16 @@ export function DepartmentPnlTab() {
       .finally(() => setBusy(false));
   };
   useEffect(load, [dateFrom, dateTo]);
+
+  const openDrill = (d) => {
+    setDrillDept(d);
+    setDrillData(null);
+    setDrillBusy(true);
+    departmentsApi.entries(d.id, { date_from: dateFrom, date_to: dateTo })
+      .then(r => setDrillData(r.data))
+      .catch(() => setDrillData({ entries: [], totals: { revenue: 0, expense: 0, net: 0 } }))
+      .finally(() => setDrillBusy(false));
+  };
 
   const fmt = (n) => (Number(n) || 0).toLocaleString();
 
@@ -47,7 +65,7 @@ export function DepartmentPnlTab() {
           <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="h-8 text-xs" data-testid="dept-pnl-to" />
         </div>
         <p className="text-[11px] text-muted-foreground self-end mb-2">
-          {data?.period ? `${data.period.days} day window · projections extrapolated to 30 days` : ''}
+          {data?.period ? `${data.period.days} day window · projections extrapolated to 30 days · click a card to audit contributing entries` : ''}
         </p>
       </div>
 
@@ -91,8 +109,8 @@ export function DepartmentPnlTab() {
             return (
               <Card
                 key={d.id}
-                className={`cursor-pointer transition-colors hover:border-primary/40 ${selected === d.id ? 'ring-2 ring-primary/40' : ''}`}
-                onClick={() => setSelected(selected === d.id ? null : d.id)}
+                className="cursor-pointer transition-colors hover:border-primary/40"
+                onClick={() => openDrill(d)}
                 data-testid={`dept-pnl-card-${d.id}`}
               >
                 <CardContent className="p-3 space-y-2">
@@ -104,6 +122,7 @@ export function DepartmentPnlTab() {
                         {d.location_name}{d.sublocation_name ? ` · ${d.sublocation_name}` : ''}
                       </p>
                     </div>
+                    <Badge variant="outline" className="text-[9px]">Audit</Badge>
                   </div>
                   {d.budget > 0 && (
                     <>
@@ -129,22 +148,88 @@ export function DepartmentPnlTab() {
                       <p className={`text-xs font-mono ${d.net >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{fmt(d.net)}</p>
                     </div>
                   </div>
-                  {selected === d.id && (
-                    <div className="pt-2 border-t space-y-1 text-[11px]">
-                      <div className="flex items-center gap-1.5 text-muted-foreground">
-                        <TrendingUp size={11} /> Monthly run-rate: <strong className="text-foreground">{fmt(d.run_rate_monthly)}</strong>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-muted-foreground">
-                        <Wallet size={11} /> Budget headroom: <strong className={d.budget - d.expense >= 0 ? 'text-emerald-700' : 'text-red-700'}>{fmt(d.budget - d.expense)}</strong>
-                      </div>
-                    </div>
-                  )}
+                  <div className="pt-1.5 border-t text-[11px] text-muted-foreground flex items-center gap-1.5">
+                    <TrendingUp size={11} /> Run-rate: <strong className="text-foreground">{fmt(d.run_rate_monthly)}/mo</strong>
+                    <Wallet size={11} className="ml-1" />
+                    <strong className={d.budget - d.expense >= 0 ? 'text-emerald-700' : 'text-red-700'}>{fmt(d.budget - d.expense)}</strong>
+                  </div>
                 </CardContent>
               </Card>
             );
           })}
         </div>
       )}
+
+      {/* Drill-down modal */}
+      <Dialog open={!!drillDept} onOpenChange={(o) => { if (!o) { setDrillDept(null); setDrillData(null); } }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" data-testid="dept-drill-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {drillDept?.color && <span className="w-3 h-3 rounded-full" style={{ background: drillDept.color }} />}
+              <span>{drillDept?.name}</span>
+              <Badge variant="secondary" className="text-[10px]">{dateFrom} → {dateTo}</Badge>
+            </DialogTitle>
+          </DialogHeader>
+          {drillBusy && <p className="py-8 text-center text-sm text-muted-foreground">Loading contributing entries…</p>}
+          {!drillBusy && drillData && (
+            <>
+              <div className="grid grid-cols-3 gap-2 text-center border-b pb-3">
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase">Revenue</p>
+                  <p className="text-sm font-mono text-emerald-700" data-testid="drill-total-revenue">{fmt(drillData.totals?.revenue)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase">Expense</p>
+                  <p className="text-sm font-mono text-red-700" data-testid="drill-total-expense">{fmt(drillData.totals?.expense)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase">Net</p>
+                  <p className={`text-sm font-mono ${drillData.totals?.net >= 0 ? 'text-emerald-800' : 'text-red-800'}`} data-testid="drill-total-net">{fmt(drillData.totals?.net)}</p>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto -mx-6 px-6">
+                {drillData.entries?.length ? (
+                  <table className="w-full text-xs">
+                    <thead className="text-left text-muted-foreground sticky top-0 bg-background">
+                      <tr className="border-b">
+                        <th className="py-2">Date</th>
+                        <th>Kind</th>
+                        <th>Title</th>
+                        <th>Note</th>
+                        <th className="text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {drillData.entries.map((e, i) => (
+                        <tr key={`${e.kind}-${e.id}-${i}`} className="border-b last:border-0" data-testid={`drill-entry-${e.kind}-${i}`}>
+                          <td className="py-1.5">{e.date}</td>
+                          <td>
+                            <Badge variant={e.kind === 'donation' ? 'default' : e.kind === 'payroll' ? 'secondary' : 'outline'} className="text-[9px] capitalize">
+                              {e.kind}
+                            </Badge>
+                          </td>
+                          <td className="font-medium truncate max-w-[180px]">{e.title}</td>
+                          <td className="text-muted-foreground truncate max-w-[140px]">{e.note}</td>
+                          <td className={`text-right font-mono ${e.kind === 'donation' ? 'text-emerald-700' : 'text-red-700'}`}>
+                            {e.kind === 'donation' ? '+' : '-'}{fmt(e.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="py-12 text-center text-sm text-muted-foreground">No entries touched this department in the selected window.</p>
+                )}
+              </div>
+              <div className="pt-3 border-t flex justify-end">
+                <Button size="sm" variant="outline" onClick={() => setDrillDept(null)} data-testid="drill-close-btn">
+                  <X size={14} className="mr-1" /> Close
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

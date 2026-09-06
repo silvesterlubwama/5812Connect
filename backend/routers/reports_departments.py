@@ -142,3 +142,98 @@ async def department_pnl(
             ],
         },
     }
+
+
+@router.get("/{department_id}/entries")
+async def department_entries(
+    department_id: str,
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    current_user: dict = Depends(require_manager),
+):
+    """Drill-down for a single department: every expense + payroll
+    allocation + tagged donation that contributed to its P&L in the
+    given window. Used by the Dept P&L card drill-down modal so admins
+    can audit exactly which entries rolled up into the totals.
+
+    Response: { department, entries: [{ kind, id, date, amount, title, note }], totals: {revenue, expense} }
+    """
+    dept = await db.departments.find_one({"id": department_id}, {"_id": 0})
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found")
+    # Enforce campus scope: managers can only see departments in their scope
+    campus = await get_campus_filter(current_user)
+    if campus.get("location_id") and dept.get("location_id") not in (
+        campus["location_id"].get("$in") if isinstance(campus.get("location_id"), dict) else [campus.get("location_id")]
+    ):
+        # loose check: if department's location isn't in the user's scope, forbid
+        raise HTTPException(status_code=403, detail="Department outside your campus scope")
+
+    today = datetime.now(timezone.utc).date()
+    dt_from = date_from or (today - timedelta(days=30)).isoformat()
+    dt_to = date_to or today.isoformat()
+
+    entries = []
+    total_exp = 0.0
+    total_rev = 0.0
+
+    # 1) Direct expenses
+    async for e in db.expenses.find(
+        {"department_id": department_id, "date": {"$gte": dt_from, "$lte": dt_to}},
+        {"_id": 0, "id": 1, "date": 1, "amount": 1, "title": 1, "notes": 1, "vendor": 1, "category": 1},
+    ):
+        amt = float(e.get("amount") or 0)
+        total_exp += amt
+        entries.append({
+            "kind": "expense",
+            "id": e.get("id"),
+            "date": e.get("date"),
+            "amount": amt,
+            "title": e.get("title") or e.get("vendor") or "Expense",
+            "note": e.get("notes") or e.get("category") or "",
+        })
+
+    # 2) Payroll allocations (with staff name lookup)
+    staff_names: dict = {}
+    async for a in db.expense_allocations.find(
+        {"department_id": department_id, "date": {"$gte": dt_from, "$lte": dt_to}},
+        {"_id": 0, "payslip_id": 1, "staff_id": 1, "amount": 1, "pct": 1, "date": 1},
+    ):
+        sid = a.get("staff_id")
+        if sid and sid not in staff_names:
+            u = await db.users.find_one({"id": sid}, {"_id": 0, "name": 1})
+            staff_names[sid] = (u or {}).get("name") or "Staff"
+        amt = float(a.get("amount") or 0)
+        total_exp += amt
+        entries.append({
+            "kind": "payroll",
+            "id": a.get("payslip_id"),
+            "date": a.get("date"),
+            "amount": amt,
+            "title": f"Payroll · {staff_names.get(sid, 'Staff')}",
+            "note": f"{a.get('pct') or 0}% allocation",
+        })
+
+    # 3) Donations tagged with this department (optional revenue dimension)
+    async for r in db.donations.find(
+        {"department_id": department_id, "date": {"$gte": dt_from, "$lte": dt_to}},
+        {"_id": 0, "id": 1, "date": 1, "amount": 1, "donor_name": 1, "type": 1, "notes": 1},
+    ):
+        amt = float(r.get("amount") or 0)
+        total_rev += amt
+        entries.append({
+            "kind": "donation",
+            "id": r.get("id"),
+            "date": r.get("date"),
+            "amount": amt,
+            "title": r.get("donor_name") or "Donation",
+            "note": r.get("type") or r.get("notes") or "",
+        })
+
+    entries.sort(key=lambda x: (x.get("date") or "", x.get("kind")), reverse=True)
+    return {
+        "department": {"id": dept["id"], "name": dept.get("name"), "color": dept.get("color"), "budget": dept.get("budget")},
+        "period": {"from": dt_from, "to": dt_to},
+        "entries": entries,
+        "totals": {"revenue": round(total_rev, 2), "expense": round(total_exp, 2), "net": round(total_rev - total_exp, 2)},
+    }

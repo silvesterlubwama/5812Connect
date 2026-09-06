@@ -12,7 +12,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
-import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi, departmentsApi } from '../services/api';
+import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi, departmentsApi, sublocationsApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -703,7 +703,16 @@ export default function FinancialPage() {
 
         {/* Budgets Tab */}
         <TabsContent value="budgets" className="mt-4 space-y-3">
-          <div className="flex justify-end">
+          <SublocationBudgetsPanel subLocations={subLocations} onChange={() => {
+            // refresh subLocations list to pick up new budget values
+            locationsApi.list().then(r => {
+              const allLocs = r.data || [];
+              const activeCampus = localStorage.getItem('5812_active_campus') || '';
+              if (activeCampus) setSubLocations(allLocs.filter(l => l.parent_id === activeCampus));
+            }).catch(() => {});
+          }} />
+          <div className="flex items-center justify-between pt-2">
+            <p className="text-xs text-muted-foreground">Department budgets (soft targets for Dept P&amp;L cards)</p>
             <Button size="sm" className="gap-1.5" onClick={() => { setBudgetForm({ department: '', period: new Date().toISOString().slice(0, 7), amount: '', category: 'general' }); setShowBudget(true); }} data-testid="create-budget-btn">Add Budget</Button>
           </div>
           {selectedBudgetIds.size > 0 && <BulkActionBar
@@ -1932,6 +1941,77 @@ function ReconciliationPanel({ locationFilter, subLocations, isFinanceAdmin, onD
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+
+// iter-subloc-budget: inline editable hard-cap for each sub-location.
+// The auto-rolled department sum is what shows on the Dept P&L rollup
+// strip by default; setting a value here becomes a hard cap that
+// overrides the sum. Passing null (blank + save) clears the override.
+function SublocationBudgetsPanel({ subLocations, onChange }) {
+  const [drafts, setDrafts] = useState({});
+  const [saving, setSaving] = useState(null);
+  useEffect(() => {
+    const initial = {};
+    (subLocations || []).forEach(s => { initial[s.id] = s.budget != null ? String(s.budget) : ''; });
+    setDrafts(initial);
+  }, [subLocations]);
+  if (!subLocations || subLocations.length === 0) return null;
+  const save = async (s) => {
+    const raw = drafts[s.id];
+    const val = raw === '' || raw == null ? null : Number(raw);
+    if (val != null && (Number.isNaN(val) || val < 0)) { toast.error('Enter a positive number or leave blank'); return; }
+    setSaving(s.id);
+    try {
+      await sublocationsApi.setBudget(s.id, val);
+      toast.success(val == null ? `Cleared cap for ${s.name}` : `Cap set for ${s.name}`);
+      onChange && onChange();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save'); }
+    finally { setSaving(null); }
+  };
+  return (
+    <Card className="rounded-xl shadow-soft" data-testid="subloc-budget-panel">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm font-semibold">Sub-location budget caps</CardTitle></CardHeader>
+      <CardContent className="p-0">
+        <p className="px-4 pb-2 text-[11px] text-muted-foreground">Hard caps override the auto-rolled department sum on the Dept P&amp;L strip. Leave blank to fall back to the rollup.</p>
+        <table className="w-full text-sm">
+          <thead><tr className="border-t border-b bg-muted/30">
+            <th className="p-3 text-left text-xs text-muted-foreground">Sub-location</th>
+            <th className="p-3 text-right text-xs text-muted-foreground w-48">Hard-cap budget (UGX)</th>
+            <th className="p-3 w-24"></th>
+          </tr></thead>
+          <tbody>
+            {subLocations.map(s => {
+              const current = s.budget != null ? String(s.budget) : '';
+              const dirty = (drafts[s.id] ?? '') !== current;
+              return (
+                <tr key={s.id} className="border-b last:border-0" data-testid={`subloc-budget-row-${s.id}`}>
+                  <td className="p-3 font-medium">{s.name}</td>
+                  <td className="p-3">
+                    <Input
+                      type="number" min={0} className="h-8 text-xs text-right"
+                      placeholder="Auto-rollup"
+                      value={drafts[s.id] ?? ''}
+                      onChange={e => setDrafts(prev => ({ ...prev, [s.id]: e.target.value }))}
+                      data-testid={`subloc-budget-input-${s.id}`}
+                    />
+                  </td>
+                  <td className="p-3 text-right">
+                    <Button
+                      size="sm" variant={dirty ? 'default' : 'ghost'}
+                      disabled={!dirty || saving === s.id}
+                      onClick={() => save(s)}
+                      data-testid={`subloc-budget-save-${s.id}`}
+                    >{saving === s.id ? 'Saving…' : dirty ? 'Save' : 'Saved'}</Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
   );
 }
 

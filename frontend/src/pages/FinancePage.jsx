@@ -12,6 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { toast } from 'sonner';
 import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import DepartmentPnlTab from '../components/DepartmentPnlTab';
+import { sublocationsApi } from '../services/api';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -50,18 +52,22 @@ export default function FinancePage() {
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         {/* Mobile-safe tab strip — on <md the tabs scroll horizontally instead
             of cramming into a 5-col grid (which caused label overlap at 390px). */}
-        <TabsList className="w-full flex overflow-x-auto no-scrollbar md:grid md:grid-cols-5 md:max-w-3xl">
+        <TabsList className="w-full flex overflow-x-auto no-scrollbar md:grid md:grid-cols-7 md:max-w-4xl">
           <TabsTrigger value="overview" className="flex-shrink-0" data-testid="finance-tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="journal" className="flex-shrink-0" data-testid="finance-tab-journal">Journal</TabsTrigger>
           <TabsTrigger value="review" className="flex-shrink-0" data-testid="finance-tab-review">Review Queue</TabsTrigger>
           <TabsTrigger value="coa" className="flex-shrink-0" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
           <TabsTrigger value="reports" className="flex-shrink-0" data-testid="finance-tab-reports">Reports</TabsTrigger>
+          <TabsTrigger value="budgets" className="flex-shrink-0" data-testid="finance-tab-budgets">Budgets</TabsTrigger>
+          <TabsTrigger value="dept-pnl" className="flex-shrink-0" data-testid="finance-tab-dept-pnl">Dept P&amp;L</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewPanel /></TabsContent>
         <TabsContent value="journal"><JournalPanel /></TabsContent>
         <TabsContent value="review"><ReviewQueuePanel /></TabsContent>
         <TabsContent value="coa"><CoaPanel /></TabsContent>
         <TabsContent value="reports"><ReportsPanel /></TabsContent>
+        <TabsContent value="budgets"><BudgetsPanel /></TabsContent>
+        <TabsContent value="dept-pnl"><DepartmentPnlTab /></TabsContent>
       </Tabs>
     </div>
   );
@@ -1266,6 +1272,101 @@ function CfView({ d }) {
         </Table>
       )}
     </div>
+  );
+}
+
+
+// ─── BUDGETS ────────────────────────────────────────────────
+// iter-subloc-budget: inline editable hard cap for each sub-location.
+// The auto-rolled department sum shows on the Dept P&L rollup strip by
+// default; setting a value here becomes a hard cap that overrides the
+// sum. Passing null (blank + save) clears the override.
+function BudgetsPanel() {
+  const [subs, setSubs] = useState([]);
+  const [drafts, setDrafts] = useState({});
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(null);
+  const load = async () => {
+    setBusy(true);
+    try {
+      const r = await sublocationsApi.list();
+      const rows = r.data || [];
+      setSubs(rows);
+      const initial = {};
+      rows.forEach(s => { initial[s.id] = s.budget != null ? String(s.budget) : ''; });
+      setDrafts(initial);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load sub-locations');
+    } finally { setBusy(false); }
+  };
+  useEffect(() => { load(); }, []);
+  const save = async (s) => {
+    const raw = drafts[s.id];
+    const val = raw === '' || raw == null ? null : Number(raw);
+    if (val != null && (Number.isNaN(val) || val < 0)) { toast.error('Enter a positive number or leave blank'); return; }
+    setSaving(s.id);
+    try {
+      await sublocationsApi.setBudget(s.id, val);
+      toast.success(val == null ? `Cleared cap for ${s.name}` : `Cap set for ${s.name}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save'); }
+    finally { setSaving(null); }
+  };
+  return (
+    <Card data-testid="subloc-budget-panel">
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-base">Sub-location budget caps</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Hard caps override the auto-rolled department sum on the Dept P&amp;L rollup strip.
+          Leave blank to fall back to the rollup.
+        </p>
+      </CardHeader>
+      <CardContent className="p-0">
+        {busy ? (
+          <p className="p-6 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : subs.length === 0 ? (
+          <p className="p-6 text-center text-sm text-muted-foreground">
+            No sub-locations in your scope yet. Add them from <strong>Admin → Locations</strong>.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead><tr className="border-t border-b bg-muted/30">
+              <th className="p-3 text-left text-xs text-muted-foreground">Sub-location</th>
+              <th className="p-3 text-right text-xs text-muted-foreground w-56">Hard-cap budget</th>
+              <th className="p-3 w-28"></th>
+            </tr></thead>
+            <tbody>
+              {subs.map(s => {
+                const current = s.budget != null ? String(s.budget) : '';
+                const dirty = (drafts[s.id] ?? '') !== current;
+                return (
+                  <tr key={s.id} className="border-b last:border-0" data-testid={`subloc-budget-row-${s.id}`}>
+                    <td className="p-3 font-medium">{s.name}</td>
+                    <td className="p-3">
+                      <Input
+                        type="number" min={0} className="h-8 text-xs text-right"
+                        placeholder="Auto-rollup"
+                        value={drafts[s.id] ?? ''}
+                        onChange={e => setDrafts(prev => ({ ...prev, [s.id]: e.target.value }))}
+                        data-testid={`subloc-budget-input-${s.id}`}
+                      />
+                    </td>
+                    <td className="p-3 text-right">
+                      <Button
+                        size="sm" variant={dirty ? 'default' : 'ghost'}
+                        disabled={!dirty || saving === s.id}
+                        onClick={() => save(s)}
+                        data-testid={`subloc-budget-save-${s.id}`}
+                      >{saving === s.id ? 'Saving…' : dirty ? 'Save' : 'Saved'}</Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

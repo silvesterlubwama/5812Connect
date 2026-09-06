@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi, socialWorkOrphansApi } from '../services/api';
+import api, { adminApi, documentsApi, locationsApi, securityCheckpointApi, securityCompaniesApi, socialWorkOrphansApi, departmentsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { BadgePrintView } from '../components/admin/BadgePrintView';

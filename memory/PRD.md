@@ -7,6 +7,26 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 323)
+
+### iter 323 — Sub-location budget UI + Dept P&L drill-down
+- **Sub-location budget UI (P0)**: Finance page gained a **Budgets** tab
+  hosting `SublocationBudgetsPanel` — inline editable hard-cap input for
+  every sub-location in the admin's scope. Blank + Save clears the cap
+  and falls back to the auto-rolled department sum on the Dept P&L
+  rollup strip. Wired to `sublocationsApi.setBudget` → `PUT
+  /api/sublocations/{id}/budget`.
+- **Dept P&L drill-down (P1)**: Clicking any department card in the
+  **Dept P&L** tab now opens a drill-down modal listing every
+  contributing entry — direct expenses, payroll allocations (with
+  staff name + %), and tagged donations — in the selected window.
+  Backend: new `GET /api/reports-department/{department_id}/entries`
+  returning `{department, period, entries, totals: {revenue,
+  expense, net}}`. Client hook: `departmentsApi.entries(id, params)`.
+- Wired both tabs into the active `FinancePage.jsx` (`/financial`
+  route). Previous `FinancialPage.jsx` is now dead code but left
+  intact until a follow-up cleanup pass.
+
 ## Current status (as of iter 322)
 
 ### iter 322 — Middleware fix + Dept P&L tab + Payroll allocation strip + Sublocation budget

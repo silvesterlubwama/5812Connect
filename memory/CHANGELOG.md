@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## iter 323 — 2026-02 — Sub-location budget UI + Dept P&L drill-down
+
+### Sub-location budget UI (last-working-item P0)
+- New **Budgets** tab on Finance (`/financial`) with
+  `SublocationBudgetsPanel`: inline editable hard-cap input per
+  sub-location; blank + Save clears the cap, otherwise the value
+  overrides the auto-rolled department sum on Dept P&L rollup strip.
+- Uses `sublocationsApi.setBudget` → `PUT /api/sublocations/{id}/budget`
+  (already wired last iter). Verified full flow via browser: panel
+  renders 1 row (`Test Kitchen`) with `Auto-rollup` placeholder, save
+  button toggles between Saved/Save on input change.
+
+### Dept P&L drill-down (P1)
+- Backend: `GET /api/reports-department/{department_id}/entries` — one
+  audit view of every entry that rolled into a department's totals in
+  the given window. Sources: `expenses.department_id`,
+  `expense_allocations` (payroll splits, joined to staff name), and
+  `donations.department_id` (optional revenue dimension). Response
+  includes `entries` (sorted by date DESC) and `totals: {revenue,
+  expense, net}`.
+- Frontend: cards on `DepartmentPnlTab` are now clickable; a dialog
+  opens with rev/exp/net summary strip and a scrollable table of
+  contributing entries, each tagged with a coloured `Badge`
+  (`donation` / `payroll` / `expense`). Test IDs: `dept-drill-modal`,
+  `drill-entry-*`, `drill-total-{revenue,expense,net}`,
+  `drill-close-btn`.
+- Client hook: `departmentsApi.entries(id, {date_from, date_to})`.
+
+### Housekeeping
+- Fixed a stale `departmentsApi` import in `AdminPage.jsx` (lint
+  blocker introduced last iter).
+- Added Budgets + Dept P&L as tabs on the ACTIVE `FinancePage.jsx`
+  (route `/financial`). Prior iter's edits landed on the legacy
+  `FinancialPage.jsx` which is unreached; left intact for now.
+
 ## iter 322 — 2026-02 — ASGI middleware fix + Dept P&L tab + Payroll allocation strip + Sub-location budget
 
 ### Middleware Fix (ROOT CAUSE OF ALL PREVIOUS 307 / RuntimeError FLAKES)
