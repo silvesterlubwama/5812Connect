@@ -479,8 +479,17 @@ export default function HRPage() {
                       }}><Pencil size={12} /> Edit</Button>
                       <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" data-testid={`payslip-history-${p.id}`} title="View edit history" onClick={async () => {
                         try {
-                          const r = await api.get(`/hr/payslips/${p.id}/history`);
-                          setPayslipHistory({ payslip: p, ...r.data });
+                          // iter-payroll-alloc: also fetch the department
+                          // allocations produced when this payslip was paid,
+                          // so the info-strip in the history dialog shows
+                          // the cost-centre split without an extra click.
+                          const [hr, ar] = await Promise.all([
+                            api.get(`/hr/payslips/${p.id}/history`),
+                            p.status === 'paid'
+                              ? api.get(`/hr/payslips/${p.id}/allocations`).catch(() => ({ data: { allocations: [] } }))
+                              : Promise.resolve({ data: { allocations: [] } }),
+                          ]);
+                          setPayslipHistory({ payslip: p, ...hr.data, allocations: ar.data?.allocations || [] });
                         } catch { toast.error('Failed to load history'); }
                       }}><History size={12} /></Button>
                       {p.status === 'draft' && <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={async () => { await api.put(`/hr/payslips/${p.id}`, { status: 'approved' }); setPayslips(prev => prev.map(x => x.id === p.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); }}><CheckCircle size={12} /> Approve</Button>}
@@ -832,13 +841,29 @@ export default function HRPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Payslip History Dialog (audit trail) */}
+      {/* Payslip History Dialog (audit trail + payroll split allocations) */}
       <Dialog open={!!payslipHistory} onOpenChange={o => !o && setPayslipHistory(null)}>
         <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit History — {payslipHistory?.payslip?.staff_name}</DialogTitle></DialogHeader>
           {payslipHistory && (
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">Created {payslipHistory.created_at?.slice(0,10)} by {payslipHistory.created_by_name}</p>
+              {payslipHistory.allocations && payslipHistory.allocations.length > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-1" data-testid="payslip-allocation-strip">
+                  <p className="text-[11px] uppercase tracking-wide font-medium text-emerald-800">Department funding split</p>
+                  <div className="space-y-1">
+                    {payslipHistory.allocations.map(a => (
+                      <div key={a.id} className="flex items-center gap-2 text-xs">
+                        {a.department_color && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: a.department_color }} />}
+                        <span className="flex-1">{a.department_name || a.department_id}</span>
+                        <span className="font-mono">{Number(a.amount || 0).toLocaleString()} {a.currency}</span>
+                        <span className="text-muted-foreground text-[10px]">({a.pct}%)</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-emerald-700 italic">Aggregate expense JE unchanged — this is the cost-centre breakdown for department P&amp;L.</p>
+                </div>
+              )}
               {payslipHistory.history.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">No edits recorded yet.</p>
               ) : (

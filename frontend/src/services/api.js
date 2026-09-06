@@ -307,6 +307,12 @@ Object.assign(financialApi, {
   deleteSponsor: (id) => api.delete(`/financial/sponsors/${id}`),
 });
 
+// ---- SUB-LOCATION BUDGETS ----
+export const sublocationsApi = {
+  list: (params) => api.get('/sublocations', { params }),
+  setBudget: (id, budget) => api.put(`/sublocations/${id}/budget`, { budget }),
+};
+
 // ---- DEPARTMENTS (cost-centre dimension) ----
 export const departmentsApi = {
   list: (params) => api.get('/departments', { params }),

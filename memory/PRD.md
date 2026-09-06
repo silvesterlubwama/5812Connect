@@ -7,6 +7,23 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 322)
+
+### iter 322 — Middleware fix + Dept P&L tab + Payroll allocation strip + Sublocation budget
+- Middleware quirk (`RuntimeError: No response returned` / intermittent
+  307s) fixed by rewriting `SecurityHeadersASGI` + `RateLimitMiddleware`
+  as pure ASGI classes. 8/8 sequential requests confirmed HTTP 200 on
+  preview after the rewrite.
+- **Financial → Dept P&L** tab wired with rollup cards + per-dept budget
+  bars + expand-to-see run-rate.
+- **Payroll allocation info-strip** on paid-payslip history dialog:
+  `GET /api/hr/payslips/{id}/allocations` returns split rows enriched
+  with dept name + colour; HR page shows green "Department funding split"
+  strip so accountants can trace the split without extra clicks.
+- **Sub-location budget editor**: `PUT /api/sublocations/{id}/budget`
+  supports hard-cap override; null clears back to auto-rolled-up
+  department-sum. UI toggle is a small follow-up.
+
 ## Current status (as of iter 321)
 
 ### iter 321 — Split-Aware Payroll + Dept Guard + Bulk Tag + Dept P&L

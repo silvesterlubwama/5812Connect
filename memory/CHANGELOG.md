@@ -1,5 +1,51 @@
 # CHANGELOG
 
+## iter 322 — 2026-02 — ASGI middleware fix + Dept P&L tab + Payroll allocation strip + Sub-location budget
+
+### Middleware Fix (ROOT CAUSE OF ALL PREVIOUS 307 / RuntimeError FLAKES)
+- Rewrote `SecurityHeadersASGI` + `RateLimitMiddleware` as pure ASGI
+  classes (`__call__(scope, receive, send)`) — bypasses Starlette's
+  `BaseHTTPMiddleware` `dispatch_func` wrapper that was raising
+  `RuntimeError: No response returned` under load in the preview
+  container. Verified 8/8 sequential requests → HTTP 200, security
+  headers preserved (`x-frame-options`, `x-content-type-options`,
+  `referrer-policy`).
+- Kept `kiosk_role_guard` as `@app.middleware("http")` because it
+  needs the parsed `Request` and always returns a Response cleanly
+  (never hits the buggy code path).
+
+### Department P&L Tab (Financial → Dept P&L)
+- `components/DepartmentPnlTab.jsx` — date-range picker + campus/sublocation
+  rollup cards + per-department grid with budget-progress bars, revenue /
+  expense / net triad, and expand-to-see-details (run-rate + budget headroom).
+- Wired into `FinancialPage.jsx` as the last tab (`data-testid="tab-dept-pnl"`).
+- Reads `GET /api/reports-department/pnl?date_from&date_to`.
+
+### Payroll Allocation Info-Strip
+- New backend endpoint `GET /api/hr/payslips/{id}/allocations` — returns
+  the split rows enriched with department name + colour.
+- `HRPage` payslip history dialog opens with a single Promise.all: the
+  history + allocations. Renders a green "Department funding split"
+  strip on paid payslips showing each department's amount, currency,
+  and percentage. Read-only visual, doesn't touch the aggregate JE.
+
+### Sub-location Budget Editor
+- New router `sublocations_budget.py`:
+  - `GET /api/sublocations` — lightweight list (id, name, location_id, budget).
+  - `PUT /api/sublocations/{id}/budget` — `{budget: number | null}`.
+    Passing null clears the hard cap and falls back to the auto-rolled-up
+    department-sum on Department P&L.
+- Frontend client `sublocationsApi.setBudget(id, budget)` added.
+- UI editor is a small follow-up (Finance → Budgets tab).
+
+### Verified end-to-end
+- `GET /api/reports-department/pnl` × 8 → 200/200/200/200/200/200/200/200
+- Security headers survive middleware rewrite.
+- Payslip allocations endpoint returns 404 on unknown id, 200 on real.
+- Sub-locations endpoint returns `[]` on empty collection.
+- All frontend files parse under `@babel/parser`.
+
+
 ## iter 321 — 2026-02 — Split-aware payroll + Dept guard + Bulk tag + Dept P&L
 
 ### Split-Aware Payroll

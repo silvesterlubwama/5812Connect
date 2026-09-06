@@ -11,6 +11,7 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import DepartmentPnlTab from '../components/DepartmentPnlTab';
 import { financialApi, financialExtrasApi, exportApi, locationsApi, chartAccountsApi, departmentsApi } from '../services/api';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -531,6 +532,7 @@ export default function FinancialPage() {
           <TabsTrigger value="balance" data-testid="tab-balance" onClick={fetchBalanceSheet}>Balance Sheet</TabsTrigger>
           <TabsTrigger value="approvals" data-testid="tab-approvals">Approvals {pendingExpenses.length > 0 && <Badge className="ml-1 bg-amber-500 text-white text-xs px-1.5">{pendingExpenses.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="reconcile" data-testid="tab-reconcile">Reconcile</TabsTrigger>
+          <TabsTrigger value="dept-pnl" data-testid="tab-dept-pnl">Dept P&amp;L</TabsTrigger>
         </TabsList>
 
         <TabsContent value="donations" className="mt-4">
@@ -929,6 +931,10 @@ export default function FinancialPage() {
         {/* Reconciliation Tab — verifies Finance sub-location totals match Chart cash accounts */}
         <TabsContent value="reconcile" className="mt-4">
           <ReconciliationPanel locationFilter={locationFilter} subLocations={subLocations} isFinanceAdmin={isFinanceAdmin} onDone={fetchAll} />
+        </TabsContent>
+
+        <TabsContent value="dept-pnl" className="mt-4">
+          <DepartmentPnlTab />
         </TabsContent>
 
       </Tabs>

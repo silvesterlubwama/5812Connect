@@ -126,7 +126,7 @@ async def update_department(dept_id: str, data: DepartmentUpdate, current_user: 
         active_salaries = await db.hr_salaries.count_documents({"department_ids": dept_id, "status": "active"})
         unpaid_expenses = await db.expenses.count_documents({"department_id": dept_id, "status": {"$ne": "paid"}})
         blocking = users_tagged + active_salaries + unpaid_expenses
-        if blocking and not (data.model_dump().get("force") is True):
+        if blocking and (data.model_dump().get("force") is not True):
             raise HTTPException(status_code=409, detail={
                 "message": "Department has live references",
                 "users_tagged": users_tagged,

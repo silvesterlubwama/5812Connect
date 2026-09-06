@@ -943,6 +943,32 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
     return {"paid_count": paid_count, "total_paid": aggregated_total}
 
 
+@router.get("/payslips/{payslip_id}/allocations")
+async def payslip_allocations(payslip_id: str, current_user: dict = Depends(require_director)):
+    """List the department-split expense allocations produced when this
+    payslip was marked paid. Powers the "This payslip contributed X to
+    HR, Y to Social Work" info-strip on the payslip detail dialog.
+    """
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "id": 1, "status": 1, "net_salary": 1, "currency": 1})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    allocations = await db.expense_allocations.find({"payslip_id": payslip_id}, {"_id": 0}).to_list(50)
+    # Enrich with department names for the UI
+    dept_ids = list({a.get("department_id") for a in allocations if a.get("department_id")})
+    depts = {}
+    if dept_ids:
+        async for d in db.departments.find({"id": {"$in": dept_ids}}, {"_id": 0, "id": 1, "name": 1, "color": 1}):
+            depts[d["id"]] = d
+    return {
+        "payslip": p,
+        "allocations": [
+            {**a, "department_name": depts.get(a.get("department_id"), {}).get("name"),
+             "department_color": depts.get(a.get("department_id"), {}).get("color")}
+            for a in allocations
+        ],
+    }
+
+
 @router.put("/payslips/{payslip_id}")
 async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depends(require_director)):
     """Update a payslip. Director+ can edit any field (gross, allowances, deductions,

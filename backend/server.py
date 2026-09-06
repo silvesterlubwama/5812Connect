@@ -140,25 +140,33 @@ async def readyz():
         )
 
 
-# Rate limiting middleware
-class RateLimitMiddleware(BaseHTTPMiddleware):
+# Rate limiting middleware — pure ASGI (see iter-middleware-asgi above).
+class RateLimitMiddleware:
     def __init__(self, app, requests_per_minute: int = 120):
-        super().__init__(app)
+        self.app = app
         self.requests_per_minute = requests_per_minute
         self.request_counts: Dict[str, list] = defaultdict(list)
 
-    async def dispatch(self, request: Request, call_next):
-        if request.headers.get("upgrade") == "websocket":
-            return await call_next(request)
-        client_ip = request.client.host if request.client else "unknown"
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Skip websocket upgrade probes
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        if headers.get("upgrade") == "websocket":
+            await self.app(scope, receive, send)
+            return
+        client = scope.get("client") or ("unknown", 0)
+        client_ip = client[0] if isinstance(client, (tuple, list)) else "unknown"
         now = time.time()
         window = now - 60
         self.request_counts[client_ip] = [t for t in self.request_counts[client_ip] if t > window]
         if len(self.request_counts[client_ip]) >= self.requests_per_minute:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again in a minute."})
+            response = JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again in a minute."})
+            await response(scope, receive, send)
+            return
         self.request_counts[client_ip].append(now)
-        response = await call_next(request)
-        return response
+        await self.app(scope, receive, send)
 
 app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 
@@ -168,24 +176,62 @@ app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
 # Hardens every response with browser-standard security headers.
 # ============================================================
 
-@app.middleware("http")
-async def security_headers_middleware(request, call_next):
-    response = await call_next(request)
-    # Always-on hardening. CSP is permissive enough for the React build (inline
-    # styles via Tailwind JIT) but locks down external script/frame sources.
-    # If something breaks (e.g. third-party iframe), refine the directive.
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = (
-        "geolocation=(self), camera=(self), microphone=(self), payment=(), "
-        "fullscreen=(self), serial=(self), hid=(self), usb=(self), bluetooth=(self)"
-    )
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    # Only set HSTS over HTTPS — avoids breaking local-http dev.
-    if request.url.scheme == "https":
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
+# iter-middleware-asgi: BaseHTTPMiddleware (used implicitly by
+# `@app.middleware("http")`) triggers `RuntimeError: No response returned`
+# intermittently under load — Starlette bug. Rewritten as pure ASGI
+# middleware which doesn't wrap `call_next` and therefore doesn't hit
+# the excgroup edge cases.
+#
+# Signature: `async def __call__(self, scope, receive, send)`; we wrap
+# `send` to inject headers on the response start event, and delegate
+# everything else to the inner app untouched.
+
+class SecurityHeadersASGI:
+    """Add security headers to every HTTP response.
+
+    Pure ASGI so it does NOT sit inside Starlette's BaseHTTPMiddleware
+    excgroup, which was raising 'No response returned' under load in the
+    preview container. Injects headers by wrapping the `send` callable.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        is_https = scope.get("scheme") == "https"
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                # append our security headers as raw bytes tuples
+                headers.extend([
+                    (b"x-frame-options", b"SAMEORIGIN"),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                    (
+                        b"permissions-policy",
+                        b"geolocation=(self), camera=(self), microphone=(self), "
+                        b"payment=(), fullscreen=(self), serial=(self), "
+                        b"hid=(self), usb=(self), bluetooth=(self)",
+                    ),
+                    (b"x-xss-protection", b"1; mode=block"),
+                ])
+                if is_https:
+                    headers.append((
+                        b"strict-transport-security",
+                        b"max-age=31536000; includeSubDomains",
+                    ))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeadersASGI)
 
 
 # Security Contractor role is meant to be **kiosk-only** — the frontend router
@@ -210,10 +256,8 @@ _CONTRACTOR_DENY_METHODS = {"DELETE"}  # never let a contractor delete anything
 @app.middleware("http")
 async def kiosk_role_guard(request, call_next):
     """Enforce Security Contractor kiosk-only scope at the transport layer.
-
-    We look up the user by the bearer token (cheap, same query the deps use)
-    and 403 anything outside the allow-list. Requests without a token or with
-    a non-contractor token pass through untouched.
+    (Kept as `@app.middleware` — this one needs the parsed `Request` and
+    doesn't hit the RuntimeError since it always returns a Response.)
     """
     path = request.url.path
     if not path.startswith("/api/") or request.method == "OPTIONS":
@@ -372,6 +416,7 @@ try:
     from routers.security_companies import router as security_companies_router
     from routers.departments import router as departments_router
     from routers.reports_departments import router as reports_departments_router
+    from routers.sublocations_budget import router as sublocations_budget_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -381,6 +426,7 @@ try:
     app.include_router(approvals_router)
     app.include_router(departments_router)
     app.include_router(reports_departments_router)
+    app.include_router(sublocations_budget_router)
     app.include_router(social_work_router)
     app.include_router(school_portal_router)
     app.include_router(bank_router)
