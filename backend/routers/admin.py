@@ -283,6 +283,37 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
     return user
 
 
+@router.post("/users/bulk-department")
+async def bulk_tag_department(data: dict, current_user: dict = Depends(require_admin)) -> dict:
+    """Assign a department to N users at once.
+
+    Body: {user_ids: [...], department_id: 'dept_...', mode: 'add' | 'replace'}
+    `add`     — append to existing `department_ids` (idempotent).
+    `replace` — overwrite `department_ids` to just [department_id].
+    """
+    ids = data.get("user_ids") or []
+    dept_id = data.get("department_id")
+    mode = (data.get("mode") or "add").lower()
+    if not ids or not dept_id:
+        raise HTTPException(status_code=400, detail="user_ids and department_id required")
+    dept = await db.departments.find_one({"id": dept_id, "active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1})
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found or inactive")
+    updated = 0
+    for uid in ids:
+        u = await db.users.find_one({"id": uid}, {"_id": 0, "id": 1, "department_ids": 1})
+        if not u:
+            continue
+        if mode == "replace":
+            new_ids = [dept_id]
+        else:
+            new_ids = list(dict.fromkeys([*(u.get("department_ids") or []), dept_id]))
+        await db.users.update_one({"id": uid}, {"$set": {"department_ids": new_ids, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        updated += 1
+    await _audit(current_user["id"], "bulk-tag-department", "users", f"{updated} users", data={"department_id": dept_id, "mode": mode})
+    return {"updated": updated, "department": dept}
+
+
 @router.put("/users/{user_id}")
 async def admin_update_user(user_id: str, data: dict, current_user: dict = Depends(require_admin)) -> dict:
     # Guard: only system admins can grant admin-tier roles

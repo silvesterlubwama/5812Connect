@@ -57,6 +57,12 @@ export default function AdminPage({ mode = 'system' }) {
   const [newPassword, setNewPassword] = useState('');
   const [bulkAction, setBulkAction] = useState('');
   const [bulkRole, setBulkRole] = useState('');
+  const [bulkDepartment, setBulkDepartment] = useState('');
+  const [bulkDeptMode, setBulkDeptMode] = useState('add');
+  const [availableDepartments, setAvailableDepartments] = useState([]);
+  useEffect(() => {
+    departmentsApi.list({ include_inactive: false }).then(r => setAvailableDepartments(r.data || [])).catch(() => {});
+  }, []);
   const [saving, setSaving] = useState(false);
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', role: 'Staff', department: '', location_id: '', also_create_member: true, is_admin: false, will_sign_in: true });
@@ -264,6 +270,12 @@ export default function AdminPage({ mode = 'system' }) {
       else if (bulkAction === 'role' && bulkRole) { const res = await adminApi.bulkUpdateUsers(ids, { role: bulkRole }); toast.success(`Updated ${res.data.updated} users`); }
       else if (bulkAction === 'activate') { const res = await adminApi.bulkUpdateUsers(ids, { status: 'active' }); toast.success(`Activated ${res.data.updated} users`); }
       else if (bulkAction === 'deactivate') { const res = await adminApi.bulkUpdateUsers(ids, { status: 'inactive' }); toast.success(`Deactivated ${res.data.updated} users`); }
+      else if (bulkAction === 'department' && bulkDepartment) {
+        // iter-bulk-tag: assign a department to N users at once. `add` mode
+        // keeps existing tags; `replace` clobbers to just the picked one.
+        const res = await departmentsApi.bulkTagUsers(ids, bulkDepartment, bulkDeptMode);
+        toast.success(`Tagged ${res.data.updated} users with ${res.data.department?.name || 'department'}`);
+      }
       setSelectedIds(new Set()); setShowBulk(false); fetchUsers();
     } catch (err) { toast.error(err.response?.data?.detail || 'Bulk action failed'); }
     finally { setSaving(false); }
@@ -383,7 +395,7 @@ export default function AdminPage({ mode = 'system' }) {
           <div className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Action</Label>
               <Select value={bulkAction} onValueChange={setBulkAction}><SelectTrigger><SelectValue placeholder="Select action" /></SelectTrigger>
-                <SelectContent><SelectItem value="role">Change Role</SelectItem><SelectItem value="activate">Activate</SelectItem><SelectItem value="deactivate">Deactivate</SelectItem><SelectItem value="delete">Delete</SelectItem></SelectContent>
+                <SelectContent><SelectItem value="role">Change Role</SelectItem><SelectItem value="department" data-testid="bulk-action-department">Assign Department</SelectItem><SelectItem value="activate">Activate</SelectItem><SelectItem value="deactivate">Deactivate</SelectItem><SelectItem value="delete">Delete</SelectItem></SelectContent>
               </Select>
             </div>
             {bulkAction === 'role' && (
@@ -392,6 +404,33 @@ export default function AdminPage({ mode = 'system' }) {
                   <SelectContent>{ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
+            )}
+            {bulkAction === 'department' && (
+              <>
+                <div className="space-y-2"><Label>Department</Label>
+                  <Select value={bulkDepartment} onValueChange={setBulkDepartment}>
+                    <SelectTrigger data-testid="bulk-dept-select"><SelectValue placeholder="Pick department…" /></SelectTrigger>
+                    <SelectContent>
+                      {availableDepartments.map(d => (
+                        <SelectItem key={d.id} value={d.id}>
+                          <span className="inline-flex items-center gap-1.5">
+                            {d.color && <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />}{d.name}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Mode</Label>
+                  <Select value={bulkDeptMode} onValueChange={setBulkDeptMode}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="add">Add (keep existing tags)</SelectItem>
+                      <SelectItem value="replace">Replace (only this department)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
             )}
             {bulkAction === 'delete' && <p className="text-sm text-destructive font-medium">This will permanently delete {selectedIds.size} users!</p>}
             <div className="flex gap-3">

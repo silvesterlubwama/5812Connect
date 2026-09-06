@@ -1,5 +1,61 @@
 # CHANGELOG
 
+## iter 321 — 2026-02 — Split-aware payroll + Dept guard + Bulk tag + Dept P&L
+
+### Split-Aware Payroll
+- `hr.pay_batch_payslips` now fans each paid payslip's net across the
+  staff's active-salary `department_splits`. Rows land in a new
+  `expense_allocations` collection: `{id, source: 'payslip', payslip_id,
+  staff_id, department_id, location_id, amount, currency, pct, date}`.
+- Aggregate expense JE still posts as a single line so cash-flow and
+  bank reconciliation stay unchanged; departmental P&L reads the
+  allocation table separately.
+
+### Dept Deactivation Guard
+- `PUT /api/departments/{id}` with `active: false` now returns HTTP 409
+  with structured detail `{users_tagged, active_salaries, unpaid_expenses}`
+  when live references exist. Set `force: true` on the payload to bypass
+  after the admin has confirmed via the warning dialog.
+- New `GET /api/departments/{id}/usage` returns counts + `safe_to_deactivate` flag.
+- New `POST /api/departments/{id}/reassign` `{target_id}` migrates
+  users' `department_ids`, salaries' `department_ids` + `department_splits`,
+  expenses' `department_id`, and `expense_allocations.department_id`.
+- Frontend `DepartmentsManager.remove` now peeks at usage before
+  confirming, catches 409, and prompts for a reassign target.
+
+### Bulk Tag Users
+- `POST /api/admin/users/bulk-department` `{user_ids[], department_id, mode: 'add'|'replace'}`.
+- Frontend bulk dialog gains an "Assign Department" action + mode
+  toggle (Add keeps existing tags, Replace clobbers).
+
+### Department P&L Report
+- New `routers/reports_departments.py`
+  `GET /api/reports-department/pnl?date_from=&date_to=&location_id=`.
+  Aggregates:
+  - `expenses.department_id` (direct tags)
+  - `expense_allocations` (split-aware payroll)
+  - `donations.department_id` (revenue side)
+  Returns per-department revenue, expense, budget, net, `run_rate_monthly`
+  (extrapolated to 30 days), and `budget_used_pct`. Also `rollups.by_sublocation`
+  and `rollups.by_location` — sub-location & location budgets and expenses
+  are automatically summed from their child departments.
+- `departmentsApi.pnl(params)` client added.
+
+### Verified end-to-end
+- `GET /api/reports-department/pnl` → HTTP 200 with structured
+  `{ period, departments, rollups: { by_sublocation, by_location } }`
+- `POST /api/admin/users/bulk-department` → 400 on empty body with clear
+  `user_ids and department_id required` message; valid body tags N users.
+- `GET /api/departments/{id}/usage` returns tagged / salaries / unpaid counts.
+- Deactivate with refs → HTTP 409 with structured detail; `force: true` → 200.
+
+### Deferred for future turns
+- Reports Departments tab UI (endpoint ready; component wire-up next slice).
+- Sub-location `budget` field editor UI (backend rollup already computes
+  from child departments; admin-editable budget field on sub-locations is
+  a small follow-up).
+
+
 ## iter 320 — 2026-02 — Departments as cost centres (Option B) + Cross-Campus Move
 
 ### Backend

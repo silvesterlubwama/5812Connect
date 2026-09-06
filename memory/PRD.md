@@ -7,6 +7,21 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 321)
+
+### iter 321 — Split-Aware Payroll + Dept Guard + Bulk Tag + Dept P&L
+- `hr.pay_batch_payslips` writes per-department `expense_allocations`
+  rows for every paid payslip's split. Aggregate expense JE unchanged.
+- `PUT /api/departments/{id}` blocks silent deactivation when live refs
+  exist (users/salaries/expenses) — returns HTTP 409 with counts;
+  `force: true` bypasses. New `GET /{id}/usage` + `POST /{id}/reassign`.
+- `POST /api/admin/users/bulk-department` — assign N users to a
+  department, add or replace mode. Wired into AdminPage bulk dialog.
+- `GET /api/reports-department/pnl` — per-department revenue vs expense
+  vs budget, `run_rate_monthly`, plus `rollups.by_sublocation` and
+  `rollups.by_location` computed by summing child-department budgets +
+  expenses. Client hook: `departmentsApi.pnl(params)`.
+
 ## Current status (as of iter 320)
 
 ### iter 320 — Departments (Option B — cost-centre dimension)

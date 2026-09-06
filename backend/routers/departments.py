@@ -46,6 +46,9 @@ class DepartmentUpdate(BaseModel):
     color: Optional[str] = None
     budget: Optional[float] = None
     active: Optional[bool] = None
+    # iter-dept-guard: bypass the "has live references" 409. Only pass true
+    # after the admin has explicitly confirmed via the warning dialog.
+    force: Optional[bool] = None
 
 
 @router.get("")
@@ -115,11 +118,75 @@ async def update_department(dept_id: str, data: DepartmentUpdate, current_user: 
     update = {k: v for k, v in data.model_dump().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # iter-dept-guard: refuse a silent deactivation when live references
+    # exist; caller must call /reassign first or force=true via a separate
+    # explicit param. Keeps admins from stranding salaries + expenses.
+    if update.get("active") is False and existing.get("active") is not False:
+        users_tagged = await db.users.count_documents({"department_ids": dept_id})
+        active_salaries = await db.hr_salaries.count_documents({"department_ids": dept_id, "status": "active"})
+        unpaid_expenses = await db.expenses.count_documents({"department_id": dept_id, "status": {"$ne": "paid"}})
+        blocking = users_tagged + active_salaries + unpaid_expenses
+        if blocking and not (data.model_dump().get("force") is True):
+            raise HTTPException(status_code=409, detail={
+                "message": "Department has live references",
+                "users_tagged": users_tagged,
+                "active_salaries": active_salaries,
+                "unpaid_expenses": unpaid_expenses,
+            })
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.departments.update_one({"id": dept_id}, {"$set": update})
     doc = await db.departments.find_one({"id": dept_id}, {"_id": 0})
     await _audit(current_user["id"], "update", "department", dept_id, data=update)
     return doc
+
+
+@router.get("/{dept_id}/usage")
+async def department_usage(dept_id: str, current_user: dict = Depends(require_manager)):
+    """Return counts of live references to a department. Used by the frontend
+    Deactivate/Delete flow to warn admins before pulling the rug."""
+    dept = await db.departments.find_one({"id": dept_id}, {"_id": 0, "id": 1, "name": 1})
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found")
+    users_tagged = await db.users.count_documents({"department_ids": dept_id})
+    active_salaries = await db.hr_salaries.count_documents({"department_ids": dept_id, "status": "active"})
+    unpaid_expenses = await db.expenses.count_documents({"department_id": dept_id, "status": {"$ne": "paid"}})
+    return {
+        "department": dept,
+        "users_tagged": users_tagged,
+        "active_salaries": active_salaries,
+        "unpaid_expenses": unpaid_expenses,
+        "safe_to_deactivate": (users_tagged + active_salaries + unpaid_expenses) == 0,
+    }
+
+
+@router.post("/{dept_id}/reassign")
+async def reassign_department(dept_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Move all live references from `dept_id` to `target_id`. Runs before a
+    deactivation when the admin picks a replacement in the warning dialog."""
+    target = (data or {}).get("target_id")
+    if not target:
+        raise HTTPException(status_code=400, detail="target_id required")
+    if target == dept_id:
+        raise HTTPException(status_code=400, detail="target must differ")
+    src = await db.departments.find_one({"id": dept_id}, {"_id": 0, "id": 1})
+    tgt = await db.departments.find_one({"id": target, "active": {"$ne": False}}, {"_id": 0, "id": 1})
+    if not src or not tgt:
+        raise HTTPException(status_code=404, detail="Source or target department not found / inactive")
+    # Users: swap the id inside the array without duplicating
+    async for u in db.users.find({"department_ids": dept_id}, {"_id": 0, "id": 1, "department_ids": 1}):
+        new_ids = [target if x == dept_id else x for x in (u.get("department_ids") or [])]
+        new_ids = list(dict.fromkeys(new_ids))
+        await db.users.update_one({"id": u["id"]}, {"$set": {"department_ids": new_ids}})
+    # Salaries: swap in department_ids + department_splits
+    async for s in db.hr_salaries.find({"department_ids": dept_id}, {"_id": 0, "id": 1, "department_ids": 1, "department_splits": 1}):
+        new_ids = list(dict.fromkeys([target if x == dept_id else x for x in (s.get("department_ids") or [])]))
+        new_splits = [{**sp, "department_id": target if sp.get("department_id") == dept_id else sp.get("department_id")} for sp in (s.get("department_splits") or [])]
+        await db.hr_salaries.update_one({"id": s["id"]}, {"$set": {"department_ids": new_ids, "department_splits": new_splits}})
+    # Expenses: swap direct department_id
+    await db.expenses.update_many({"department_id": dept_id}, {"$set": {"department_id": target}})
+    await db.expense_allocations.update_many({"department_id": dept_id}, {"$set": {"department_id": target}})
+    await _audit(current_user["id"], "reassign", "department", dept_id, data={"to": target})
+    return {"ok": True}
 
 
 @router.delete("/{dept_id}")

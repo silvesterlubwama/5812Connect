@@ -313,6 +313,10 @@ export const departmentsApi = {
   create: (data) => api.post('/departments', data),
   update: (id, data) => api.put(`/departments/${id}`, data),
   delete: (id, opts = {}) => api.delete(`/departments/${id}`, { params: opts.hard ? { hard: true } : undefined }),
+  usage: (id) => api.get(`/departments/${id}/usage`),
+  reassign: (id, targetId) => api.post(`/departments/${id}/reassign`, { target_id: targetId }),
+  pnl: (params) => api.get('/reports-department/pnl', { params }),
+  bulkTagUsers: (userIds, departmentId, mode = 'add') => api.post('/admin/users/bulk-department', { user_ids: userIds, department_id: departmentId, mode }),
 };
 
 // ---- PRODUCTS & SALES ----

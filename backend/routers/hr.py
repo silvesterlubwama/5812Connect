@@ -897,6 +897,40 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
         if not payslip:
             continue
         await _aggregate_payroll_expense(payslip, current_user)
+        # iter-split-payroll: fan the paid amount out to department cost centres
+        # so per-department P&L takes its share. Reads splits from the staff's
+        # salary record; writes rows to `expense_allocations` (structured
+        # dimension distinct from the aggregate expense ledger entry).
+        try:
+            sal = await db.hr_salaries.find_one(
+                {"staff_id": payslip.get("staff_id"), "status": "active"},
+                {"_id": 0, "department_splits": 1, "department_ids": 1},
+            ) or {}
+            splits = sal.get("department_splits") or []
+            net = float(payslip.get("net_salary") or 0)
+            if splits and net > 0:
+                today_iso = datetime.now(timezone.utc).isoformat()[:10]
+                loc_id = payslip.get("payroll_location_id") or payslip.get("location_id") or ""
+                for s in splits:
+                    dept_id = s.get("department_id")
+                    pct = float(s.get("pct") or 0)
+                    if not dept_id or pct <= 0:
+                        continue
+                    await db.expense_allocations.insert_one({
+                        "id": f"alloc_{uuid.uuid4().hex[:8]}",
+                        "source": "payslip",
+                        "payslip_id": pid,
+                        "staff_id": payslip.get("staff_id"),
+                        "department_id": dept_id,
+                        "location_id": loc_id,
+                        "amount": round(net * pct / 100.0, 2),
+                        "currency": payslip.get("currency", "UGX"),
+                        "pct": pct,
+                        "date": today_iso,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+        except Exception as ex:
+            logger.error(f"Payroll split alloc failed for {pid}: {ex}")
         await db.hr_payslips.update_one({"id": pid}, {"$set": {
             "status": "paid",
             "paid_at": datetime.now(timezone.utc).isoformat(),

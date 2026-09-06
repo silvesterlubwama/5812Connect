@@ -106,16 +106,56 @@ export function DepartmentsManager() {
   };
 
   const remove = async (d, hard = false) => {
-    const msg = hard
-      ? `Permanently delete "${d.name}"? Only allowed when no user is tagged with it.`
-      : `Deactivate "${d.name}"? Existing tagged staff and expenses keep their reference.`;
+    // iter-dept-guard: peek at usage first so the confirm modal is honest.
+    let usage = null;
+    try {
+      const uRes = await departmentsApi.usage(d.id);
+      usage = uRes.data;
+    } catch { /* fall through to blind confirm */ }
+    let msg;
+    if (usage && (usage.users_tagged || usage.active_salaries || usage.unpaid_expenses)) {
+      msg = `"${d.name}" is in use — ${usage.users_tagged} user(s), ${usage.active_salaries} active salary record(s), ${usage.unpaid_expenses} unpaid expense(s). \n\n` +
+        (hard ? 'Hard delete is refused while any user is tagged. Cancel and use Reassign first.' : 'Deactivate anyway? Existing tagged records keep their reference and can be reassigned later.');
+    } else {
+      msg = hard
+        ? `Permanently delete "${d.name}"? Only allowed when no user is tagged with it.`
+        : `Deactivate "${d.name}"? Existing tagged staff and expenses keep their reference.`;
+    }
     if (!window.confirm(msg)) return;
     try {
-      await departmentsApi.delete(d.id, { hard });
-      toast.success(hard ? 'Department deleted' : 'Department deactivated');
+      if (!hard && usage && (usage.users_tagged || usage.active_salaries || usage.unpaid_expenses)) {
+        // Force-deactivate via PUT to bypass the 409 guard now that the
+        // admin has seen and accepted the impact.
+        await departmentsApi.update(d.id, { active: false, force: true });
+        toast.success('Department deactivated (force)');
+      } else {
+        await departmentsApi.delete(d.id, { hard });
+        toast.success(hard ? 'Department deleted' : 'Department deactivated');
+      }
       fetchAll();
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Delete failed');
+      // 409 with structured detail → give the admin a chance to reassign.
+      const detail = e.response?.data?.detail;
+      if (e.response?.status === 409 && typeof detail === 'object') {
+        const target = window.prompt(
+          `Cannot deactivate — ${detail.users_tagged} user(s), ${detail.active_salaries} salary(ies), ${detail.unpaid_expenses} unpaid expense(s) still reference this department.\n\n` +
+          `To reassign to another department, enter its id (see the list below), or Cancel:\n\n` +
+          departments.filter(x => x.id !== d.id && x.active !== false).map(x => `${x.id} — ${x.name}`).join('\n')
+        );
+        if (target) {
+          try {
+            await departmentsApi.reassign(d.id, target.trim());
+            toast.success('References reassigned. Retrying deactivation…');
+            await departmentsApi.update(d.id, { active: false });
+            toast.success('Department deactivated');
+            fetchAll();
+          } catch (e2) {
+            toast.error(e2.response?.data?.detail || 'Reassign failed');
+          }
+        }
+      } else {
+        toast.error(detail || 'Delete failed');
+      }
     }
   };
 

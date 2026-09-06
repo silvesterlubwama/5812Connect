@@ -371,6 +371,7 @@ try:
     from routers.fare_alerts import router as fare_alerts_router
     from routers.security_companies import router as security_companies_router
     from routers.departments import router as departments_router
+    from routers.reports_departments import router as reports_departments_router
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
@@ -379,6 +380,7 @@ try:
     app.include_router(sheet_import_router)
     app.include_router(approvals_router)
     app.include_router(departments_router)
+    app.include_router(reports_departments_router)
     app.include_router(social_work_router)
     app.include_router(school_portal_router)
     app.include_router(bank_router)
