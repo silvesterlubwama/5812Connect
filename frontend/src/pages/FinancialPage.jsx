@@ -1010,7 +1010,23 @@ export default function FinancialPage() {
       {/* Add Expense Modal */}
       <Dialog open={showExpense} onOpenChange={setShowExpense}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Record Expense</DialogTitle>
+            {(() => {
+              // iter-loc-placeholder: show which campus this expense will
+              // be stamped with — matches the backend main-location rule.
+              const targetId = user?.location_id || localStorage.getItem('5812_active_campus') || '';
+              const targetLoc = locations.find(l => l.id === targetId);
+              if (!targetLoc) return null;
+              const subLoc = expenseForm.sublocation_id ? subLocations.find(l => l.id === expenseForm.sublocation_id) : null;
+              return (
+                <div className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[11px] text-primary w-fit" data-testid="expense-create-target-badge">
+                  <span className="opacity-70">Creating in:</span>
+                  <span className="font-medium">{targetLoc.name}{subLoc ? ` · ${subLoc.name}` : ''}</span>
+                </div>
+              );
+            })()}
+          </DialogHeader>
           <form onSubmit={handleAddExpense} className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Title *</Label>

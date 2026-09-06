@@ -1164,7 +1164,22 @@ export default function ProductsPage() {
       {/* Add/Edit Product Modal */}
       <Dialog open={showProductModal} onOpenChange={setShowProductModal}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editingProduct ? 'Edit Product' : 'Add Product'}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{editingProduct ? 'Edit Product' : 'Add Product'}</DialogTitle>
+            {!editingProduct && (() => {
+              // iter-loc-placeholder: reflect where the product will land —
+              // uses the form's picked location first, then the store filter,
+              // then the user's main location. Matches backend default.
+              const targetId = productForm.location_id || (locationFilter !== 'all' ? locationFilter : (user?.location_id || ''));
+              const targetLoc = locations.find(l => l.id === targetId);
+              return (
+                <div className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[11px] text-primary w-fit" data-testid="product-create-target-badge">
+                  <span className="opacity-70">Creating in:</span>
+                  <span className="font-medium">{targetLoc ? targetLoc.name : 'No location (global)'}</span>
+                </div>
+              );
+            })()}
+          </DialogHeader>
           <form onSubmit={handleSaveProduct} className="space-y-4 mt-2">
             <div className="space-y-2"><Label>Product Name *</Label>
               <Input placeholder="Product name" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} required data-testid="product-name-input" />

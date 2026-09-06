@@ -294,16 +294,36 @@ export default function TasksPage() {
   const addCard = useCallback(async (listId, title) => {
     const list = board?.lists?.find(l => l.id === listId);
     const pos = tasks[listId]?.length || 0;
+    // iter-optimistic-tasks: insert a temporary card immediately so the UI
+    // feels instant even on slow networks. Swap it for the real record when
+    // the server response comes back; roll it back and toast on failure.
+    const tempId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const tempCard = {
+      id: tempId, title, board_id: activeBoardId, list_id: listId,
+      list_name: list?.name || '', status: 'todo', position: pos,
+      assignees: [], labels: [], checklist: [], attachments: [],
+      _optimistic: true,
+    };
+    setTasks(prev => ({ ...prev, [listId]: [...(prev[listId] || []), tempCard] }));
     try {
       const res = await tasksApi.create({ title, board_id: activeBoardId, list_id: listId, list_name: list?.name || '', status: 'todo', position: pos, assignees: [], labels: [], checklist: [], attachments: [] });
-      // Optimistic update. Also refetch the board a beat later so we survive
-      // any race where the WS broadcast lands before local state flushes and
-      // the card never appears (iter 277 — user reported "new tasks aren't
-      // saving"; server IS persisting them, the UI was hiding them).
-      setTasks(prev => ({ ...prev, [listId]: [...(prev[listId] || []), res.data] }));
+      // Swap temp → real
+      setTasks(prev => ({
+        ...prev,
+        [listId]: (prev[listId] || []).map(t => t.id === tempId ? res.data : t),
+      }));
+      // Refetch once after settle so WS-driven fields (e.g. server-side
+      // computed cover URL) land, without blocking the UX.
       setTimeout(() => { fetchBoardDetail(); }, 300);
       toast.success('Card added');
-    } catch { toast.error('Failed to add card'); }
+    } catch {
+      // Roll back the optimistic insert so the UI doesn't lie
+      setTasks(prev => ({
+        ...prev,
+        [listId]: (prev[listId] || []).filter(t => t.id !== tempId),
+      }));
+      toast.error('Failed to add card');
+    }
   }, [activeBoardId, board, tasks, fetchBoardDetail]);
 
   const archiveCard = useCallback(async (task) => {
@@ -526,7 +546,18 @@ export default function TasksPage() {
               </button>
               <span className="w-4 h-4 rounded flex-shrink-0" style={{ background: accentColor }} />
               <h2 className="text-base font-semibold text-white truncate">{currentBoard.name}</h2>
-              {currentBoard.location_name && <span className="hidden sm:flex items-center gap-1 text-xs text-slate-400"><MapPin size={11} /> {currentBoard.location_name}</span>}
+              {/* iter-loc-placeholder: chip that tells the truth about where
+                  a board belongs. Multi-campus users need this visible up
+                  front so they know before opening a card which scope it's
+                  going into. Global boards render with a neutral chip. */}
+              <span
+                className={`hidden sm:inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ${currentBoard.location_id ? 'bg-primary/15 border border-primary/25 text-primary-foreground/90' : 'bg-white/10 border border-white/15 text-slate-300'}`}
+                data-testid="board-location-chip"
+              >
+                <MapPin size={10} />
+                <span className="opacity-70">Board lives in:</span>
+                <span className="font-medium">{currentBoard.location_name || (currentBoard.location_id ? currentBoard.location_id : 'Global')}</span>
+              </span>
               {boardViewers.length > 1 && <span className="hidden sm:flex items-center gap-1 text-xs text-emerald-400"><Wifi size={11} /> {boardViewers.length} viewing</span>}
               {currentBoard.is_shared && <span className="hidden sm:inline text-xs text-blue-400 px-2 py-0.5 bg-blue-500/10 rounded">Shared</span>}
             </div>
@@ -664,7 +695,24 @@ export default function TasksPage() {
       {/* Create Board Dialog */}
       <Dialog open={showNewBoard} onOpenChange={setShowNewBoard}>
         <DialogContent className="max-w-sm bg-[#1e293b] border-white/10 text-slate-100">
-          <DialogHeader><DialogTitle className="text-slate-100">Create Board</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle className="text-slate-100">Create Board</DialogTitle>
+            {(() => {
+              // iter-loc-placeholder: mirror the Add-Event pill. Shows where
+              // this board will live before the admin picks a location — if
+              // they leave the location picker on "Global" the pill flips to
+              // Global instantly so there are no surprises.
+              const targetId = newBoardForm.location_id;
+              const targetLoc = locations.find(l => l.id === targetId);
+              return (
+                <div className="inline-flex items-center gap-1.5 mt-1 px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-400/30 text-[11px] text-blue-200 w-fit" data-testid="board-create-target-badge">
+                  <MapPin size={10} />
+                  <span className="opacity-70">Creating in:</span>
+                  <span className="font-medium">{targetLoc ? targetLoc.name : 'Global (all users)'}</span>
+                </div>
+              );
+            })()}
+          </DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label className="text-slate-300 text-xs">Board Name *</Label>
