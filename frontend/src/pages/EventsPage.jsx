@@ -173,6 +173,8 @@ export default function EventsPage() {
   // Venue availability
   const [venueConflict, setVenueConflict] = useState(null); // {title,date,time,end_time,source}
   const [venueBusy, setVenueBusy] = useState({ events: [], space_bookings: [] });
+  // Cross-campus move dialog (admin-only relocate)
+  const [moveEvent, setMoveEvent] = useState(null);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -781,6 +783,11 @@ export default function EventsPage() {
                 </Select>
                 <Button variant="outline" onClick={() => { editEvent(eventDetail); setSelectedEvent(null); }}>Edit</Button>
                 <Button variant="outline" onClick={() => { duplicateEvent(eventDetail); setSelectedEvent(null); }}><Copy size={14} className="mr-1" />Duplicate</Button>
+                {(user?.role === 'admin' || user?.role === 'system_admin') && (
+                  <Button variant="outline" data-testid="event-move-campus-btn" onClick={() => { setMoveEvent(eventDetail); setSelectedEvent(null); }}>
+                    <ArrowRightLeft size={14} className="mr-1" /> Move Campus
+                  </Button>
+                )}
                 <Button variant="outline" data-testid="export-attendees-csv" onClick={async () => {
                   try {
                     const res = await api.get(`/events/${eventDetail.id}/attendees/export`, { responseType: 'blob' });
@@ -798,6 +805,19 @@ export default function EventsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Cross-campus move dialog (admin-only) */}
+      <CrossCampusMoveDialog
+        open={!!moveEvent}
+        onOpenChange={(o) => { if (!o) setMoveEvent(null); }}
+        kind="event"
+        record={moveEvent || {}}
+        onMoved={(updated) => {
+          setMoveEvent(null);
+          setEvents(prev => prev.map(e => e.id === updated?.id ? { ...e, ...updated } : e));
+          fetchEvents();
+        }}
+      />
 
       <Dialog open={showTypeManager} onOpenChange={setShowTypeManager}>
         <DialogContent className="max-w-md">

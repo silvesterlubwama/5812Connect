@@ -20,6 +20,8 @@ import { ArchivePanel } from './kanban/ArchivePanel';
 import { CardDetailDialog } from './kanban/CardDetailDialog';
 import { TeamCalendar } from './kanban/TeamCalendar';
 import EmptyState from '../components/EmptyState';
+import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
+import { ArrowRightLeft } from 'lucide-react';
 
 export default function TasksPage() {
   const { user } = useAuth();
@@ -48,6 +50,13 @@ export default function TasksPage() {
   const [showBoardEdit, setShowBoardEdit] = useState(false);
   const [showTrelloImport, setShowTrelloImport] = useState(false);
   const [trelloJson, setTrelloJson] = useState('');
+  // Cross-campus move: reused for both board-level moves and card-level
+  // moves triggered from the CardDetailDialog. `moveBoardTarget` holds the
+  // board being relocated; `moveCardTarget` holds the card being reassigned
+  // to another board (potentially in another campus). Renamed to avoid
+  // collision with the existing `moveCard` callback below.
+  const [moveBoardTarget, setMoveBoardTarget] = useState(null);
+  const [moveCardTarget, setMoveCardTarget] = useState(null);
   const [importLocationId, setImportLocationId] = useState('');
   const [importing, setImporting] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
@@ -609,6 +618,13 @@ export default function TasksPage() {
                 <Archive size={13} /> Archive
               </Button>
               {isAdmin && (
+                <Button size="sm" variant="ghost" className="text-slate-400 hover:text-white hover:bg-white/10 gap-1.5 h-8 text-xs"
+                  onClick={() => setMoveBoardTarget(currentBoard)} data-testid="board-move-campus-btn"
+                  title="Move this board to another campus">
+                  <ArrowRightLeft size={13} /> Move
+                </Button>
+              )}
+              {isAdmin && (
                 <Button size="sm" variant="ghost" className="text-slate-400 hover:text-red-400 hover:bg-red-500/10 h-8 text-xs" onClick={() => deleteBoard(activeBoardId)}>
                   <Trash2 size={13} />
                 </Button>
@@ -673,7 +689,8 @@ export default function TasksPage() {
         onSaved={onCardSaved}
         onArchive={archiveCard}
         onDelete={deleteCard}
-        onMove={moveCard} />
+        onMove={moveCard}
+        onMoveToBoard={(card) => { setMoveCardTarget(card); setOpenCard(null); }} />
 
       {/* Archive Panel */}
       <ArchivePanel open={showArchive} onClose={() => setShowArchive(false)} boardId={activeBoardId}
@@ -691,6 +708,41 @@ export default function TasksPage() {
             setTasks(prev => ({ ...prev, [list.id]: prev[list.id] || [] }));
           }
         }} />
+
+      {/* Cross-campus move: board and card */}
+      <CrossCampusMoveDialog
+        open={!!moveBoardTarget}
+        onOpenChange={(o) => { if (!o) setMoveBoardTarget(null); }}
+        kind="board"
+        record={moveBoardTarget || {}}
+        onMoved={(updated) => {
+          setMoveBoardTarget(null);
+          if (updated) setBoards(prev => prev.map(b => b.id === updated.id ? { ...b, ...updated } : b));
+          fetchBoards();
+        }}
+      />
+      <CrossCampusMoveDialog
+        open={!!moveCardTarget}
+        onOpenChange={(o) => { if (!o) setMoveCardTarget(null); }}
+        kind="task"
+        record={moveCardTarget || {}}
+        currentBoardName={board?.name}
+        onMoved={(updated) => {
+          const fromListId = moveCardTarget?.list_id;
+          setMoveCardTarget(null);
+          // Optimistically remove the card from its current list — the
+          // task now belongs to a different board so it must disappear
+          // from this view. fetchBoardDetail runs after to reconcile.
+          if (fromListId && updated?.id) {
+            setTasks(prev => {
+              const next = { ...prev };
+              next[fromListId] = (next[fromListId] || []).filter(t => t.id !== updated.id);
+              return next;
+            });
+          }
+          fetchBoardDetail();
+        }}
+      />
 
       {/* Create Board Dialog */}
       <Dialog open={showNewBoard} onOpenChange={setShowNewBoard}>

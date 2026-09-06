@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download, Link2, ExternalLink, Clock, Play, Square } from 'lucide-react';
+import { Check, Trash2, Archive, AlignLeft, CheckSquare, Paperclip, Flag, Calendar, Users, Tag, ChevronRight, Upload, Eye, X, Download, Link2, ExternalLink, Clock, Play, Square, ArrowRightLeft } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 
 const LABEL_COLORS = ['#10b981','#f59e0b','#f97316','#ef4444','#8b5cf6','#3b82f6','#06b6d4','#84cc16','#ec4899','#6366f1'];
 
-export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, onArchive, onDelete, onMove }) {
+export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, onArchive, onDelete, onMove, onMoveToBoard }) {
   const [title, setTitle] = useState(card?.title || '');
   const [description, setDescription] = useState(card?.description || '');
   const [priority, setPriority] = useState(card?.priority || 'medium');
@@ -434,6 +434,12 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
               onClick={save} disabled={saving} data-testid="save-card-btn">
               <Check size={12} /> {saving ? 'Saving...' : 'Save Card'}
             </Button>
+            {onMoveToBoard && (
+              <Button size="sm" variant="ghost" className="w-full h-8 text-xs text-blue-300 hover:text-blue-200 hover:bg-blue-500/10 gap-1.5"
+                onClick={() => onMoveToBoard(card)} data-testid="card-move-to-board-btn">
+                <ArrowRightLeft size={12} /> Move to another board / campus
+              </Button>
+            )}
             <Button size="sm" variant="ghost" className="w-full h-8 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 gap-1.5"
               onClick={() => { save(); onArchive?.(card); }}>
               <Archive size={12} /> Archive Card

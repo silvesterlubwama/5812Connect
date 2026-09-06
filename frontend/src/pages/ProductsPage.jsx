@@ -26,6 +26,8 @@ import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
+import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
+import { ArrowRightLeft } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
@@ -57,6 +59,8 @@ export default function ProductsPage() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sales, setSales] = useState([]);
   const [locations, setLocations] = useState([]);
+  // Cross-campus move dialog (admin-only)
+  const [moveProduct, setMoveProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState([]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
@@ -1020,6 +1024,11 @@ export default function ProductsPage() {
                       <p className="font-semibold text-sm leading-tight flex-1">{p.name}</p>
                       <div className="flex gap-1 ml-2">
                         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openEditProduct(p)} data-testid="edit-product-btn"><Edit2 size={11} /></Button>
+                        {(user?.role === 'admin' || user?.role === 'system_admin') && (
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setMoveProduct(p)} data-testid="move-product-btn" title="Move to another campus">
+                            <ArrowRightLeft size={11} />
+                          </Button>
+                        )}
                         {p.has_variants && (p.variants || []).length > 0 && (
                           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setBarcodePrintProduct(p)} data-testid="print-variant-barcodes-btn" title="Print variant barcodes"><Printer size={11} /></Button>
                         )}
