@@ -7,6 +7,17 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 325)
+
+### iter 325 — Finance entry campus + department
+- Quick expense/income dialog on Finance → Overview now includes a
+  required **Campus / sub-location** picker and an optional
+  **Department** picker. Both auto-prefill from the current user
+  (`active_campus_id` / `department_ids[0]`) so the common case stays
+  one-click. Backend `/finance/transactions/expense` and `/income`
+  accept `department_id`, and `post_journal_entry` now persists it on
+  the JE doc so Dept P&L rollups pick it up automatically.
+
 ## Current status (as of iter 324)
 
 ### iter 324 — Reliability sweep (production redeploy required)

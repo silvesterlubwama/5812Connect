@@ -151,6 +151,7 @@ async def post_journal_entry(
     source: str,
     reference: Optional[str] = None,
     location_id: Optional[str] = None,
+    department_id: Optional[str] = None,
     created_by: Optional[str] = None,
     created_by_name: Optional[str] = None,
     idempotency_key: Optional[str] = None,
@@ -228,6 +229,10 @@ async def post_journal_entry(
         "lines": cleaned_lines,
         "total": float(total_debit),
         "location_id": location_id or "",
+        # iter-je-department: cost-centre tag so this JE rolls into the right
+        # Dept P&L card. Kept optional so legacy callers (payroll, sales,
+        # opening balances) keep working without changes.
+        "department_id": department_id or "",
         "reversed": False,
         "reverses_id": None,
         "idempotency_key": idempotency_key,

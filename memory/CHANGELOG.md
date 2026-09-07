@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## iter 325 — 2026-02 — Finance entry: campus + department fields (auto-prefill)
+
+### Backend
+- `post_journal_entry` (`routers/finance/_common.py`) now accepts
+  `department_id`. Persisted on `finance_journal_entries.department_id`
+  so Dept P&L rollups pick manual JEs up alongside expense allocations.
+- `/api/finance/transactions/expense` and `/income`
+  (`routers/finance/transactions.py`) both accept `department_id`
+  optional in the body and forward it to the JE.
+
+### Frontend
+- `QuickPostDialog` on `pages/FinancePage.jsx` gained two new fields:
+  required **Campus / sub-location** and optional **Department**.
+  Sub-locations for the picked campus are shown indented under it.
+  Departments refresh whenever the campus changes.
+- Both fields auto-prefill from the current user (`active_campus_id` +
+  first entry in `department_ids`). Small helper text shows
+  "Prefilled from your active campus / primary department" whenever
+  the current value matches the default so users know why it's set.
+- Verified end-to-end via curl: POST returns a JE with
+  `department_id` set; the value survives round-trip through
+  `/api/finance/journal`. Backend now returns 400 when `location_id`
+  is missing, matching the pre-existing enforcement.
+
 ## iter 324 — 2026-02 — Reliability sweep (React #31, task persistence, notifications, boards perf)
 
 ### React error #31 (`{name, color}` rendered as child)

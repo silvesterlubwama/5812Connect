@@ -33,7 +33,7 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
     """One-line expense entry — auto-posts to the ledger.
 
     Body: {amount, expense_account_id | expense_account_code, paid_from_account_id | paid_from_code,
-           date?, description?, location_id?, reference?}
+           date?, description?, location_id?, department_id?, reference?}
     """
     amount = float(data.get("amount") or 0)
     if amount <= 0:
@@ -41,6 +41,7 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
     location_id = (data.get("location_id") or "").strip()
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id is required — every entry must belong to a campus or sub-location")
+    department_id = (data.get("department_id") or "").strip() or None
     expense_acct = await _resolve_account(data.get("expense_account_id"), data.get("expense_account_code"))
     if expense_acct["type"] != "expense":
         raise HTTPException(status_code=400, detail=f"'{expense_acct['name']}' is not an expense account")
@@ -62,6 +63,7 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
         source="expense",
         reference=data.get("reference"),
         location_id=location_id,
+        department_id=department_id,
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )
@@ -73,7 +75,7 @@ async def record_income(data: dict, current_user: dict = Depends(require_staff))
     """One-line income entry (sponsor gift, donation, misc revenue).
 
     Body: {amount, revenue_account_id | revenue_account_code, deposited_to_account_id | deposited_to_code,
-           date?, description?, location_id (required), reference?}
+           date?, description?, location_id (required), department_id?, reference?}
     """
     amount = float(data.get("amount") or 0)
     if amount <= 0:
@@ -81,6 +83,7 @@ async def record_income(data: dict, current_user: dict = Depends(require_staff))
     location_id = (data.get("location_id") or "").strip()
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id is required — every entry must belong to a campus or sub-location")
+    department_id = (data.get("department_id") or "").strip() or None
     revenue_acct = await _resolve_account(data.get("revenue_account_id"), data.get("revenue_account_code"))
     if revenue_acct["type"] != "revenue":
         raise HTTPException(status_code=400, detail=f"'{revenue_acct['name']}' is not a revenue account")
@@ -102,6 +105,7 @@ async def record_income(data: dict, current_user: dict = Depends(require_staff))
         source="income",
         reference=data.get("reference"),
         location_id=location_id,
+        department_id=department_id,
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )

@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
-import { sublocationsApi } from '../services/api';
+import { sublocationsApi, departmentsApi, locationsApi } from '../services/api';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -491,20 +491,57 @@ function StatCard({ icon, label, value, testid, tone }) {
 }
 
 // ─── QUICK POST DIALOG (expense/income) ──────────────────────
+// iter-tx-scope: every JE must land on a campus (or sub-location) AND
+// optionally a department so Dept P&L rollups stay accurate. Both fields
+// are auto-prefilled from the current user (their active campus, then
+// their primary department) so the common case is zero-click.
 function QuickPostDialog({ mode, onClose, onDone }) {
+  const { user } = useAuth();
   const isExpense = mode === 'expense';
   const isIncome = mode === 'income';
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm] = useState({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '', reference: '' });
+  const [locations, setLocations] = useState([]);
+  const [subLocations, setSubLocations] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const defaultCampus = user?.active_campus_id || user?.location_id || '';
+  const defaultDept = (user?.department_ids || [])[0] || '';
+  const [form, setForm] = useState({
+    amount: '', account_id: '', paid_from_id: '', date: todayIso(),
+    description: '', reference: '',
+    location_id: defaultCampus, department_id: defaultDept,
+  });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!mode) return;
     (async () => {
-      const r = await api.get('/finance/chart-of-accounts');
-      setAccounts(r.data || []);
+      const [ac, lc] = await Promise.all([
+        api.get('/finance/chart-of-accounts'),
+        locationsApi.list().catch(() => ({ data: [] })),
+      ]);
+      setAccounts(ac.data || []);
+      setLocations((lc.data || []).filter(l => !l.parent_id));
     })().catch(() => {});
+    // Reset form to prefilled defaults whenever the dialog opens.
+    setForm({
+      amount: '', account_id: '', paid_from_id: '', date: todayIso(),
+      description: '', reference: '',
+      location_id: defaultCampus, department_id: defaultDept,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  // When campus changes, refetch its sub-locations + departments.
+  useEffect(() => {
+    if (!form.location_id) { setSubLocations([]); setDepartments([]); return; }
+    Promise.all([
+      sublocationsApi.list({ location_id: form.location_id }).catch(() => ({ data: [] })),
+      departmentsApi.list({ location_id: form.location_id }).catch(() => ({ data: [] })),
+    ]).then(([sl, dp]) => {
+      setSubLocations(sl.data || []);
+      setDepartments(dp.data || []);
+    });
+  }, [form.location_id]);
 
   const filterType = isExpense ? 'expense' : 'revenue';
   const primary = accounts.filter(a => a.type === filterType);
@@ -512,16 +549,27 @@ function QuickPostDialog({ mode, onClose, onDone }) {
 
   const submit = async () => {
     if (!form.amount || !form.account_id || !form.paid_from_id) { toast.error('Amount and both accounts are required'); return; }
+    if (!form.location_id) { toast.error('Pick a campus / sub-location'); return; }
     setBusy(true);
     try {
       const url = isExpense ? '/finance/transactions/expense' : '/finance/transactions/income';
+      const shared = {
+        amount: Number(form.amount), date: form.date,
+        description: form.description, reference: form.reference,
+        location_id: form.location_id,
+        department_id: form.department_id || undefined,
+      };
       const payload = isExpense
-        ? { amount: Number(form.amount), expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id, date: form.date, description: form.description, reference: form.reference }
-        : { amount: Number(form.amount), revenue_account_id: form.account_id, deposited_to_account_id: form.paid_from_id, date: form.date, description: form.description, reference: form.reference };
+        ? { ...shared, expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id }
+        : { ...shared, revenue_account_id: form.account_id, deposited_to_account_id: form.paid_from_id };
       await api.post(url, payload);
       toast.success(`${isExpense ? 'Expense' : 'Income'} recorded`);
       onDone();
-      setForm({ amount: '', account_id: '', paid_from_id: '', date: todayIso(), description: '', reference: '' });
+      setForm({
+        amount: '', account_id: '', paid_from_id: '', date: todayIso(),
+        description: '', reference: '',
+        location_id: defaultCampus, department_id: defaultDept,
+      });
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
     setBusy(false);
   };
@@ -533,6 +581,42 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         <div className="space-y-3">
           <div><Label>Amount</Label><Input data-testid="quick-post-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+
+          {/* Campus / sub-location — required, defaults to user's active campus */}
+          <div>
+            <Label>Campus / sub-location <span className="text-red-500">*</span></Label>
+            <Select value={form.location_id} onValueChange={v => setForm({ ...form, location_id: v, department_id: '' })}>
+              <SelectTrigger data-testid="quick-post-location"><SelectValue placeholder="Choose campus / sub-location" /></SelectTrigger>
+              <SelectContent>
+                {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                {subLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {defaultCampus === form.location_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your active campus</p>}
+          </div>
+
+          {/* Department — optional cost-centre tag */}
+          {departments.length > 0 && (
+            <div>
+              <Label>Department (optional)</Label>
+              <Select value={form.department_id || '_none'} onValueChange={v => setForm({ ...form, department_id: v === '_none' ? '' : v })}>
+                <SelectTrigger data-testid="quick-post-department"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">— No department —</SelectItem>
+                  {departments.map(d => (
+                    <SelectItem key={d.id} value={d.id}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {d.color && <span className="w-2 h-2 rounded-full inline-block" style={{ background: d.color }} />}
+                        {d.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {defaultDept && defaultDept === form.department_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your primary department</p>}
+            </div>
+          )}
+
           <div>
             <Label>{isExpense ? 'Expense account' : 'Revenue account'}</Label>
             <Select value={form.account_id} onValueChange={v => setForm({ ...form, account_id: v })}>
