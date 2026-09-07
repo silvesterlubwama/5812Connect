@@ -73,13 +73,20 @@ async def unsubscribe(current_user: dict = Depends(get_current_user)):
 # ─── In-app notification feed ────────────────────────────────
 
 @router.get("/notifications")
-async def list_notifications(current_user: dict = Depends(get_current_user)):
-    """Return the last 50 notifications visible to this user. Role-scoped
-    (`target_role`) with the user-specific `read` flag computed from `read_by`."""
+async def list_notifications(include_read: bool = False, current_user: dict = Depends(get_current_user)):
+    """Return notifications for this user. By default only unread ones are
+    returned so cleared/read notifications don't come back after re-login
+    or redeploy. Pass `?include_read=true` for the full history.
+
+    Role-scoped (`target_role`) with the user-specific `read` flag computed
+    from `read_by`.
+    """
     role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
-    notifs = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     user_id = current_user["id"]
+    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    if not include_read:
+        query["read_by"] = {"$ne": user_id}
+    notifs = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     for n in notifs:
         n["read"] = user_id in n.get("read_by", [])
     return notifs

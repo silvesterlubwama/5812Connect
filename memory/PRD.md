@@ -7,6 +7,26 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 324)
+
+### iter 324 — Reliability sweep (production redeploy required)
+- **React error #31 on boards** — `CardDetailDialog` & `KanbanCard` label
+  rendering safely handles both legacy string colours and `{name, color}`
+  objects (was rendering the object as a React child).
+- **Tasks disappearing after creation** — removed the 300 ms `setTimeout`
+  refetch in `TasksPage.addCard` that raced with the optimistic swap.
+- **Tasks missing from calendar** — `CalendarPage` default `taskScope`
+  changed from `mine` to `campus` so a due date is enough to see the
+  task without needing to be assigned.
+- **Cleared notifications returning after re-login / redeploy** —
+  `GET /api/notifications` now filters out anything the user has read
+  by default (pass `?include_read=true` for the full history).
+- **Admin/Boards timeouts** — `GET /api/boards` no longer does N+1
+  `count_documents` per board; two aggregation pipelines replace 2×N
+  round-trips.
+- **Legacy `FinancialPage.jsx` deleted** — Finance surface is now
+  exclusively `FinancePage.jsx`.
+
 ## Current status (as of iter 323)
 
 ### iter 323 — Sub-location budget UI + Dept P&L drill-down

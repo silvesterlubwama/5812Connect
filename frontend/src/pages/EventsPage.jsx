@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign, Download, Ticket } from 'lucide-react';
+import { Plus, Calendar, Clock, MapPin, Users, Search, Trash2, Eye, RefreshCw, Copy, Lock, Globe, Tag, DollarSign, Download, Ticket, ArrowRightLeft } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -13,6 +13,7 @@ import { eventsApi, checkinsApi, locationsApi, venuesApi, locationVenuesApi } fr
 import api from '../services/api';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
 import { useAuth } from '../context/AuthContext';
+import CrossCampusMoveDialog from '../components/CrossCampusMoveDialog';
 import { toast } from 'sonner';
 
 const statusColors = { upcoming: 'bg-blue-100 text-blue-700 border-blue-200', completed: 'bg-green-100 text-green-700 border-green-200', cancelled: 'bg-red-100 text-red-700 border-red-200' };

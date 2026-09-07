@@ -139,10 +139,21 @@ async def list_boards(current_user: dict = Depends(get_current_user)):
         else:
             boards.append(b)
 
-    # Enrich with counts
-    for b in boards:
-        b["list_count"] = await db.board_lists.count_documents({"board_id": b["id"]})
-        b["card_count"] = await db.tasks.count_documents({"board_id": b["id"], "is_archived": {"$ne": True}})
+    # Enrich with counts — batched to avoid N+1 timeouts on Admin/Boards
+    # pages with many boards. Two aggregations instead of 2×N queries.
+    board_ids = [b["id"] for b in boards]
+    if board_ids:
+        list_counts = {r["_id"]: r["count"] async for r in db.board_lists.aggregate([
+            {"$match": {"board_id": {"$in": board_ids}}},
+            {"$group": {"_id": "$board_id", "count": {"$sum": 1}}},
+        ])}
+        card_counts = {r["_id"]: r["count"] async for r in db.tasks.aggregate([
+            {"$match": {"board_id": {"$in": board_ids}, "is_archived": {"$ne": True}}},
+            {"$group": {"_id": "$board_id", "count": {"$sum": 1}}},
+        ])}
+        for b in boards:
+            b["list_count"] = list_counts.get(b["id"], 0)
+            b["card_count"] = card_counts.get(b["id"], 0)
     return boards
 
 

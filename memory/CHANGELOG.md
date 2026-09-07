@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## iter 324 — 2026-02 — Reliability sweep (React #31, task persistence, notifications, boards perf)
+
+### React error #31 (`{name, color}` rendered as child)
+- Fixed label rendering in `pages/kanban/CardDetailDialog.jsx` and
+  `pages/kanban/KanbanCard.jsx` — a label can be either a legacy string
+  colour (`"#3b82f6"`) or the newer `{name, color}` object. The old
+  `{lbl.name || lbl}` fallback rendered the object when `name` was an
+  empty string (the shape produced by toggling a colour without typing
+  a name), which is what triggered the crash on production /boards.
+
+### Tasks disappearing after creation
+- `TasksPage.addCard` used to schedule `setTimeout(() =>
+  fetchBoardDetail(), 300)` after POST. That refetch raced against the
+  local optimistic swap and, in most attempts, wiped the just-added
+  card off the UI. Removed the delayed refetch — server response is
+  already merged into state.
+
+### Calendar
+- Default `taskScope` in `CalendarPage.jsx` changed from `'mine'` to
+  `'campus'` so tasks with a due date show up without the user having
+  to be in `assignees` / `created_by`. Users can still toggle back.
+
+### Notifications persistence
+- `GET /api/notifications` now defaults to unread-only. Explicit
+  `?include_read=true` reveals the full history. Cleared notifications
+  no longer resurface after re-login or redeploy.
+
+### Admin/Boards page timeouts
+- `GET /api/boards` was doing N+1 `count_documents` calls (one for
+  lists, one for cards, per board). Replaced with two
+  `aggregate($group)` pipelines so latency is O(1) round-trips rather
+  than O(N).
+
+### Cleanup
+- Deleted the unreached legacy `FinancialPage.jsx`; `FinancePage.jsx`
+  is now the single Finance surface.
+
 ## iter 323 — 2026-02 — Sub-location budget UI + Dept P&L drill-down
 
 ### Sub-location budget UI (last-working-item P0)
