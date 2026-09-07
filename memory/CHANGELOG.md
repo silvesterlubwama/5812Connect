@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## iter 326 — 2026-02 — COA bulk import + Fair Alerts wipe
+
+### Chart of Accounts — CSV / XLSX bulk import
+- **Backend**: `POST /api/finance/chart-of-accounts/bulk-import` accepts
+  `{accounts: [{code, name, type, bank_subtype?, is_cash?}]}` and returns
+  `{created_count, skipped_count, invalid_count, created, skipped, invalid}`.
+  Existing codes (in the DB or duplicated within the payload) are skipped
+  so re-uploading the same file is safe. Max 500 rows per request.
+- **Frontend**: `CoaImportDialog` on the CoA panel parses `.csv` via
+  `papaparse` and `.xlsx` via `xlsx` client-side, normalises header casing,
+  previews up to 200 rows in a table, then POSTs to the bulk endpoint.
+  Shows a diff-style result summary with expandable "invalid" and
+  "skipped" details. Ships with a "Download template" button.
+- Verified via curl: 3/4 rows created on first upload, all 2 skipped on
+  re-upload (idempotency confirmed).
+
+### Fair Alerts feature wiped
+- Deleted `backend/routers/fare_alerts.py` and `frontend/src/pages/FareAlertsPage.jsx`.
+- Removed `_run_fare_alerts_loop` from `scheduler.py` and its `create_task`
+  in `server.py` startup.
+- Removed `fare_alerts` collection indexes from `db_indexes.py`.
+- Removed `/fare-alerts` route from `App.js` and the sidebar entry from
+  `Layout.jsx` (both nav item and route-guard rule).
+
 ## iter 325 — 2026-02 — Finance entry: campus + department fields (auto-prefill)
 
 ### Backend

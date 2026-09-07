@@ -744,34 +744,9 @@ async def _fire_birthday_anniversary_notifications():
         logger.error(f"Birthday/anniversary fire error: {e}")
 
 
-async def _run_fare_alerts_loop():
-    """Once per 24h, iterate active fare alerts and re-check via AI. Emails
-    on drop-to-target are handled inside _check_single_alert."""
-    await asyncio.sleep(90)  # let startup + seeding finish
-    while True:
-        try:
-            from routers.fare_alerts import _check_single_alert
-            n_checked = 0
-            n_triggered = 0
-            async for a in db.fare_alerts.find({"active": True}, {"_id": 0}):
-                # Skip alerts whose date has already passed
-                try:
-                    if a.get("date") and datetime.fromisoformat(a["date"]).date() < datetime.now(timezone.utc).date():
-                        continue
-                except Exception:
-                    pass
-                try:
-                    r = await _check_single_alert(a)
-                    n_checked += 1
-                    if r.get("triggered"):
-                        n_triggered += 1
-                except Exception as ex:
-                    logger.warning(f"Fare alert {a.get('id')} check failed: {ex}")
-            if n_checked:
-                logger.info(f"Fare-alert cycle: checked {n_checked}, triggered {n_triggered}")
-        except Exception as ex:
-            logger.warning(f"Fare-alert loop error: {ex}")
-        await asyncio.sleep(24 * 3600)  # 24h
+async def _run_flight_status_refresh_loop_placeholder():
+    """Retired — fare-alerts feature was wiped in iter 326."""
+    return
 
 
 async def _run_flight_status_refresh_loop():

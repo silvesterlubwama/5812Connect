@@ -141,9 +141,6 @@ async def _ensure_indexes():
         # Auto-posted journal entry lookup by source (donation/expense delete cascade)
         await db.accounting_entries.create_index([("auto_generated_from", 1), ("source_id", 1)])
         await db.accounting_entries.create_index([("status", 1), ("is_reversed", 1)])
-        # iter227 — fare alert lookup + passenger portal token lookup
-        await db.fare_alerts.create_index("created_by")
-        await db.fare_alerts.create_index([("active", 1), ("date", 1)])
         await db.shipments.create_index("passengers.portal_token")
         # ===== iter296 — unified finance ledger + AP/AR hot-path indexes =====
         # `finance_journal_entries` is queried by:

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import api from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -10,10 +10,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
 import { sublocationsApi, departmentsApi, locationsApi } from '../services/api';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -956,6 +958,7 @@ function CoaPanel() {
   const [addOpen, setAddOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
   const [obRow, setObRow] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [obForm, setObForm] = useState({ amount: '', date: todayIso(), memo: '' });
   const [form, setForm] = useState({ code: '', name: '', type: 'expense', bank_subtype: '' });
   const reload = async () => {
@@ -1030,7 +1033,10 @@ function CoaPanel() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Chart of Accounts</CardTitle>
-        <Button size="sm" onClick={() => setAddOpen(true)} data-testid="coa-add"><Plus size={14} className="mr-1" />Add account</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)} data-testid="coa-import-btn"><Upload size={14} className="mr-1" />Import CSV/XLSX</Button>
+          <Button size="sm" onClick={() => setAddOpen(true)} data-testid="coa-add"><Plus size={14} className="mr-1" />Add account</Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto -mx-4 md:mx-0">
@@ -1151,7 +1157,148 @@ function CoaPanel() {
           <DialogFooter><Button variant="outline" onClick={() => setObRow(null)}>Cancel</Button><Button onClick={submitOpeningBalance} data-testid="coa-ob-submit">Post</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Bulk import (CSV / XLSX) */}
+      <CoaImportDialog open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); reload(); }} />
     </Card>
+  );
+}
+
+// iter-coa-import: CSV/XLSX bulk import. Header row is inspected
+// case-insensitively for `code`, `name`, `type`, `bank_subtype`. Rows are
+// posted to /finance/chart-of-accounts/bulk-import which skips any code
+// that already exists so re-uploading the same file is safe.
+function CoaImportDialog({ open, onClose, onDone }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState([]);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) { setFile(null); setPreview([]); setResult(null); }
+  }, [open]);
+
+  const normalize = (raw) => (raw || []).map(r => {
+    const low = Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k).trim().toLowerCase(), v]));
+    return {
+      code: String(low.code || '').trim(),
+      name: String(low.name || '').trim(),
+      type: String(low.type || '').trim().toLowerCase(),
+      bank_subtype: String(low.bank_subtype || low['bank subtype'] || '').trim().toLowerCase(),
+    };
+  }).filter(r => r.code || r.name);
+
+  const parseFile = (f) => {
+    setFile(f); setPreview([]); setResult(null);
+    if (!f) return;
+    const ext = (f.name || '').toLowerCase().split('.').pop();
+    if (ext === 'csv') {
+      Papa.parse(f, {
+        header: true, skipEmptyLines: true,
+        complete: (res) => setPreview(normalize(res.data)),
+        error: (e) => toast.error(`CSV parse failed: ${e.message}`),
+      });
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const wb = XLSX.read(ev.target.result, { type: 'array' });
+          const sheet = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+          setPreview(normalize(json));
+        } catch (e) { toast.error(`XLSX parse failed: ${e.message}`); }
+      };
+      reader.readAsArrayBuffer(f);
+    } else {
+      toast.error('Upload a .csv or .xlsx file');
+    }
+  };
+
+  const submit = async () => {
+    if (!preview.length) { toast.error('Nothing to import'); return; }
+    setBusy(true);
+    try {
+      const r = await api.post('/finance/chart-of-accounts/bulk-import', { accounts: preview });
+      setResult(r.data);
+      const c = r.data.created_count, s = r.data.skipped_count, i = r.data.invalid_count;
+      toast.success(`Imported ${c} · skipped ${s} · invalid ${i}`);
+      if (c > 0) onDone();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Import failed'); }
+    setBusy(false);
+  };
+
+  const downloadTemplate = () => {
+    const csv = 'code,name,type,bank_subtype\n5100,Rent Expense,expense,\n5200,Utilities,expense,\n1020,Stanbic Checking,asset,checking\n';
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'chart-of-accounts-template.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl" data-testid="coa-import-dialog">
+        <DialogHeader><DialogTitle>Import Chart of Accounts</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Upload a <strong>.csv</strong> or <strong>.xlsx</strong> file with columns
+            <code className="mx-1">code</code>, <code>name</code>, <code>type</code>, and optional <code>bank_subtype</code>.
+            Existing codes are skipped so re-uploading the same file is safe.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={e => parseFile(e.target.files?.[0])} data-testid="coa-import-file" className="text-xs" />
+            <Button variant="ghost" size="sm" onClick={downloadTemplate} data-testid="coa-import-template">
+              <Download size={12} className="mr-1" />Template
+            </Button>
+          </div>
+          {preview.length > 0 && !result && (
+            <div className="border rounded max-h-64 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50 sticky top-0"><tr>
+                  <th className="p-2 text-left">Code</th><th className="p-2 text-left">Name</th>
+                  <th className="p-2 text-left">Type</th><th className="p-2 text-left">Bank subtype</th>
+                </tr></thead>
+                <tbody>
+                  {preview.slice(0, 200).map((r, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="p-1.5 font-mono">{r.code}</td>
+                      <td className="p-1.5">{r.name}</td>
+                      <td className="p-1.5">{r.type}</td>
+                      <td className="p-1.5 text-muted-foreground">{r.bank_subtype || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {preview.length > 200 && <p className="p-2 text-[10px] text-muted-foreground">Preview capped at 200 rows — {preview.length - 200} more will still be imported.</p>}
+            </div>
+          )}
+          {result && (
+            <div className="border rounded p-2 space-y-1.5 text-xs" data-testid="coa-import-result">
+              <p className="font-semibold">Import complete</p>
+              <p>✓ <strong>{result.created_count}</strong> created · ⏭ <strong>{result.skipped_count}</strong> skipped (code exists) · ✗ <strong>{result.invalid_count}</strong> invalid</p>
+              {result.invalid?.length > 0 && (
+                <details><summary className="cursor-pointer text-red-700">Invalid rows</summary>
+                  <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                    {result.invalid.slice(0, 20).map((r, i) => <li key={i}>Row {r.row} ({r.code || '—'}): {r.reason}</li>)}
+                  </ul>
+                </details>
+              )}
+              {result.skipped?.length > 0 && (
+                <details><summary className="cursor-pointer text-amber-700">Skipped rows</summary>
+                  <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                    {result.skipped.slice(0, 20).map((r, i) => <li key={i}>Row {r.row} — code {r.code}: {r.reason}</li>)}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>{result ? 'Done' : 'Cancel'}</Button>
+          {!result && <Button onClick={submit} disabled={busy || !preview.length} data-testid="coa-import-submit">{busy ? 'Importing…' : `Import ${preview.length || ''}`}</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

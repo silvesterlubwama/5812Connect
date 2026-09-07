@@ -412,7 +412,6 @@ try:
     from routers.funds import router as funds_router
     from routers.social_review_forms import router as social_review_forms_router
     from routers.shipments_pkg import router as shipments_router
-    from routers.fare_alerts import router as fare_alerts_router
     from routers.security_companies import router as security_companies_router
     from routers.departments import router as departments_router
     from routers.reports_departments import router as reports_departments_router
@@ -440,7 +439,6 @@ try:
     app.include_router(funds_router)
     app.include_router(social_review_forms_router)
     app.include_router(shipments_router)
-    app.include_router(fare_alerts_router)
     app.include_router(security_companies_router)
 
     # iter303 — endpoint blocks extracted from server.py
@@ -472,7 +470,6 @@ from scheduler import (
     _fire_payday_payslip_generation,
     _fire_overdue_payment_reminders,
     _fire_birthday_anniversary_notifications,
-    _run_fare_alerts_loop,
     _run_flight_status_refresh_loop,
 )
 from db_indexes import _ensure_indexes
@@ -526,8 +523,6 @@ async def startup():
     asyncio.create_task(_run_due_date_reminder_scheduler())
     # iter226 — every 15 min refresh flight status for departed/shipped shipments
     asyncio.create_task(_run_flight_status_refresh_loop())
-    # iter227 — daily fare-alert check
-    asyncio.create_task(_run_fare_alerts_loop())
     # Defer heavy seeding so the app becomes ready immediately
     asyncio.create_task(_seed_initial_data())
 

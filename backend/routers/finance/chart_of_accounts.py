@@ -61,6 +61,62 @@ async def create_account(data: dict, current_user: dict = Depends(require_direct
     return doc
 
 
+@router.post("/bulk-import")
+async def bulk_import_accounts(data: dict, current_user: dict = Depends(require_director)):
+    """Bulk-import a list of accounts. Skips any row whose `code` already
+    exists so re-uploading a spreadsheet mid-cleanup is safe. Returns
+    `{created, skipped, invalid}` counts + the created accounts + the
+    per-row reasons for anything skipped/invalid so the client can show
+    a diff-style summary.
+
+    Body: `{accounts: [{code, name, type, bank_subtype?, is_cash?}]}`.
+    """
+    rows = data.get("accounts") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="accounts must be a non-empty array")
+    if len(rows) > 500:
+        raise HTTPException(status_code=400, detail="Max 500 rows per import — split the file")
+
+    existing_codes = {a["code"] async for a in db.finance_chart_of_accounts.find({}, {"_id": 0, "code": 1})}
+    created: list = []
+    skipped: list = []
+    invalid: list = []
+    seen_in_batch: set = set()
+
+    for i, r in enumerate(rows):
+        code = str(r.get("code") or "").strip()
+        name = str(r.get("name") or "").strip()
+        acct_type = str(r.get("type") or "").strip().lower()
+        if not code or not name:
+            invalid.append({"row": i + 1, "reason": "code and name required", "code": code})
+            continue
+        if acct_type not in ACCOUNT_TYPES:
+            invalid.append({"row": i + 1, "reason": f"invalid type '{acct_type}'", "code": code})
+            continue
+        if code in existing_codes or code in seen_in_batch:
+            skipped.append({"row": i + 1, "reason": "code already exists", "code": code})
+            continue
+        seen_in_batch.add(code)
+        bank_subtype = (str(r.get("bank_subtype") or "").strip().lower() or None)
+        doc = {
+            "id": f"acc_{uuid.uuid4().hex[:10]}",
+            "code": code, "name": name, "type": acct_type,
+            "is_cash": bool(r.get("is_cash") or bank_subtype),
+            "bank_subtype": bank_subtype,
+            "is_system": False, "active": True,
+            "created_at": _now(), "created_by": current_user["id"],
+            "imported": True,
+        }
+        await db.finance_chart_of_accounts.insert_one(doc)
+        doc.pop("_id", None)
+        created.append(doc)
+
+    return {
+        "created_count": len(created), "skipped_count": len(skipped), "invalid_count": len(invalid),
+        "created": created, "skipped": skipped, "invalid": invalid,
+    }
+
+
 @router.put("/{account_id}")
 async def update_account(account_id: str, data: dict, current_user: dict = Depends(require_director)):
     acct = await db.finance_chart_of_accounts.find_one({"id": account_id}, {"_id": 0})

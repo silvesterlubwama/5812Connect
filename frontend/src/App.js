@@ -30,7 +30,6 @@ import SettingsPage from './pages/SettingsPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import FundsPage from './pages/FundsPage';
 const ShipmentsAdminPage = lazy(() => import('./pages/ShipmentsAdminPage'));
-const FareAlertsPage = lazy(() => import('./pages/FareAlertsPage'));
 const PassengerPortalPage = lazy(() => import('./pages/PassengerPortalPage'));
 const PublicCalendarPage = lazy(() => import('./pages/PublicCalendarPage'));
 const VoipAdminPage = lazy(() => import('./pages/VoipAdminPage'));
@@ -169,7 +168,6 @@ function AppRoutes() {
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="funds" element={<FundsPage />} />
         <Route path="shipments" element={<ShipmentsAdminPage />} />
-        <Route path="fare-alerts" element={<FareAlertsPage />} />
         <Route path="social-work" element={<SocialWorkPage />} />
         <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />

@@ -7,6 +7,21 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 326)
+
+### iter 326 — COA bulk import + Fair Alerts wipe
+- **COA bulk import**: New `POST /api/finance/chart-of-accounts/bulk-import`
+  accepts an array of `{code, name, type, bank_subtype?, is_cash?}` and
+  returns `{created, skipped, invalid}` counts + per-row reasons.
+  Existing codes are skipped so re-uploading the same file is safe.
+- **CoA panel** gained an "Import CSV/XLSX" button that opens a dialog
+  parsing files client-side via `papaparse` (CSV) and `xlsx` (XLSX),
+  previews rows, and calls the bulk endpoint. Includes a "Download
+  template" button.
+- **Fair Alerts wiped**: `routers/fare_alerts.py`, `pages/FareAlertsPage.jsx`,
+  scheduler loop, indexes, App.js route, and Layout sidebar entry all
+  removed.
+
 ## Current status (as of iter 325)
 
 ### iter 325 — Finance entry campus + department
