@@ -7,6 +7,36 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 336)
+
+### iter 336 — Per-salary wage types (hourly / daily / weekly / biweekly / monthly)
+- Everyone still gets paid on the same campus schedule, but each
+  salary record now carries a `wage_type` that changes how the base
+  amount is interpreted. New helper `_compute_base_gross` in
+  `backend/routers/hr.py`:
+  * `salary` / `monthly`  → monthly_base × pay_frequency proration (existing).
+  * `daily`   → daily_rate × days_worked (falls back to working days).
+  * `hourly`  → hourly_rate × hours_worked (falls back to days × 8h).
+  * `weekly`  → weekly_rate × (period_days / 7).
+  * `biweekly`→ biweekly_rate × (period_days / 14).
+- User's canonical case now works: **60,000 UGX daily × 10 working
+  days in a biweekly period → 600,000 UGX payslip**.
+- Unpaid-leave and days-worked proration blocks are automatically
+  skipped when wage_type ∈ {daily, hourly}, since base_gross already
+  reflects the units worked (prevents double-deduction).
+- The Salary form gains a Rate Type picker (Monthly Salary / Hourly /
+  Daily / Weekly / Biweekly) plus a contextual helper line explaining
+  how the number is applied. The label auto-updates ("Hourly Rate *",
+  "Daily Rate *", etc.) and Pay Frequency clarifies it's independent.
+- Preview + generate endpoints report `wage_type` and a human
+  `wage_details` string (e.g. `60,000 × 10 days`) surfaced under the
+  gross column in the Preview dialog.
+- Existing salary records default to `wage_type: "salary"` and behave
+  exactly as before — zero regression path.
+- Tests: `backend/tests/test_iter336_wage_types.py` covers all five
+  wage types (including the exact 60k×10=600k user scenario) plus a
+  live preview integration check.
+
 ## Current status (as of iter 335)
 
 ### iter 335 — Payroll Preview · Anchor Nudge · PDF coverage line

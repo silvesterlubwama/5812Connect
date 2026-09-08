@@ -47,7 +47,7 @@ export default function HRPage() {
   const [showDocReq, setShowDocReq] = useState(false);
   const [showIssueContract, setShowIssueContract] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [], department_ids: [], department_splits: [] });
+  const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', wage_type: 'salary', line_items: [], department_ids: [], department_splits: [] });
   // iter-departments: list of departments visible in the current campus, used
   // by the salary form's multi-department picker + funding-splits editor.
   const [availableDepartments, setAvailableDepartments] = useState([]);
@@ -158,6 +158,11 @@ export default function HRPage() {
           base_salary: parseFloat(salaryForm.base_salary),
           currency: salaryForm.currency,
           pay_frequency: salaryForm.pay_frequency,
+          wage_type: salaryForm.wage_type || 'salary',
+          hourly_rate: salaryForm.wage_type === 'hourly' ? parseFloat(salaryForm.base_salary) : 0,
+          daily_rate: salaryForm.wage_type === 'daily' ? parseFloat(salaryForm.base_salary) : 0,
+          weekly_rate: salaryForm.wage_type === 'weekly' ? parseFloat(salaryForm.base_salary) : 0,
+          biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
           line_items: salaryForm.line_items,
           department_ids: salaryForm.department_ids || [],
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
@@ -169,6 +174,11 @@ export default function HRPage() {
         const res = await api.post('/hr/salaries', {
           ...salaryForm,
           base_salary: parseFloat(salaryForm.base_salary),
+          wage_type: salaryForm.wage_type || 'salary',
+          hourly_rate: salaryForm.wage_type === 'hourly' ? parseFloat(salaryForm.base_salary) : 0,
+          daily_rate: salaryForm.wage_type === 'daily' ? parseFloat(salaryForm.base_salary) : 0,
+          weekly_rate: salaryForm.wage_type === 'weekly' ? parseFloat(salaryForm.base_salary) : 0,
+          biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
           location_id: activeCampus,
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
         });
@@ -188,7 +198,8 @@ export default function HRPage() {
     setEditReason('');
     setSalaryForm({
       staff_id: s.staff_id || '',
-      base_salary: String(s.base_salary || ''),
+      base_salary: String(s.base_salary || s.hourly_rate || s.daily_rate || s.weekly_rate || s.biweekly_rate || ''),
+      wage_type: s.wage_type || 'salary',
       currency: s.currency || 'UGX',
       pay_frequency: s.pay_frequency || 'monthly',
       line_items: s.line_items || [],
@@ -638,7 +649,27 @@ export default function HRPage() {
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Base Salary *</Label><Input type="number" value={salaryForm.base_salary} onChange={e => setSalaryForm({...salaryForm, base_salary: e.target.value})} /></div>
+              <div className="space-y-1.5">
+                <Label>{(() => {
+                  const wt = salaryForm.wage_type || 'salary';
+                  if (wt === 'hourly') return 'Hourly Rate *';
+                  if (wt === 'daily') return 'Daily Rate *';
+                  if (wt === 'weekly') return 'Weekly Rate *';
+                  if (wt === 'biweekly') return 'Biweekly Rate *';
+                  return 'Monthly Salary *';
+                })()}</Label>
+                <Input type="number" value={salaryForm.base_salary} onChange={e => setSalaryForm({...salaryForm, base_salary: e.target.value})} data-testid="salary-base-input" />
+                <p className="text-[10px] text-muted-foreground">
+                  {(() => {
+                    const wt = salaryForm.wage_type || 'salary';
+                    if (wt === 'hourly') return 'Paid per hour worked. Payslip = rate × hours worked in the period.';
+                    if (wt === 'daily') return 'Paid per day worked. E.g. 60,000/day × 10 working days = 600,000 per biweekly payslip.';
+                    if (wt === 'weekly') return 'Fixed weekly rate. Biweekly period pays 2 weeks; monthly period pays ~4.33 weeks.';
+                    if (wt === 'biweekly') return 'Fixed biweekly rate. Paid once per biweekly period; monthly pays ~2.17 biweekly cheques.';
+                    return 'Fixed monthly salary. Biweekly period pays 12/26; weekly pays 12/52.';
+                  })()}
+                </p>
+              </div>
               <div className="space-y-1.5"><Label>Currency</Label>
                 <Select value={salaryForm.currency} onValueChange={v => setSalaryForm({...salaryForm, currency: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -646,11 +677,26 @@ export default function HRPage() {
                 </Select>
               </div>
             </div>
-            <div className="space-y-1.5"><Label>Pay Frequency</Label>
-              <Select value={salaryForm.pay_frequency} onValueChange={v => setSalaryForm({...salaryForm, pay_frequency: v})}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Rate Type</Label>
+                <Select value={salaryForm.wage_type || 'salary'} onValueChange={v => setSalaryForm({...salaryForm, wage_type: v})}>
+                  <SelectTrigger data-testid="salary-wage-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="salary">Monthly Salary</SelectItem>
+                    <SelectItem value="hourly">Hourly</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label>Pay Frequency</Label>
+                <Select value={salaryForm.pay_frequency} onValueChange={v => setSalaryForm({...salaryForm, pay_frequency: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">How often this staff member is actually paid — independent of Rate Type.</p>
+              </div>
             </div>
             {/* Line Items */}
             <div className="space-y-2">
@@ -983,7 +1029,12 @@ export default function HRPage() {
                         <tr key={r.staff_id} className={r.already_generated ? 'opacity-50' : ''} data-testid={`preview-row-${r.staff_id}`}>
                           <td className="px-2 py-1.5">{r.staff_name}</td>
                           <td className="px-2 py-1.5 hidden sm:table-cell text-muted-foreground">{r.department || '—'}</td>
-                          <td className="px-2 py-1.5 text-right">{r.currency} {r.gross.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            {r.currency} {r.gross.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            {r.wage_details && (
+                              <div className="text-[10px] text-muted-foreground font-normal">{r.wage_details}</div>
+                            )}
+                          </td>
                           <td className="px-2 py-1.5 text-right hidden sm:table-cell text-emerald-700">+{r.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right hidden sm:table-cell text-amber-700">-{r.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right font-semibold">{r.currency} {r.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>

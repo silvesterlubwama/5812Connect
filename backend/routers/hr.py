@@ -113,6 +113,98 @@ def _period_label(pay_frequency: str, payday: dt_date) -> str:
     return payday.strftime("%Y-%m")
 
 
+def _period_span_days(period: str) -> int:
+    """Return the calendar-day length of a period string.
+    - Biweekly/weekly windows (`YYYY-MM-DD_YYYY-MM-DD ...`) → parsed span.
+    - Monthly (`YYYY-MM`) → days in the month.
+    - Fallback → 30.
+    """
+    import re as _re
+    m = _re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", period or "")
+    if m:
+        try:
+            s = dt_date.fromisoformat(m.group(1))
+            e = dt_date.fromisoformat(m.group(2))
+            return max(1, (e - s).days + 1)
+        except Exception:
+            return 14
+    if _re.match(r"^\d{4}-\d{2}$", period or ""):
+        try:
+            y, mo = period.split("-")
+            first = dt_date(int(y), int(mo), 1)
+            nxt = dt_date(int(y) + (1 if int(mo) == 12 else 0),
+                          1 if int(mo) == 12 else int(mo) + 1, 1)
+            return (nxt - first).days
+        except Exception:
+            return 30
+    return 30
+
+
+def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: Optional[float], hours_worked: Optional[float]) -> tuple[float, str]:
+    """Iter 336 — compute a payslip's BASE gross based on the salary's
+    `wage_type`. Returns (gross, details_string) where details is a human
+    breakdown like "60,000 × 10 days".
+
+    Wage types
+    ----------
+    - salary / monthly → monthly_base × pay_frequency_proration (existing)
+    - daily            → daily_rate × days_worked (falls back to working_days)
+    - hourly           → hourly_rate × hours_worked (falls back to
+                         days_worked×8h then working_days×8h)
+    - weekly           → weekly_rate × (period_span_days / 7)
+    - biweekly         → biweekly_rate × (period_span_days / 14)
+
+    Rate resolution: the pre-existing `hourly_rate` / `daily_rate` fields
+    are honoured. `weekly_rate` / `biweekly_rate` fall back to
+    `base_salary` when the type-specific field is 0/absent so admins can
+    just tweak `wage_type` on an existing record without re-entering the
+    number.
+    """
+    wage_type = (sal.get("wage_type") or "salary").lower()
+    monthly_base = float(sal.get("base_salary", 0) or 0)
+    period_days = _period_span_days(period)
+    weeks_in_period = period_days / 7.0
+
+    if wage_type == "daily":
+        rate = float(sal.get("daily_rate") or 0) or monthly_base
+        # Use days_worked when known, else the working days in this period.
+        # working_days is 0 for windows without an approved timesheet fallback;
+        # pick a sensible ceiling so daily rates never look zeroed out.
+        days = days_worked if days_worked is not None else (working_days or round(period_days * 5 / 7))
+        gross = round(rate * float(days), 2)
+        return gross, f"{rate:,.0f} × {float(days):g} days"
+
+    if wage_type == "hourly":
+        rate = float(sal.get("hourly_rate") or 0) or monthly_base
+        if hours_worked is not None:
+            hrs = float(hours_worked)
+            src = "hours worked"
+        elif days_worked is not None:
+            hrs = float(days_worked) * 8.0
+            src = f"{float(days_worked):g} days × 8h"
+        else:
+            hrs = float(working_days or round(period_days * 5 / 7)) * 8.0
+            src = f"{working_days} days × 8h"
+        gross = round(rate * hrs, 2)
+        return gross, f"{rate:,.0f} × {hrs:g}h ({src})"
+
+    if wage_type == "weekly":
+        rate = float(sal.get("weekly_rate") or 0) or monthly_base
+        gross = round(rate * weeks_in_period, 2)
+        return gross, f"{rate:,.0f} × {weeks_in_period:g} wk"
+
+    if wage_type == "biweekly":
+        rate = float(sal.get("biweekly_rate") or 0) or monthly_base
+        gross = round(rate * (weeks_in_period / 2.0), 2)
+        return gross, f"{rate:,.0f} × {weeks_in_period / 2:g} bi-wk"
+
+    # Default: monthly-salary wage type — scale by pay_frequency proration.
+    is_multi_pay = _period_is_multi_pay(period)
+    factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
+    gross = round(monthly_base * factor, 2)
+    return gross, f"{monthly_base:,.0f} × {factor:.4f}"
+
+
 def _proration_factor(pay_frequency: str) -> float:
     """Multiplier to convert a monthly base_salary into one payslip's gross.
 
@@ -331,6 +423,8 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "wage_type": wage_type,
         "hourly_rate": float(data.get("hourly_rate") or 0),
         "daily_rate": float(data.get("daily_rate") or 0),
+        "weekly_rate": float(data.get("weekly_rate") or 0),
+        "biweekly_rate": float(data.get("biweekly_rate") or 0),
         "currency": data.get("currency", "UGX"),
         "pay_frequency": data.get("pay_frequency", "monthly"),
         "effective_date": data.get("effective_date", datetime.now(timezone.utc).isoformat()[:10]),
@@ -358,7 +452,9 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
         raise HTTPException(status_code=404, detail="Salary not found")
     allowed = {"base_salary", "currency", "pay_frequency", "effective_date", "line_items", "status",
                # iter-departments: allow retagging & re-splitting on edit.
-               "department_ids", "department_splits"}
+               "department_ids", "department_splits",
+               # iter 336: allow wage_type + type-specific rate edits.
+               "wage_type", "hourly_rate", "daily_rate", "weekly_rate", "biweekly_rate"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "department_splits" in update and update["department_splits"]:
         total_pct = sum(float(s.get("pct") or 0) for s in update["department_splits"])
@@ -601,21 +697,23 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             existing_count += 1
 
         monthly_base = float(sal.get("base_salary", 0) or 0)
-        factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
-        base_gross = round(monthly_base * factor, 2)
-
+        wage_type = (sal.get("wage_type") or "salary").lower()
         unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
+        override_days = days_worked_override.get(sal["staff_id"])
+        eff_days = override_days if override_days is not None else max(0, working_days - unpaid_days)
+        base_gross, wage_details = _compute_base_gross(
+            sal, period, working_days, eff_days if wage_type in {"daily", "hourly"} else None, None,
+        )
+        skip_days_proration = wage_type in {"daily", "hourly"}
         proration_amount = 0.0
         effective_gross = base_gross
-        if unpaid_days > 0 and working_days > 0 and base_gross > 0:
+        if not skip_days_proration and unpaid_days > 0 and working_days > 0 and base_gross > 0:
             proration_amount = round(base_gross * (unpaid_days / working_days), 2)
             effective_gross = max(0.0, base_gross - proration_amount)
 
         deductions = proration_amount
         allowances = 0.0
-        # Manual days-worked override (mirrors _generate_payslips_for math)
-        override_days = days_worked_override.get(sal["staff_id"])
-        if override_days is not None and working_days > 0 and base_gross > 0:
+        if not skip_days_proration and override_days is not None and working_days > 0 and base_gross > 0:
             wd_after_unpaid = max(0, working_days - unpaid_days)
             days_worked_val = float(override_days)
             if wd_after_unpaid > 0 and days_worked_val < wd_after_unpaid:
@@ -641,6 +739,8 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             "department": sal.get("department", ""),
             "currency": sal.get("currency", "UGX"),
             "base_salary": monthly_base,
+            "wage_type": wage_type,
+            "wage_details": wage_details,
             "pay_frequency": sal.get("pay_frequency") or "monthly",
             "gross": round(base_gross, 2),
             "allowances": round(allowances, 2),
@@ -854,19 +954,39 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
         if existing:
             continue
-        # For bi-weekly / weekly, scale monthly base into a single paycheque.
-        # For anything else `factor == 1.0` so the number is unchanged.
+        # Iter 336 — per-salary wage_type overrides the monthly-proration
+        # path. Daily/hourly/weekly/biweekly rates are multiplied by the
+        # units actually worked in this period instead of scaled by
+        # 12/26 etc. `_compute_base_gross` returns a human explanation
+        # that we surface as a line-item detail.
         monthly_base = float(sal.get("base_salary", 0) or 0)
-        factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
-        base_gross = round(monthly_base * factor, 2)
+        wage_type = (sal.get("wage_type") or "salary").lower()
+        # Peek at unpaid-leave-adjusted working days first so daily/hourly
+        # calcs can use `working_days - unpaid_days` when no explicit
+        # override is provided.
+        unpaid_days_peek, working_days_peek = await _unpaid_leave_days_in_period(sal["staff_id"], period)
+        override_days = days_worked_override.get(sal["staff_id"])
+        # Optional per-staff hours override — populated by timesheets when
+        # they carry `hours_worked` (see hr_timesheets fetch below). Left None
+        # otherwise; `_compute_base_gross` falls back to days × 8h.
+        hours_override = None
+        eff_days = override_days if override_days is not None else max(0, working_days_peek - unpaid_days_peek)
+        base_gross, wage_details = _compute_base_gross(
+            sal, period, working_days_peek, eff_days if wage_type in {"daily", "hourly"} else None, hours_override
+        )
         deductions = 0
         allowances = 0
         items = []
+        # Iter 336: for daily/hourly wage types we prefer the direct
+        # rate × units math computed above. Skipping the unpaid-leave
+        # proration + shortfall block avoids double-counting since the
+        # base_gross ALREADY reflects days_worked.
+        skip_days_proration = wage_type in {"daily", "hourly"}
         # ---- Unpaid leave proration (existing) ----
-        unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
+        unpaid_days, working_days = unpaid_days_peek, working_days_peek
         proration_amount = 0.0
         effective_gross = base_gross
-        if unpaid_days > 0 and working_days > 0 and base_gross > 0:
+        if not skip_days_proration and unpaid_days > 0 and working_days > 0 and base_gross > 0:
             proration_amount = round(base_gross * (unpaid_days / working_days), 2)
             effective_gross = max(0.0, base_gross - proration_amount)
             items.append({
@@ -883,7 +1003,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         # ---- Manual days_worked override (from timesheet or director) ----
         override_days = days_worked_override.get(sal["staff_id"])
         pto_days = pto_days_override.get(sal["staff_id"])
-        if override_days is not None and working_days > 0 and base_gross > 0:
+        if not skip_days_proration and override_days is not None and working_days > 0 and base_gross > 0:
             # Recompute gross based on actual days worked
             wd_after_unpaid = max(0, working_days - unpaid_days)
             days_worked_val = float(override_days)

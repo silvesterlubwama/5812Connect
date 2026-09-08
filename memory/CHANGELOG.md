@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## iter 336 — 2026-02 — Per-salary wage types
+
+### `_compute_base_gross(sal, period, working_days, days_worked, hours_worked)`
+- New helper in `backend/routers/hr.py` that picks the right math
+  based on the salary's `wage_type`:
+  * salary / monthly → monthly_base × pay_frequency proration
+  * daily    → daily_rate × days_worked
+  * hourly   → hourly_rate × hours_worked (days × 8h fallback)
+  * weekly   → weekly_rate × (period_days / 7)
+  * biweekly → biweekly_rate × (period_days / 14)
+- Returns `(gross, human_details_string)` so the preview table can
+  show `60,000 × 10 days` under the number.
+- Also exposes `_period_span_days(period)` for weeks-in-period math.
+
+### `_generate_payslips_for` + `preview_payslips`
+- Both endpoints call `_compute_base_gross` instead of the previous
+  `monthly_base × proration_factor` shortcut.
+- Unpaid-leave proration and days-worked shortfall blocks are skipped
+  when `wage_type` ∈ {daily, hourly} — the base_gross already reflects
+  actual units, so re-applying would double-deduct.
+- Preview response gains `wage_type` and `wage_details` fields.
+
+### `update_salary` allowed list
+- Adds `wage_type`, `hourly_rate`, `daily_rate`, `weekly_rate`,
+  `biweekly_rate` so directors can tweak rate type / rate on
+  existing salaries (with full audit-history capture).
+
+### Salary form UI
+- `HRPage.jsx` salary form gains a Rate Type picker (Monthly Salary /
+  Hourly / Daily / Weekly / Biweekly) alongside Pay Frequency.
+- Amount label auto-updates ("Hourly Rate *", "Daily Rate *", etc.)
+  with a contextual helper line explaining how the number is applied
+  per period.
+- Save handler now writes the correct `hourly_rate` / `daily_rate` /
+  `weekly_rate` / `biweekly_rate` field alongside `base_salary` so
+  legacy code reading `base_salary` still sees a value.
+
+### Preview dialog
+- Gross column now shows the wage breakdown below the amount
+  (e.g. `60,000 × 10 days`) so directors can eyeball proration
+  correctness at a glance.
+
+### Tests
+- `backend/tests/test_iter336_wage_types.py` — 6 scenarios: daily,
+  hourly, weekly, biweekly, monthly (regression), and a live preview
+  integration check confirming a daily 60,000 UGX × 10 days === 600,000.
+
 ## iter 335 — 2026-02 — Payroll preview · Anchor nudge · PDF coverage line
 
 ### `/hr/payslips/preview` dry-run
