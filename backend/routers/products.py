@@ -82,6 +82,15 @@ class ProductCreate(BaseModel):
     # Security checkpoint flag — if true, the receipt exit-scan denies departure
     # until a supervisor approves. See routers/security_checkpoint.py:receipt_exit_scan.
     is_exit_restricted: bool = False
+    # iter-marketplace-resource: link a POS/marketplace product to a bookable
+    # resource. When a sale of this product lands, `create_sale` writes a row
+    # into `bookings` so the staff booking dialog's `check_booking_conflict`
+    # naturally blocks that slot — no separate reconciliation needed.
+    resource_id: Optional[str] = None
+    # iter-marketplace-tickets: link a product to a paid public event. Each
+    # sold unit becomes an `event_ticket` row so families walking in can just
+    # buy at the door and get a scannable ticket.
+    event_id: Optional[str] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -92,6 +101,8 @@ class ProductUpdate(BaseModel):
     qty_discount_tiers: Optional[List[dict]] = None
     max_discount_pct: Optional[float] = None
     is_exit_restricted: Optional[bool] = None
+    resource_id: Optional[str] = None
+    event_id: Optional[str] = None
 
 # ========== PRODUCTS ==========
 

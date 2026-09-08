@@ -7,6 +7,23 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 328)
+
+### iter 328 — Marketplace → Resource bookings & event tickets
+- Products can now carry `resource_id` and/or `event_id` — turning a POS
+  line into either a locked resource booking or a scannable event ticket.
+- **Sale flow**: after inserting the sale, `create_sale` iterates each
+  line item. If the linked product has `resource_id` and the item ships
+  `booking_date/start_time/end_time`, it calls `check_booking_conflict`
+  (skips gracefully on conflict) then inserts a `bookings` row tagged
+  `source="marketplace_sale"`. If the product has `event_id`, it
+  inserts one `event_tickets` row per unit sold. Both id lists are
+  written back onto the sale as `linked_booking_ids` / `linked_ticket_ids`.
+- **Two-way lock**: since marketplace-created bookings live in the
+  same `db.bookings` collection, the existing staff booking-dialog
+  conflict check (`check_booking_conflict`) automatically blocks
+  overlapping staff bookings. Verified end-to-end via curl.
+
 ## Current status (as of iter 327)
 
 ### iter 327 — Resources kind tabs + select-all

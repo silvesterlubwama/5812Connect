@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## iter 328 — 2026-02 — Marketplace ↔ resource bookings + event tickets
+
+### Product model
+- Extended `ProductCreate` / `ProductUpdate` (`routers/products.py`) with
+  two optional links:
+  - `resource_id` → any sold unit of this product auto-creates a
+    booking on the linked resource.
+  - `event_id` → each sold unit auto-issues one `event_tickets` row
+    tied to the sale.
+
+### Sale flow
+- `create_sale` (`routers/sales.py`) now, after the sale doc is
+  persisted and stock decremented:
+  1. Fetches every referenced product in a single query.
+  2. For `resource_id` products: reads `booking_date / booking_start_time /
+     booking_end_time` off the line item, runs `check_booking_conflict`
+     (skips gracefully on conflict, logged) and writes a `bookings` row
+     tagged `source="marketplace_sale"`.
+  3. For `event_id` products: writes one `event_tickets` row per unit
+     sold, tagged `source="marketplace_sale"`.
+  4. Writes both id arrays back onto the sale as `linked_booking_ids` /
+     `linked_ticket_ids` so the receipt UI can deep-link.
+- Failures at this step are logged but never roll back the sale —
+  the sale record is already committed.
+
+### Two-way lock (staff booking ↔ marketplace)
+- Because marketplace-created bookings share the `db.bookings`
+  collection with staff-created ones, the existing staff booking
+  dialog's `check_booking_conflict` naturally blocks overlapping
+  slots. Verified end-to-end via curl: sale-created booking at
+  14:00–16:00 blocks a subsequent staff POST at 15:00–17:00 with a
+  409 that references the sale's window.
+
 ## iter 327 — 2026-02 — Resources kind tabs + select-all
 
 ### Kind filter tabs

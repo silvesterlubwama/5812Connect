@@ -156,6 +156,86 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
                     {"id": item["product_id"]},
                     {"$inc": {"stock": -base_units}}
                 )
+
+    # iter-marketplace-resource + iter-marketplace-tickets:
+    # If any line item's product is linked to a bookable resource or a paid
+    # event, spawn the matching booking / ticket record so the two systems
+    # stay locked in step.  Any failures here are logged but never block
+    # the sale — the sale record is already committed above.
+    linked_bookings: list = []
+    linked_tickets: list = []
+    try:
+        product_ids = list({it.get("product_id") for it in doc.get("items", []) if it.get("product_id")})
+        products_by_id: dict = {}
+        if product_ids:
+            async for p in db.products.find(
+                {"id": {"$in": product_ids}},
+                {"_id": 0, "id": 1, "name": 1, "resource_id": 1, "event_id": 1},
+            ):
+                products_by_id[p["id"]] = p
+        from routers.bookings import check_booking_conflict as _cbc
+        import uuid as _uuid
+        for item in doc.get("items", []):
+            pid = item.get("product_id")
+            prod = products_by_id.get(pid, {})
+            # ── Resource booking ──
+            if prod.get("resource_id"):
+                slot_date = item.get("booking_date") or doc.get("booking_date")
+                start = item.get("booking_start_time") or doc.get("booking_start_time")
+                end = item.get("booking_end_time") or doc.get("booking_end_time")
+                if slot_date and start and end:
+                    conflict = await _cbc(prod["resource_id"], None, slot_date, start, end)
+                    if conflict:
+                        logger.warning(f"Sale {sale_id} — resource {prod['resource_id']} already booked at {start}-{end}; skipping auto-booking")
+                    else:
+                        booking = {
+                            "id": f"bk_{_uuid.uuid4().hex[:8]}",
+                            "resource_id": prod["resource_id"],
+                            "location_id": doc.get("location_id"),
+                            "title": f"{prod.get('name') or 'Booking'} · {doc.get('customer_name') or 'Customer'}",
+                            "date": slot_date,
+                            "start_time": start,
+                            "end_time": end,
+                            "booked_by": current_user["id"],
+                            "booked_by_name": doc.get("customer_name") or current_user.get("name"),
+                            "notes": f"Auto-booked from sale {doc['id']}",
+                            "status": "confirmed",
+                            "source": "marketplace_sale",
+                            "sale_id": doc["id"],
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await db.bookings.insert_one(booking)
+                        booking.pop("_id", None)
+                        linked_bookings.append(booking["id"])
+            # ── Event ticket ──
+            if prod.get("event_id"):
+                qty = int(item.get("qty") or 1)
+                for _ in range(max(1, qty)):
+                    ticket = {
+                        "id": f"tkt_{_uuid.uuid4().hex[:10]}",
+                        "event_id": prod["event_id"],
+                        "sale_id": doc["id"],
+                        "holder_name": doc.get("customer_name") or "Guest",
+                        "holder_phone": doc.get("customer_phone") or "",
+                        "holder_id": doc.get("customer_id"),
+                        "price": float(item.get("price") or 0),
+                        "status": "issued",
+                        "source": "marketplace_sale",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await db.event_tickets.insert_one(ticket)
+                    ticket.pop("_id", None)
+                    linked_tickets.append(ticket["id"])
+        if linked_bookings or linked_tickets:
+            await db.sales.update_one(
+                {"id": sale_id},
+                {"$set": {"linked_booking_ids": linked_bookings, "linked_ticket_ids": linked_tickets}},
+            )
+            doc["linked_booking_ids"] = linked_bookings
+            doc["linked_ticket_ids"] = linked_tickets
+    except Exception as _e:
+        logger.warning(f"Sale {sale_id} resource/ticket linkage skipped: {_e}")
+
     # Update customer account totals if linked
     customer_id = doc.get("customer_id")
     if customer_id:
