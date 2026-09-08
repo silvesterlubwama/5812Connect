@@ -7,6 +7,27 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 335)
+
+### iter 335 — Payroll Preview · Anchor Nudge · PDF coverage line
+- **Payroll preview dry-run**: new `POST /hr/payslips/preview` mirrors
+  the exact `_generate_payslips_for` math but returns rows instead of
+  writing. The Generate Payslips dialog now shows a table of staff /
+  gross / allowances / deductions / net (plus "Existing — skipped"
+  chips for anyone already drafted) so directors catch surprises
+  before touching the ledger.
+- **Anchor nudge**: switching HR Settings frequency to biweekly/weekly
+  without a Next Pay Date now pre-fills the coming Wednesday (or the
+  configured `payday_weekday`) and shows a toast telling the admin
+  where to tweak it.
+- **PDF coverage line**: payslip PDF now includes "Covers work from
+  Sep 16, 2026 to Sep 29, 2026 (2 weeks)" derived from the canonical
+  period label — biweekly and monthly variants both supported so
+  paper matches the on-screen explainer added in iter 334.
+- Tests: `backend/tests/test_iter335_preview_and_pdf.py` (2 scenarios
+  in one asyncio.run) — verifies preview never persists AND the PDF
+  HTML contains the coverage line.
+
 ## Current status (as of iter 334)
 
 ### iter 334 — Biweekly payroll UX cleanup

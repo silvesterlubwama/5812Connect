@@ -70,6 +70,9 @@ export default function HRPage() {
   const [editPayslipReason, setEditPayslipReason] = useState('');
   const [payslipHistory, setPayslipHistory] = useState(null);
   const [bulkExportPeriod, setBulkExportPeriod] = useState(new Date().toISOString().slice(0, 7));
+  // iter 335 — dry-run preview before writing draft payslips
+  const [previewRows, setPreviewRows] = useState(null); // null = not previewed yet
+  const [previewLoading, setPreviewLoading] = useState(false);
   // Cash accounts + locations for the payslip edit dialog (iter210b)
   const [cashAccountOptions, setCashAccountOptions] = useState([]);
   const [locationOptions, setLocationOptions] = useState([]);
@@ -228,9 +231,23 @@ export default function HRPage() {
       const res = await api.post('/hr/payslips/generate', { period: selectedPayday, location_id: activeCampus });
       setPayslips(prev => [...res.data.payslips, ...prev]);
       setShowPayslipGen(false);
+      setPreviewRows(null);
       toast.success(`Generated ${res.data.generated} payslips`);
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
+  };
+
+  // iter 335: dry-run every staffer's calculated gross/net so directors
+  // catch surprises BEFORE draft payslips are written. Reuses the exact
+  // same math as /payslips/generate.
+  const handlePreviewPayslips = async () => {
+    if (!selectedPayday) { toast.error('Choose a payday first'); return; }
+    setPreviewLoading(true);
+    try {
+      const res = await api.post('/hr/payslips/preview', { period: selectedPayday, location_id: activeCampus });
+      setPreviewRows(res.data.rows || []);
+    } catch (err) { toast.error(err.response?.data?.detail || 'Preview failed'); }
+    finally { setPreviewLoading(false); }
   };
 
   // Fetch upcoming paydays whenever the Generate dialog opens so the picker
@@ -890,8 +907,8 @@ export default function HRPage() {
       </Dialog>
 
       {/* Generate Payslips Dialog — payday-driven per campus HR settings */}
-      <Dialog open={showPayslipGen} onOpenChange={setShowPayslipGen}>
-        <DialogContent className="max-w-sm">
+      <Dialog open={showPayslipGen} onOpenChange={(o) => { setShowPayslipGen(o); if (!o) setPreviewRows(null); }}>
+        <DialogContent className={previewRows ? 'max-w-3xl max-h-[92vh] overflow-y-auto' : 'max-w-sm'}>
           <DialogHeader><DialogTitle>Generate Payslips</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5">
@@ -903,7 +920,7 @@ export default function HRPage() {
                   No paydays available. Enable HR and set pay frequency + next pay date in <strong>HR Settings</strong>.
                 </p>
               ) : (
-                <Select value={selectedPayday} onValueChange={setSelectedPayday}>
+                <Select value={selectedPayday} onValueChange={(v) => { setSelectedPayday(v); setPreviewRows(null); }}>
                   <SelectTrigger data-testid="pay-period-select"><SelectValue placeholder="Choose payday…" /></SelectTrigger>
                   <SelectContent>
                     {upcomingPaydays.map(p => {
@@ -922,9 +939,6 @@ export default function HRPage() {
                 Paydays follow the campus <strong>{paydayFrequency}</strong> schedule. Adjust in HR Settings.
               </p>
               {paydayFrequency !== 'monthly' && selectedPayday && (() => {
-                // Iter 334: parse the canonical period label to surface the
-                // start/end dates directly so staff aren't confused by "W38"
-                // when the window is actually 14 days.
                 const match = String(selectedPayday).match(/^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})/);
                 if (!match) return null;
                 const [, startIso, endIso] = match;
@@ -936,13 +950,74 @@ export default function HRPage() {
                 );
               })()}
             </div>
-            <p className="text-xs text-muted-foreground">{salaries.length} active salary records will be processed.</p>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setShowPayslipGen(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleGeneratePayslips} disabled={saving || !selectedPayday} data-testid="generate-payslips-submit">
-                {saving ? 'Generating...' : 'Generate'}
-              </Button>
-            </div>
+
+            {previewRows === null ? (
+              <>
+                <p className="text-xs text-muted-foreground">{salaries.length} active salary records will be processed.</p>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setShowPayslipGen(false)}>Cancel</Button>
+                  <Button variant="secondary" className="flex-1" onClick={handlePreviewPayslips} disabled={previewLoading || !selectedPayday} data-testid="preview-payslips-btn">
+                    {previewLoading ? 'Previewing…' : 'Preview'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-md border" data-testid="payslip-preview-table">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="text-left px-2 py-1.5">Staff</th>
+                        <th className="text-left px-2 py-1.5 hidden sm:table-cell">Dept</th>
+                        <th className="text-right px-2 py-1.5">Gross</th>
+                        <th className="text-right px-2 py-1.5 hidden sm:table-cell">Allowances</th>
+                        <th className="text-right px-2 py-1.5 hidden sm:table-cell">Deductions</th>
+                        <th className="text-right px-2 py-1.5">Net</th>
+                        <th className="text-center px-2 py-1.5">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewRows.length === 0 ? (
+                        <tr><td colSpan={7} className="text-center text-muted-foreground py-4">No active salary records for this campus.</td></tr>
+                      ) : previewRows.map(r => (
+                        <tr key={r.staff_id} className={r.already_generated ? 'opacity-50' : ''} data-testid={`preview-row-${r.staff_id}`}>
+                          <td className="px-2 py-1.5">{r.staff_name}</td>
+                          <td className="px-2 py-1.5 hidden sm:table-cell text-muted-foreground">{r.department || '—'}</td>
+                          <td className="px-2 py-1.5 text-right">{r.currency} {r.gross.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right hidden sm:table-cell text-emerald-700">+{r.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right hidden sm:table-cell text-amber-700">-{r.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right font-semibold">{r.currency} {r.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-center">
+                            {r.already_generated ? (
+                              <span className="text-[10px] rounded-full bg-slate-200 text-slate-700 px-2 py-0.5">Existing — skipped</span>
+                            ) : (
+                              <span className="text-[10px] rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5">Will draft</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {previewRows.length > 0 && (
+                      <tfoot className="bg-muted/30">
+                        <tr>
+                          <td colSpan={5} className="px-2 py-1.5 text-right font-medium text-muted-foreground">Total net pay ({previewRows.filter(r => !r.already_generated).length} new payslips)</td>
+                          <td className="px-2 py-1.5 text-right font-bold" data-testid="preview-total-net">
+                            {previewRows[0].currency} {previewRows.filter(r => !r.already_generated).reduce((s, r) => s + r.net, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+                <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setPreviewRows(null)}>Back</Button>
+                  <Button className="flex-1" onClick={handleGeneratePayslips} disabled={saving || !selectedPayday || previewRows.every(r => r.already_generated)} data-testid="generate-payslips-submit">
+                    {saving ? 'Generating…' : `Draft ${previewRows.filter(r => !r.already_generated).length} Payslip${previewRows.filter(r => !r.already_generated).length === 1 ? '' : 's'}`}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -1160,7 +1235,23 @@ export default function HRPage() {
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5"><Label>Pay Frequency</Label>
-                <Select value={settingsForm.pay_frequency} onValueChange={v => setSettingsForm({...settingsForm, pay_frequency: v})}>
+                <Select value={settingsForm.pay_frequency} onValueChange={v => {
+                  // iter 335 anchor nudge: switching TO biweekly/weekly with no
+                  // Next Pay Date pre-fills the coming Wednesday (or the
+                  // configured pay_run_weekday) so the required field is never
+                  // blank on save.
+                  const next = { ...settingsForm, pay_frequency: v };
+                  const needsAnchor = ['weekly', 'biweekly', 'bi-weekly', 'fortnightly'].includes(v.toLowerCase());
+                  if (needsAnchor && !settingsForm.next_pay_date) {
+                    const target = settingsForm.payday_weekday != null ? parseInt(settingsForm.payday_weekday) : 2; // 2 = Wed default
+                    const today = new Date();
+                    const delta = (target - today.getDay() + 7) % 7 || 7; // upcoming target weekday (never today)
+                    const nextDate = new Date(today.getTime() + delta * 86400000);
+                    next.next_pay_date = nextDate.toISOString().slice(0, 10);
+                    toast.info(`Next Pay Date pre-filled to ${nextDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} — tweak if needed.`);
+                  }
+                  setSettingsForm(next);
+                }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
                 </Select>

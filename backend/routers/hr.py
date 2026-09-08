@@ -561,6 +561,107 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
     return await _generate_payslips_for(period, location_id, current_user, days_worked, pto_days)
 
 
+@router.post("/payslips/preview")
+async def preview_payslips(data: dict, current_user: dict = Depends(require_director)):
+    """Dry-run of `/payslips/generate` — computes every staffer's gross / net
+    for the given period WITHOUT writing anything to the database. Used by the
+    HR Preview dialog so directors can catch surprises before drafting.
+
+    Same body as `/payslips/generate`. Response:
+      { period, location_id, count, existing_count, rows: [
+          { staff_id, staff_name, department, currency, base_salary,
+            pay_frequency, gross, allowances, deductions, net,
+            unpaid_leave_days, working_days, days_worked, pto_days,
+            already_generated (bool) }
+      ] }
+    """
+    period = data.get("period") or datetime.now(timezone.utc).strftime("%Y-%m")
+    location_id = data.get("location_id")
+    days_worked_override = dict(data.get("days_worked_override") or {})
+    pto_days_override = dict(data.get("pto_days_override") or {})
+    if data.get("use_timesheets", True):
+        async for ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
+            days_worked_override.setdefault(ts["staff_id"], ts.get("days_worked"))
+            pto_days_override.setdefault(ts["staff_id"], ts.get("pto_days", 0))
+
+    is_multi_pay = _period_is_multi_pay(period)
+    query = {"status": "active"}
+    if location_id:
+        query["location_id"] = location_id
+    salaries = await db.hr_salaries.find(query, {"_id": 0}).to_list(500)
+
+    rows = []
+    existing_count = 0
+    for sal in salaries:
+        existing = await db.hr_payslips.find_one(
+            {"salary_id": sal["id"], "period": period}, {"_id": 0, "id": 1}
+        )
+        already = bool(existing)
+        if already:
+            existing_count += 1
+
+        monthly_base = float(sal.get("base_salary", 0) or 0)
+        factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
+        base_gross = round(monthly_base * factor, 2)
+
+        unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
+        proration_amount = 0.0
+        effective_gross = base_gross
+        if unpaid_days > 0 and working_days > 0 and base_gross > 0:
+            proration_amount = round(base_gross * (unpaid_days / working_days), 2)
+            effective_gross = max(0.0, base_gross - proration_amount)
+
+        deductions = proration_amount
+        allowances = 0.0
+        # Manual days-worked override (mirrors _generate_payslips_for math)
+        override_days = days_worked_override.get(sal["staff_id"])
+        if override_days is not None and working_days > 0 and base_gross > 0:
+            wd_after_unpaid = max(0, working_days - unpaid_days)
+            days_worked_val = float(override_days)
+            if wd_after_unpaid > 0 and days_worked_val < wd_after_unpaid:
+                short_days = wd_after_unpaid - days_worked_val
+                short_amount = round(effective_gross * (short_days / wd_after_unpaid), 2)
+                effective_gross = max(0.0, effective_gross - short_amount)
+                deductions += short_amount
+
+        gross_for_pct = effective_gross
+        for li in (sal.get("line_items") or []):
+            amt = float(li.get("amount", 0))
+            if li.get("is_percentage"):
+                amt = gross_for_pct * amt / 100
+            if li.get("type") == "deduction":
+                deductions += amt
+            else:
+                allowances += amt
+        net = base_gross + allowances - deductions
+
+        rows.append({
+            "staff_id": sal["staff_id"],
+            "staff_name": sal.get("staff_name", ""),
+            "department": sal.get("department", ""),
+            "currency": sal.get("currency", "UGX"),
+            "base_salary": monthly_base,
+            "pay_frequency": sal.get("pay_frequency") or "monthly",
+            "gross": round(base_gross, 2),
+            "allowances": round(allowances, 2),
+            "deductions": round(deductions, 2),
+            "net": round(net, 2),
+            "unpaid_leave_days": unpaid_days,
+            "working_days": working_days,
+            "days_worked": override_days if override_days is not None else max(0, working_days - unpaid_days),
+            "pto_days": pto_days_override.get(sal["staff_id"], 0),
+            "already_generated": already,
+        })
+
+    return {
+        "period": period,
+        "location_id": location_id,
+        "count": len(rows),
+        "existing_count": existing_count,
+        "rows": rows,
+    }
+
+
 @router.post("/payslips/manual")
 async def manual_payslip(data: dict, current_user: dict = Depends(require_director)):
     """One-off payslip — HR types the amount + deductions directly, no recurring
@@ -2908,6 +3009,40 @@ async def _generate_payslip_pdf_bytes(payslip_id: str) -> bytes:
         line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{amt:,.2f}</td></tr>"
     if not line_rows:
         line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
+    # Iter 335: parse the canonical period string into a human "Covers work
+    # from <start> to <end> (N weeks)" line so paper matches the on-screen
+    # explainer added in iter 334.
+    import re as _re
+    period_str = p.get("period", "") or ""
+    coverage_line = ""
+    _m = _re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", period_str)
+    if _m:
+        try:
+            _s = dt_date.fromisoformat(_m.group(1))
+            _e = dt_date.fromisoformat(_m.group(2))
+            _days = (_e - _s).days + 1
+            _label = "1 week" if _days <= 7 else f"{_days // 7} weeks" if _days % 7 == 0 else f"{_days} days"
+            coverage_line = (
+                f"<p class='meta' style='margin:4px 0 0 0'>"
+                f"Covers work from <strong>{_s.strftime('%b %-d, %Y')}</strong> "
+                f"to <strong>{_e.strftime('%b %-d, %Y')}</strong> "
+                f"({_label})</p>"
+            )
+        except Exception:
+            coverage_line = ""
+    elif _re.match(r"^\d{4}-\d{2}$", period_str):
+        try:
+            _y, _mo = period_str.split("-")
+            _first = dt_date(int(_y), int(_mo), 1)
+            _last = (dt_date(int(_y) + (1 if int(_mo) == 12 else 0),
+                              1 if int(_mo) == 12 else int(_mo) + 1, 1) - td(days=1))
+            coverage_line = (
+                f"<p class='meta' style='margin:4px 0 0 0'>"
+                f"Covers work from <strong>{_first.strftime('%b %-d, %Y')}</strong> "
+                f"to <strong>{_last.strftime('%b %-d, %Y')}</strong> (1 month)</p>"
+            )
+        except Exception:
+            coverage_line = ""
     paid_note = ""
     if p.get("status") == "paid" and p.get("paid_at"):
         paid_note = f"<p class='meta' style='text-align:center;margin-top:14mm'>Paid on {p['paid_at'][:10]}</p>"
@@ -2939,6 +3074,7 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
     <div style='text-align:right'>
       <h1>Payslip &middot; {p.get('period','')}</h1>
       <p class='meta' style='margin:2px 0 0 0'>Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      {coverage_line}
       <p style='margin:6px 0 0 0'><span class='status {p.get("status","")}'>{p.get('status','draft')}</span></p>
     </div>
   </div>

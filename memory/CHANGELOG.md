@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## iter 335 — 2026-02 — Payroll preview · Anchor nudge · PDF coverage line
+
+### `/hr/payslips/preview` dry-run
+- `backend/routers/hr.py` adds `POST /hr/payslips/preview` that returns
+  every staffer's computed gross / allowances / deductions / net for the
+  picked period WITHOUT persisting. Reuses the identical math from
+  `_generate_payslips_for` so preview never drifts from generate.
+- Response also flags `already_generated: true` for anyone whose
+  payslip already exists in that period, so the UI can grey-out
+  "will skip" rows.
+
+### Generate dialog gains a Preview step
+- `pages/HRPage.jsx` Generate Payslips dialog is now two-step:
+  Preview → Draft. Preview surfaces a table with gross/net per
+  staffer plus a totals footer ("Total net pay (N new payslips)").
+  Existing payslips render at 50% opacity with a "Skipped" chip.
+
+### Anchor nudge for biweekly / weekly
+- Switching HR Settings frequency to weekly/biweekly with no
+  `next_pay_date` pre-fills the coming Wednesday (or the configured
+  `payday_weekday`) and toasts the admin the picked date so they can
+  fine-tune.
+
+### Payslip PDF coverage line
+- `_generate_payslip_pdf_bytes` now parses the canonical period label
+  and prints "Covers work from <start> to <end> (<N weeks/1 month>)"
+  under the payslip header. Works for both `YYYY-MM` (monthly) and
+  `YYYY-MM-DD_YYYY-MM-DD (Www-Www)` (biweekly/weekly) formats.
+
+### Tests
+- `backend/tests/test_iter335_preview_and_pdf.py` — asserts the
+  preview endpoint returns the correct gross/net WITHOUT writing to
+  `hr_payslips`, and verifies the payslip PDF HTML contains the
+  coverage line for a biweekly period.
+
 ## iter 334 — 2026-02 — Biweekly payroll UX cleanup
 
 ### Period labels reflect the real span
