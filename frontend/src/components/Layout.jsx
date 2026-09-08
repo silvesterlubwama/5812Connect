@@ -58,6 +58,7 @@ const NAV_SECTIONS = [
       { to: '/funds', icon: Banknote, label: 'Fund Requests', roles: STAFF_PLUS },
       { to: '/shipments', icon: Container, label: 'Container Shipments', roles: DIRECTOR_PLUS },
       { to: '/access', icon: ScanLine, label: 'Access Control', roles: COORDINATOR_PLUS },
+      { to: '/ticket-scanner', icon: ScanLine, label: 'Ticket Scanner', roles: COORDINATOR_PLUS },
     ]
   },
   {
@@ -441,6 +442,7 @@ export default function Layout() {
       '/report-builder': { roles: MANAGER_PLUS, module: null },
       '/analytics': { roles: MANAGER_PLUS, module: null },
       '/access': { roles: COORDINATOR_PLUS, module: null },
+      '/ticket-scanner': { roles: COORDINATOR_PLUS, module: null },
       '/volunteer-scheduling': { roles: COORDINATOR_PLUS, module: null },
       '/attendance': { roles: STAFF_PLUS, module: null },
       '/check-ins': { roles: STAFF_PLUS, module: null },

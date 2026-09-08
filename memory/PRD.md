@@ -7,6 +7,24 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 329)
+
+### iter 329 — Ticket Scanner + Marketplace product pickers
+- **Ticket Scanner page** (`/ticket-scanner`): camera QR scan (via
+  `html5-qrcode`) + manual `tkt_...` entry. Redeems via
+  `POST /api/tickets/{id}/redeem` (new endpoint) and shows a persistent
+  green/amber/red result card so door staff can double-check the last
+  scan. Behind `COORDINATOR_PLUS` role guard.
+- **Product editor** in the Sales Portal gained two mutually-exclusive
+  dropdowns: **Link resource** (bookable, non-consumable) and
+  **Link event** (public, non-cancelled). Picking either sets the
+  matching product field so sales auto-book the resource or auto-issue
+  a ticket. Cart items on resource-linked products auto-carry a
+  booking slot (today 2–3pm default) that `create_sale` uses to write
+  the booking row.
+- Verified end-to-end via curl: lookup → redeem → double-redeem 409 →
+  bogus id 404, all correct.
+
 ## Current status (as of iter 328)
 
 ### iter 328 — Marketplace → Resource bookings & event tickets

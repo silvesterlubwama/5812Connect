@@ -46,6 +46,7 @@ import LocationAnalyticsPage from './pages/LocationAnalyticsPage';
 import CommsPage from './pages/CommsPage';
 import OutreachPage from './pages/OutreachPage';
 import ResourcesPage from './pages/ResourcesPage';
+import TicketScannerPage from './pages/TicketScannerPage';
 import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
 import CampusReportsPage from './pages/CampusReportsPage';
@@ -188,6 +189,7 @@ function AppRoutes() {
         <Route path="voip" element={<VoipAdminPage />} />
         <Route path="outreach" element={<OutreachPage />} />
         <Route path="resources" element={<ResourcesPage />} />
+        <Route path="ticket-scanner" element={<TicketScannerPage />} />
         <Route path="access" element={<AccessPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="campus-reports" element={<CampusReportsPage />} />

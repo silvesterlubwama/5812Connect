@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## iter 329 — 2026-02 — Ticket Scanner page + marketplace product pickers
+
+### Backend — ticket redemption endpoints
+- `routers/event_tickets.py` gained a second `APIRouter`
+  (`tickets_router` at `/api/tickets`) exposing:
+  - `GET /api/tickets/{id}` → returns `{ticket, event}` with a minimal
+    event summary so the scanner UI can label the door.
+  - `POST /api/tickets/{id}/redeem` → marks the ticket `status="used"`
+    and stamps `used_at / used_by / used_by_name`. 409 with the
+    original redemption timestamp if already used; 410 if voided.
+- Registered in `server.py`.
+
+### Frontend — `/ticket-scanner` page
+- New `pages/TicketScannerPage.jsx` (behind `COORDINATOR_PLUS` guard):
+  - Camera QR scan via `html5-qrcode` (extracts a `tkt_[a-zA-Z0-9]+`
+    from any decoded string so both bare ids and URLs work).
+  - Manual `tkt_...` input for keyboard-only workflows.
+  - Persistent result card (green / amber / red / red) that summarises
+    the outcome (`Admit one`, `Already used at …`, `Void`, `Not a
+    valid ticket`) so door staff can double-check before waving the
+    next family in.
+- App.js route + Layout sidebar entry + route-guard rule added.
+
+### Frontend — marketplace product linkage
+- `SalesPortalPage.jsx` product-manage dialog gained two dropdowns:
+  **Link resource** (bookable, non-consumable) and **Link event**
+  (public, non-cancelled). They're mutually exclusive — picking one
+  clears the other. Helper text confirms what will happen at sale time.
+- `addToCart` now, when a product carries `resource_id`, attaches a
+  default booking slot (today, 14:00–15:00) to the cart line item so
+  the sale POST passes the fields the auto-booking code in
+  `create_sale` needs.
+- Verified end-to-end via curl: lookup / redeem / double-redeem 409 /
+  bogus id 404.
+
 ## iter 328 — 2026-02 — Marketplace ↔ resource bookings + event tickets
 
 ### Product model

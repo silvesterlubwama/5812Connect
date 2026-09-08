@@ -23,7 +23,9 @@ export default function SalesPortalPage() {
   const [adminPwd, setAdminPwd] = useState('');
   const [processing, setProcessing] = useState(false);
   const [showManage, setShowManage] = useState(false);
-  const [productForm, setProductForm] = useState({ name: '', price: '', stock: '', category: '' });
+  const [productForm, setProductForm] = useState({ name: '', price: '', stock: '', category: '', resource_id: '', event_id: '' });
+  const [resourceOptions, setResourceOptions] = useState([]);
+  const [eventOptions, setEventOptions] = useState([]);
   const [recentSales, setRecentSales] = useState([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -54,6 +56,22 @@ export default function SalesPortalPage() {
   }, []);
 
   useEffect(() => { if (authed) { fetchProducts(); fetchRecentSales(); } }, [authed, fetchProducts, fetchRecentSales]);
+
+  // Fetch bookable resources + upcoming public events so the product editor
+  // can offer them for linkage (marketplace ↔ resource / marketplace ↔ ticket).
+  useEffect(() => {
+    if (!authed || !showManage) return;
+    (async () => {
+      try {
+        const [rs, ev] = await Promise.all([
+          api.get('/resources').catch(() => ({ data: [] })),
+          api.get('/events', { params: { is_public: true } }).catch(() => ({ data: [] })),
+        ]);
+        setResourceOptions((rs.data || []).filter(r => r.is_bookable && !r.is_consumable));
+        setEventOptions((ev.data || []).filter(e => e.status !== 'cancelled'));
+      } catch { /* ignore */ }
+    })();
+  }, [authed, showManage]);
 
   const searchCustomers = async (q) => {
     if (q.length < 2) { setCustomers([]); return; }
@@ -116,8 +134,15 @@ export default function SalesPortalPage() {
   const addToCart = (p) => {
     setCart(prev => {
       const existing = prev.find(c => c.product_id === p.id);
+      // If this product is linked to a resource, capture a booking slot so
+      // the sale can auto-create the booking. Sensible defaults: today, 2pm–3pm.
+      const slot = p.resource_id ? {
+        booking_date: new Date().toISOString().slice(0, 10),
+        booking_start_time: '14:00',
+        booking_end_time: '15:00',
+      } : {};
       if (existing) return prev.map(c => c.product_id === p.id ? { ...c, qty: c.qty + 1 } : c);
-      return [...prev, { product_id: p.id, name: p.name, price: p.price || 0, qty: 1 }];
+      return [...prev, { product_id: p.id, name: p.name, price: p.price, qty: 1, resource_id: p.resource_id || null, event_id: p.event_id || null, ...slot }];
     });
   };
 
@@ -151,8 +176,8 @@ export default function SalesPortalPage() {
 
   const handleAddProduct = async () => {
     try {
-      await api.post('/products', { ...productForm, price: parseFloat(productForm.price) || 0, stock: parseInt(productForm.stock) || 0 });
-      setProductForm({ name: '', price: '', stock: '', category: '' });
+      const res = await api.post('/products', { ...productForm, price: parseFloat(productForm.price) || 0, stock: parseInt(productForm.stock) || 0, resource_id: productForm.resource_id || null, event_id: productForm.event_id || null });
+      setProductForm({ name: '', price: '', stock: '', category: '', resource_id: '', event_id: '' });
       fetchProducts();
       toast.success('Product added');
     } catch { toast.error('Failed'); }
@@ -296,6 +321,33 @@ export default function SalesPortalPage() {
               <Input type="number" placeholder="Stock" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: e.target.value})} />
               <Input placeholder="Category" value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value})} />
             </div>
+            {/* iter-marketplace-links: pick a bookable resource OR a public
+                event so a POS sale auto-creates a booking or ticket. */}
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                className="text-xs h-9 rounded border px-2 bg-background"
+                value={productForm.resource_id}
+                onChange={e => setProductForm({ ...productForm, resource_id: e.target.value, event_id: e.target.value ? '' : productForm.event_id })}
+                data-testid="product-resource-picker"
+              >
+                <option value="">Link resource (optional)</option>
+                {resourceOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+              <select
+                className="text-xs h-9 rounded border px-2 bg-background"
+                value={productForm.event_id}
+                onChange={e => setProductForm({ ...productForm, event_id: e.target.value, resource_id: e.target.value ? '' : productForm.resource_id })}
+                data-testid="product-event-picker"
+              >
+                <option value="">Link event (optional)</option>
+                {eventOptions.map(ev => <option key={ev.id} value={ev.id}>{ev.title}</option>)}
+              </select>
+            </div>
+            {(productForm.resource_id || productForm.event_id) && (
+              <p className="text-[10px] text-muted-foreground -mt-1">
+                {productForm.resource_id ? '✓ Sales of this product will auto-book the resource (cart must ship a date/start/end).' : '✓ Each sold unit will auto-issue a scannable event ticket.'}
+              </p>
+            )}
             <Button className="w-full" disabled={!productForm.name} onClick={handleAddProduct} data-testid="add-product-portal-btn">Add Product</Button>
             <div className="border-t pt-3 space-y-1.5">
               <p className="text-xs font-semibold text-muted-foreground">All Products ({products.length})</p>

@@ -1,18 +1,65 @@
 """Admin auto-issue tickets to existing users (children, members) for events.
 
-Admins pick an event, an audience filter (e.g. "all children at this campus",
+Admins pick an event, an audience filter (e.g. "all children at this campus"),
 specific member IDs), an optional custom label / tier, and we create one
 `public_bookings` row per person. Tickets are marked `auto_issued=True`
 so front-desk staff can distinguish them from public bookings.
+
+Also exposes door-staff endpoints for scanning `tkt_*` marketplace
+tickets (see routers/sales.py — marketplace sales auto-create these):
+
+- GET  /api/tickets/{ticket_id}          → look up a ticket
+- POST /api/tickets/{ticket_id}/redeem   → mark as used at entry
 """
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
-from deps import db, get_current_user, require_manager, get_campus_filter
+from deps import db, get_current_user, require_manager, require_staff, get_campus_filter
 
 router = APIRouter(prefix="/api/events", tags=["event-tickets"])
+tickets_router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+
+@tickets_router.get("/{ticket_id}")
+async def get_ticket(ticket_id: str, current_user: dict = Depends(require_staff)):
+    """Look up a marketplace-issued ticket. Returns the ticket plus a
+    minimal event summary so the scanner can show the door staff the
+    event name / date and the current status."""
+    t = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    ev = None
+    if t.get("event_id"):
+        ev = await db.events.find_one({"id": t["event_id"]}, {"_id": 0, "id": 1, "title": 1, "event_date": 1, "location_id": 1})
+    return {"ticket": t, "event": ev}
+
+
+@tickets_router.post("/{ticket_id}/redeem")
+async def redeem_ticket(ticket_id: str, current_user: dict = Depends(require_staff)):
+    """Mark a ticket as used at the door. Idempotent-ish: re-scanning a
+    used ticket returns 409 with the original redemption timestamp so
+    door staff can see when it was first used."""
+    t = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if t.get("status") == "used":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ticket already used at {t.get('used_at') or 'earlier'} by {t.get('used_by_name') or 'staff'}",
+        )
+    if t.get("status") == "void":
+        raise HTTPException(status_code=410, detail="Ticket is void (refund or cancellation)")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.event_tickets.update_one(
+        {"id": ticket_id},
+        {"$set": {
+            "status": "used", "used_at": now,
+            "used_by": current_user["id"], "used_by_name": current_user.get("name"),
+        }},
+    )
+    return {"ok": True, "ticket_id": ticket_id, "used_at": now, "used_by_name": current_user.get("name")}
 
 
 @router.post("/{event_id}/issue-tickets")
