@@ -7,6 +7,24 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 327)
+
+### iter 327 — Resources kind tabs + select-all
+- **Kind filter tabs** on the Resources page: **All** (default),
+  **Bookable**, **Consumable**, **Unbookable** each with a live count.
+  Filter combines with the existing search + type stat-card selector.
+- **Select all** checkbox next to the tab strip: selects every currently
+  filtered row (respects both search and kind), supports indeterminate
+  state when a partial selection exists. Feeds straight into the
+  existing `BulkActionBar` (export / delete / print barcodes).
+- **Booking conflict guard** was already enforced across `POST
+  /api/bookings` via `check_booking_conflict` with a 1-hour buffer, so
+  double-booking is prevented regardless of whether the booking
+  originates from the staff booking dialog or a public booking flow.
+  The marketplace/store side has no resource_id tie-in yet, so a full
+  two-way marketplace lock is deferred until the marketplace is wired
+  to reference resources.
+
 ## Current status (as of iter 326)
 
 ### iter 326 — COA bulk import + Fair Alerts wipe

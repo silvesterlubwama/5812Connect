@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## iter 327 — 2026-02 — Resources kind tabs + select-all
+
+### Kind filter tabs
+- Added a segmented control on `pages/ResourcesPage.jsx` above the grid:
+  **All** (default), **Bookable**, **Consumable**, **Unbookable**. Each
+  tab shows a live count and combines with the existing search box and
+  type stat-card selector for compound filtering.
+- Logic:
+  - `bookable` = `is_bookable && !is_consumable`
+  - `consumable` = `is_consumable`
+  - `unbookable` = `!is_bookable && !is_consumable`
+
+### Select all
+- New `Select all (N)` checkbox next to the tabs. Selects every row in
+  the current filter view (respects search + kind + type). Supports the
+  indeterminate visual state via `ref.indeterminate` when only some
+  filtered rows are selected. Feeds straight into the existing
+  `BulkActionBar` (export / delete / bulk barcode print).
+
+### Booking lock (staff + public)
+- Verified: `POST /api/bookings` already runs `check_booking_conflict`
+  with a 1-hour buffer for *every* incoming request — staff dialog, the
+  public bookings page, and the `ResourceViewPage`. No additional
+  changes required at that layer.
+- Marketplace side: the `sales` / marketplace flow does not currently
+  carry a `resource_id`, so wiring a two-way marketplace ↔ resource
+  lock needs the marketplace itself to first reference resources.
+  Deferred to a follow-up turn.
+
 ## iter 326 — 2026-02 — COA bulk import + Fair Alerts wipe
 
 ### Chart of Accounts — CSV / XLSX bulk import

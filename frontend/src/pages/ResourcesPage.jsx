@@ -53,6 +53,10 @@ export default function ResourcesPage() {
   const [stockResource, setStockResource] = useState(null);
   const [stockMap, setStockMap] = useState({});
   const [typeFilter, setTypeFilter] = useState('all');
+  // iter-resource-kind-tabs: separate the "kind" (bookable vs consumable
+  // vs static asset) from the type dropdown (room/laptop/car/…). Users
+  // now filter by kind with a tab strip, and by type via the stat-card grid.
+  const [kindFilter, setKindFilter] = useState('all'); // all | bookable | consumable | unbookable
   const [showBooking, setShowBooking] = useState(false);
   const [bookingResource, setBookingResource] = useState(null);
   const [barcodeResource, setBarcodeResource] = useState(null);
@@ -186,8 +190,29 @@ export default function ResourcesPage() {
   const filtered = resources.filter(r => {
     if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
     if (typeFilter !== 'all' && r.type !== typeFilter) return false;
+    if (kindFilter === 'bookable' && !(r.is_bookable && !r.is_consumable)) return false;
+    if (kindFilter === 'consumable' && !r.is_consumable) return false;
+    if (kindFilter === 'unbookable' && (r.is_bookable || r.is_consumable)) return false;
     return true;
   });
+
+  const kindCounts = {
+    all: resources.length,
+    bookable: resources.filter(r => r.is_bookable && !r.is_consumable).length,
+    consumable: resources.filter(r => r.is_consumable).length,
+    unbookable: resources.filter(r => !r.is_bookable && !r.is_consumable).length,
+  };
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(r => selectedIds.has(r.id));
+  const someFilteredSelected = filtered.some(r => selectedIds.has(r.id));
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allFilteredSelected) filtered.forEach(r => next.delete(r.id));
+      else filtered.forEach(r => next.add(r.id));
+      return next;
+    });
+  };
 
   const byType = resourceTypes.map(t => ({ ...t, count: resources.filter(r => r.type === t.value).length }));
 
@@ -222,13 +247,37 @@ export default function ResourcesPage() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input className="pl-9 h-8 text-xs" placeholder="Search resources..." value={search} onChange={e => setSearch(e.target.value)} data-testid="resource-search" />
         </div>
-
-
-
-
-
-
-
+        {/* Kind tabs: All / Bookable / Consumable / Unbookable */}
+        <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 text-xs" data-testid="resource-kind-tabs">
+          {[
+            { v: 'all', label: 'All' },
+            { v: 'bookable', label: 'Bookable' },
+            { v: 'consumable', label: 'Consumable' },
+            { v: 'unbookable', label: 'Unbookable' },
+          ].map(t => (
+            <button
+              key={t.v}
+              onClick={() => setKindFilter(t.v)}
+              className={`px-3 py-1 rounded-md font-medium transition-colors ${kindFilter === t.v ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              data-testid={`resource-kind-tab-${t.v}`}
+            >
+              {t.label} <span className="ml-1 text-[10px] opacity-60">({kindCounts[t.v]})</span>
+            </button>
+          ))}
+        </div>
+        {/* Select-all — visible only when there are rows to select */}
+        {filtered.length > 0 && (
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer" data-testid="resource-select-all">
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={allFilteredSelected}
+              ref={el => { if (el) el.indeterminate = !allFilteredSelected && someFilteredSelected; }}
+              onChange={toggleSelectAll}
+            />
+            Select all ({filtered.length})
+          </label>
+        )}
       </div>
 
       {/* Resources Grid */}
@@ -239,7 +288,7 @@ export default function ResourcesPage() {
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-sm text-muted-foreground">
           <Package size={40} className="mx-auto mb-3 opacity-30" />
-          {search || typeFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
+          {search || typeFilter !== 'all' || kindFilter !== 'all' ? 'No matching resources.' : 'No resources added yet.'}
         </div>
       ) : (
         <div>
