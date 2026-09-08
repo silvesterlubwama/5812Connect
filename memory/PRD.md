@@ -7,6 +7,23 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 330)
+
+### iter 330 — Sponsor↔Parent payment routing, Slot picker, Scanner deep-link
+- **Social-work payments** now classify the payer via `source`
+  (`sponsor` / `parent` / `guardian` / `org_fund` / …) into a `payer_type`
+  field. Parent/guardian contributions route to the *child's*
+  campus + sublocation and post to account `4005` (Parent
+  Contributions Income; falls back to `4000` if not yet seeded).
+  Sponsor gifts still hit `4000` and stay tagged as external.
+- **POS cart slot picker**: for resource-linked line items, cashiers
+  can now edit date / start / end inline before completing the sale.
+  Defaults remain today 14:00–15:00 so the common case is still
+  one-click.
+- **Ticket scanner deep-link**: the result card now shows the event
+  date/time and venue/location so door staff at multi-day events can
+  spot wrong-day scans at a glance.
+
 ## Current status (as of iter 329)
 
 ### iter 329 — Ticket Scanner + Marketplace product pickers

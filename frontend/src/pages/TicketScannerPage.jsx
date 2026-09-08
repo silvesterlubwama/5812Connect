@@ -42,7 +42,7 @@ export default function TicketScannerPage() {
         return;
       }
       const r = await api.post(`/tickets/${tid}/redeem`);
-      setLast({ kind: 'ok', title: 'Admit one', sub: `${ev?.title || 'Event'} · ${t.holder_name || 'Guest'}`, ticket: { ...t, ...r.data, status: 'used' }, event: ev });
+      setLast({ kind: 'ok', title: 'Admit one', sub: `${ev?.title || 'Event'} · ${t.holder_name || 'Guest'}`, event: ev, ticket: { ...t, ...r.data, status: 'used' } });
       toast.success(`Admit — ${t.holder_name || 'guest'}`);
     } catch (e) {
       const s = e?.response?.status;
@@ -145,6 +145,22 @@ export default function TicketScannerPage() {
             <div className="flex-1 min-w-0">
               <p className="text-xl font-bold">{last.title}</p>
               <p className="text-sm mt-0.5 truncate">{last.sub}</p>
+              {/* iter-scanner-deeplink: surface the event date and venue so
+                  door staff at multi-day fairs immediately spot wrong-day scans. */}
+              {last.event && (
+                <div className="text-[11px] mt-1.5 opacity-80 space-y-0.5">
+                  {last.event.event_date && (
+                    <p data-testid="ticket-scan-event-date">
+                      📅 {new Date(last.event.event_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                    </p>
+                  )}
+                  {(last.event.location_name || last.event.venue || last.event.location_id) && (
+                    <p data-testid="ticket-scan-event-venue">
+                      📍 {last.event.location_name || last.event.venue || last.event.location_id}
+                    </p>
+                  )}
+                </div>
+              )}
               {last.ticket?.id && (
                 <p className="text-[10px] font-mono mt-1 opacity-60">{last.ticket.id}</p>
               )}

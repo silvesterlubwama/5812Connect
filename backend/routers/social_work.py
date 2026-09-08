@@ -1276,10 +1276,24 @@ async def list_case_payments(case_id: str, current_user: dict = Depends(require_
 async def add_case_payment(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     """Record a payment FOR or FROM a child case.
     Body: { kind ('tuition'|'resource'|'medical'|'child_support'), amount, currency?, date?,
-            paid_to (school/clinic/etc), notes?, source ('sponsor'|'org_fund'|'partner'|'other') }
+            paid_to (school/clinic/etc), notes?, source ('sponsor'|'parent'|'guardian'|'org_fund'|'partner'|'other') }
+
+    iter-sponsor-vs-parent: `source` decides where the money is booked.
+    - `sponsor` (or a `child_support` kind) is an external, sponsor-tracked
+      gift. We still write the mirror row and the JE lands on the campus
+      sponsorship-income account (4000) — the child's campus GL.
+    - `parent` / `guardian` (with kind=child_support) is a family
+      contribution. It's booked to the *child's* campus/sublocation and
+      the JE credits a distinct "Parent Contribution" income account
+      (4005) so reports can separate the two revenue streams. If 4005
+      doesn't exist yet we fall back to 4000 but tag `payer_type` on the
+      JE so a re-classification report can find the row later.
+
     Side effects:
       • Mirror to financial.donations (child_support) or financial.expenses (tuition/resource/medical)
-      • Auto-post a balanced journal entry to accounting (via the same helper sales/donations use)."""
+      • Auto-post a balanced journal entry to accounting, tagged with
+        `payer_type` and the child's campus/sublocation so Dept P&L and
+        campus rollups pick it up automatically."""
     case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -1294,6 +1308,14 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
         raise HTTPException(status_code=400, detail="amount must be positive")
     pay_id = f"scp_{uuid.uuid4().hex[:10]}"
     now_iso = datetime.now(timezone.utc).isoformat()
+    src = (data.get("source") or "org_fund").strip().lower()[:60]
+    # Classify the payer for downstream reporting.
+    payer_type = (
+        "parent" if src in ("parent", "guardian", "family") else
+        "sponsor" if src == "sponsor" else
+        "org" if src in ("org_fund", "org", "internal") else
+        "external"
+    )
     payment = {
         "id": pay_id,
         "case_id": case_id,
@@ -1305,9 +1327,13 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
         "currency": (data.get("currency") or "UGX").upper()[:5],
         "date": (data.get("date") or now_iso)[:10],
         "paid_to": (data.get("paid_to") or "")[:200],
-        "source": (data.get("source") or "org_fund")[:60],
+        "source": src,
+        "payer_type": payer_type,
         "notes": (data.get("notes") or "")[:500],
+        # Book against the child's campus AND sublocation so campus GL /
+        # sublocation P&L both catch the entry.
         "location_id": case.get("location_id"),
+        "sublocation_id": case.get("sublocation_id"),
         "created_at": now_iso,
         "created_by": current_user["id"],
         "created_by_name": current_user.get("name", ""),
@@ -1317,18 +1343,20 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
         if kind == "child_support":
             mirror = {
                 "id": f"don_{uuid.uuid4().hex[:8]}",
-                "donor_name": data.get("source_name") or "Child Sponsor",
+                "donor_name": data.get("source_name") or (payer_type.title() + " contribution"),
                 "amount": amount,
                 "currency": payment["currency"],
-                "type": "sponsorship",
+                "type": "parent_contribution" if payer_type == "parent" else "sponsorship",
                 "date": payment["date"],
-                "notes": f"Sponsorship for {case.get('subject_name')} [{case_id}]: {payment.get('notes','')}".strip(),
+                "notes": f"{payer_type.title()} contribution for {case.get('subject_name')} [{case_id}]: {payment.get('notes','')}".strip(),
                 "location_id": payment["location_id"],
+                "sublocation_id": payment.get("sublocation_id"),
                 "created_at": now_iso,
                 "created_by": current_user["id"],
                 "entered_by": current_user.get("name", ""),
                 "social_case_id": case_id,
                 "social_payment_id": pay_id,
+                "payer_type": payer_type,
             }
             await db.donations.insert_one(mirror)
             payment["mirror_id"] = mirror["id"]
@@ -1344,7 +1372,8 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
                 "date": payment["date"],
                 "notes": (payment.get("notes") or "") + f" [case: {case_id}]",
                 "location_id": payment["location_id"],
-                "status": "approved",  # social-work-recorded payments are post-fact, not pending
+                "sublocation_id": payment.get("sublocation_id"),
+                "status": "approved",
                 "approved_by": current_user["id"],
                 "approved_by_name": current_user.get("name", ""),
                 "approved_at": now_iso,
@@ -1359,26 +1388,26 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
             payment["mirror_collection"] = "expenses"
     except Exception as e:
         logger.error(f"Social-work payment mirror failed: {e}")
-    # ── iter 246: post to the NEW single ledger ─────────────────
-    # child_support → income (Dr Bank / Cr Sponsorship Income)
-    # tuition/resource/medical → expense (Dr Programme Costs / Cr Cash)
-    # The mirror rows into legacy `donations` / `expenses` collections are
-    # kept intact ABOVE so the child's timeline still has a record, but the
-    # authoritative money movement is the new JE.
     try:
         from routers.finance._common import post_journal_entry, get_account_by_code
         if kind == "child_support":
-            revenue = await get_account_by_code("4000")
+            # Parent contributions ideally hit 4005 "Parent Contributions
+            # Income" — fall back to 4000 "Sponsorship Income" if the
+            # account hasn't been created yet.
+            if payer_type == "parent":
+                revenue = await get_account_by_code("4005") or await get_account_by_code("4000")
+            else:
+                revenue = await get_account_by_code("4000")
             bank = await get_account_by_code("1010")
             if revenue and bank:
                 await post_journal_entry(
                     date=payment["date"],
-                    description=f"Sponsorship gift — {case.get('subject_name') or ''}"[:280],
+                    description=f"{payer_type.title()} contribution — {case.get('subject_name') or ''}"[:280],
                     lines=[
-                        {"account_id": bank["id"], "account_code": bank["code"], "account_name": bank["name"], "debit": amount, "credit": 0},
-                        {"account_id": revenue["id"], "account_code": revenue["code"], "account_name": revenue["name"], "debit": 0, "credit": amount},
+                        {"account_id": bank["id"], "account_code": bank["code"], "account_name": bank["name"], "debit": amount, "credit": 0, "memo": f"{payer_type} contribution"},
+                        {"account_id": revenue["id"], "account_code": revenue["code"], "account_name": revenue["name"], "debit": 0, "credit": amount, "memo": f"{payer_type} contribution"},
                     ],
-                    source="social_donation",
+                    source="social_donation" if payer_type == "sponsor" else "parent_contribution",
                     reference=pay_id,
                     location_id=case.get("location_id"),
                     created_by=current_user["id"],

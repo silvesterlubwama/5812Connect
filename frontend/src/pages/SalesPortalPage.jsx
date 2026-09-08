@@ -287,14 +287,43 @@ export default function SalesPortalPage() {
           </div>
           <div className="flex-1 overflow-auto p-2 space-y-1">
             {cart.map(c => (
-              <div key={c.product_id} className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-700/50 text-sm">
-                <div className="flex-1 min-w-0"><p className="truncate font-medium text-xs">{c.name}</p><p className="text-[10px] text-muted-foreground">{c.price.toLocaleString()} x {c.qty}</p></div>
-                <div className="flex items-center gap-1">
-                  <button className="w-6 h-6 rounded bg-muted flex items-center justify-center" onClick={() => updateQty(c.product_id, -1)}><Minus size={10} /></button>
-                  <span className="text-xs w-5 text-center">{c.qty}</span>
-                  <button className="w-6 h-6 rounded bg-muted flex items-center justify-center" onClick={() => updateQty(c.product_id, 1)}><Plus size={10} /></button>
-                  <button className="text-destructive" onClick={() => removeFromCart(c.product_id)}><Trash2 size={12} /></button>
+              <div key={c.product_id} className="p-2 rounded-lg bg-slate-50 dark:bg-slate-700/50 text-sm space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0"><p className="truncate font-medium text-xs">{c.name}</p><p className="text-[10px] text-muted-foreground">{c.price.toLocaleString()} x {c.qty}</p></div>
+                  <div className="flex items-center gap-1">
+                    <button className="w-6 h-6 rounded bg-muted flex items-center justify-center" onClick={() => updateQty(c.product_id, -1)}><Minus size={10} /></button>
+                    <span className="text-xs w-5 text-center">{c.qty}</span>
+                    <button className="w-6 h-6 rounded bg-muted flex items-center justify-center" onClick={() => updateQty(c.product_id, 1)}><Plus size={10} /></button>
+                    <button className="text-destructive text-xs ml-1" onClick={() => removeFromCart(c.product_id)}>×</button>
+                  </div>
                 </div>
+                {/* iter-slot-picker: cashiers can override the auto-filled booking
+                    slot before completing the sale (product is linked to a resource). */}
+                {c.resource_id && (
+                  <div className="grid grid-cols-3 gap-1 pt-1 border-t" data-testid={`cart-slot-${c.product_id}`}>
+                    <input
+                      type="date"
+                      className="h-6 text-[10px] rounded border px-1 bg-background"
+                      value={c.booking_date || ''}
+                      onChange={e => setCart(prev => prev.map(x => x.product_id === c.product_id ? { ...x, booking_date: e.target.value } : x))}
+                      data-testid={`cart-slot-date-${c.product_id}`}
+                    />
+                    <input
+                      type="time"
+                      className="h-6 text-[10px] rounded border px-1 bg-background"
+                      value={c.booking_start_time || ''}
+                      onChange={e => setCart(prev => prev.map(x => x.product_id === c.product_id ? { ...x, booking_start_time: e.target.value } : x))}
+                      data-testid={`cart-slot-start-${c.product_id}`}
+                    />
+                    <input
+                      type="time"
+                      className="h-6 text-[10px] rounded border px-1 bg-background"
+                      value={c.booking_end_time || ''}
+                      onChange={e => setCart(prev => prev.map(x => x.product_id === c.product_id ? { ...x, booking_end_time: e.target.value } : x))}
+                      data-testid={`cart-slot-end-${c.product_id}`}
+                    />
+                  </div>
+                )}
               </div>
             ))}
             {cart.length === 0 && <p className="text-center text-xs text-muted-foreground py-8">Cart empty</p>}

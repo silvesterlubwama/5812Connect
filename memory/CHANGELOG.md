@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## iter 330 — 2026-02 — Sponsor↔Parent payments · Slot picker · Scanner deep-link
+
+### Sponsor vs Parent payment routing (backend)
+- `POST /api/social-work/cases/{id}/payments` now inspects `source`
+  and derives a `payer_type` (`parent` / `sponsor` / `org` / `external`).
+- **Parent / guardian contributions** are classed as `child_support`
+  income and posted to `4005 Parent Contributions Income` (fall back
+  to `4000` if 4005 hasn't been seeded), so campus P&L cleanly
+  separates external sponsor gifts from family contributions.
+- Every entry now carries the child's `location_id` AND
+  `sublocation_id` on the payment row + mirror row + JE so campus
+  GL and sublocation rollups both pick it up.
+- Mirror donation row's `type` becomes `parent_contribution` (vs
+  `sponsorship`) for parent payers; JE `source` becomes
+  `parent_contribution`.
+- Verified via curl: parent JE tagged `source=parent_contribution`,
+  sponsor JE tagged `source=social_donation`, both on `loc_001`.
+
+### POS cart slot picker (frontend)
+- `SalesPortalPage.jsx` cart line items now render a date + start-time
+  + end-time trio when the product carries `resource_id`. Editing any
+  field updates the cart state so the sale POST ships the operator's
+  picked slot instead of the default 14:00–15:00.
+
+### Ticket scanner deep-link (frontend)
+- `TicketScannerPage.jsx` result card now surfaces `event.event_date`
+  (localised) and `event.location_name / venue / location_id` beneath
+  the admit banner. Test IDs `ticket-scan-event-date` and
+  `ticket-scan-event-venue` for automation.
+
 ## iter 329 — 2026-02 — Ticket Scanner page + marketplace product pickers
 
 ### Backend — ticket redemption endpoints
