@@ -239,6 +239,16 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
     if set_ops:
         await db.children.update_one({"id": child_id}, {"$set": set_ops})
 
+    # Iter-sw-autopop: mirror the review fields onto the child's active social
+    # case document (which is what the CaseDetailDialog reads from), keeping a
+    # per-field _field_sources map + _change_log so counsellors see WHERE each
+    # value came from and can audit overwrites. Non-fatal — a stale sync must
+    # never block the review itself.
+    try:
+        await _apply_review_to_case(child_id, kind, data, data.get("fields") or {}, review_id)
+    except Exception as e:
+        logger.warning(f"case sync failed for {child_id}: {e}")
+
     # Propagate the computed risk onto the child's active social case so the
     # case list badge stays in sync without staff editing the case manually.
     # Never DOWNGRADES a manually-set risk level — only escalates.
@@ -263,6 +273,164 @@ async def _apply_review_to_child(child_id: str, kind: str, data: dict, user: dic
                     )
         except Exception as e:
             logger.warning(f"case risk propagation failed for {child_id}: {e}")
+
+
+async def _apply_review_to_case(child_id: str, kind: str, data: dict, fields: dict, review_id: str):
+    """Mirror review fields onto the child's active social case doc so the
+    CaseDetailDialog's Family / Education / Medical panels reflect the newest
+    review without staff retyping. Records the origin of each auto-populated
+    value under ``_field_sources`` and appends an audit-friendly ``_change_log``.
+
+    • welfare_visit  → overwrites case.family fields
+    • school_progress → overwrites case.education fields (with prev→new change log)
+    • medical_exam   → overwrites case.medical fields
+
+    Idempotent — a review can be re-saved and this always converges on the
+    latest values. Never DELETES existing fields, only overwrites the ones the
+    review actually filled in.
+    """
+    case = await db.social_cases.find_one(
+        {"subject_kind": "child", "subject_id": child_id, "status": "active"},
+        {"_id": 0, "id": 1, "family": 1, "education": 1, "medical": 1},
+    )
+    if not case:
+        return
+    review_date = data.get("review_date") or ""
+    source = {
+        "review_id": review_id,
+        "review_date": review_date,
+        "kind": kind,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    set_ops = {}
+
+    if kind == "welfare_visit":
+        family = case.get("family") or {}
+        new_family = {**family}
+        guardians = fields.get("guardians")
+        if isinstance(guardians, str):
+            guardians = [g.strip() for g in guardians.split(",") if g.strip()]
+        mapping = {
+            "guardians": guardians,
+            "siblings": fields.get("siblings"),
+            "household_income": fields.get("household_income"),
+            "notes": fields.get("family_notes"),
+            "primary_caregiver": fields.get("caregiver_name"),
+            "caregiver_relationship": fields.get("caregiver_relationship"),
+            "village_parish": fields.get("village_parish"),
+            "district": fields.get("district"),
+        }
+        sources = dict(new_family.get("_field_sources") or {})
+        changed = []
+        for k, v in mapping.items():
+            if v is None or v == "" or v == []:
+                continue
+            new_family[k] = v
+            sources[k] = source
+            changed.append(k)
+        if changed:
+            new_family["_field_sources"] = sources
+            log = list(new_family.get("_change_log") or [])
+            log.append({
+                "review_id": review_id,
+                "review_date": review_date,
+                "kind": "welfare_visit",
+                "changed": changed,
+                "at": source["at"],
+            })
+            new_family["_change_log"] = log[-20:]
+            new_family["_last_source_review_id"] = review_id
+            new_family["_last_source_review_date"] = review_date
+            set_ops["family"] = new_family
+
+    elif kind == "school_progress":
+        edu = case.get("education") or {}
+        new_edu = {**edu}
+        ad = fields.get("attendance_discipline") or {}
+        ap = fields.get("academic_performance") or {}
+        mapping = {
+            "grade": fields.get("class_grade"),
+            "school_name": fields.get("school"),
+            "current_term": fields.get("term"),
+            "class_teacher": fields.get("teacher_name"),
+            "teacher_phone": fields.get("teacher_phone"),
+            "attendance_pct": ad.get("attendance_pct"),
+            "discipline": ad.get("discipline"),
+            "academic_performance": ap.get("overall"),
+            "class_position": ap.get("position_in_class"),
+        }
+        sources = dict(new_edu.get("_field_sources") or {})
+        changes = []
+        for k, v in mapping.items():
+            if v is None or v == "":
+                continue
+            prev = new_edu.get(k)
+            if prev != v:
+                changes.append({"field": k, "from": prev, "to": v})
+            new_edu[k] = v
+            sources[k] = source
+        if changes:
+            new_edu["_field_sources"] = sources
+            log = list(new_edu.get("_change_log") or [])
+            log.append({
+                "review_id": review_id,
+                "review_date": review_date,
+                "kind": "school_progress",
+                "changes": changes,
+                "at": source["at"],
+            })
+            new_edu["_change_log"] = log[-20:]
+            new_edu["_last_source_review_id"] = review_id
+            new_edu["_last_source_review_date"] = review_date
+            set_ops["education"] = new_edu
+
+    elif kind == "medical_exam":
+        med = case.get("medical") or {}
+        new_med = {**med}
+        history = fields.get("medical_history") or {}
+        conds = [k for k in (
+            "asthma", "epilepsy", "diabetes", "sickle_cell", "heart_disease",
+            "tuberculosis", "hiv_aids", "chronic_illness",
+        ) if (history.get(k) or {}).get("present")]
+        other_cond = (history.get("other") or {}).get("specify", "").strip()
+        if other_cond:
+            conds.append(other_cond)
+        allergies = fields.get("known_allergies")
+        if isinstance(allergies, str):
+            allergies = [a.strip() for a in allergies.split(",") if a.strip()]
+        mapping = {
+            "conditions": conds or None,
+            "allergies": allergies,
+            "current_medication": fields.get("current_medication"),
+            "nutritional_status": fields.get("nutritional_status"),
+            "notes": (fields.get("diagnosis") or "").strip() or None,
+            "primary_doctor": ((fields.get("practitioner") or {}).get("facility") or "").strip() or None,
+        }
+        sources = dict(new_med.get("_field_sources") or {})
+        changed = []
+        for k, v in mapping.items():
+            if v is None or v == "" or v == []:
+                continue
+            new_med[k] = v
+            sources[k] = source
+            changed.append(k)
+        if changed:
+            new_med["_field_sources"] = sources
+            log = list(new_med.get("_change_log") or [])
+            log.append({
+                "review_id": review_id,
+                "review_date": review_date,
+                "kind": "medical_exam",
+                "changed": changed,
+                "at": source["at"],
+            })
+            new_med["_change_log"] = log[-20:]
+            new_med["_last_source_review_id"] = review_id
+            new_med["_last_source_review_date"] = review_date
+            set_ops["medical"] = new_med
+
+    if set_ops:
+        await db.social_cases.update_one({"id": case["id"]}, {"$set": set_ops})
 
 
 async def _compute_child_risk(child_id: str, latest_kind: str, latest_fields: dict, latest_set_ops: dict) -> dict:

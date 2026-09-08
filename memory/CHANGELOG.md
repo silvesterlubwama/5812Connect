@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## iter 332 — 2026-02 — Social Work auto-populate + Notes chronology
+
+### Auto-populate case Family/Education/Medical from reviews
+- `routers/social_review_forms/child_sync.py` gains
+  `_apply_review_to_case(child_id, kind, data, fields, review_id)`
+  called from `_apply_review_to_child` after the child doc updates.
+- Mirrors the latest review's structured fields onto the active
+  `db.social_cases` document so the `CaseDetailDialog` reads fresh
+  values without staff retyping.
+- Writes a `_field_sources[fieldName] = {review_id, review_date, kind,
+  at}` map + a rolling `_change_log[]` (last 20 entries) on each
+  section so counsellors can audit exactly which review overwrote
+  which value.
+- welfare_visit → family; school_progress → education (with
+  prev→new pairs); medical_exam → medical.
+- Idempotent — re-saving the same review updates the source stamp but
+  never DELETES existing fields.
+
+### Frontend source pills + change-log dialog
+- `pages/SocialWorkPage.jsx` renders `SourceBadge` (`from home visit
+  YYYY-MM-DD`) inline next to every auto-populated Family / Education
+  / Medical field. `ChangeLogButton` opens a per-section audit dialog.
+- A one-line emerald banner appears at the top of Family / Education
+  when at least one auto-populated field is present, telling
+  counsellors "edit and Save to overwrite".
+
+### Notes chronology "New" pill
+- Notes remain newest-first (existing behaviour). Unseen notes get an
+  animated green `New` pill + emerald ring + light shadow to visibly
+  rise above the chronology.
+- Seen state stored per case in `localStorage`
+  (`sw:seen_notes:<caseId>`). Clicking a note marks it seen; the pill
+  clears immediately.
+
+### Tests
+- `backend/tests/test_iter298_case_autopop.py` — direct calls to
+  `_apply_review_to_case` verify welfare / school / medical +
+  idempotent re-runs (all four scenarios in a single test to share
+  the motor event loop).
+
 ## iter 331 — 2026-02 — Social Work merge · Donation payer filter · Seed COA 4005
 
 ### Social Work tabs merged

@@ -20,7 +20,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe, ExternalLink } from 'lucide-react';
+import { HeartHandshake, Plus, RefreshCw, GraduationCap, FileText, DollarSign, Users, Trash2, KeyRound, Copy, Eye, AlertTriangle, BookOpen, Heart, Home, Target, ClipboardList, ClipboardCheck, Search, FileDown, Globe, ExternalLink, History, Sparkles } from 'lucide-react';
 import SocialReviewsPanel from '../components/SocialReviewsPanel';
 import ReviewsDueWidget from '../components/ReviewsDueWidget';
 import ExternalSponsorAutocomplete from '../components/ExternalSponsorAutocomplete';
@@ -55,6 +55,103 @@ const PAYMENT_KIND_LABELS = {
   medical: 'Medical support',
   child_support: 'Sponsor payment received',
 };
+
+// Auto-populated fields (Family / Education / Medical) carry a
+// `_field_sources[fieldName] = { review_id, review_date, kind }` map that the
+// backend writes whenever a review form fills in a value. This badge surfaces
+// that origin next to the field so counsellors know the number came from the
+// N Feb 2026 home visit — not from a random keystroke last month.
+function SourceBadge({ src, testid }) {
+  if (!src) return null;
+  const kindLabel = { welfare_visit: 'home visit', school_progress: 'school review', medical_exam: 'medical exam' }[src.kind] || 'review';
+  const when = (src.review_date || '').slice(0, 10) || (src.at || '').slice(0, 10);
+  return (
+    <Badge
+      variant="outline"
+      className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200 ml-2 whitespace-nowrap"
+      title={`Auto-populated from ${kindLabel}${when ? ` dated ${when}` : ''}`}
+      data-testid={testid}
+    >
+      <Sparkles size={9} className="mr-0.5" /> from {kindLabel}{when ? ` ${when}` : ''}
+    </Badge>
+  );
+}
+
+// Compact button that opens a dialog listing every auto-populated overwrite
+// on a section (education/family/medical) so directors can audit exactly
+// which value was replaced by which review and when.
+function ChangeLogButton({ log, sectionLabel, testid }) {
+  const [open, setOpen] = useState(false);
+  const entries = Array.isArray(log) ? [...log].reverse() : [];
+  if (!entries.length) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-[10px] text-primary hover:underline inline-flex items-center gap-1"
+        data-testid={testid}
+      >
+        <History size={10} /> View change log ({entries.length})
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-lg" aria-describedby={undefined}>
+          <DialogHeader><DialogTitle className="text-sm">{sectionLabel} — auto-populate history</DialogTitle></DialogHeader>
+          <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+            {entries.map((e, i) => (
+              <div key={i} className="p-2 rounded border text-xs space-y-1" data-testid={`change-log-entry-${i}`}>
+                <div className="flex items-center justify-between">
+                  <Badge variant="outline" className="text-[10px] capitalize">
+                    {(e.kind || '').replace('_', ' ') || 'review'}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground">{(e.review_date || '').slice(0, 10)}</span>
+                </div>
+                {Array.isArray(e.changes) && e.changes.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {e.changes.map((c, j) => (
+                      <li key={j} className="text-[11px]">
+                        <span className="font-medium">{c.field.replace(/_/g, ' ')}:</span>{' '}
+                        <span className="line-through text-muted-foreground">{String(c.from ?? '—')}</span>{' → '}
+                        <span className="text-emerald-700">{String(c.to ?? '—')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {Array.isArray(e.changed) && e.changed.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground">Overwrote: {e.changed.map(f => f.replace(/_/g, ' ')).join(', ')}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// Track which notes the current user has already seen so a fresh note stands
+// out with a green "New" pill. We persist per-case in localStorage so the
+// badge disappears once you close and reopen the dialog on the same device.
+function useSeenNotes(caseId) {
+  const storageKey = caseId ? `sw:seen_notes:${caseId}` : null;
+  const [seen, setSeen] = useState(() => {
+    if (!storageKey) return new Set();
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch { return new Set(); }
+  });
+  const markSeen = useCallback((id) => {
+    if (!storageKey || !id) return;
+    setSeen(prev => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev); next.add(id);
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  }, [storageKey]);
+  return [seen, markSeen];
+}
 
 export default function SocialWorkPage() {
   const { user } = useAuth();
@@ -535,7 +632,7 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
   const [editing, setEditing] = useState(null);  // local edits (education/medical/family/goals)
   const [complianceEdits, setComplianceEdits] = useState({});
   const [newNote, setNewNote] = useState({ kind: 'visit', body: '', is_confidential: false });
-  const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
+  const [seenNotes, markNoteSeen] = useSeenNotes(caseId);  const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
   // When a manual sponsor's email matches an existing in-system user we surface a
   // "link this account instead?" banner so org-wide identity stays unified.
   const [sponsorUserMatch, setSponsorUserMatch] = useState(null);
@@ -1060,16 +1157,30 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
 
             {/* EDUCATION */}
             <TabsContent value="education" className="space-y-4 mt-4">
-              <p className="text-[11px] text-muted-foreground -mb-2">Click any field to edit. Save with the button at the bottom of the section.</p>
+              <div className="flex items-center justify-between gap-2 -mb-2">
+                <p className="text-[11px] text-muted-foreground">Click any field to edit. Save with the button at the bottom of the section.</p>
+                <ChangeLogButton
+                  log={caseDoc?.education?._change_log}
+                  sectionLabel="Education"
+                  testid="cd-education-changelog-btn"
+                />
+              </div>
+              {caseDoc?.education?._last_source_review_date && (
+                <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 flex items-center gap-1" data-testid="cd-education-autopop-banner">
+                  <Sparkles size={10} /> Fields with a green pill were auto-populated from the newest school review — overwrite them by editing and Save.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5"><Label className="text-xs">Grade / Level</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center"><Label className="text-xs">Grade / Level</Label><SourceBadge src={caseDoc?.education?._field_sources?.grade} testid="cd-src-grade" /></div>
                   <Input value={editing.education?.grade || ''} onChange={e => setEditing({ ...editing, education: { ...editing.education, grade: e.target.value } })} data-testid="cd-grade" />
                 </div>
                 <div className="space-y-1.5"><Label className="text-xs">Enrollment date</Label>
                   <Input type="date" value={editing.education?.enrollment_date || ''} onChange={e => setEditing({ ...editing, education: { ...editing.education, enrollment_date: e.target.value } })} />
                 </div>
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">School</Label>
+              <div className="space-y-1.5">
+                <div className="flex items-center"><Label className="text-xs">School</Label><SourceBadge src={caseDoc?.education?._field_sources?.school_name} testid="cd-src-school" /></div>
                 <Select value={editing.education?.school_id || 'none'} onValueChange={v => {
                   const s = schools.find(x => x.id === v);
                   setEditing({ ...editing, education: { ...editing.education, school_id: v === 'none' ? null : v, school_name: s?.name || '' } });
@@ -1081,6 +1192,25 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                   </SelectContent>
                 </Select>
               </div>
+              {/* Auto-populated academic signals from the latest school-progress review.
+                  These are read-only on the summary but always visible so counsellors
+                  don't have to open the review to see the freshest numbers. */}
+              {(caseDoc?.education?.attendance_pct != null || caseDoc?.education?.academic_performance || caseDoc?.education?.class_teacher) && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2 rounded border bg-muted/30" data-testid="cd-education-review-signals">
+                  {caseDoc?.education?.attendance_pct != null && (
+                    <div><p className="text-[10px] text-muted-foreground">Attendance</p><p className="text-sm font-medium">{caseDoc.education.attendance_pct}%</p><SourceBadge src={caseDoc?.education?._field_sources?.attendance_pct} testid="cd-src-attendance" /></div>
+                  )}
+                  {caseDoc?.education?.academic_performance && (
+                    <div><p className="text-[10px] text-muted-foreground">Performance</p><p className="text-sm font-medium capitalize">{caseDoc.education.academic_performance}</p><SourceBadge src={caseDoc?.education?._field_sources?.academic_performance} testid="cd-src-perf" /></div>
+                  )}
+                  {caseDoc?.education?.class_position && (
+                    <div><p className="text-[10px] text-muted-foreground">Class position</p><p className="text-sm font-medium">{caseDoc.education.class_position}</p><SourceBadge src={caseDoc?.education?._field_sources?.class_position} testid="cd-src-position" /></div>
+                  )}
+                  {caseDoc?.education?.class_teacher && (
+                    <div><p className="text-[10px] text-muted-foreground">Class teacher</p><p className="text-sm font-medium">{caseDoc.education.class_teacher}</p><SourceBadge src={caseDoc?.education?._field_sources?.class_teacher} testid="cd-src-teacher" /></div>
+                  )}
+                </div>
+              )}
               <div className="space-y-1.5"><Label className="text-xs">Extracurricular activities (comma-separated)</Label>
                 <Input value={(editing.education?.extracurricular || []).join(', ')} onChange={e => setEditing({ ...editing, education: { ...editing.education, extracurricular: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} placeholder="football, choir, debate" />
               </div>
@@ -1101,11 +1231,20 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                   from the form below when a new medical_exam is saved, so editing here directly is
                   for one-off corrections between exams. */}
               <div className="space-y-3 p-3 rounded-lg border" data-testid="cd-medical-summary">
-                <p className="text-[11px] text-muted-foreground -mb-1">Quick summary — full exam history + forms below.</p>
-                <div className="space-y-1.5"><Label className="text-xs">Conditions (comma-separated)</Label>
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] text-muted-foreground">Quick summary — full exam history + forms below.</p>
+                  <ChangeLogButton
+                    log={caseDoc?.medical?._change_log}
+                    sectionLabel="Medical"
+                    testid="cd-medical-changelog-btn"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center"><Label className="text-xs">Conditions (comma-separated)</Label><SourceBadge src={caseDoc?.medical?._field_sources?.conditions} testid="cd-src-conditions" /></div>
                   <Input value={(editing.medical?.conditions || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, conditions: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} data-testid="cd-conditions" />
                 </div>
-                <div className="space-y-1.5"><Label className="text-xs">Allergies (comma-separated)</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center"><Label className="text-xs">Allergies (comma-separated)</Label><SourceBadge src={caseDoc?.medical?._field_sources?.allergies} testid="cd-src-allergies" /></div>
                   <Input value={(editing.medical?.allergies || []).join(', ')} onChange={e => setEditing({ ...editing, medical: { ...editing.medical, allergies: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -1135,18 +1274,50 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
 
             {/* FAMILY */}
             <TabsContent value="family" className="space-y-4 mt-4">
-              <div className="space-y-1.5"><Label className="text-xs">Guardians (comma-separated)</Label>
+              <div className="flex items-center justify-end -mb-2">
+                <ChangeLogButton
+                  log={caseDoc?.family?._change_log}
+                  sectionLabel="Family"
+                  testid="cd-family-changelog-btn"
+                />
+              </div>
+              {caseDoc?.family?._last_source_review_date && (
+                <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 flex items-center gap-1" data-testid="cd-family-autopop-banner">
+                  <Sparkles size={10} /> Fields with a green pill were auto-populated from the newest home visit — overwrite by editing and Save.
+                </p>
+              )}
+              <div className="space-y-1.5">
+                <div className="flex items-center"><Label className="text-xs">Guardians (comma-separated)</Label><SourceBadge src={caseDoc?.family?._field_sources?.guardians} testid="cd-src-guardians" /></div>
                 <Input value={(editing.family?.guardians || []).join(', ')} onChange={e => setEditing({ ...editing, family: { ...editing.family, guardians: e.target.value.split(',').map(x => x.trim()).filter(Boolean) } })} />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5"><Label className="text-xs">Number of siblings</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center"><Label className="text-xs">Number of siblings</Label><SourceBadge src={caseDoc?.family?._field_sources?.siblings} testid="cd-src-siblings" /></div>
                   <Input type="number" value={editing.family?.siblings ?? ''} onChange={e => setEditing({ ...editing, family: { ...editing.family, siblings: parseInt(e.target.value) || 0 } })} />
                 </div>
-                <div className="space-y-1.5"><Label className="text-xs">Household income notes</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center"><Label className="text-xs">Household income notes</Label><SourceBadge src={caseDoc?.family?._field_sources?.household_income} testid="cd-src-income" /></div>
                   <Input value={editing.family?.household_income || ''} onChange={e => setEditing({ ...editing, family: { ...editing.family, household_income: e.target.value } })} placeholder="e.g. mother is single, casual labour" />
                 </div>
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">Family situation</Label>
+              {(caseDoc?.family?.primary_caregiver || caseDoc?.family?.village_parish || caseDoc?.family?.district || caseDoc?.family?.caregiver_relationship) && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2 rounded border bg-muted/30" data-testid="cd-family-review-signals">
+                  {caseDoc?.family?.primary_caregiver && (
+                    <div><p className="text-[10px] text-muted-foreground">Primary caregiver</p><p className="text-sm font-medium">{caseDoc.family.primary_caregiver}</p><SourceBadge src={caseDoc?.family?._field_sources?.primary_caregiver} testid="cd-src-caregiver" /></div>
+                  )}
+                  {caseDoc?.family?.caregiver_relationship && (
+                    <div><p className="text-[10px] text-muted-foreground">Relationship</p><p className="text-sm font-medium capitalize">{caseDoc.family.caregiver_relationship}</p><SourceBadge src={caseDoc?.family?._field_sources?.caregiver_relationship} testid="cd-src-relationship" /></div>
+                  )}
+                  {caseDoc?.family?.village_parish && (
+                    <div><p className="text-[10px] text-muted-foreground">Village / parish</p><p className="text-sm font-medium">{caseDoc.family.village_parish}</p><SourceBadge src={caseDoc?.family?._field_sources?.village_parish} testid="cd-src-village" /></div>
+                  )}
+                  {caseDoc?.family?.district && (
+                    <div><p className="text-[10px] text-muted-foreground">District</p><p className="text-sm font-medium">{caseDoc.family.district}</p><SourceBadge src={caseDoc?.family?._field_sources?.district} testid="cd-src-district" /></div>
+                  )}
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <div className="flex items-center"><Label className="text-xs">Family situation</Label><SourceBadge src={caseDoc?.family?._field_sources?.notes} testid="cd-src-family-notes" /></div>
                 <Textarea rows={3} value={editing.family?.notes || ''} onChange={e => setEditing({ ...editing, family: { ...editing.family, notes: e.target.value } })} />
               </div>
               <Button size="sm" onClick={() => saveSection('family')} data-testid="cd-family-save">Save family</Button>
@@ -1327,24 +1498,43 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
               </Card>
               {notes.length === 0 ? <EmptyState compact icon={ClipboardList} title="No notes yet" description="Use this space for visit observations, counseling notes, and safeguarding flags." testid="cd-notes-empty" /> : (
                 <div className="space-y-2">
-                  {notes.map(n => (
-                    <div key={n.id} className="p-2 rounded border text-xs" data-testid={`cd-note-${n.id}`}>
+                  {notes.map((n, idx) => {
+                    // Notes are already newest-first from the API. The freshest
+                    // note the current user hasn't opened yet is highlighted so
+                    // it visibly rises above the chronology. Click anywhere on
+                    // the note (or its body) to clear the pill.
+                    const isNew = !seenNotes.has(n.id);
+                    const isTop = idx === 0;
+                    return (
+                    <div
+                      key={n.id}
+                      className={`p-2 rounded border text-xs cursor-pointer transition-all ${isNew ? 'border-emerald-400 bg-emerald-50/40 ring-1 ring-emerald-200' : ''} ${isTop && isNew ? 'shadow-sm' : ''}`}
+                      data-testid={`cd-note-${n.id}`}
+                      data-note-new={isNew ? 'true' : 'false'}
+                      onClick={() => markNoteSeen(n.id)}
+                    >
                       <div className="flex items-center justify-between gap-2 mb-1">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {isNew && (
+                            <Badge className="bg-emerald-500 text-white text-[10px] animate-pulse" data-testid={`cd-note-new-badge-${n.id}`}>
+                              <Sparkles size={9} className="mr-0.5" />New
+                            </Badge>
+                          )}
                           <Badge variant="outline" className="text-[10px] capitalize">{n.kind}</Badge>
                           {n.is_confidential && <Badge className="bg-red-100 text-red-700 text-[10px]"><AlertTriangle size={9} className="mr-0.5" />Confidential</Badge>}
                           {n.source === 'school_portal' && <Badge className="bg-blue-100 text-blue-700 text-[10px]"><GraduationCap size={9} className="mr-0.5" />from {n.school_name}</Badge>}
                         </div>
-                        <span className="text-[10px] text-muted-foreground">{n.created_at?.slice(0, 16).replace('T', ' ')} · {n.created_by_name}</span>
+                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">{n.created_at?.slice(0, 16).replace('T', ' ')} · {n.created_by_name}</span>
                       </div>
                       <p className="whitespace-pre-wrap">{n.body}</p>
                       {(n.attachments || []).length > 0 && (
                         <div className="mt-1 text-[10px]">
-                          {n.attachments.map((a, i) => <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="text-primary underline mr-2">📎 {a.name || 'Attachment'}</a>)}
+                          {n.attachments.map((a, i) => <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="text-primary underline mr-2" onClick={e => e.stopPropagation()}>📎 {a.name || 'Attachment'}</a>)}
                         </div>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </TabsContent>

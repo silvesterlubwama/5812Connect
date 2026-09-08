@@ -7,6 +7,42 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 332)
+
+### iter 332 — Social Work auto-populate (Family / Education / Medical) + Notes chronology
+- **Auto-populate case sub-docs from reviews**: `_apply_review_to_child`
+  in `routers/social_review_forms/child_sync.py` now also mirrors the
+  latest review's structured fields onto the child's active
+  `db.social_cases` document (which is what the `CaseDetailDialog`
+  reads). New helper `_apply_review_to_case(child_id, kind, data,
+  fields, review_id)` handles all three kinds:
+  * `welfare_visit` → `case.family` (guardians, siblings,
+    household_income, notes, primary_caregiver, caregiver_relationship,
+    village_parish, district).
+  * `school_progress` → `case.education` (grade, school_name,
+    current_term, class_teacher, teacher_phone, attendance_pct,
+    discipline, academic_performance, class_position) with a
+    prev→new change log entry.
+  * `medical_exam` → `case.medical` (conditions, allergies,
+    current_medication, nutritional_status, notes, primary_doctor).
+  Every populated field carries a `_field_sources[fieldName] =
+  {review_id, review_date, kind, at}` marker + a rolling
+  `_change_log[]` (last 20 entries) so counsellors can audit
+  overwrites.
+- **UI source pills**: `pages/SocialWorkPage.jsx` renders a
+  `SourceBadge` (`from home visit YYYY-MM-DD` / `from school review …`
+  / `from medical exam …`) next to every auto-populated field. A
+  `ChangeLogButton` on Education/Family/Medical opens a dialog showing
+  every historical overwrite with prev→new values.
+- **Notes "New" chronology**: notes stay newest-first (existing
+  behaviour). Unseen notes now get a green `New` pill + emerald ring
+  until the user clicks them. Seen state is persisted per case in
+  `localStorage` under `sw:seen_notes:<caseId>` so the pill clears
+  once you've read the note but survives dialog re-opens for other
+  notes.
+- Tests: `backend/tests/test_iter298_case_autopop.py` covers all three
+  kinds + idempotent re-runs.
+
 ## Current status (as of iter 331)
 
 ### iter 331 — Social Work merge · Payer filter · Seed 4005
