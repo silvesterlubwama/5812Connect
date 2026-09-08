@@ -7,6 +7,23 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 331)
+
+### iter 331 — Social Work merge · Payer filter · Seed 4005
+- **Social Work tab merge**: `CaseDetailDialog` tabs `medical`, `notes`,
+  and `school_reviews` were folded into their parents. Labels now read
+  **Education & School**, **Family & Medical**, **Goals & Notes**.
+  Radix renders both `TabsContent` blocks with the same active value,
+  so no content was lost — each secondary section shows below a
+  `border-t` divider with a section heading.
+- **Donation payer filter**: `GET /api/financial/donations` accepts
+  `?payer_type=sponsor|parent|org|external`. Legacy rows without
+  `payer_type` are matched by mirror `type` fallback so historical
+  data slots into the right bucket without a migration.
+- **Seed COA `4005 Parent Contributions Income`**: added to the
+  default seed list in `finance/_common.py` so new campuses ship
+  with parent vs sponsor split reporting out of the box.
+
 ## Current status (as of iter 330)
 
 ### iter 330 — Sponsor↔Parent payment routing, Slot picker, Scanner deep-link

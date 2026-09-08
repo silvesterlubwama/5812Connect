@@ -250,13 +250,28 @@ async def distribute_funds(data: dict, current_user: dict = Depends(require_dire
 # ========== DONATIONS ==========
 
 @router.get("/financial/donations")
-async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
+async def list_donations(skip: int = 0, limit: int = 100, location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, payer_type: Optional[str] = None, current_user: dict = Depends(require_finance_view)):
+    """List donations with optional filters. `payer_type` (`sponsor` /
+    `parent` / `org` / `external`) is honoured on the `payer_type`
+    column that social-work payments now stamp — legacy rows without
+    the field are matched by `type` fallback: `parent_contribution`
+    → parent, `sponsorship` → sponsor."""
     query = {**await _financial_campus_filter(current_user)}
     if location_id: query["location_id"] = location_id
     if date_from or date_to:
         query["date"] = {}
         if date_from: query["date"]["$gte"] = date_from
         if date_to: query["date"]["$lte"] = date_to
+    if payer_type:
+        pt = payer_type.strip().lower()
+        # Backwards compatible: pre-iter-330 donations don't have
+        # `payer_type` so infer from `type` for a clean filter.
+        if pt == "parent":
+            query["$or"] = [{"payer_type": "parent"}, {"type": "parent_contribution"}]
+        elif pt == "sponsor":
+            query["$or"] = [{"payer_type": "sponsor"}, {"type": "sponsorship"}]
+        else:
+            query["payer_type"] = pt
     return await db.donations.find(query, {"_id": 0}).sort("date", -1).skip(skip).limit(limit).to_list(limit)
 
 

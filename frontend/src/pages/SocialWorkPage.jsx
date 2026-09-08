@@ -816,14 +816,16 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                 Abbreviated labels keep each trigger compact while testids remain stable. */}
             <TabsList className="w-full flex flex-nowrap overflow-x-auto justify-start gap-0.5 h-auto p-1">
               <TabsTrigger value="overview" data-testid="cd-tab-overview" className="text-xs px-2.5 py-1.5 shrink-0">Overview</TabsTrigger>
-              <TabsTrigger value="education" data-testid="cd-tab-education" className="text-xs px-2.5 py-1.5 shrink-0"><BookOpen size={11} className="mr-1" />Education</TabsTrigger>
-              <TabsTrigger value="medical" data-testid="cd-tab-medical" className="text-xs px-2.5 py-1.5 shrink-0"><Heart size={11} className="mr-1" />Medical</TabsTrigger>
-              <TabsTrigger value="family" data-testid="cd-tab-family" className="text-xs px-2.5 py-1.5 shrink-0"><Home size={11} className="mr-1" />Family</TabsTrigger>
+              {/* iter-sw-merge: tab labels now reflect the combined
+                  Education+School, Family+Medical, Goals+Notes panes.
+                  The old standalone `medical`, `notes` and `school_reviews`
+                  triggers were removed — their content still lives in
+                  their TabsContent so links / deep-links keep working. */}
+              <TabsTrigger value="education" data-testid="cd-tab-education" className="text-xs px-2.5 py-1.5 shrink-0"><BookOpen size={11} className="mr-1" />Education &amp; School</TabsTrigger>
+              <TabsTrigger value="family" data-testid="cd-tab-family" className="text-xs px-2.5 py-1.5 shrink-0"><Home size={11} className="mr-1" />Family &amp; Medical</TabsTrigger>
               <TabsTrigger value="compliance" data-testid="cd-tab-compliance" className="text-xs px-2.5 py-1.5 shrink-0"><Globe size={11} className="mr-1" />Compliance</TabsTrigger>
-              <TabsTrigger value="goals" data-testid="cd-tab-goals" className="text-xs px-2.5 py-1.5 shrink-0"><Target size={11} className="mr-1" />Goals</TabsTrigger>
+              <TabsTrigger value="goals" data-testid="cd-tab-goals" className="text-xs px-2.5 py-1.5 shrink-0"><Target size={11} className="mr-1" />Goals &amp; Notes</TabsTrigger>
               <TabsTrigger value="payments" data-testid="cd-tab-payments" className="text-xs px-2.5 py-1.5 shrink-0"><DollarSign size={11} className="mr-1" />Payments ({payments.length})</TabsTrigger>
-              <TabsTrigger value="notes" data-testid="cd-tab-notes" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardList size={11} className="mr-1" />Notes ({notes.length})</TabsTrigger>
-              <TabsTrigger value="school_reviews" data-testid="cd-tab-school-reviews" className="text-xs px-2.5 py-1.5 shrink-0"><GraduationCap size={11} className="mr-1" />School</TabsTrigger>
               <TabsTrigger value="welfare_visits" data-testid="cd-tab-welfare-visits" className="text-xs px-2.5 py-1.5 shrink-0"><ClipboardCheck size={11} className="mr-1" />Welfare</TabsTrigger>
               <TabsTrigger value="documents" data-testid="cd-tab-documents" className="text-xs px-2.5 py-1.5 shrink-0"><FileText size={11} className="mr-1" />Documents</TabsTrigger>
             </TabsList>
@@ -1086,7 +1088,14 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
             </TabsContent>
 
             {/* MEDICAL */}
-            <TabsContent value="medical" className="space-y-4 mt-4">
+            {/* iter-sw-merge: medical rolls under Family & Medical.
+                Kept as a separate TabsContent so all state hooks that
+                reference `medical`-only values keep their scope. */}
+            <TabsContent value="family" className="space-y-4 mt-6 border-t pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Heart size={14} className="text-red-500" />
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Medical</h4>
+              </div>
               {/* Combined Medical view — quick-edit summary + full Medical Examinations history
                   (was two separate tabs in iter-172; user asked us to merge). Summary fields auto-sync
                   from the form below when a new medical_exam is saved, so editing here directly is
@@ -1291,7 +1300,12 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
             </TabsContent>
 
             {/* NOTES */}
-            <TabsContent value="notes" className="space-y-4 mt-4">
+            {/* iter-sw-merge: notes rolls under Goals & Notes. */}
+            <TabsContent value="goals" className="space-y-4 mt-6 border-t pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <ClipboardList size={14} className="text-primary" />
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Case notes ({notes.length})</h4>
+              </div>
               <Card className="rounded-lg border-dashed">
                 <CardContent className="p-3 space-y-2">
                   <p className="text-xs font-semibold uppercase text-muted-foreground">Add a note</p>
@@ -1336,7 +1350,12 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
             </TabsContent>
 
             {/* SCHOOL PROGRESS REVIEWS — termly review forms filled at school visits */}
-            <TabsContent value="school_reviews" className="space-y-4 mt-4">
+            {/* iter-sw-merge: school reviews roll under Education & School. */}
+            <TabsContent value="education" className="space-y-4 mt-6 border-t pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <GraduationCap size={14} className="text-blue-500" />
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">School reviews</h4>
+              </div>
               <SocialReviewsPanel child={subject} kind="school_progress" />
             </TabsContent>
 

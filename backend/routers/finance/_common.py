@@ -93,6 +93,10 @@ SEED_ACCOUNTS = [
     {"code": "3100", "name": "Retained Earnings", "type": "equity"},
     # Revenue
     {"code": "4000", "name": "Sponsorship Income", "type": "revenue"},
+    # iter-parent-vs-sponsor: distinct income line so campus P&L can split
+    # external sponsor gifts from parent/guardian contributions cleanly.
+    # `add_case_payment` credits this account when payer_type == "parent".
+    {"code": "4005", "name": "Parent Contributions Income", "type": "revenue"},
     {"code": "4100", "name": "Sales Revenue", "type": "revenue"},
     {"code": "4900", "name": "Other Income", "type": "revenue"},
     # Expenses

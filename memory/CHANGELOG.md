@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## iter 331 — 2026-02 — Social Work merge · Donation payer filter · Seed COA 4005
+
+### Social Work tabs merged
+- `pages/SocialWorkPage.jsx` `CaseDetailDialog` tabs collapsed from 11
+  to 8 by folding `medical` → **Family & Medical**, `notes` → **Goals &
+  Notes**, `school_reviews` → **Education & School**.
+- Achieved by re-tagging the secondary `TabsContent` blocks with the
+  parent's `value` — Radix mounts every matching content section,
+  giving one continuous canvas per subject. Each secondary block shows
+  under a `border-t` divider with a `Heart` / `ClipboardList` /
+  `GraduationCap` section heading so counsellors keep their bearings.
+- No content was deleted or moved; all existing state hooks and
+  actions keep working unchanged.
+
+### Donation payer-type filter
+- `GET /api/financial/donations` now accepts `?payer_type=` (`sponsor` |
+  `parent` | `org` | `external`). Backwards-compatible: legacy rows
+  without `payer_type` are matched by mirror `type` (`sponsorship` →
+  sponsor, `parent_contribution` → parent) so historical data slots
+  in without a migration.
+- Verified end-to-end via curl: `?payer_type=parent` returns the
+  parent-contribution row from iter 330 tests; `?payer_type=sponsor`
+  returns the sponsor row.
+
+### Seed COA `4005 Parent Contributions Income`
+- Added to `SEED_ACCOUNTS` in `routers/finance/_common.py` so new
+  campuses ship with the parent-vs-sponsor income split without a
+  manual step. `add_case_payment` already prefers 4005 with a
+  fallback to 4000, so this closes the loop.
+
 ## iter 330 — 2026-02 — Sponsor↔Parent payments · Slot picker · Scanner deep-link
 
 ### Sponsor vs Parent payment routing (backend)
