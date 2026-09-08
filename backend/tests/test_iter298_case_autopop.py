@@ -152,7 +152,13 @@ def test_iter298_case_autopop_all_scenarios():
     motor client stays valid across the whole run (pytest-asyncio not
     configured in this project — this pattern matches test_iter293 etc.)."""
     async def _run():
-        from deps import db  # bound to whatever loop imports this first
+        # Force a fresh motor client bound to THIS loop so co-running with
+        # other iter tests that use deps.db doesn't hit "Event loop is closed".
+        import deps
+        from motor.motor_asyncio import AsyncIOMotorClient
+        client = AsyncIOMotorClient(deps.MONGO_URL if hasattr(deps, "MONGO_URL") else os.environ["MONGO_URL"])
+        deps.db = client[os.environ["DB_NAME"]]
+        db = deps.db
         from routers.social_review_forms.child_sync import _apply_review_to_case
         await _welfare_case(db, _apply_review_to_case)
         await _school_case(db, _apply_review_to_case)

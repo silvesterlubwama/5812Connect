@@ -327,10 +327,11 @@ export function UserEditDialog({ open, onOpenChange, selectedUser, editForm, set
           <TabsContent value="account" className="space-y-4 mt-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2"><Label>Primary Role</Label>
-                <Select value={editForm.role === 'admin' || editForm.role === 'system_admin' ? 'Staff' : (editForm.role || 'Member')} onValueChange={v => setEditForm({...editForm, role: v})}>
+                <Select value={editForm.role === 'admin' || editForm.role === 'system_admin' ? 'Staff' : (editForm.role || 'Member')} onValueChange={v => setEditForm({...editForm, role: v, is_admin: false })}>
                   <SelectTrigger data-testid="edit-role-select"><SelectValue /></SelectTrigger>
                   <SelectContent>{ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                 </Select>
+                <p className="text-[10px] text-muted-foreground">Picking a role here clears the admin-access toggle. Turn admin back on below if you want to keep sysadmin.</p>
               </div>
               <div className="space-y-2"><Label>Status</Label>
                 <Select value={editForm.status || 'active'} onValueChange={v => setEditForm({...editForm, status: v})}>

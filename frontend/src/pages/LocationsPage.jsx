@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import api from '../services/api';
-import { locationsApi, membersApi, venuesApi, groupTypesApi } from '../services/api';
+import { locationsApi, membersApi, venuesApi, groupTypesApi, departmentsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -56,6 +56,12 @@ export default function LocationsPage() {
   const [form, setForm] = useState(emptyForm);
   const [deptInput, setDeptInput] = useState('');
   const [expanded, setExpanded] = useState({});
+  // iter-loc-console-depts: read-only preview of console-managed departments
+  // for the location currently being edited. Actual CRUD lives in Admin →
+  // Departments; we surface the list here so admins can see which cost
+  // centres are wired up without leaving the editor.
+  const [consoleDepts, setConsoleDepts] = useState([]);
+  const [consoleDeptsLoading, setConsoleDeptsLoading] = useState(false);
   const [venues, setVenues] = useState([]);
   const [groupTypes, setGroupTypes] = useState([]);
   const [showVenueForm, setShowVenueForm] = useState(false);
@@ -109,6 +115,13 @@ export default function LocationsPage() {
       allows_residents: loc.allows_residents !== false,
     });
     setDeptInput('');
+    // Load console-managed departments for THIS location so the editor
+    // shows the live cost-centre list next to the legacy free-text field.
+    setConsoleDeptsLoading(true);
+    departmentsApi.list({ location_id: loc.id, include_inactive: false })
+      .then(r => setConsoleDepts(r.data || []))
+      .catch(() => setConsoleDepts([]))
+      .finally(() => setConsoleDeptsLoading(false));
     setShowModal(true);
   };
 
@@ -490,22 +503,91 @@ export default function LocationsPage() {
               </div>
             )}
 
-            {/* Departments */}
-            <div className="space-y-2">
-              <Label>Departments</Label>
-              <div className="flex gap-2">
-                <Input placeholder="Add department..." value={deptInput} onChange={e => setDeptInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addDept(); } }} />
-                <Button type="button" variant="outline" size="sm" onClick={addDept}>Add</Button>
+            {/* Departments — console-managed (Admin → Departments) rendered
+                as read-only chips. Below is the legacy free-text field kept
+                for backwards compatibility while campuses migrate off it. */}
+            <div className="space-y-2" data-testid="loc-departments-block">
+              <div className="flex items-center justify-between">
+                <Label>Departments</Label>
+                {editing && (
+                  <a
+                    href="/admin?tab=departments"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-primary hover:underline inline-flex items-center gap-1"
+                    data-testid="manage-departments-link"
+                  >
+                    <UserCog size={11} /> Manage in Admin console
+                  </a>
+                )}
               </div>
-              {form.departments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {form.departments.map(d => (
-                    <Badge key={d} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => removeDept(d)}>
-                      {d} <XCircle size={10} />
-                    </Badge>
-                  ))}
-                </div>
+              {editing ? (
+                <>
+                  <div className="rounded-md border bg-muted/30 p-2" data-testid="console-dept-list">
+                    {consoleDeptsLoading ? (
+                      <p className="text-[11px] text-muted-foreground">Loading departments…</p>
+                    ) : consoleDepts.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground italic">
+                        No departments defined for this campus yet. Add them in
+                        Admin → Departments to enable Option-B cost-centre
+                        splits.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {consoleDepts.map(d => (
+                          <span
+                            key={d.id}
+                            className="inline-flex items-center gap-1 text-[11px] rounded-full border px-2 py-0.5 bg-background"
+                            style={d.color ? { borderColor: d.color, color: d.color } : undefined}
+                            data-testid={`console-dept-${d.id}`}
+                          >
+                            {d.color && <span className="w-1.5 h-1.5 rounded-full" style={{ background: d.color }} />}
+                            {d.name}
+                            {d.budget != null && d.budget > 0 && (
+                              <span className="text-[9px] text-muted-foreground">· budget {d.budget.toLocaleString()}</span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {form.departments.length > 0 && (
+                    <div className="rounded-md border border-dashed border-amber-300 bg-amber-50/60 p-2" data-testid="legacy-dept-block">
+                      <p className="text-[11px] text-amber-800 mb-1.5">
+                        Legacy free-text departments — migrate these into Admin
+                        → Departments so they show up on the P&amp;L drill-down.
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {form.departments.map(d => (
+                          <Badge key={d} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => removeDept(d)}>
+                            {d} <XCircle size={10} />
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="text-[11px] text-muted-foreground">
+                    Save this campus first — then reopen to manage its
+                    departments from the Admin console.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input placeholder="Legacy: add free-text department..." value={deptInput} onChange={e => setDeptInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addDept(); } }} />
+                    <Button type="button" variant="outline" size="sm" onClick={addDept}>Add</Button>
+                  </div>
+                  {form.departments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {form.departments.map(d => (
+                        <Badge key={d} variant="secondary" className="text-xs gap-1 cursor-pointer" onClick={() => removeDept(d)}>
+                          {d} <XCircle size={10} />
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

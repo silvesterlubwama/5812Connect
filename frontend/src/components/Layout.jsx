@@ -26,6 +26,7 @@ import { useI18n } from '../context/I18nContext';
 import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
 import Dialer from './Dialer';
+import IncomingCallModal from './IncomingCallModal';
 
 // Role helpers
 const ADMIN_ROLES = ['admin', 'system_admin'];
@@ -684,6 +685,11 @@ export default function Layout() {
 
         <main className="flex-1 overflow-y-auto"><Outlet /></main>
       </div>
+
+      {/* Global incoming-call overlay — mounted once so any inbound
+          `incoming_call` WS event pops a ringing UI over whatever page
+          the user happens to be on. */}
+      <IncomingCallModal />
 
       {/* Global JsSIP softphone is mounted in App.js (SoftphonePanel) so it
           persists across route transitions. Nothing to render here. */}

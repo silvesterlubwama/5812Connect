@@ -7,6 +7,38 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 333)
+
+### iter 333 — Role persistence · Live call ringing · Console departments · Sponsor directory hygiene
+- **Role edits now persist**: `UserEditDialog.jsx` role select now clears
+  the `is_admin` toggle on change. Previously, a hydrated admin who was
+  demoted via the Role dropdown had `is_admin` stuck at true, so
+  `saveEdit` kept forcing `payload.role='admin'`. Micro-help copy under
+  the select explains the trade-off ("Turn admin back on below if you
+  want to keep sysadmin").
+- **Live incoming-call overlay**: new `components/IncomingCallModal.jsx`
+  is mounted globally by `Layout.jsx`. It subscribes to the existing
+  `incoming_call` broadcast (already emitted by
+  `backend/routers/websocket.py` on any `call_offer`) and pops a
+  ringing UI with Answer / Reject buttons over any page. Answer hands
+  off to `/comms?call=<id>&caller=<id>&answer=1` where the existing
+  RTCPeerConnection plumbing takes over. `call_answered` /
+  `call_rejected` / `call_ended` / `call_cancelled` all auto-hide the
+  overlay.
+- **Console departments in Location editor**: `LocationsPage.jsx` now
+  loads the campus's departments from `departmentsApi.list({ location_id
+  })` and shows them as read-only chips. A "Manage in Admin console"
+  link routes to `/admin?tab=departments`. Legacy free-text departments
+  still render underneath with an amber warning banner so admins can
+  migrate them.
+- **Sponsors no longer pollute People**: `_upsert_external_sponsor_guest`
+  in `routers/social_work.py` now ONLY matches existing users/members/
+  guests. When no directory row exists, it returns None and the sponsor
+  stays purely on `case.sponsor_manual`. Existing matches get contact
+  fields backfilled without changing their `kind`.
+- Tests: `backend/tests/test_iter299_sponsor_no_autopeople.py` covers
+  the three matching branches (no-match, user-match, guest-match).
+
 ## Current status (as of iter 332)
 
 ### iter 332 — Social Work auto-populate (Family / Education / Medical) + Notes chronology

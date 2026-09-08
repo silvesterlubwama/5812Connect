@@ -954,15 +954,22 @@ async def delete_external_sponsor(guest_id: str, current_user: dict = Depends(re
 
 
 async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dict) -> Optional[str]:
-    """Idempotently create-or-find a guest record for an external sponsor.
+    """Idempotently find (never CREATE) a guest record for an external sponsor.
 
-    Dedup strategy:
-      • Primary key — email (case-insensitive) when present.
-      • Secondary — phone (exact) when present.
-      • Tertiary — name (case-insensitive) alone.
+    Iter 299: previously auto-inserted a `db.guests` row for every manual
+    sponsor which polluted the People directory. Now we ONLY look up an
+    existing user/member/guest and backfill missing contact bits. If no
+    match exists, the sponsor stays purely on the case's `sponsor_manual`
+    object and never appears in People.
 
-    Returns the guest id (existing or newly-created), or None if upsert failed.
-    Non-fatal — sponsor_manual still saves on the case if this errors.
+    Dedup lookup order:
+      • Existing `db.users` by email (system users take priority so linking
+        an actual staff-member sponsor still works).
+      • Existing `db.members` by email or phone.
+      • Existing `db.guests` (any kind) by email → phone → name.
+
+    Returns the guest id when a matching `db.guests` row is found (so the
+    case can link to it), or None when the sponsor is external-only.
     """
     name = (sponsor_manual.get("name") or "").strip()
     if not name:
@@ -971,59 +978,60 @@ async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dic
     phone = (sponsor_manual.get("phone") or "").strip()
     notes = (sponsor_manual.get("notes") or "").strip()
     try:
-        # Look for an existing external_sponsor by email→phone→name (whichever matches first)
+        import re as _re
+        # A user match wins — sponsor is a real staff/member account already.
+        if email:
+            user_hit = await db.users.find_one({"email": email}, {"_id": 0, "id": 1})
+            if user_hit:
+                logger.info(f"external sponsor '{name}' matched existing user {user_hit['id']}; skipping guest create")
+                # Don't create/return a guest id — the case's sponsor_member_id
+                # linking path is a separate flow the admin can trigger.
+                return None
+            member_hit = await db.members.find_one({"email": email}, {"_id": 0, "id": 1})
+            if member_hit:
+                logger.info(f"external sponsor '{name}' matched existing member {member_hit['id']}; skipping guest create")
+                return None
+        if phone and not email:
+            member_hit = await db.members.find_one({"phone": phone}, {"_id": 0, "id": 1})
+            if member_hit:
+                logger.info(f"external sponsor '{name}' matched existing member by phone; skipping guest create")
+                return None
+
+        # Look for an existing guest (any kind, not just external_sponsor) so we
+        # never double-insert. Backfill missing contact bits only.
         existing = None
         if email:
             existing = await db.guests.find_one(
-                {"kind": "external_sponsor", "email": email}, {"_id": 0, "id": 1}
+                {"email": email}, {"_id": 0, "id": 1, "kind": 1}
             )
         if not existing and phone:
             existing = await db.guests.find_one(
-                {"kind": "external_sponsor", "phone": phone}, {"_id": 0, "id": 1}
+                {"phone": phone}, {"_id": 0, "id": 1, "kind": 1}
             )
         if not existing:
-            # re.escape to defend against names with regex metacharacters
-            # ('O'Brien (Jr.)', etc.) — would otherwise mis-match or throw.
-            import re as _re
             existing = await db.guests.find_one(
-                {"kind": "external_sponsor", "name": {"$regex": f"^{_re.escape(name)}$", "$options": "i"}},
-                {"_id": 0, "id": 1},
+                {"name": {"$regex": f"^{_re.escape(name)}$", "$options": "i"}},
+                {"_id": 0, "id": 1, "kind": 1},
             )
 
-        now = datetime.now(timezone.utc).isoformat()
         if existing:
-            # Backfill any fields the caller now has that we didn't previously
-            await db.guests.update_one(
-                {"id": existing["id"]},
-                {"$set": {
-                    "name": name,
-                    "email": email or None,
-                    "phone": phone or None,
-                    "notes": notes or None,
-                    "updated_at": now,
-                    "kind": "external_sponsor",
-                    "is_sponsor": True,
-                }},
-            )
+            # Backfill missing contact bits (never overwrite an existing kind).
+            now = datetime.now(timezone.utc).isoformat()
+            backfill = {"updated_at": now, "is_sponsor": True}
+            if email:
+                backfill["email"] = email
+            if phone:
+                backfill["phone"] = phone
+            if notes:
+                backfill["notes"] = notes
+            await db.guests.update_one({"id": existing["id"]}, {"$set": backfill})
             return existing["id"]
-        # Create fresh
-        guest_id = f"gst_{uuid.uuid4().hex[:8]}"
-        await db.guests.insert_one({
-            "id": guest_id,
-            "kind": "external_sponsor",
-            "is_sponsor": True,
-            "name": name,
-            "email": email or None,
-            "phone": phone or None,
-            "notes": notes or None,
-            "created_at": now,
-            "created_by": current_user["id"],
-            "created_by_name": current_user.get("name", ""),
-            "source": "social_work_sponsor_manual",
-        })
-        return guest_id
+
+        # No match — keep sponsor data purely on the case doc.
+        logger.info(f"external sponsor '{name}' has no matching directory entry; keeping on case only")
+        return None
     except Exception as e:
-        logger.warning(f"external sponsor guest upsert failed: {e}")
+        logger.warning(f"external sponsor guest lookup failed: {e}")
         return None
 
 

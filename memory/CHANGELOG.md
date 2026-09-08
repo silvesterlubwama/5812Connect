@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## iter 333 — 2026-02 — Role persistence · Live call ringing · Console departments · Sponsor directory hygiene
+
+### Role edits persist
+- `components/admin/UserEditDialog.jsx`: primary-role Select clears the
+  `is_admin` toggle on change. Previously the admin-tier fold-back in
+  `AdminPage.saveEdit` kept overwriting the picked role with
+  `'admin'` because `is_admin` was stuck true from hydration.
+
+### Live incoming-call ringing
+- New `components/IncomingCallModal.jsx` mounted from `Layout.jsx`.
+  Subscribes to the existing `incoming_call` WS broadcast, plays a
+  soft ringtone, and pops Answer / Reject over any page.
+- Answering navigates to `/comms?call=<id>&caller=<id>&answer=1` so
+  the RTCPeerConnection plumbing on the Comms page picks up the offer
+  without renegotiating.
+
+### Console departments in Location editor
+- `pages/LocationsPage.jsx` now imports `departmentsApi` and, when
+  editing an existing location, fetches its console-managed
+  departments (`location_id=<loc.id>`) into a read-only chip list.
+- Legacy free-text departments still render below with an amber
+  "migrate these" banner. New locations show a hint asking the admin
+  to save first, then reopen to manage cost centres from the Admin
+  console.
+- Added `data-testid="manage-departments-link"` linking to
+  `/admin?tab=departments`.
+
+### Sponsor directory hygiene
+- `routers/social_work.py::_upsert_external_sponsor_guest` no longer
+  auto-creates guest rows. Lookup order now: `db.users` (by email) →
+  `db.members` (by email or phone) → `db.guests` (any kind, by email
+  → phone → name).
+- Match found → backfill `is_sponsor`, phone, notes, updated_at
+  without touching `kind` or `name`.
+- No match → return None and let the sponsor stay purely on the
+  case's `sponsor_manual` object. People/Guests directory stays
+  clean.
+
+### Tests
+- `backend/tests/test_iter299_sponsor_no_autopeople.py` — asserts
+  no-match / user-match / guest-match branches behave correctly and
+  no stray guest rows leak into the directory.
+
 ## iter 332 — 2026-02 — Social Work auto-populate + Notes chronology
 
 ### Auto-populate case Family/Education/Medical from reviews
