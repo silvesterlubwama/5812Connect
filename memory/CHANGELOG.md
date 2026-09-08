@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## iter 339-340 — 2026-02 — Punch corrections · Period-based financial edit gate
+
+### Punch corrections
+- `PUT /api/hr/timesheets/{id}/entries/{index}` — edits a single
+  kiosk punch's arrival/exit with a required `reason`. Rejects
+  reversed timestamps.
+- `DELETE /api/hr/timesheets/{id}/entries/{index}?reason=<>` —
+  removes a bad punch. Reason required.
+- Both endpoints re-roll `hours_worked` + `days_worked` from
+  remaining entries and append to `punch_corrections[]` (capped at
+  last 50) with before/after payloads + who/when.
+- Frontend: TimesheetsPanel "Punches" button opens an entries table
+  with inline Edit/Delete + correction log accordion.
+
+### Financial edit gate is now period-based
+- `routers/financial.py::_within_self_edit_window` no longer denies
+  after 7 days.
+- New async helper `_period_open_or_admin(doc, user)` layers
+  `finance.setup.period_is_locked` on top of the creator check.
+  Donations / expenses / their delete variants all use it, so a
+  creator can amend or delete an entry any time BEFORE the fiscal
+  period covering the entry's date is closed.
+- Admins still bypass every gate.
+
+### Tests
+- `backend/tests/test_iter339_punch_and_period_edit.py` — 2
+  scenarios: punch edit + delete rolls up hours; financial gate
+  allows on open period, denies on locked, admin bypass.
+
 ## iter 338 — 2026-02 — Kiosk autofill · Per-day XLSX Daily Log
 
 ### Badge Autofill on Kiosk

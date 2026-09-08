@@ -1,5 +1,5 @@
 """HR Module: contracts, salaries, payslips, document requests, per-campus settings"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view
 from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional, List, Tuple
@@ -2875,6 +2875,138 @@ async def compensation_summary(staff_id: str, year: Optional[int] = None, format
         headers={"Content-Disposition": f'attachment; filename="compensation-{safe_name}-{yr}.pdf"'},
     )
 
+
+
+@router.put("/timesheets/{ts_id}/entries/{index}")
+async def edit_timesheet_punch(ts_id: str, index: int, data: dict, current_user: dict = Depends(require_director)):
+    """Iter 339 — edit a single kiosk punch on a timesheet.
+
+    Body: { check_in_time?: ISO, check_out_time?: ISO, reason: str (required) }
+
+    Records an audit entry under `punch_corrections[]` with the before/after
+    payload so campuses can trace who fixed what. Rolls up `hours_worked`
+    and `days_worked` from the updated entries so the payslip picks up the
+    corrected total automatically.
+    """
+    reason = (data.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason is required for a punch correction")
+    ts = await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+    if not ts:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    entries = list(ts.get("entries") or [])
+    if index < 0 or index >= len(entries):
+        raise HTTPException(status_code=400, detail=f"entry index {index} out of range (0..{len(entries) - 1})")
+    before = dict(entries[index])
+    e = dict(before)
+    # Only allow the two timestamps to be edited — everything else on a
+    # punch is derived. `null` is respected so directors can re-open a
+    # bad checkout.
+    if "check_in_time" in data:
+        e["check_in_time"] = data["check_in_time"]
+    if "check_out_time" in data:
+        e["check_out_time"] = data["check_out_time"]
+    # Sanity-check ordering.
+    if e.get("check_in_time") and e.get("check_out_time"):
+        try:
+            ci = datetime.fromisoformat(str(e["check_in_time"]).replace("Z", "+00:00"))
+            co = datetime.fromisoformat(str(e["check_out_time"]).replace("Z", "+00:00"))
+            if co < ci:
+                raise HTTPException(status_code=400, detail="check_out_time must be at/after check_in_time")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="Timestamps must be ISO-8601 strings")
+    e["corrected"] = True
+    entries[index] = e
+
+    # Recompute rollup (mirrors sync_kiosk_to_timesheet math).
+    total_min = 0
+    days_seen = set()
+    for x in entries:
+        if x.get("check_in_time"):
+            days_seen.add(str(x["check_in_time"])[:10])
+        if x.get("check_in_time") and x.get("check_out_time"):
+            try:
+                ci = datetime.fromisoformat(str(x["check_in_time"]).replace("Z", "+00:00"))
+                co = datetime.fromisoformat(str(x["check_out_time"]).replace("Z", "+00:00"))
+                total_min += max(0, int((co - ci).total_seconds() / 60))
+            except Exception:
+                continue
+    corrections = list(ts.get("punch_corrections") or [])
+    corrections.append({
+        "index": index,
+        "before": before,
+        "after": e,
+        "reason": reason[:500],
+        "by": current_user["id"],
+        "by_name": current_user.get("name", ""),
+        "at": datetime.now(timezone.utc).isoformat(),
+        "op": "edit",
+    })
+    await db.hr_timesheets.update_one(
+        {"id": ts_id},
+        {"$set": {
+            "entries": entries,
+            "hours_worked": round(total_min / 60.0, 2),
+            "days_worked": float(len(days_seen)),
+            "punch_corrections": corrections[-50:],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    await _audit(current_user["id"], "correct_punch", "timesheet", ts_id, {"index": index, "reason": reason})
+    return await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+
+
+@router.delete("/timesheets/{ts_id}/entries/{index}")
+async def delete_timesheet_punch(ts_id: str, index: int, reason: str = Query(...), current_user: dict = Depends(require_director)):
+    """Delete a single bad punch. Required `reason` query param. Rolls up
+    hours + days and stores the deletion on `punch_corrections[]`."""
+    reason_clean = (reason or "").strip()
+    if not reason_clean:
+        raise HTTPException(status_code=400, detail="reason is required to delete a punch")
+    ts = await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
+    if not ts:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    entries = list(ts.get("entries") or [])
+    if index < 0 or index >= len(entries):
+        raise HTTPException(status_code=400, detail="entry index out of range")
+    removed = entries.pop(index)
+    total_min = 0
+    days_seen = set()
+    for x in entries:
+        if x.get("check_in_time"):
+            days_seen.add(str(x["check_in_time"])[:10])
+        if x.get("check_in_time") and x.get("check_out_time"):
+            try:
+                ci = datetime.fromisoformat(str(x["check_in_time"]).replace("Z", "+00:00"))
+                co = datetime.fromisoformat(str(x["check_out_time"]).replace("Z", "+00:00"))
+                total_min += max(0, int((co - ci).total_seconds() / 60))
+            except Exception:
+                continue
+    corrections = list(ts.get("punch_corrections") or [])
+    corrections.append({
+        "index": index,
+        "before": removed,
+        "after": None,
+        "reason": reason_clean[:500],
+        "by": current_user["id"],
+        "by_name": current_user.get("name", ""),
+        "at": datetime.now(timezone.utc).isoformat(),
+        "op": "delete",
+    })
+    await db.hr_timesheets.update_one(
+        {"id": ts_id},
+        {"$set": {
+            "entries": entries,
+            "hours_worked": round(total_min / 60.0, 2),
+            "days_worked": float(len(days_seen)),
+            "punch_corrections": corrections[-50:],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    await _audit(current_user["id"], "delete_punch", "timesheet", ts_id, {"index": index, "reason": reason_clean})
+    return await db.hr_timesheets.find_one({"id": ts_id}, {"_id": 0})
 
 
 # ========== TIMESHEETS (staff-submitted, manager-approved) ==========

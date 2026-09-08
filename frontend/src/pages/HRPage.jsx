@@ -2270,6 +2270,9 @@ function TimesheetsPanel() {
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-green-700" onClick={() => approve(t)} data-testid={`ts-approve-${t.id}`}>Approve</Button>
                         <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => setRejecting(t)} data-testid={`ts-reject-${t.id}`}>Reject</Button>
                       </>}
+                      {(t.entries || []).length > 0 && (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPunchTs(t)} data-testid={`ts-punches-${t.id}`}>Punches</Button>
+                      )}
                     </td>
                   </tr>
                 ))}

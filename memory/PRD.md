@@ -7,6 +7,33 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 339-340)
+
+### iter 339-340 — Punch correction log · Period-based financial edit gate
+- **Punch Corrections**: two new HR endpoints allow directors to
+  repair bad kiosk scans without discarding a timesheet:
+  * `PUT /api/hr/timesheets/{id}/entries/{index}` — edit arrival/exit
+    with a required `reason`. Records `punch_corrections[]` with
+    before/after payloads + who/when.
+  * `DELETE /api/hr/timesheets/{id}/entries/{index}?reason=<>` —
+    delete a bad punch (required reason).
+  Both re-roll `hours_worked` + `days_worked` after the change so
+  payroll picks up the corrected total automatically. Reject 400 on
+  missing reason or reversed timestamps.
+- **Frontend Punches dialog**: TimesheetsPanel gains a "Punches"
+  button on any row with `entries[]`. Opens a table of arrival/exit
+  pairs with per-row Edit + Delete buttons. Edit dialog captures
+  the required reason and calls the new endpoints. Correction log
+  is exposed at the bottom for audit.
+- **Financial edit gate now period-based**: `_within_self_edit_window`
+  in `routers/financial.py` no longer denies after 7 days. New
+  `_period_open_or_admin(doc, user)` layers `period_is_locked` over
+  the creator check — so donations/expenses are editable by the
+  creator any time BEFORE the fiscal period covering the entry's
+  date is closed. Admins still bypass everything.
+- Tests: `backend/tests/test_iter339_punch_and_period_edit.py`
+  covers both features end-to-end.
+
 ## Current status (as of iter 338)
 
 ### iter 338 — Kiosk autofill + Per-day XLSX Daily Log

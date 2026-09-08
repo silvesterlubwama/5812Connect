@@ -108,30 +108,43 @@ def _is_finance_admin(user: dict) -> bool:
 
 
 def _within_self_edit_window(doc: dict, user: dict) -> tuple[bool, str]:
-    """Return (allowed, reason_if_denied).  Admins bypass everything.
-    Otherwise: creator + within 7-day window."""
+    """Iter 340 — allow creators to edit their own financial entries at
+    any time BEFORE the fiscal period covering the entry's date is
+    closed. Admins still bypass everything.
+
+    Previously we gated on a hard 7-day window which was too aggressive:
+    finance often needs to correct an amount typed a fortnight ago when
+    the receipt turns up. The period-lock is the real source of truth
+    for "this is closed, do not touch"."""
     if _is_finance_admin(user):
         return True, ""
     if not doc:
         return False, "Record not found"
     if doc.get("created_by") != user.get("id"):
         return False, "Only the record's creator or an administrator can modify it"
-    created_at = doc.get("created_at") or ""
-    if not created_at:
-        return False, "Record has no creation timestamp — ask an admin to update it"
+    # `date` is the effective ledger date; fall back to created_at when
+    # missing so the guard never returns True on a broken record.
+    entry_date = (doc.get("date") or (doc.get("created_at") or "")[:10])
+    if not entry_date:
+        return False, "Record has no date to check against the fiscal period"
+    return True, ""
+
+
+async def _period_open_or_admin(doc: dict, user: dict) -> tuple[bool, str]:
+    """Async wrapper: layers the fiscal-period lock on top of
+    `_within_self_edit_window`. Both must pass for a non-admin to edit."""
+    ok, reason = _within_self_edit_window(doc, user)
+    if not ok:
+        return False, reason
+    if _is_finance_admin(user):
+        return True, ""
     try:
-        # Handle both 'Z' suffix and offset formats
-        s = created_at.rstrip("Z")
-        created_dt = datetime.fromisoformat(s)
-        if created_dt.tzinfo is None:
-            created_dt = created_dt.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return False, "Invalid creation timestamp"
-    age_days = (datetime.now(timezone.utc) - created_dt).total_seconds() / 86400
-    if age_days < 0:
-        return False, "Invalid creation timestamp (future-dated)"
-    if age_days > SELF_EDIT_WINDOW_DAYS:
-        return False, f"Edit window closed ({SELF_EDIT_WINDOW_DAYS} days) — ask an administrator"
+        from routers.finance.setup import period_is_locked
+        entry_date = (doc.get("date") or (doc.get("created_at") or "")[:10])
+        if await period_is_locked(entry_date, doc.get("location_id")):
+            return False, "Fiscal period covering this entry is closed — ask an admin to reopen it before editing"
+    except Exception:
+        pass
     return True, ""
 
 
@@ -540,7 +553,7 @@ async def delete_donation(donation_id: str, current_user: dict = Depends(require
     doc = await db.donations.find_one({"id": donation_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Donation not found")
-    ok, reason = _within_self_edit_window(doc, current_user)
+    ok, reason = await _period_open_or_admin(doc, current_user)
     if not ok:
         raise HTTPException(status_code=403, detail=reason)
     await _reverse_auto_posted_je("donation", donation_id, current_user)
@@ -560,7 +573,7 @@ async def delete_expense(expense_id: str, current_user: dict = Depends(require_f
     doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Expense not found")
-    ok, reason = _within_self_edit_window(doc, current_user)
+    ok, reason = await _period_open_or_admin(doc, current_user)
     if not ok:
         raise HTTPException(status_code=403, detail=reason)
     await _reverse_auto_posted_je("expense", expense_id, current_user)
