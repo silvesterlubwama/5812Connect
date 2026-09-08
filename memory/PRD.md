@@ -7,6 +7,32 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 338)
+
+### iter 338 — Kiosk autofill + Per-day XLSX Daily Log
+- **Badge Autofill on Kiosk**: new `sync_kiosk_to_timesheet(staff_id,
+  action, when_iso, location_id)` in `routers/hr.py`. Called from
+  `kiosk_checkin` and `kiosk_pin_checkin` in `routers/events.py`
+  whenever a staff (with an active `hr_salaries` row) scans in/out.
+  Appends punch entries to `hr_timesheets.entries[]` for the current
+  pay period, closes matching entries on checkout, rolls up
+  `hours_worked` + `days_worked` automatically. Silent no-op for
+  non-payroll members. Auto-closes stale open punches (>12h idle)
+  at +8h so a forgotten checkout doesn't corrupt the week.
+- **Per-Day XLSX Rows**: the downloadable template gains a "Daily
+  Log" sheet with per-staff × per-day rows (14 days for biweekly,
+  full month for monthly). Columns: Staff Name | Badge | Date |
+  Arrival | Exit | Hours | Notes. Hours cell is a live Excel
+  formula that handles overnight shift wraps. Upload endpoint sums
+  Daily Log hours + days per badge and uses them as the fallback
+  when the Summary sheet's Hours Worked / Days Worked cells are
+  left blank — so paper time-cards flow through with zero HR
+  retyping.
+- Tests: `backend/tests/test_iter338_kiosk_and_daily_log.py` covers
+  end-to-end kiosk sync (check-in → check-out → rollup), non-payroll
+  short-circuit, XLSX template contains Daily Log sheet, and upload
+  falls back to Daily Log totals when Summary is blank.
+
 ## Current status (as of iter 337)
 
 ### iter 337 — Overtime tier · Hours-on-Timesheet · XLSX template · Wage-breakdown on PDF

@@ -1572,7 +1572,14 @@ async def kiosk_pin_checkin(data: dict):
             {"_id": 0}, sort=[("check_in_time", -1)]
         )
         if last_ci:
-            await db.checkins.update_one({"id": last_ci["id"]}, {"$set": {"check_out_time": datetime.now(timezone.utc).isoformat()}})
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.checkins.update_one({"id": last_ci["id"]}, {"$set": {"check_out_time": now_iso}})
+            # iter 338 — mirror the checkout onto the staff timesheet.
+            try:
+                from routers.hr import sync_kiosk_to_timesheet
+                await sync_kiosk_to_timesheet(member["id"], "checkout", now_iso, resolved_location)
+            except Exception as e:
+                logger.warning(f"kiosk→timesheet checkout sync failed for {member.get('id')}: {e}")
             return {"message": "Checked out", "member_name": member.get("name")}
         return {"message": "No active check-in", "member_name": member.get("name")}
     # ---- check in (parent + optional children) ----
@@ -1585,6 +1592,14 @@ async def kiosk_pin_checkin(data: dict):
     }
     await db.checkins.insert_one(checkin)
     checkin.pop("_id", None)
+    # iter 338 — badge autofill onto timesheet (silent no-op for non-staff).
+    try:
+        from routers.hr import sync_kiosk_to_timesheet
+        await sync_kiosk_to_timesheet(
+            member["id"], "checkin", checkin["check_in_time"], resolved_location,
+        )
+    except Exception as e:
+        logger.warning(f"kiosk pin→timesheet autofill failed for {member.get('id')}: {e}")
     # Optionally check in the parent's children too
     selected_child_ids = data.get("child_ids") or []
     child_checkins = []

@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## iter 338 — 2026-02 — Kiosk autofill · Per-day XLSX Daily Log
+
+### Badge Autofill on Kiosk
+- New `sync_kiosk_to_timesheet(staff_id, action, when_iso,
+  location_id)` in `backend/routers/hr.py`.
+- Hooked into `kiosk_checkin` + `kiosk_pin_checkin` in
+  `routers/events.py`: any staff (with active `hr_salaries`) who
+  scans in at a kiosk gets an entry appended to the current pay
+  period's timesheet; scan-out closes it, hours + days auto-roll.
+- Non-payroll members silently skipped. Stale open punches (>12h
+  idle) are auto-closed at +8h so forgotten checkouts don't wreck
+  the week. Timesheet marked `source='kiosk_autofill'`,
+  `status='draft'` awaiting HR review at period end.
+- `_current_period_for_location(location_id)` picks the right
+  period label from HR settings (monthly / biweekly / weekly).
+
+### Per-day XLSX Daily Log
+- `backend/routers/hr_timesheet_templates.py::timesheet_template`
+  now creates a second sheet "Daily Log" with per-staff × per-day
+  rows (14 days for biweekly, full month for monthly). Columns:
+  Staff Name | Badge | Date | Arrival | Exit | Hours | Notes.
+- Hours cell is an Excel formula: `=IF(AND(D<>"",E<>""),
+  IF(E<D,(E-D+1)*24,(E-D)*24),"")` — handles overnight wrap.
+- `timesheet_upload` now reads the Daily Log sheet, sums hours +
+  days per badge, and uses them as fallback when the Summary
+  Hours Worked / Days Worked cells are blank. Notes get a
+  `[hours from Daily Log]` tag so directors know which source
+  fed the number.
+
+### Tests
+- `backend/tests/test_iter338_kiosk_and_daily_log.py` — 5
+  scenarios in one asyncio.run: kiosk create timesheet on check-in,
+  close-and-rollup on check-out, non-payroll silent skip, XLSX
+  template contains Daily Log sheet, upload falls back to Daily
+  Log when Summary is blank.
+
 ## iter 337 — 2026-02 — Overtime · Hours-on-Timesheet · XLSX template · Payslip wage breakdown
 
 ### Overtime tier

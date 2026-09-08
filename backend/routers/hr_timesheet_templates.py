@@ -18,7 +18,7 @@ signed by staff without app access flow straight into payroll approval.
 """
 from __future__ import annotations
 import io
-from datetime import datetime, timezone, date as dt_date
+from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -138,6 +138,98 @@ async def timesheet_template(
     c = ws.cell(row=footer_row, column=1, value="HR Approval: ______________________________     Date: __________")
     c.font = Font(size=10, italic=True, color="475569")
 
+    # ==================================================================
+    # iter 338 — "Daily Log" sheet: per-staff × per-day rows so paper
+    # time-cards (arrival/exit) can be typed directly into Excel and
+    # auto-sum hours per day + per staff. Upload endpoint prefers the
+    # Daily Log total when the Summary "Hours Worked" cell is blank.
+    # ==================================================================
+    ws_d = wb.create_sheet("Daily Log")
+
+    ws_d.merge_cells("A1:G1")
+    c = ws_d.cell(row=1, column=1, value="Daily Log — arrival / exit per day (auto-sums into hours)")
+    c.font = Font(size=13, bold=True, color="0F172A")
+    c.alignment = Alignment(horizontal="center")
+
+    daily_headers = ["Staff Name", "Badge Number", "Date", "Arrival", "Exit", "Hours", "Notes"]
+    for col, h in enumerate(daily_headers, start=1):
+        cc = ws_d.cell(row=3, column=col, value=h)
+        cc.font = header_font
+        cc.fill = header_fill
+        cc.alignment = Alignment(horizontal="center", vertical="center")
+        cc.border = border
+    ws_d.row_dimensions[3].height = 22
+
+    # Figure out the concrete date range
+    try:
+        import re as _re
+        m = _re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", period)
+        if m:
+            _start = dt_date.fromisoformat(m.group(1))
+            _end = dt_date.fromisoformat(m.group(2))
+        elif _re.match(r"^\d{4}-\d{2}$", period):
+            _y, _mo = period.split("-")
+            _start = dt_date(int(_y), int(_mo), 1)
+            _end = dt_date(int(_y) + (1 if int(_mo) == 12 else 0),
+                            1 if int(_mo) == 12 else int(_mo) + 1, 1) - td(days=1)
+        else:
+            _start = datetime.now(timezone.utc).date()
+            _end = _start + td(days=13)
+    except Exception:
+        _start = datetime.now(timezone.utc).date()
+        _end = _start + td(days=13)
+    day_count = (_end - _start).days + 1
+
+    daily_row = 4
+    for sal in salaries:
+        u = users.get(sal["staff_id"], {})
+        badge = u.get("badge_number") or u.get("member_id") or ""
+        for i in range(day_count):
+            d = _start + td(days=i)
+            row_vals = [
+                sal.get("staff_name", "") if i == 0 else "",  # name on first row only for readability
+                str(badge) if i == 0 else "",
+                d.isoformat(),
+                "",  # Arrival — HH:MM
+                "",  # Exit — HH:MM
+                None,  # Hours — formula written next
+                "",  # Notes
+            ]
+            for col, v in enumerate(row_vals, start=1):
+                cc = ws_d.cell(row=daily_row, column=col, value=v)
+                cc.border = border
+                cc.alignment = Alignment(vertical="center")
+            # Hours formula: computes exit-arrival across midnight safely.
+            # Arrival + Exit are typed as `08:00` / `17:00`; empty = blank.
+            ws_d.cell(row=daily_row, column=6, value=(
+                f'=IF(AND(D{daily_row}<>"",E{daily_row}<>""),'
+                f'IF(E{daily_row}<D{daily_row},'
+                f'(E{daily_row}-D{daily_row}+1)*24,'
+                f'(E{daily_row}-D{daily_row})*24),"")'
+            ))
+            daily_row += 1
+        # Blank separator row between staff for readability
+        daily_row += 1
+
+    ws_d.column_dimensions["A"].width = 24
+    ws_d.column_dimensions["B"].width = 16
+    ws_d.column_dimensions["C"].width = 14
+    ws_d.column_dimensions["D"].width = 10
+    ws_d.column_dimensions["E"].width = 10
+    ws_d.column_dimensions["F"].width = 10
+    ws_d.column_dimensions["G"].width = 28
+
+    # Instructions on how to fill Daily Log
+    dl_note_row = daily_row + 2
+    ws_d.merge_cells(start_row=dl_note_row, start_column=1, end_row=dl_note_row, end_column=7)
+    c = ws_d.cell(row=dl_note_row, column=1, value=(
+        "Fill Arrival and Exit in 24h format (HH:MM). Hours will auto-calculate. "
+        "If arrival/exit are blank the day is treated as not worked. "
+        "For overnight shifts (exit next morning), enter the exit time as-is and Hours handles the wrap."
+    ))
+    c.font = Font(size=9, italic=True, color="64748B")
+    c.alignment = Alignment(wrap_text=True)
+
     # Second sheet: instructions
     ws2 = wb.create_sheet("Instructions")
     ws2.column_dimensions["A"].width = 90
@@ -221,6 +313,51 @@ async def timesheet_upload(
         c = header_map.get(name)
         return ws.cell(row=row, column=c).value if c else None
 
+    # iter 338 — build a per-badge hour total from the "Daily Log" sheet
+    # (arrival/exit rows). If the Summary "Hours Worked" cell is blank
+    # we'll fall back to this sum so paper time-cards flow through
+    # untouched by HR.
+    daily_hours_by_badge: dict[str, float] = {}
+    daily_hours_by_name: dict[str, float] = {}
+    daily_days_by_badge: dict[str, int] = {}
+    daily_days_by_name: dict[str, int] = {}
+    if "Daily Log" in wb.sheetnames:
+        ws_d = wb["Daily Log"]
+        d_header = None
+        for r in range(1, min(10, ws_d.max_row) + 1):
+            vals = [str(ws_d.cell(row=r, column=c).value or "").strip().lower() for c in range(1, 8)]
+            if "arrival" in vals and "exit" in vals and "hours" in vals:
+                d_header = r
+                break
+        if d_header:
+            d_col = {}
+            for c in range(1, 10):
+                v = str(ws_d.cell(row=d_header, column=c).value or "").strip().lower()
+                if v:
+                    d_col[v] = c
+            last_name, last_badge = "", ""
+            for r in range(d_header + 1, ws_d.max_row + 1):
+                name_v = str(ws_d.cell(row=r, column=d_col.get("staff name", 1)).value or "").strip()
+                badge_v = str(ws_d.cell(row=r, column=d_col.get("badge number", 2)).value or "").strip()
+                # Name/badge only appear on the first date row per staff — carry them forward.
+                if name_v:
+                    last_name = name_v
+                if badge_v:
+                    last_badge = badge_v
+                hours_cell = ws_d.cell(row=r, column=d_col.get("hours", 6)).value
+                try:
+                    hrs = float(hours_cell) if hours_cell not in (None, "", 0) else 0
+                except (TypeError, ValueError):
+                    hrs = 0
+                if hrs > 0 and (last_name or last_badge):
+                    if last_badge:
+                        daily_hours_by_badge[last_badge] = daily_hours_by_badge.get(last_badge, 0) + hrs
+                        daily_days_by_badge[last_badge] = daily_days_by_badge.get(last_badge, 0) + 1
+                    if last_name:
+                        key = last_name.lower()
+                        daily_hours_by_name[key] = daily_hours_by_name.get(key, 0) + hrs
+                        daily_days_by_name[key] = daily_days_by_name.get(key, 0) + 1
+
     created = []
     skipped = []
     total_rows = 0
@@ -257,6 +394,18 @@ async def timesheet_upload(
         except (TypeError, ValueError):
             skipped.append({"row": r, "name": name, "badge": badge, "reason": "non-numeric days/hours"})
             continue
+        # iter 338 — fall back to Daily Log totals when summary Hours Worked is blank
+        source_bits = []
+        if hours_val is None or hours_val == 0:
+            fallback_hrs = daily_hours_by_badge.get(badge) or daily_hours_by_name.get(name.lower(), 0)
+            if fallback_hrs > 0:
+                hours_val = round(fallback_hrs, 2)
+                source_bits.append("hours from Daily Log")
+        if days_val == 0:
+            fallback_days = daily_days_by_badge.get(badge) or daily_days_by_name.get(name.lower(), 0)
+            if fallback_days > 0:
+                days_val = float(fallback_days)
+                source_bits.append("days from Daily Log")
         if days_val == 0 and (hours_val is None or hours_val == 0):
             skipped.append({"row": r, "name": name, "badge": badge, "reason": "no hours or days worked"})
             continue
@@ -277,7 +426,7 @@ async def timesheet_upload(
             "days_worked": days_val,
             "hours_worked": hours_val,
             "pto_days": pto_val,
-            "notes": notes[:1000],
+            "notes": (notes + (f" [{', '.join(source_bits)}]" if source_bits else ""))[:1000],
             "status": "submitted",
             "source": "xlsx_upload",
             "uploaded_from": file.filename,

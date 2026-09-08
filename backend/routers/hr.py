@@ -2412,6 +2412,144 @@ async def employee_expenses_summary(period: Optional[str] = None, current_user: 
 
 
 
+async def _current_period_for_location(location_id: str) -> Optional[str]:
+    """Return the canonical period label containing today for the given
+    location's HR settings — used by kiosk autofill to know which
+    timesheet a clock-in belongs on.
+
+    Falls back to `YYYY-MM` when no HR settings exist.
+    """
+    today = datetime.now(timezone.utc).date()
+    if not location_id:
+        return today.strftime("%Y-%m")
+    s = await db.hr_settings.find_one({"location_id": location_id}, {"_id": 0}) or {}
+    freq = (s.get("pay_frequency") or "monthly").lower().replace(" ", "").replace("_", "-")
+    if freq == "monthly":
+        return today.strftime("%Y-%m")
+    step = 14 if freq in {"bi-weekly", "biweekly", "fortnightly"} else 7
+    anchor_iso = (s.get("next_pay_date") or "").strip()
+    try:
+        anchor = dt_date.fromisoformat(anchor_iso) if anchor_iso else today
+    except Exception:
+        anchor = today
+    # Walk back until anchor <= today, then step forward past today to find
+    # the payday that CLOSES the current period.
+    d = anchor
+    while d > today:
+        d = d - td(days=step)
+    while d + td(days=step - 1) < today:
+        d = d + td(days=step)
+    # d is now the START of the current period. Frame as full window label.
+    period_start = d - td(days=step - 1) if step > 1 else d
+    # Convention used elsewhere: period label is <window_start>_<window_end> (Www[-Www]).
+    return _biweekly_period(period_start, step)
+
+
+async def sync_kiosk_to_timesheet(staff_id: str, action: str, when_iso: str, location_id: Optional[str] = None) -> Optional[dict]:
+    """Called from the kiosk check-in/out flow to keep hourly staff timesheets
+    fresh without them touching the app.
+
+    - action='checkin'  → append an OPEN entry to today's timesheet
+      (or create the timesheet if this is the first punch of the period).
+    - action='checkout' → close the most-recent open entry with the given
+      timestamp, recompute the total hours + days, save.
+
+    Returns the touched timesheet doc, or None when the person isn't on
+    payroll (no active hr_salaries).
+    """
+    sal = await db.hr_salaries.find_one(
+        {"staff_id": staff_id, "status": "active"},
+        {"_id": 0, "location_id": 1, "staff_name": 1, "department": 1},
+    )
+    if not sal:
+        return None  # not on payroll — do nothing
+    loc = location_id or sal.get("location_id") or ""
+    period = await _current_period_for_location(loc)
+    if not period:
+        return None
+    ts = await db.hr_timesheets.find_one(
+        {"staff_id": staff_id, "period": period, "status": {"$in": ["draft", "submitted", "rejected"]}},
+        {"_id": 0},
+    )
+    entries = list((ts or {}).get("entries") or [])
+    if action == "checkin":
+        # Guard against a runaway open entry — if the last one has no
+        # checkout AND is within the last 12h, keep it; otherwise close it
+        # auto-truncated at 8h so we don't double-open.
+        if entries and not entries[-1].get("check_out_time"):
+            try:
+                prev = datetime.fromisoformat(entries[-1]["check_in_time"].replace("Z", "+00:00"))
+                gap = (datetime.now(timezone.utc) - prev).total_seconds() / 3600.0
+                if gap > 12:
+                    entries[-1]["check_out_time"] = (prev + td(hours=8)).isoformat()
+                    entries[-1]["auto_closed"] = True
+            except Exception:
+                pass
+        entries.append({
+            "check_in_time": when_iso,
+            "check_out_time": None,
+            "source": "kiosk",
+        })
+    elif action == "checkout":
+        # Close the most recent open entry.
+        target = None
+        for e in reversed(entries):
+            if not e.get("check_out_time"):
+                target = e
+                break
+        if target is None:
+            # Unpaired checkout — record it as a zero-length punch so HR can spot it.
+            entries.append({"check_in_time": when_iso, "check_out_time": when_iso, "source": "kiosk", "unpaired": True})
+        else:
+            target["check_out_time"] = when_iso
+    else:
+        return ts
+
+    # Recompute rollup — total hours + days that have any punch.
+    total_min = 0
+    days_seen = set()
+    for e in entries:
+        if e.get("check_in_time"):
+            days_seen.add(e["check_in_time"][:10])
+        if e.get("check_in_time") and e.get("check_out_time"):
+            try:
+                ci = datetime.fromisoformat(e["check_in_time"].replace("Z", "+00:00"))
+                co = datetime.fromisoformat(e["check_out_time"].replace("Z", "+00:00"))
+                mins = max(0, int((co - ci).total_seconds() / 60))
+                total_min += mins
+            except Exception:
+                continue
+    hours = round(total_min / 60.0, 2)
+    days_worked = len(days_seen)
+
+    doc = ts or {
+        "id": f"ts_{uuid.uuid4().hex[:10]}",
+        "staff_id": staff_id,
+        "staff_name": sal.get("staff_name", ""),
+        "department": sal.get("department", ""),
+        "location_id": loc,
+        "period": period,
+        "pto_days": 0,
+        "notes": "",
+        "status": "draft",   # kiosk-driven sheets start as drafts, HR reviews at period-end
+        "source": "kiosk_autofill",
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_by": staff_id,
+        "submitted_by_name": sal.get("staff_name", ""),
+    }
+    doc["entries"] = entries
+    doc["days_worked"] = float(days_worked)
+    doc["hours_worked"] = hours
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    if ts:
+        await db.hr_timesheets.update_one({"id": doc["id"]}, {"$set": doc})
+    else:
+        await db.hr_timesheets.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
 # ========== ATTENDANCE / CLOCK-IN-OUT (Odoo-style) ==========
 
 @router.post("/attendance/clock-in")
