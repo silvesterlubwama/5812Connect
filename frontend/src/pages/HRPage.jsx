@@ -921,6 +921,20 @@ export default function HRPage() {
               <p className="text-[10px] text-muted-foreground">
                 Paydays follow the campus <strong>{paydayFrequency}</strong> schedule. Adjust in HR Settings.
               </p>
+              {paydayFrequency !== 'monthly' && selectedPayday && (() => {
+                // Iter 334: parse the canonical period label to surface the
+                // start/end dates directly so staff aren't confused by "W38"
+                // when the window is actually 14 days.
+                const match = String(selectedPayday).match(/^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})/);
+                if (!match) return null;
+                const [, startIso, endIso] = match;
+                const fmt = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                return (
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800" data-testid="pay-window-explainer">
+                    Covers work performed from <strong>{fmt(startIso)}</strong> to <strong>{fmt(endIso)}</strong> ({paydayFrequency === 'weekly' ? '1 week' : '2 weeks'}). Amounts are pro-rated from each monthly base salary.
+                  </div>
+                );
+              })()}
             </div>
             <p className="text-xs text-muted-foreground">{salaries.length} active salary records will be processed.</p>
             <div className="flex gap-3">
@@ -1151,20 +1165,41 @@ export default function HRPage() {
                   <SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="biweekly">Bi-weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <Label>Payday (day of month)</Label>
-                <Select value={String(settingsForm.pay_day || 28)} onValueChange={v => setSettingsForm({...settingsForm, pay_day: parseInt(v) || 28})}>
-                  <SelectTrigger data-testid="pay-day-picker"><SelectValue /></SelectTrigger>
-                  <SelectContent className="max-h-64">
-                    {Array.from({length: 31}, (_, i) => i + 1).map(d => (
-                      <SelectItem key={d} value={String(d)}>{d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : d === 21 ? 'st' : d === 22 ? 'nd' : d === 23 ? 'rd' : d === 31 ? 'st' : 'th'} of the month</SelectItem>
-                    ))}
-                    <SelectItem value="99">Last day of month</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground">Payslips are drafted automatically each month on this day. If it&apos;s a weekend or holiday, payslips still draft — payment can be issued on the next working day.</p>
+              {/* iter 334: day-of-month payday only makes sense for MONTHLY.
+                  Biweekly / weekly cadences are anchor-driven — future
+                  paydays are calculated from Next Pay Date every 14 or 7 days.
+                  Showing the day-of-month picker for those frequencies caused
+                  staff to misread payslip amounts. */}
+              {(settingsForm.pay_frequency || 'monthly').toLowerCase() === 'monthly' ? (
+                <div className="space-y-1.5">
+                  <Label>Payday (day of month)</Label>
+                  <Select value={String(settingsForm.pay_day || 28)} onValueChange={v => setSettingsForm({...settingsForm, pay_day: parseInt(v) || 28})}>
+                    <SelectTrigger data-testid="pay-day-picker"><SelectValue /></SelectTrigger>
+                    <SelectContent className="max-h-64">
+                      {Array.from({length: 31}, (_, i) => i + 1).map(d => (
+                        <SelectItem key={d} value={String(d)}>{d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : d === 21 ? 'st' : d === 22 ? 'nd' : d === 23 ? 'rd' : d === 31 ? 'st' : 'th'} of the month</SelectItem>
+                      ))}
+                      <SelectItem value="99">Last day of month</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">Payslips are drafted automatically each month on this day. If it&apos;s a weekend or holiday, payslips still draft — payment can be issued on the next working day.</p>
+                </div>
+              ) : (
+                <div className="space-y-1.5 col-span-1">
+                  <Label className="text-muted-foreground">Payday</Label>
+                  <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-3 py-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Not needed for {settingsForm.pay_frequency}. Future paydays
+                      are calculated from <strong>Next Pay Date</strong> every {(settingsForm.pay_frequency || '').toLowerCase() === 'weekly' ? '7' : '14'} days.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <div className="space-y-1.5"><Label>Next Pay Date <span className="text-[10px] text-red-500">*</span></Label><Input type="date" value={settingsForm.next_pay_date || ''} onChange={e => setSettingsForm({...settingsForm, next_pay_date: e.target.value})} data-testid="next-pay-date" />
+                {(settingsForm.pay_frequency || 'monthly').toLowerCase() !== 'monthly' && !settingsForm.next_pay_date && (
+                  <p className="text-[10px] text-red-600">Required for {settingsForm.pay_frequency} — every future payday and pay period is derived from this date.</p>
+                )}
               </div>
-              <div className="space-y-1.5"><Label>Next Pay Date</Label><Input type="date" value={settingsForm.next_pay_date || ''} onChange={e => setSettingsForm({...settingsForm, next_pay_date: e.target.value})} data-testid="next-pay-date" /></div>
             </div>
             {/* iter309 — weekly/bi-weekly payday-on-weekday.
                 Hidden for monthly cadence because monthly still uses

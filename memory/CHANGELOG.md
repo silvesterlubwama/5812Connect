@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## iter 334 — 2026-02 — Biweekly payroll UX cleanup
+
+### Period labels reflect the real span
+- `routers/hr.py::_biweekly_period` now emits `(Www-Www)` for windows
+  that straddle two ISO weeks. Every biweekly period does — so staff
+  will always see the correct span instead of a lone `(W38)` that
+  reads as a single week's pay.
+
+### Settings UI removes the confusing day-of-month picker
+- `pages/HRPage.jsx` hides "Payday (day of month)" whenever pay
+  frequency is anything other than `monthly`. A dashed placeholder
+  clarifies that biweekly/weekly cadences are anchor-driven from
+  Next Pay Date. Next Pay Date shows a red required hint if left
+  blank on non-monthly setups.
+
+### Backend guardrail prevents silent fall-through
+- `/hr/payslips/upcoming-paydays` now raises 400 with an actionable
+  message if a weekly/biweekly campus is missing `next_pay_date`.
+  Previously it silently defaulted to a stale day-of-month anchor
+  and produced wrong periods.
+
+### Payday picker window explainer
+- Generate Payslips dialog surfaces "Covers work performed from
+  <start> to <end> (2 weeks)" next to the picked biweekly payday so
+  the window/amount relationship is obvious.
+
+### Tests
+- `backend/tests/test_iter334_biweekly_period_label.py` — verifies
+  the new label format and re-checks the screenshot amounts
+  (600k → 276,923.08; 400k → 184,615.38; 75k → 34,615.38) match
+  the 12/26 biweekly proration.
+
 ## iter 333 — 2026-02 — Role persistence · Live call ringing · Console departments · Sponsor directory hygiene
 
 ### Role edits persist

@@ -22,10 +22,19 @@ def _iso(d: dt_date) -> str:
 
 
 def _biweekly_period(start: dt_date, days: int = 14) -> str:
-    """Format a bi-weekly/weekly period label from its start date."""
+    """Format a bi-weekly/weekly period label from its start date.
+
+    Iter 334 fix: for a 14-day biweekly window, show BOTH ISO weeks in the
+    label (e.g. `2026-09-16_2026-09-29 (W38-W39)`) so staff don't
+    misread the amount as one week's pay. Weekly windows stay as a single
+    `(Www)` label.
+    """
     end = start + td(days=days - 1)
-    iso_year, iso_week, _ = start.isocalendar()
-    return f"{_iso(start)}_{_iso(end)} (W{iso_week:02d})"
+    iso_year_s, iso_week_s, _ = start.isocalendar()
+    iso_year_e, iso_week_e, _ = end.isocalendar()
+    if iso_week_s == iso_week_e:
+        return f"{_iso(start)}_{_iso(end)} (W{iso_week_s:02d})"
+    return f"{_iso(start)}_{_iso(end)} (W{iso_week_s:02d}-W{iso_week_e:02d})"
 
 
 def _snap_to_weekday(d: dt_date, weekday: int) -> dt_date:
@@ -462,7 +471,10 @@ async def upcoming_paydays(
     payday_weekday = s.get("payday_weekday")
     today = datetime.now(timezone.utc).date()
 
-    # Anchor payday: next_pay_date wins; else pay_day day-of-month in current month
+    # Anchor payday: next_pay_date wins; else pay_day day-of-month (monthly only).
+    # Iter 334: for weekly/biweekly, pay_day (day of month) is meaningless — the
+    # cadence is anchor-driven, not calendar-day-driven. So we IGNORE pay_day
+    # for those frequencies and force the admin to set next_pay_date instead.
     anchor_iso = (s.get("next_pay_date") or "").strip()
     anchor_d: Optional[dt_date] = None
     if anchor_iso:
@@ -470,11 +482,23 @@ async def upcoming_paydays(
             anchor_d = dt_date.fromisoformat(anchor_iso)
         except Exception:
             anchor_d = None
-    if anchor_d is None and s.get("pay_day"):
+    if anchor_d is None and freq == "monthly" and s.get("pay_day"):
         try:
             anchor_d = today.replace(day=int(s["pay_day"]))
         except Exception:
             anchor_d = None
+    if anchor_d is None and freq != "monthly":
+        # Biweekly / weekly without a Next Pay Date — the admin needs to set
+        # one before we can compute future paydays. Surface a friendly error
+        # instead of silently defaulting to a wrong anchor.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{freq.capitalize()} pay frequency requires a Next Pay Date. "
+                "Open HR Settings and set it — future paydays are calculated "
+                "from there every 14 days (biweekly) or 7 days (weekly)."
+            ),
+        )
     if anchor_d is None:
         anchor_d = today.replace(day=min(28, today.day))
 

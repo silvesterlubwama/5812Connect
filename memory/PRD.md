@@ -7,6 +7,31 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 334)
+
+### iter 334 — Biweekly payroll UX cleanup
+- **Period label now shows the full span**: `_biweekly_period` in
+  `routers/hr.py` writes `(W38-W39)` when a 14-day window crosses two
+  ISO weeks (i.e. every biweekly period in practice). Staff no longer
+  read the single-week label and think the payslip amount is one
+  week's pay. Single-ISO-week windows still show a plain `(Www)`.
+- **Settings hygiene**: `pages/HRPage.jsx` hides the "Payday (day of
+  month)" picker whenever `pay_frequency` is not `monthly`. Instead a
+  dashed placeholder explains that future paydays are calculated from
+  Next Pay Date every 14 or 7 days. Next Pay Date is now marked
+  required (`*`) with an inline red hint if missing for non-monthly.
+- **Backend guardrail**: `/hr/payslips/upcoming-paydays` now raises a
+  400 with a plain-English message if a weekly/biweekly campus has no
+  `next_pay_date` — no more silent fall-back to a stale day-of-month
+  anchor that produced wrong periods.
+- **Payday picker window explainer**: the Generate Payslips dialog
+  now surfaces "Covers work performed from <start> to <end> (2 weeks)"
+  next to the selected biweekly payday so HR sees the exact span.
+- Tests: `backend/tests/test_iter334_biweekly_period_label.py` covers
+  the label formatting and verifies the screenshot amounts
+  (600k → 276,923.08; 400k → 184,615.38; 75k → 34,615.38) match the
+  12/26 proration.
+
 ## Current status (as of iter 333)
 
 ### iter 333 — Role persistence · Live call ringing · Console departments · Sponsor directory hygiene
