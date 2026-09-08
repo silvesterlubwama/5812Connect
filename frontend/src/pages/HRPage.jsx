@@ -163,6 +163,8 @@ export default function HRPage() {
           daily_rate: salaryForm.wage_type === 'daily' ? parseFloat(salaryForm.base_salary) : 0,
           weekly_rate: salaryForm.wage_type === 'weekly' ? parseFloat(salaryForm.base_salary) : 0,
           biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
+          ot_threshold_hours: parseFloat(salaryForm.ot_threshold_hours) || 0,
+          ot_multiplier: parseFloat(salaryForm.ot_multiplier) || 1.5,
           line_items: salaryForm.line_items,
           department_ids: salaryForm.department_ids || [],
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
@@ -179,6 +181,8 @@ export default function HRPage() {
           daily_rate: salaryForm.wage_type === 'daily' ? parseFloat(salaryForm.base_salary) : 0,
           weekly_rate: salaryForm.wage_type === 'weekly' ? parseFloat(salaryForm.base_salary) : 0,
           biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
+          ot_threshold_hours: parseFloat(salaryForm.ot_threshold_hours) || 0,
+          ot_multiplier: parseFloat(salaryForm.ot_multiplier) || 1.5,
           location_id: activeCampus,
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
         });
@@ -200,6 +204,8 @@ export default function HRPage() {
       staff_id: s.staff_id || '',
       base_salary: String(s.base_salary || s.hourly_rate || s.daily_rate || s.weekly_rate || s.biweekly_rate || ''),
       wage_type: s.wage_type || 'salary',
+      ot_threshold_hours: String(s.ot_threshold_hours || ''),
+      ot_multiplier: String(s.ot_multiplier || ''),
       currency: s.currency || 'UGX',
       pay_frequency: s.pay_frequency || 'monthly',
       line_items: s.line_items || [],
@@ -698,6 +704,19 @@ export default function HRPage() {
                 <p className="text-[10px] text-muted-foreground">How often this staff member is actually paid — independent of Rate Type.</p>
               </div>
             </div>
+            {salaryForm.wage_type === 'hourly' && (
+              <div className="grid grid-cols-2 gap-3 rounded-md border border-dashed p-2 bg-muted/20" data-testid="salary-ot-block">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">OT threshold (hours/week)</Label>
+                  <Input type="number" step="0.5" value={salaryForm.ot_threshold_hours || ''} onChange={e => setSalaryForm({...salaryForm, ot_threshold_hours: e.target.value})} placeholder="e.g. 40  (blank = no OT)" data-testid="salary-ot-threshold" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">OT multiplier</Label>
+                  <Input type="number" step="0.1" value={salaryForm.ot_multiplier || ''} onChange={e => setSalaryForm({...salaryForm, ot_multiplier: e.target.value})} placeholder="1.5" data-testid="salary-ot-multiplier" />
+                  <p className="text-[10px] text-muted-foreground">Applied to hours worked beyond the weekly threshold. Threshold scales with the pay window (2× for biweekly).</p>
+                </div>
+              </div>
+            )}
             {/* Line Items */}
             <div className="space-y-2">
               <Label>Allowances & Deductions</Label>
@@ -2102,17 +2121,26 @@ function TimesheetsPanel() {
   const [periodFilter, setPeriodFilter] = React.useState('');
   const [rejecting, setRejecting] = React.useState(null);
   const [rejectReason, setRejectReason] = React.useState('');
-  // On-behalf submission (iter214) — director+/admin can log a timesheet
-  // for a staff member who doesn't use the app.
   const [showLogFor, setShowLogFor] = React.useState(false);
   const [staffOptions, setStaffOptions] = React.useState([]);
   const [logForm, setLogForm] = React.useState({
     staff_id: '',
     period: new Date().toISOString().slice(0, 7),
     days_worked: '',
+    hours_worked: '',
     pto_days: '',
     notes: '',
   });
+  // iter 337 — printable / re-uploadable XLSX timesheets for staff who don't
+  // use the app. The period drives which pay window the file targets;
+  // uploads land as `status='submitted'` awaiting director approval.
+  const [showXlsx, setShowXlsx] = React.useState(false);
+  const [xlsxForm, setXlsxForm] = React.useState({
+    period: new Date().toISOString().slice(0, 7),
+    file: null,
+  });
+  const [xlsxBusy, setXlsxBusy] = React.useState(false);
+  const [xlsxResult, setXlsxResult] = React.useState(null);
 
   React.useEffect(() => {
     api.get('/admin/users/directory', { params: { limit: 500 } })
@@ -2152,20 +2180,56 @@ function TimesheetsPanel() {
   };
   const submitLogFor = async () => {
     if (!logForm.staff_id) return toast.error('Pick a staff member');
-    if (!logForm.days_worked) return toast.error('Days worked required');
+    if (!logForm.days_worked && !logForm.hours_worked) return toast.error('Days or hours worked required');
     try {
       await api.post('/hr/timesheets', {
         staff_id: logForm.staff_id,
         period: logForm.period,
         days_worked: parseFloat(logForm.days_worked) || 0,
+        hours_worked: logForm.hours_worked ? parseFloat(logForm.hours_worked) : undefined,
         pto_days: parseFloat(logForm.pto_days) || 0,
         notes: logForm.notes,
       });
       toast.success('Timesheet logged on staff\u2019s behalf — status: submitted, awaits your approval');
       setShowLogFor(false);
-      setLogForm({ staff_id: '', period: new Date().toISOString().slice(0, 7), days_worked: '', pto_days: '', notes: '' });
+      setLogForm({ staff_id: '', period: new Date().toISOString().slice(0, 7), days_worked: '', hours_worked: '', pto_days: '', notes: '' });
       load();
     } catch (e) { toast.error(e.response?.data?.detail || 'Log failed'); }
+  };
+
+  // iter 337 — download a pre-filled XLSX template for the picked period.
+  // Uses authenticated fetch so the download works exactly like the
+  // per-payslip PDF endpoint.
+  const downloadTemplate = async () => {
+    try {
+      const res = await api.get('/hr/timesheets/template', {
+        params: { period: xlsxForm.period },
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `timesheet-${xlsxForm.period}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Template download failed'); }
+  };
+
+  const uploadTemplate = async () => {
+    if (!xlsxForm.file) return toast.error('Pick a file first');
+    setXlsxBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', xlsxForm.file);
+      const res = await api.post(`/hr/timesheets/upload?period=${encodeURIComponent(xlsxForm.period)}`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setXlsxResult(res.data);
+      toast.success(`Imported ${res.data.created.length} timesheets · ${res.data.skipped.length} skipped`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
+    finally { setXlsxBusy(false); }
   };
 
   return (
@@ -2173,6 +2237,7 @@ function TimesheetsPanel() {
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-xs text-muted-foreground flex-1">Staff-submitted timesheets. Approved rows auto-feed the next payslip generation.</p>
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => setShowXlsx(true)} data-testid="xlsx-timesheet-btn"><FileDown size={12} /> Sheet up/download</Button>
           <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => setShowLogFor(true)} data-testid="log-for-staff-btn"><Plus size={12} /> Log for staff</Button>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="h-8 w-36 text-xs" data-testid="ts-status-filter"><SelectValue /></SelectTrigger>
@@ -2246,6 +2311,9 @@ function TimesheetsPanel() {
               <div className="space-y-1.5"><Label className="text-xs">Days worked</Label>
                 <Input type="number" value={logForm.days_worked} onChange={e => setLogForm({...logForm, days_worked: e.target.value})} data-testid="log-for-days" />
               </div>
+              <div className="space-y-1.5"><Label className="text-xs">Hours worked (hourly only)</Label>
+                <Input type="number" step="0.25" value={logForm.hours_worked} onChange={e => setLogForm({...logForm, hours_worked: e.target.value})} data-testid="log-for-hours" placeholder="Leave blank if not hourly" />
+              </div>
               <div className="space-y-1.5"><Label className="text-xs">PTO days</Label>
                 <Input type="number" value={logForm.pto_days} onChange={e => setLogForm({...logForm, pto_days: e.target.value})} data-testid="log-for-pto" />
               </div>
@@ -2257,6 +2325,47 @@ function TimesheetsPanel() {
               <Button variant="outline" className="flex-1" onClick={() => setShowLogFor(false)}>Cancel</Button>
               <Button className="flex-1" onClick={submitLogFor} data-testid="log-for-submit-btn">Log &amp; submit</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter 337 — Printable / re-uploadable timesheet dialog */}
+      <Dialog open={showXlsx} onOpenChange={(o) => { setShowXlsx(o); if (!o) setXlsxResult(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Downloadable / Uploadable Timesheet</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Download an XLSX pre-filled with every active staff (name + badge + wage type + rate). Print it, or email it. Staff fill Days / Hours / PTO and sign. Re-upload the completed file and each row lands as a submitted timesheet awaiting your approval.
+            </p>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Pay Period *</Label>
+              <Input type="month" value={xlsxForm.period} onChange={e => setXlsxForm({...xlsxForm, period: e.target.value})} data-testid="xlsx-period" />
+              <p className="text-[10px] text-muted-foreground">For biweekly windows enter the canonical label (e.g. <code>2026-09-16_2026-09-29</code>).</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1 gap-1" onClick={downloadTemplate} data-testid="xlsx-download-btn"><FileDown size={13} /> Download blank sheet</Button>
+            </div>
+            <div className="border-t pt-3 space-y-1.5">
+              <Label className="text-xs">Upload completed sheet</Label>
+              <Input type="file" accept=".xlsx,.xls" onChange={e => setXlsxForm({...xlsxForm, file: e.target.files?.[0] || null})} data-testid="xlsx-file-input" />
+              <Button className="w-full gap-1" onClick={uploadTemplate} disabled={xlsxBusy || !xlsxForm.file} data-testid="xlsx-upload-btn">
+                {xlsxBusy ? 'Uploading…' : 'Upload & import'}
+              </Button>
+            </div>
+            {xlsxResult && (
+              <div className="rounded-md border p-2 space-y-1 text-xs" data-testid="xlsx-result">
+                <p><strong>{xlsxResult.created.length}</strong> timesheets imported · <strong>{xlsxResult.skipped.length}</strong> skipped from {xlsxResult.total_rows} rows.</p>
+                {xlsxResult.skipped.length > 0 && (
+                  <details className="text-[11px] text-muted-foreground"><summary className="cursor-pointer">See skipped rows</summary>
+                    <ul className="mt-1 space-y-0.5">
+                      {xlsxResult.skipped.slice(0, 10).map((s, i) => (
+                        <li key={i}>Row {s.row}: {s.name || s.badge || '(blank)'} — {s.reason}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

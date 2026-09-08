@@ -7,6 +7,39 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 337)
+
+### iter 337 — Overtime tier · Hours-on-Timesheet · XLSX template · Wage-breakdown on PDF
+- **Overtime tier**: `_compute_base_gross` for `wage_type=hourly` now
+  honours `ot_threshold_hours` (weekly, scales with period) and
+  `ot_multiplier` (default 1.5). Hours above threshold are split into
+  regular + OT slices. Example: hourly 10,000 UGX, 40h/week threshold,
+  90 hours over a biweekly period → 80h reg + 10h × 1.5 = 950,000 UGX.
+- **Hours on Timesheet**: `submit_timesheet` accepts an optional
+  `hours_worked` field (0-1000). `generate_payslips` and
+  `preview_payslips` merge it from approved timesheets and pass it
+  into `_compute_base_gross` so hourly staff get the true rate × hours
+  (no more days × 8h fallback when a real number is available).
+- **XLSX template + upload**: new `routers/hr_timesheet_templates.py`
+  ships two endpoints:
+  * `GET /api/hr/timesheets/template?period=<>` — download an XLSX
+    pre-filled with every active staff (name + badge + wage type +
+    rate) plus 5 blank rows for casuals. Includes an Instructions
+    sheet.
+  * `POST /api/hr/timesheets/upload?period=<>` — HR uploads the
+    completed file; rows are matched by badge_number (fallback: name)
+    and land as `status='submitted'` awaiting director approval.
+- **Wage breakdown on payslip PDF**: payslip docs now persist
+  `wage_type` + `wage_details` and the downloadable PDF prints them
+  under the header ("Wage breakdown: 60,000 × 10 days").
+- **Salary form UI**: adds Rate Type + OT threshold/multiplier fields
+  for hourly staff. TimesheetsPanel adds an Hours field to the
+  Log-for-Staff dialog and a "Sheet up/download" button opening the
+  XLSX flow.
+- Tests: `backend/tests/test_iter337_ot_hours_xlsx.py` covers all
+  four features end-to-end (OT math, hours-worked timesheet path,
+  XLSX template contents, XLSX upload with badge match).
+
 ## Current status (as of iter 336)
 
 ### iter 336 — Per-salary wage types (hourly / daily / weekly / biweekly / monthly)

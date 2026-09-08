@@ -393,6 +393,8 @@ try:
     app.include_router(holidays_router)
     from routers.hr import router as hr_router
     app.include_router(hr_router)
+    from routers.hr_timesheet_templates import router as hr_ts_tpl_router
+    app.include_router(hr_ts_tpl_router)
     from routers.donors_vendors import router as donors_vendors_router
     app.include_router(donors_vendors_router)
     from routers.seed import router as seed_router

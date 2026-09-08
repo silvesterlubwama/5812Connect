@@ -145,20 +145,20 @@ def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: 
     `wage_type`. Returns (gross, details_string) where details is a human
     breakdown like "60,000 × 10 days".
 
+    Iter 337 — hourly wage_type now honours an optional overtime tier:
+    ``ot_threshold_hours`` (per WEEK; default 40) and ``ot_multiplier``
+    (default 1.5). Hours above the threshold are paid at
+    ``rate × multiplier``. Weekly threshold is scaled by the period's
+    week-count so a biweekly period allows 2× threshold before OT kicks in.
+
     Wage types
     ----------
     - salary / monthly → monthly_base × pay_frequency_proration (existing)
     - daily            → daily_rate × days_worked (falls back to working_days)
     - hourly           → hourly_rate × hours_worked (falls back to
-                         days_worked×8h then working_days×8h)
+                         days_worked×8h then working_days×8h); OT applied.
     - weekly           → weekly_rate × (period_span_days / 7)
     - biweekly         → biweekly_rate × (period_span_days / 14)
-
-    Rate resolution: the pre-existing `hourly_rate` / `daily_rate` fields
-    are honoured. `weekly_rate` / `biweekly_rate` fall back to
-    `base_salary` when the type-specific field is 0/absent so admins can
-    just tweak `wage_type` on an existing record without re-entering the
-    number.
     """
     wage_type = (sal.get("wage_type") or "salary").lower()
     monthly_base = float(sal.get("base_salary", 0) or 0)
@@ -167,9 +167,6 @@ def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: 
 
     if wage_type == "daily":
         rate = float(sal.get("daily_rate") or 0) or monthly_base
-        # Use days_worked when known, else the working days in this period.
-        # working_days is 0 for windows without an approved timesheet fallback;
-        # pick a sensible ceiling so daily rates never look zeroed out.
         days = days_worked if days_worked is not None else (working_days or round(period_days * 5 / 7))
         gross = round(rate * float(days), 2)
         return gross, f"{rate:,.0f} × {float(days):g} days"
@@ -185,6 +182,22 @@ def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: 
         else:
             hrs = float(working_days or round(period_days * 5 / 7)) * 8.0
             src = f"{working_days} days × 8h"
+
+        # Iter 337 — overtime tier. Weekly threshold scales with the
+        # period. Only applied when the salary explicitly enables OT
+        # (ot_threshold_hours > 0). Multiplier defaults to 1.5×.
+        ot_threshold_weekly = float(sal.get("ot_threshold_hours") or 0)
+        ot_multiplier = float(sal.get("ot_multiplier") or 1.5)
+        if ot_threshold_weekly > 0 and hrs > 0:
+            period_threshold = ot_threshold_weekly * max(1.0, weeks_in_period)
+            if hrs > period_threshold:
+                reg_hrs = period_threshold
+                ot_hrs = hrs - period_threshold
+                gross = round(rate * reg_hrs + rate * ot_multiplier * ot_hrs, 2)
+                return gross, (
+                    f"{rate:,.0f} × {reg_hrs:g}h reg + "
+                    f"{rate:,.0f} × {ot_multiplier:g}× × {ot_hrs:g}h OT"
+                )
         gross = round(rate * hrs, 2)
         return gross, f"{rate:,.0f} × {hrs:g}h ({src})"
 
@@ -198,7 +211,6 @@ def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: 
         gross = round(rate * (weeks_in_period / 2.0), 2)
         return gross, f"{rate:,.0f} × {weeks_in_period / 2:g} bi-wk"
 
-    # Default: monthly-salary wage type — scale by pay_frequency proration.
     is_multi_pay = _period_is_multi_pay(period)
     factor = _proration_factor(sal.get("pay_frequency") or "monthly") if is_multi_pay else 1.0
     gross = round(monthly_base * factor, 2)
@@ -425,6 +437,10 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "daily_rate": float(data.get("daily_rate") or 0),
         "weekly_rate": float(data.get("weekly_rate") or 0),
         "biweekly_rate": float(data.get("biweekly_rate") or 0),
+        # iter 337 — optional overtime tier for hourly staff. Threshold is
+        # per-week (40h is US default; can be overridden per campus policy).
+        "ot_threshold_hours": float(data.get("ot_threshold_hours") or 0),
+        "ot_multiplier": float(data.get("ot_multiplier") or 1.5),
         "currency": data.get("currency", "UGX"),
         "pay_frequency": data.get("pay_frequency", "monthly"),
         "effective_date": data.get("effective_date", datetime.now(timezone.utc).isoformat()[:10]),
@@ -454,7 +470,9 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
                # iter-departments: allow retagging & re-splitting on edit.
                "department_ids", "department_splits",
                # iter 336: allow wage_type + type-specific rate edits.
-               "wage_type", "hourly_rate", "daily_rate", "weekly_rate", "biweekly_rate"}
+               "wage_type", "hourly_rate", "daily_rate", "weekly_rate", "biweekly_rate",
+               # iter 337: overtime tier.
+               "ot_threshold_hours", "ot_multiplier"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "department_splits" in update and update["department_splits"]:
         total_pct = sum(float(s.get("pct") or 0) for s in update["department_splits"])
@@ -648,13 +666,16 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
     location_id = data.get("location_id")
     days_worked = dict(data.get("days_worked_override") or {})
     pto_days = dict(data.get("pto_days_override") or {})
+    hours_worked = dict(data.get("hours_worked_override") or {})
     use_timesheets = data.get("use_timesheets", True)
     # Merge in approved timesheets — explicit overrides win
     if use_timesheets:
         async for ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
             days_worked.setdefault(ts["staff_id"], ts.get("days_worked"))
             pto_days.setdefault(ts["staff_id"], ts.get("pto_days", 0))
-    return await _generate_payslips_for(period, location_id, current_user, days_worked, pto_days)
+            if ts.get("hours_worked") is not None:
+                hours_worked.setdefault(ts["staff_id"], ts.get("hours_worked"))
+    return await _generate_payslips_for(period, location_id, current_user, days_worked, pto_days, hours_worked)
 
 
 @router.post("/payslips/preview")
@@ -675,10 +696,13 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
     location_id = data.get("location_id")
     days_worked_override = dict(data.get("days_worked_override") or {})
     pto_days_override = dict(data.get("pto_days_override") or {})
+    hours_worked_override = dict(data.get("hours_worked_override") or {})
     if data.get("use_timesheets", True):
         async for ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
             days_worked_override.setdefault(ts["staff_id"], ts.get("days_worked"))
             pto_days_override.setdefault(ts["staff_id"], ts.get("pto_days", 0))
+            if ts.get("hours_worked") is not None:
+                hours_worked_override.setdefault(ts["staff_id"], ts.get("hours_worked"))
 
     is_multi_pay = _period_is_multi_pay(period)
     query = {"status": "active"}
@@ -700,9 +724,10 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
         wage_type = (sal.get("wage_type") or "salary").lower()
         unpaid_days, working_days = await _unpaid_leave_days_in_period(sal["staff_id"], period)
         override_days = days_worked_override.get(sal["staff_id"])
+        hours_override = hours_worked_override.get(sal["staff_id"])
         eff_days = override_days if override_days is not None else max(0, working_days - unpaid_days)
         base_gross, wage_details = _compute_base_gross(
-            sal, period, working_days, eff_days if wage_type in {"daily", "hourly"} else None, None,
+            sal, period, working_days, eff_days if wage_type in {"daily", "hourly"} else None, hours_override,
         )
         skip_days_proration = wage_type in {"daily", "hourly"}
         proration_amount = 0.0
@@ -926,7 +951,7 @@ async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
     return (unpaid_total, working)
 
 
-async def _generate_payslips_for(period: str, location_id: str, current_user: dict, days_worked_override: dict = None, pto_days_override: dict = None) -> dict:
+async def _generate_payslips_for(period: str, location_id: str, current_user: dict, days_worked_override: dict = None, pto_days_override: dict = None, hours_worked_override: dict = None) -> dict:
     """Shared helper: generate missing payslips for a period + optional location.
     Applies automatic unpaid-leave proration: gross is reduced by (unpaid_days / working_days)
     and a transparent line-item 'Unpaid leave proration' is added so payslip math is auditable.
@@ -944,6 +969,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
     """
     days_worked_override = days_worked_override or {}
     pto_days_override = pto_days_override or {}
+    hours_worked_override = hours_worked_override or {}
     is_multi_pay = _period_is_multi_pay(period)
     query = {"status": "active"}
     if location_id:
@@ -967,9 +993,9 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         unpaid_days_peek, working_days_peek = await _unpaid_leave_days_in_period(sal["staff_id"], period)
         override_days = days_worked_override.get(sal["staff_id"])
         # Optional per-staff hours override — populated by timesheets when
-        # they carry `hours_worked` (see hr_timesheets fetch below). Left None
+        # they carry `hours_worked` (see hr_timesheets fetch above). Left None
         # otherwise; `_compute_base_gross` falls back to days × 8h.
-        hours_override = None
+        hours_override = hours_worked_override.get(sal["staff_id"])
         eff_days = override_days if override_days is not None else max(0, working_days_peek - unpaid_days_peek)
         base_gross, wage_details = _compute_base_gross(
             sal, period, working_days_peek, eff_days if wage_type in {"daily", "hourly"} else None, hours_override
@@ -1051,9 +1077,15 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "unpaid_leave_days": unpaid_days,
             "working_days": working_days,
             "days_worked": override_days if override_days is not None else (max(0, working_days - unpaid_days)),
+            "hours_worked": hours_override,
             "pto_days": pto_days if pto_days is not None else 0,
             "unpaid_leave_proration": proration_amount,
             "currency": sal.get("currency", "UGX"),
+            # iter 336 — persist wage_type + human breakdown so the PDF /
+            # portal payslip view can display the same explainer as the
+            # generation-time preview table.
+            "wage_type": wage_type,
+            "wage_details": wage_details,
             "line_items": items,
             "status": "draft",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2743,6 +2775,16 @@ async def submit_timesheet(data: dict, current_user: dict = Depends(get_current_
     days_worked = float(data.get("days_worked") or 0)
     if days_worked < 0 or days_worked > 100:
         raise HTTPException(status_code=400, detail="days_worked out of range")
+    # iter 337 — hours_worked for hourly staff so payslips can compute
+    # rate × hours instead of days×8h fallback. Optional.
+    hours_worked = data.get("hours_worked")
+    if hours_worked is not None:
+        try:
+            hours_worked = float(hours_worked)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="hours_worked must be a number")
+        if hours_worked < 0 or hours_worked > 1000:
+            raise HTTPException(status_code=400, detail="hours_worked out of range")
     # On-behalf submission — director+ can create timesheets for staff who
     # don't use the app (iter214). Regular staff always submit for themselves.
     on_behalf_of = (data.get("staff_id") or "").strip()
@@ -2781,6 +2823,7 @@ async def submit_timesheet(data: dict, current_user: dict = Depends(get_current_
         "location_id": data.get("location_id") or default_loc,
         "period": period,
         "days_worked": days_worked,
+        "hours_worked": hours_worked,
         "pto_days": float(data.get("pto_days") or 0),
         "entries": data.get("entries") or [],  # optional daily breakdown (iter214)
         "notes": (data.get("notes") or "")[:1000],
@@ -3207,9 +3250,12 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
     <div><span class='k'>Currency:</span> {cur}</div>
     <div><span class='k'>Working days:</span> {p.get('working_days','&mdash;')}</div>
     <div><span class='k'>Days worked:</span> {p.get('days_worked','&mdash;')}</div>
+    {("<div><span class='k'>Hours worked:</span> " + str(p.get('hours_worked')) + "</div>") if p.get('hours_worked') is not None else ""}
     <div><span class='k'>Unpaid leave days:</span> {p.get('unpaid_leave_days',0)}</div>
     <div><span class='k'>PTO days:</span> {p.get('pto_days',0)}</div>
+    {("<div><span class='k'>Rate type:</span> " + str(p.get('wage_type','salary')).title() + "</div>") if p.get('wage_type') else ""}
   </div>
+  {(f"<p class='meta' style='margin:6px 0 0 0'><strong>Wage breakdown:</strong> " + p.get('wage_details','') + "</p>") if p.get('wage_details') else ""}
   <h2>Line Items</h2>
   <table>
     <thead><tr><th>Description</th><th style='text-align:right'>Amount</th></tr></thead>

@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## iter 337 — 2026-02 — Overtime · Hours-on-Timesheet · XLSX template · Payslip wage breakdown
+
+### Overtime tier
+- `routers/hr.py::_compute_base_gross` for `wage_type='hourly'`
+  splits hours at `ot_threshold_hours` (weekly, scales with the
+  period's week-count) into regular + OT slices, paying OT at
+  `rate × ot_multiplier` (default 1.5). Details string shows the
+  split (`10,000 × 80h reg + 10,000 × 1.5× × 10h OT`).
+- `create_salary` accepts `ot_threshold_hours` + `ot_multiplier`;
+  `update_salary` allowed-list expanded.
+
+### Hours on Timesheet
+- `submit_timesheet` accepts optional `hours_worked` (0-1000). Doc
+  now persists it. `generate_payslips` and `preview_payslips` merge
+  hours from approved timesheets and forward them to
+  `_compute_base_gross`, replacing the days × 8h fallback.
+
+### XLSX template + upload
+- New `backend/routers/hr_timesheet_templates.py`:
+  * `GET /api/hr/timesheets/template?period=<>` — returns an XLSX
+    seeded with every active salary (name, badge, wage type, rate)
+    plus 5 blank rows for casual workers and a signature/HR-approval
+    line. Instructions sheet included.
+  * `POST /api/hr/timesheets/upload?period=<>` — parses the same
+    format, matches rows by badge_number (fallback: case-insensitive
+    name), creates timesheet drafts with `status='submitted'` +
+    `source='xlsx_upload'`. Idempotent re-uploads reuse the existing
+    draft for the same staff+period.
+- Router registered in `server.py` right after the main HR router.
+
+### Payslip PDF wage breakdown
+- `hr_payslips` docs persist `wage_type` + `wage_details` at
+  generation time. `_generate_payslip_pdf_bytes` prints a "Wage
+  breakdown: …" line under the header for anyone with the field
+  populated. Rate type also shown in the meta grid.
+
+### Frontend
+- HR Salary form (`HRPage.jsx`) gains Rate Type picker (already in
+  iter 336) plus OT threshold + multiplier fields shown only when
+  `wage_type='hourly'`.
+- TimesheetsPanel: Log-for-Staff dialog adds an "Hours worked"
+  field. New "Sheet up/download" toolbar button opens an XLSX
+  dialog: pick a period, download the pre-filled blank sheet, hand
+  it out on paper, then re-upload the completed file — HR sees a
+  per-row created/skipped report inline.
+
+### Tests
+- `backend/tests/test_iter337_ot_hours_xlsx.py` — end-to-end: OT
+  math (with & without threshold), hours-worked timesheet →
+  preview → OT-adjusted gross, XLSX template contents, XLSX upload
+  matching by badge_number.
+
 ## iter 336 — 2026-02 — Per-salary wage types
 
 ### `_compute_base_gross(sal, period, working_days, days_worked, hours_worked)`
