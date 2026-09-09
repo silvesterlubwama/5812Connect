@@ -94,11 +94,11 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
 
     lines_changed = "lines" in data and data["lines"] is not None
     if not lines_changed:
-        # Safe in-place edit — metadata / date / scope fields. `location_id`
-        # and `department_id` land here too so admins can retag a JE
-        # without a reverse+repost when the amounts are right but the
-        # cost centre or campus was wrong at post time (iter344e).
-        allowed = {"description", "reference", "date", "location_id", "department_id"}
+        # Safe in-place edit — metadata / date / scope fields. `location_id`,
+        # `department_id`, and `vendor` land here too so admins can retag a
+        # JE without a reverse+repost when the amounts are right but the
+        # cost centre / campus / vendor was wrong at post time.
+        allowed = {"description", "reference", "date", "location_id", "department_id", "vendor"}
         update = {k: v for k, v in data.items() if k in allowed}
         if not update:
             return doc

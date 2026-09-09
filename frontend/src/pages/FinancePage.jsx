@@ -702,8 +702,9 @@ function JournalPanel() {
   const [expanded, setExpanded] = useState({});
   const [reversing, setReversing] = useState(null); // je object being reversed
   const [editing, setEditing] = useState(null); // je object being edited (metadata only)
-  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', location_id: '', department_id: '', lines: null });
+  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', location_id: '', department_id: '', vendor: '', lines: null });
   const [editAccounts, setEditAccounts] = useState([]); // CoA cache for the line-editor account swap
+  const [editVendorMatches, setEditVendorMatches] = useState([]);
   // iter344e — retag a JE's campus/sub-location + department without a
   // full reverse+repost. Loaded lazily when the edit dialog opens.
   const [editLocations, setEditLocations] = useState([]);
@@ -743,6 +744,7 @@ function JournalPanel() {
       date: editing.date || '',
       location_id: editing.location_id || '',
       department_id: editing.department_id || '',
+      vendor: editing.vendor || '',
       lines: null,
     });
     if (editAccounts.length === 0) {
@@ -781,7 +783,24 @@ function JournalPanel() {
         list.push({ id: picked, name: '(picked sub-location)', location_id: parent });
       }
       setEditSubLocations(list);
-      setEditDepartments(dp.data || []);
+      // iter344i — preserve the currently-tagged department even when the
+      // scope-filtered response doesn't include it (legacy JE points at a
+      // deactivated / cross-campus dept). Without this the Select renders
+      // blank instead of the retagable current value.
+      const depts = dp.data || [];
+      const currentDept = editForm.department_id;
+      if (currentDept && !depts.some(d => d.id === currentDept)) {
+        // Ask the backend for every department (no scope filter) so we can
+        // resolve the legacy id → human name for the dropdown.
+        api.get('/departments', { params: { include_inactive: true } })
+          .then(r => {
+            const match = (r.data || []).find(x => x.id === currentDept);
+            setEditDepartments([...depts, match || { id: currentDept, name: '(current department)', location_id: parent }]);
+          })
+          .catch(() => setEditDepartments([...depts, { id: currentDept, name: '(current department)', location_id: parent }]));
+      } else {
+        setEditDepartments(depts);
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editForm.location_id, editing?.id]);
@@ -826,6 +845,9 @@ function JournalPanel() {
       }
       if ((editForm.department_id || '') !== (editing.department_id || '')) {
         payload.department_id = editForm.department_id || null;
+      }
+      if ((editForm.vendor || '') !== (editing.vendor || '')) {
+        payload.vendor = editForm.vendor || null;
       }
       if (linesDirty && editForm.lines) {
         payload.lines = editForm.lines.map(ln => ({
@@ -1004,13 +1026,44 @@ function JournalPanel() {
               <div>
                 <Label className="text-xs">Department</Label>
                 <Select value={editForm.department_id || '__none__'} onValueChange={v => setEditForm({ ...editForm, department_id: v === '__none__' ? '' : v })}>
-                  <SelectTrigger data-testid="journal-edit-department" disabled={!editForm.location_id}><SelectValue placeholder={editForm.location_id ? 'Untagged' : 'Pick a campus first'} /></SelectTrigger>
+                  <SelectTrigger data-testid="journal-edit-department" disabled={!editForm.location_id}><SelectValue placeholder={editForm.location_id ? (editDepartments.length ? 'Untagged' : 'No departments for this campus') : 'Pick a campus first'} /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">Untagged</SelectItem>
                     {editDepartments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="relative">
+              <Label className="text-xs">Vendor</Label>
+              <Input
+                data-testid="journal-edit-vendor"
+                value={editForm.vendor || ''}
+                placeholder="Vendor / payee (retag after the fact)"
+                onChange={async e => {
+                  const v = e.target.value;
+                  setEditForm({ ...editForm, vendor: v });
+                  if (v && v.length >= 1) {
+                    try {
+                      const { vendorsApi } = await import('../services/api');
+                      const r = await vendorsApi.suggest(v);
+                      setEditVendorMatches(r.data || []);
+                    } catch { setEditVendorMatches([]); }
+                  } else setEditVendorMatches([]);
+                }}
+                onBlur={() => setTimeout(() => setEditVendorMatches([]), 200)}
+              />
+              {editVendorMatches.length > 0 && (
+                <div className="absolute z-50 left-0 right-0 top-full mt-1 border rounded-lg bg-popover shadow max-h-48 overflow-y-auto" data-testid="journal-edit-vendor-suggest">
+                  {editVendorMatches.map(v => (
+                    <button key={v.id} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent" onClick={() => { setEditForm(f => ({ ...f, vendor: v.name })); setEditVendorMatches([]); }} data-testid={`journal-edit-vendor-suggest-${v.id}`}>
+                      <div className="font-medium">{v.name}</div>
+                      {(v.email || v.phone || v.category) && <div className="text-[10px] text-muted-foreground">{[v.category, v.phone, v.email].filter(Boolean).join(' · ')}</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground mt-1">Typing a new name creates a vendor profile on save; picking a match links the existing one.</p>
             </div>
 
             <div className="pt-2 border-t">
