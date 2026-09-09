@@ -1,6 +1,16 @@
 # ROADMAP — 58:12 Global Connect CRM
 
-## P0 / P1 — none open
+## P0 — open (found in the iter317 audit, awaiting user's go-ahead)
+- **Rate limiter is global, not per user.** `RateLimitMiddleware` keys on the
+  ingress pod IP, so all users share one 120 req/min bucket → random empty
+  panels and failed saves under normal multi-user load. Fix: key on
+  authenticated user id + honour `X-Forwarded-For`, raise the authenticated
+  ceiling, keep a tight per-IP limit for public routes.
+
+## P2 — nice-to-have hardening (not requested)
+- `server.py` imports all routers in one try/except logged as WARNING; one bad
+  import silently unregisters every router after it.
+- `fare_alerts` collection still exists though the feature was wiped (iter326).
 
 ## Approved backlog (user-requested only)
 

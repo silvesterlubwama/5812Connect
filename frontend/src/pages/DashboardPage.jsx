@@ -45,20 +45,18 @@ export default function DashboardPage() {
   const [parentData, setParentData] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [deptData, setDeptData] = useState([]);
-  const [campuses, setCampuses] = useState([]);
-  const [selectedCampus, setSelectedCampus] = useState('all');
   const [actionItems, setActionItems] = useState(null);
-
-  useEffect(() => {
-    if (isSystemAdmin) {
-      locationsApi.list().then(res => setCampuses(res.data || [])).catch(() => {});
-    }
-  }, [isSystemAdmin]);
 
   const fetchAll = async () => {
     setLoadingStats(true);
     try {
-      const campusParam = selectedCampus !== 'all' ? { campus_id: selectedCampus } : {};
+      const campusParam = {};
+      // Money cards are month-to-date; /reports/summary keys on location_id.
+      const _now = new Date();
+      const monthParams = {
+        date_from: `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-01`,
+        date_to: _now.toISOString().slice(0, 10),
+      };
       if (isParent) {
         const [dashRes, evRes] = await Promise.all([parentApi.dashboard(), eventsApi.list({ status: 'upcoming' })]);
         setParentData(dashRes.data);
@@ -71,7 +69,7 @@ export default function DashboardPage() {
           dashboardApi.stats(campusParam),
           eventsApi.list({ status: 'upcoming' }),
           tasksApi.list(),
-          financialApi.summary(campusParam),
+          financialApi.summary(monthParams),
           familiesApi.list(),
           childrenApi.list(),
           productsApi.list(),
@@ -121,7 +119,7 @@ export default function DashboardPage() {
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchAll(); }, [isParent, selectedCampus]);
+  useEffect(() => { fetchAll(); }, [isParent]);
 
   // ---- PARENT VIEW ----
   if (isParent) {
@@ -194,7 +192,6 @@ export default function DashboardPage() {
   }
 
   // ---- ADMIN/STAFF VIEW ----
-  const campusName = selectedCampus === 'all' ? 'All Campuses' : (campuses.find(c => c.id === selectedCampus)?.name || '');
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
@@ -217,7 +214,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Financial summary — only when a campus is selected */}
-      {selectedCampus !== 'all' && (
+      {hasDirectorAccess(user) && (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
@@ -225,7 +222,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground">Monthly Donations</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
-                <p className="text-lg font-bold">UGX {(financial?.monthly_donations || 0).toLocaleString()}</p>
+                <p className="text-lg font-bold">UGX {(financial?.total_income || 0).toLocaleString()}</p>
               )}
             </div>
           </CardContent>
@@ -236,18 +233,18 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground">Monthly Expenses</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
-                <p className="text-lg font-bold">UGX {(financial?.monthly_expenses || 0).toLocaleString()}</p>
+                <p className="text-lg font-bold">UGX {(financial?.total_expenses || 0).toLocaleString()}</p>
               )}
             </div>
           </CardContent>
         </Card>
         <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <CardContent className="p-5 flex items-center gap-4">
-            <div className={`p-2.5 rounded-lg ${(financial?.net_balance || 0) >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}><TrendingUp size={18} className="text-white" /></div>
+            <div className={`p-2.5 rounded-lg ${(financial?.net || 0) >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}><TrendingUp size={18} className="text-white" /></div>
             <div>
               <p className="text-xs text-muted-foreground">Net Balance</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
-                <p className="text-lg font-bold">UGX {(financial?.net_balance || 0).toLocaleString()}</p>
+                <p className="text-lg font-bold">UGX {(financial?.net || 0).toLocaleString()}</p>
               )}
             </div>
           </CardContent>

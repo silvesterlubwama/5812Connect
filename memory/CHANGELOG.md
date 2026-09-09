@@ -1393,3 +1393,50 @@ backend endpoints are wired correctly.
 **Tests** — `backend/tests/test_iter316_holiday_events_tasks.py`: 16/16 pass
 (`/app/test_reports/iteration_101.json`). Venue picker + edit hydration
 verified via Playwright at 1920px and 390px (no overflow).
+
+## iter 317 — 2026-06 — Full-app wiring audit + 2 fixes
+
+**Audit performed** (evidence, not assertion)
+- ESLint across all 76 pages + components: **0 errors** (391 style warnings).
+- `python -m compileall` on all 64 routers: clean. Current boot logs
+  "All modular routers loaded" with no warning.
+- Route table introspected: **978 routes, 0 duplicate (method,path)
+  registrations, 0 literal routes shadowed by a dynamic one**.
+- ~50 live endpoint calls across every module: all 200 (the 404/405/422s in
+  the first sweep were wrong guesses at paths, re-verified against `api.js`).
+- All 23 main routes loaded in a real browser session: none blank, no
+  React/pageerror exceptions.
+
+**Found + fixed**
+1. Dashboard money cards called `GET /api/financial/summary`, which does not
+   exist → silent 404 (swallowed by `Promise.allSettled`). Repointed
+   `financialApi.summary` to the real `/api/reports/summary` and passed
+   month-to-date `date_from`/`date_to` + `location_id`.
+2. Those same cards were gated on `selectedCampus !== 'all'`, but
+   `setSelectedCampus` was **never called** anywhere — the campus picker had
+   been removed at some point, so the gate was permanently false and the
+   Donations / Expenses / Net cards had never rendered for anyone. Gate is now
+   `hasDirectorAccess(user)` (keeps figures away from non-finance staff, since
+   `/reports/summary` has no role guard of its own). Removed the dead
+   `campuses` / `selectedCampus` / `campusName` state.
+   Verified live: UGX 110,000 / 75,000 / 35,000 now render, 0 failed requests.
+
+**Found, NOT fixed — needs a decision (P0 for multi-user use)**
+- `RateLimitMiddleware(requests_per_minute=120)` keys the bucket on
+  `scope["client"]`, which behind the K8s ingress is the **proxy pod IP**
+  (observed: only `10.79.142.2` / `10.79.142.5` ever reach the app). So the
+  120/min ceiling is effectively **shared by every user of the platform**, and
+  `X-Forwarded-For` is ignored. A single page load fires 15–25 API calls, so a
+  few staff browsing at once exhaust it; the UI then renders empty panels
+  silently (429s are swallowed by `catch`/`allSettled`). Reproduced: 200
+  sequential requests → 196×200 + 4×429, and a browser session collided with
+  the same bucket.
+  Recommended: key on authenticated `user.id` (fall back to the left-most
+  `X-Forwarded-For` hop for anonymous traffic) and raise the authenticated
+  ceiling; keep a tight per-IP limit on public/unauthenticated routes only.
+
+**Docs**
+- `/app/memory/ARCHITECTURE.md` — stack, request path, tenancy model,
+  module→router→page→collection map, background jobs, integrations.
+- `/app/memory/USER_REQUESTS.md` — every user request compiled from all
+  handoffs, grouped by module, with removed/out-of-scope sections.

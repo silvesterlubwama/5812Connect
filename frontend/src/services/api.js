@@ -239,7 +239,9 @@ export const kioskApi = {
 
 // ---- FINANCIAL ----
 export const financialApi = {
-  summary: (location_id) => api.get('/financial/summary', { params: location_id ? { location_id } : {} }),
+  // iter317: was hitting a non-existent /financial/summary (silent 404 → the
+  // dashboard's money cards always read 0). /reports/summary is the real one.
+  summary: (params) => api.get('/reports/summary', { params: params || {} }),
   accounts: (params) => api.get('/financial/accounts', { params }),
   campusAccounts: (campusId) => api.get(`/financial/campus-accounts/${campusId}`),
   updateAccount: (id, data) => api.put(`/financial/campus-accounts/${id}`, data),
