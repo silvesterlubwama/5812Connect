@@ -706,7 +706,15 @@ export const boardsApi = {
   // Trello import
   importTrello: (data) => api.post('/boards/import-trello', data),
   // Tasks (filtered)
-  tasks: (boardId, listId) => api.get('/tasks', { params: { board_id: boardId, list_id: listId } }),
+  tasks: (boardId, listId) => {
+    // iter344g — DO NOT pass list_id when the caller didn't provide one.
+    // Axios serialises `null` as the literal string "null", which the
+    // backend then uses as a filter (`list_id="null"`) — zero matches,
+    // whole board renders empty. Only forward truthy values.
+    const params = { board_id: boardId };
+    if (listId) params.list_id = listId;
+    return api.get('/tasks', { params });
+  },
   moveTask: (taskId, data) => api.patch(`/tasks/${taskId}/move`, data),
 };
 

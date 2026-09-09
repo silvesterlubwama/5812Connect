@@ -534,15 +534,27 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   }, [mode]);
 
   // When campus changes, refetch its sub-locations + departments.
+  // iter344g — resolve to top-level parent when the picked value is a
+  // sub-location so we don't overwrite the list with an empty children
+  // response for the just-picked row.
   useEffect(() => {
     if (!form.location_id) { setSubLocations([]); setDepartments([]); return; }
+    const picked = form.location_id;
+    const parent = locations.find(l => l.id === picked)
+      ? picked
+      : (subLocations.find(s => s.id === picked)?.location_id || picked);
     Promise.all([
-      sublocationsApi.list({ location_id: form.location_id }).catch(() => ({ data: [] })),
-      departmentsApi.list({ location_id: form.location_id }).catch(() => ({ data: [] })),
+      sublocationsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
+      departmentsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
     ]).then(([sl, dp]) => {
-      setSubLocations(sl.data || []);
+      const list = sl.data || [];
+      if (picked !== parent && !list.some(s => s.id === picked)) {
+        list.push({ id: picked, name: '(picked sub-location)', location_id: parent });
+      }
+      setSubLocations(list);
       setDepartments(dp.data || []);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.location_id]);
 
   const filterType = isExpense ? 'expense' : 'revenue';
@@ -707,15 +719,31 @@ function JournalPanel() {
   }, [editing]);
 
   // Chain department + sublocation fetch off the currently-picked location.
+  // iter344g — resolve to the TOP-LEVEL campus (either the picked value or
+  // its parent when the caller picked a sub-location). Without this, picking
+  // a sub-location fired another lookup for its own children (zero rows),
+  // wiped the dropdown, and the picker rendered blank because the just-
+  // picked value no longer matched any option.
   useEffect(() => {
     if (!editing) return;
-    const loc = editForm.location_id;
-    if (!loc) { setEditSubLocations([]); setEditDepartments([]); return; }
+    const picked = editForm.location_id;
+    if (!picked) { setEditSubLocations([]); setEditDepartments([]); return; }
+    // Is `picked` a top-level campus? If yes, use it. Else look up its parent.
+    const parent = editLocations.find(l => l.id === picked)
+      ? picked
+      : (editSubLocations.find(s => s.id === picked)?.location_id || picked);
     Promise.all([
-      sublocationsApi.list({ location_id: loc }).catch(() => ({ data: [] })),
-      departmentsApi.list({ location_id: loc }).catch(() => ({ data: [] })),
+      sublocationsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
+      departmentsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
     ]).then(([sl, dp]) => {
-      setEditSubLocations(sl.data || []);
+      // Preserve the picked sub-location in the list even if the backend
+      // response doesn't include it (defensive — should never happen once
+      // parent resolution is right, but avoids Select rendering blank).
+      const list = sl.data || [];
+      if (picked !== parent && !list.some(s => s.id === picked)) {
+        list.push({ id: picked, name: '(picked sub-location)', location_id: parent });
+      }
+      setEditSubLocations(list);
       setEditDepartments(dp.data || []);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
