@@ -7,7 +7,7 @@ import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
-import { portalApi } from '../services/api';
+import { portalApi, holidaysApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import api from '../services/api';
@@ -42,6 +42,21 @@ export default function PortalProfile() {
   };
   const _initWeek = isoWeekOf();
   const [tsWeek, setTsWeek] = useState({ period: _initWeek.period, monday: _initWeek.monday, days: [false, false, false, false, false, false, false], pto: 0, notes: '' });
+  // Paid / optional-paid public holidays land in this week's grid so staff can
+  // see what payroll credits them automatically (iter 316).
+  const [payHolidays, setPayHolidays] = useState({});
+  const tsYear = new Date(tsWeek.monday).getFullYear();
+  useEffect(() => {
+    holidaysApi.list({ year: tsYear, country: 'all' })
+      .then(r => {
+        const map = {};
+        for (const h of (r.data || [])) {
+          if (h.policy === 'paid' || h.policy === 'optional_paid') map[h.date] = h;
+        }
+        setPayHolidays(map);
+      })
+      .catch(() => setPayHolidays({}));
+  }, [tsYear]);
 
   const openMyBadge = async () => {
     setBadgeLoading(true);
@@ -419,11 +434,12 @@ export default function PortalProfile() {
                 <div key={p.id} className="py-2 flex items-center justify-between gap-2" data-testid={`payslip-row-${p.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{p.period} · {p.currency} {(p.net_salary || 0).toLocaleString()}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px] text-muted-foreground">
                       <Badge variant={p.status === 'paid' ? 'default' : 'secondary'} className="text-[10px] mr-1">{p.status}</Badge>
                       Gross {(p.gross_salary || 0).toLocaleString()} · Allowances {(p.allowances || 0).toLocaleString()} · Deductions {(p.deductions || 0).toLocaleString()}
                       {p.days_worked != null && ` · ${p.days_worked} day(s)`}
-                    </p>
+                      {p.holiday_credit?.note && ` · ${p.holiday_credit.note}`}
+                    </div>
                   </div>
                   <div className="flex gap-1">
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setViewingPayslip(p)} data-testid={`payslip-view-${p.id}`}>Review</Button>
@@ -549,17 +565,30 @@ export default function PortalProfile() {
                   const d = new Date(tsWeek.monday); d.setDate(d.getDate() + i);
                   const label = d.toLocaleDateString(undefined, { day: 'numeric' });
                   const on = tsWeek.days[i];
+                  const hol = payHolidays[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`];
                   return (
                     <button key={i} type="button" onClick={() => { const nd = [...tsWeek.days]; nd[i] = !nd[i]; setTsWeek({ ...tsWeek, days: nd }); }}
-                      data-testid={`ts-day-${i}`}
-                      className={`flex flex-col items-center justify-center h-14 rounded-md border text-xs transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-muted/40'}`}>
+                      data-testid={`ts-day-${i}`} title={hol ? `${hol.name} — ${hol.policy === 'paid' ? 'paid holiday' : 'optional paid day off'}` : undefined}
+                      className={`relative flex flex-col items-center justify-center h-14 rounded-md border text-xs transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : hol ? 'bg-amber-50 border-amber-300 hover:bg-amber-100' : 'bg-background hover:bg-muted/40'}`}>
                       <span className="font-semibold">{ltr}</span>
                       <span className="text-[10px] opacity-70">{label}</span>
+                      {hol && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" data-testid={`ts-day-holiday-${i}`} />}
                     </button>
                   );
                 })}
               </div>
               <p className="text-[11px] text-muted-foreground mt-1">Total: <b>{tsWeek.days.filter(Boolean).length}</b> day(s) worked</p>
+              {Object.entries(payHolidays).filter(([date]) => {
+                const m = new Date(tsWeek.monday); const s2 = m.toISOString().slice(0, 10);
+                const e2 = new Date(m.getTime() + 6 * 86400000).toISOString().slice(0, 10);
+                return date >= s2 && date <= e2;
+              }).map(([date, h]) => (
+                <p key={date} className="text-[11px] text-amber-700 mt-1" data-testid="ts-holiday-note">
+                  {h.name} ({date.slice(5)}) — {h.policy === 'paid'
+                    ? 'paid holiday, credited automatically. Check it too if you actually worked.'
+                    : 'optional paid day off — leave it unchecked to be paid for it.'}
+                </p>
+              ))}
             </div>
             <div className="space-y-1.5"><Label className="text-xs">PTO days (optional)</Label>
               <Input type="number" step="0.5" min="0" value={tsWeek.pto} onChange={e => setTsWeek({ ...tsWeek, pto: e.target.value })} data-testid="ts-pto" />

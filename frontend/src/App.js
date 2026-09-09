@@ -22,7 +22,6 @@ const FinancePage = lazy(() => import('./pages/FinancePage'));
 const DonorsPage = lazy(() => import('./pages/DonorsPage'));
 const VendorsPage = lazy(() => import('./pages/VendorsPage'));
 const SocialWorkPage = lazy(() => import('./pages/SocialWorkPage'));
-import EventsPage from './pages/EventsPage';
 import TasksPage from './pages/TasksPage';
 import CalendarPage from './pages/CalendarPage';
 import CheckInsPage from './pages/CheckInsPage';

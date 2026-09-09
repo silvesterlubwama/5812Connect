@@ -494,6 +494,9 @@ export const publicCalendarApi = {
 // Public holidays (US federal + Ugandan) — server-computed, non-auth
 export const holidaysApi = {
   list: (params) => api.get('/holidays', { params }),
+  policies: () => api.get('/holidays/policies'),
+  setPolicy: (data) => api.put('/holidays/policies', data),
+  resetPolicy: (key) => api.delete(`/holidays/policies/${encodeURIComponent(key)}`),
 };
 
 // ---- OUTREACH ----

@@ -589,23 +589,22 @@ async def _fetch_tasks_for_config(cfg: dict) -> list:
     if not owner:
         return []
     scope = cfg.get("task_scope") or "mine"
-    q: dict = {"due_date": {"$exists": True, "$ne": ""}, "is_archived": {"$ne": True}}
+    # `due_date: {$ne: ""}` alone still matches docs where due_date is null,
+    # so require a real string date.
+    q: dict = {"due_date": {"$type": "string", "$ne": ""}, "is_archived": {"$ne": True}}
     if scope == "mine":
-        q["$or"] = [{"assignees": owner["id"]}, {"assignee": owner["id"]}, {"created_by": owner["id"]}]
+        q["$or"] = [{"assignees": owner["id"]}, {"assignee": owner["id"]},
+                    {"assignee_id": owner["id"]}, {"reporter_id": owner["id"]},
+                    {"created_by": owner["id"]}]
     else:
-        # scope == 'campus' → all tasks in owner's descendant scope
-        owner_locs = set(owner.get("location_ids") or [])
-        if owner.get("location_id"):
-            owner_locs.add(owner["location_id"])
-        allowed = set(owner_locs)
-        if owner_locs:
-            descendants = await expand_descendants(list(owner_locs), include_restricted_from=owner_locs, allow_all_restricted=is_system_admin(owner))
-            allowed |= descendants
-        cfg_locs = cfg.get("location_ids") or []
-        if cfg_locs:
-            allowed &= set(cfg_locs)
-        if allowed:
-            q["location_id"] = {"$in": list(allowed)}
+        # scope == 'campus' → every task on a board in the owner's scope.
+        # Tasks carry no location_id of their own — filtering on it here is
+        # what silently emptied the shared feed (iter 316).
+        from routers.tasks import resolve_allowed_board_ids
+        allowed_boards = await resolve_allowed_board_ids(owner, set(cfg.get("location_ids") or []) or None)
+        if not allowed_boards:
+            return []
+        q["board_id"] = {"$in": list(allowed_boards)}
     return await db.tasks.find(q, {"_id": 0}).sort("due_date", 1).to_list(2000)
 
 
@@ -1630,10 +1629,23 @@ async def kiosk_pin_checkin(data: dict):
 
 @router.get("/venues")
 async def list_venues(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Venues the caller may see.
+
+    Campus venues are limited to locations the user can access (restricted
+    sub-locations stay hidden). External / off-site venues carry no campus,
+    so they're shared by everyone — that's the "external venues we've used
+    before" pool the event form offers (iter 316).
+    """
     query = {}
     if location_id:
         query["location_id"] = location_id
-    return await db.venues.find(query, {"_id": 0}).sort("name", 1).to_list(100)
+    venues = await db.venues.find(query, {"_id": 0}).sort("name", 1).to_list(200)
+    from routers.locations import visible_locations
+    allowed = {l["id"] for l in await visible_locations(current_user)}
+    return [
+        v for v in venues
+        if not v.get("location_id") or v.get("is_offsite") or v.get("is_external") or v["location_id"] in allowed
+    ]
 
 
 @router.post("/venues")

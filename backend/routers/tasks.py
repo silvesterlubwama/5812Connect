@@ -10,6 +10,66 @@ import json
 router = APIRouter(prefix="/api", tags=["tasks"])
 
 
+async def resolve_allowed_board_ids(user: dict, restrict_to_locations: set = None) -> set:
+    """Board ids `user` may see — the single source of truth for task scoping.
+
+    Tasks themselves carry no `location_id`; visibility is decided by the
+    BOARD. Anything that lists tasks (the Tasks page, the Calendar, shared
+    calendar feeds) must go through here, otherwise tasks silently vanish.
+    `restrict_to_locations` further narrows the location scope (used by
+    calendar share links that pin specific campuses).
+    """
+    user_id = user["id"]
+    active_campus = user.get("active_campus_id")
+    if active_campus:
+        user_locs = {active_campus}
+    else:
+        user_locs = set(user.get("location_ids") or [])
+        if user.get("location_id"):
+            user_locs.add(user["location_id"])
+    if user_locs:
+        descendants = await expand_descendants(list(user_locs), include_restricted_from=user_locs, allow_all_restricted=False)
+        user_locs |= descendants
+    if restrict_to_locations:
+        user_locs &= set(restrict_to_locations)
+    user_locs_list = list(user_locs)
+
+    # Boards on which user has a task assigned — include even if otherwise out of scope
+    task_board_ids = await db.tasks.distinct("board_id", {
+        "$or": [{"assignees": user_id}, {"assignee": user_id}],
+        "is_archived": {"$ne": True},
+    })
+
+    or_clauses = []
+    if active_campus:
+        # STRICT scope — only boards in this campus PLUS boards the user
+        # owns/is tagged on/has an assigned task on (iter-tasks-calendar).
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        or_clauses.append({"tagged_members": user_id})
+        or_clauses.append({"created_by": user_id})
+        if task_board_ids:
+            or_clauses.append({"id": {"$in": [b for b in task_board_ids if b]}})
+    else:
+        or_clauses.append({"tagged_members": user_id})
+        or_clauses.append({"created_by": user_id})
+        if user_locs_list:
+            or_clauses.append({"location_id": {"$in": user_locs_list}})
+        or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
+    candidate_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0, "id": 1, "tagged_members": 1, "created_by": 1, "is_restricted": 1, "is_private": 1}).to_list(500)
+    allowed: set = set()
+    for b in candidate_boards:
+        if b.get("is_restricted") or b.get("is_private"):
+            if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by"):
+                allowed.add(b["id"])
+        else:
+            allowed.add(b["id"])
+    for bid in task_board_ids:
+        if bid:
+            allowed.add(bid)
+    return allowed
+
+
 async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_user: str = None):
     """Broadcast a board event to all WS viewers of a board."""
     if not board_id:
@@ -152,69 +212,10 @@ async def list_tasks(
     if list_id:
         query["list_id"] = list_id
 
-    # Scope tasks to boards the user has access to (same rules as /api/boards).
-    # When active_campus_id is set, narrow to JUST that campus (admin/director switched).
-    # Otherwise use the union of user's assigned locations.
-    user_id = current_user["id"]
-    active_campus = current_user.get("active_campus_id")
-    if active_campus:
-        # Strict scope — admin explicitly chose a campus
-        user_locs = {active_campus}
-    else:
-        user_locs = set(current_user.get("location_ids") or [])
-        if current_user.get("location_id"):
-            user_locs.add(current_user["location_id"])
-    if user_locs:
-        # Recursive descendant walk — type-agnostic. Viewing 58:12 Uganda
-        # should surface Zimba Farm; viewing 58:12 Global (Central) should
-        # surface every descendant (Uganda, Kenya, Haiti, and their sub-locs).
-        descendants = await expand_descendants(list(user_locs), include_restricted_from=user_locs, allow_all_restricted=False)
-        user_locs |= descendants
-    user_locs_list = list(user_locs)
-
-    # Boards on which user has a task assigned — include even if otherwise out of scope
-    task_board_ids = await db.tasks.distinct("board_id", {
-        "$or": [{"assignees": user_id}, {"assignee": user_id}],
-        "is_archived": {"$ne": True},
-    })
-
-    or_clauses = []
-    if active_campus:
-        # STRICT scope — only boards in this campus PLUS boards the user
-        # owns/is tagged on/has an assigned task on (iter-tasks-calendar).
-        # Without these escapes, a user with an active campus set never sees
-        # tasks on their personal/global boards on the Calendar page.
-        if user_locs_list:
-            or_clauses.append({"location_id": {"$in": user_locs_list}})
-        or_clauses.append({"tagged_members": user_id})
-        or_clauses.append({"created_by": user_id})
-        if task_board_ids:
-            or_clauses.append({"id": {"$in": [b for b in task_board_ids if b]}})
-    else:
-        or_clauses.append({"tagged_members": user_id})
-        or_clauses.append({"created_by": user_id})
-        if user_locs_list:
-            or_clauses.append({"location_id": {"$in": user_locs_list}})
-        or_clauses.append({"is_global": True, "is_restricted": {"$ne": True}, "is_private": {"$ne": True}})
-    if not or_clauses:
-        return []
-    candidate_boards = await db.boards.find({"$or": or_clauses}, {"_id": 0, "id": 1, "tagged_members": 1, "created_by": 1, "is_restricted": 1, "is_private": 1}).to_list(500)
-    allowed_board_ids = set()
-    for b in candidate_boards:
-        if b.get("is_restricted") or b.get("is_private"):
-            if user_id in (b.get("tagged_members") or []) or user_id == b.get("created_by"):
-                allowed_board_ids.add(b["id"])
-        else:
-            allowed_board_ids.add(b["id"])
-    # Add boards user has tasks on — always, even when scoped to an active
-    # campus. Previously this escape only ran in the un-scoped branch, which
-    # is what caused user-created tasks to vanish from the Calendar when the
-    # switcher was pinned to a different campus.
-    for bid in task_board_ids:
-        if bid:
-            allowed_board_ids.add(bid)
-    # Apply the board scope to the task query (only if user requested no specific board)
+    # Scope tasks to boards the user has access to — see
+    # `resolve_allowed_board_ids` (shared with the shared-calendar feeds).
     if not board_id:
+        allowed_board_ids = await resolve_allowed_board_ids(current_user)
         if not allowed_board_ids:
             return []
         query["board_id"] = {"$in": list(allowed_board_ids)}

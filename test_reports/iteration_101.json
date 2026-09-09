@@ -1,0 +1,40 @@
+{
+  "summary": "iter316 review: verified holiday policy CRUD (kinds, per-name persistence across years, admin-only 403, hidden/reset), payroll credit maths for hourly + hourly-worked-stacks + optional_paid-worked-no-credit + daily wage, payslip persistence of holiday_credit, event create with is_free/price/ticket_tiers, event duplicate, shared calendar feed with include_tasks (campus + mine scopes, JSON + ICS with CATEGORIES:TASK), and /api/tasks board-scoping regression (private board not visible to non-tagged user). All 16 backend pytest cases pass. Frontend spot-check: /events → /calendar redirect works, New Event dialog exposes capacity + Free checkbox + TicketTiersEditor (add-btn appears after unchecking Free), HR salary dialog exposes salary-holiday-hours field when wage_type=Hourly, Portal Profile Submit-timesheet dialog opens (holiday markers only render on weeks that contain a paid/optional-paid holiday — current week Jan 2026 has none, so dot count 0 is expected). Punches dialog could not be exercised because no timesheets with daily entries exist in the tenant; code path and data-testid are present.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/hr/payslips/generate", "issue": "response shape not documented; test had to try both payload.payslips and payload.created — some created payslips were not id-captured so my fixture teardown missed 3 stray drafts (manually deleted)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PortalProfile.jsx (~line 437-438)", "issue": "Hydration warning: <Badge> (renders as <div>) is nested inside a <p> element in the My Payslips row → 'In HTML, <div> cannot be a descendant of <p>' console error on every profile page load. Change the outer <p> to a <div> or <span>.", "selector": "[data-testid=my-payslips-card] p", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter316_holiday_events_tasks.py",
+    "/app/test_reports/pytest/iter316_results.xml"
+  ],
+  "action_items": [
+    "Fix <p>-inside-<p> hydration warning in PortalProfile.jsx around line 437 (My Payslips row wraps a Badge inside a <p>).",
+    "Consider standardising the /api/hr/payslips/generate response so integrations can reliably extract the created ids (currently varies between {payslips:[...]} and other shapes)."
+  ],
+  "critical_code_review_comments": [
+    "routers/hr.py::_holiday_credit correctly branches on wage_type (hourly → hours, daily → days). Sanity confirmed with 4 test cases (paid hourly, paid+worked hourly stack, optional_paid+worked → no credit, paid daily).",
+    "routers/holidays.py policy_key() slugifies name+country deterministically → same policy persists across auto-computed dates (Thanksgiving 2026-11-26 vs 2027-11-25 both return 'paid'). Verified.",
+    "routers/events.py _fetch_tasks_for_config now correctly uses resolve_allowed_board_ids so restricted/private boards are honoured in the shared feed. Verified end-to-end (task appears for owner; private board hidden from non-tagged user in /api/tasks list).",
+    "PortalProfile.jsx has an HTML nesting bug (Badge inside <p>) — pre-existing but flagged during this iteration."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter316_holiday_events_tasks.py (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "6/6 checked flows OK (Punches dialog skipped — no fixture data)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None persisted — all TEST_iter316_* boards/events/salaries/timesheets/policies/share-configs/payslips deleted (3 stray draft payslips manually cleaned after test-fixture missed them; live tenant is clean).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter316 fully verified. If re-running the pytest, note that POST /api/hr/payslips/generate response format is inconsistent — capture ids defensively and always sweep drafts for the test user afterward. Portal timesheet holiday markers require a paid/optional_paid policy on a date in the currently-viewed week; setting Thanksgiving 'paid' and shifting the tsWeek to 2026-11-23..29 is the way to see amber dots. HR Punches dialog requires a timesheet with daily entries to exist for its 'Punches' button to render — none in the tenant.",
+  "rca of the issue": "N/A — no functional bugs found; all specified iter316 behaviour works as designed."
+}

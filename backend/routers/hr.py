@@ -140,7 +140,83 @@ def _period_span_days(period: str) -> int:
     return 30
 
 
-def _compute_base_gross(sal: dict, period: str, working_days: int, days_worked: Optional[float], hours_worked: Optional[float]) -> tuple[float, str]:
+def _period_bounds(period: str) -> tuple:
+    """(start_date, end_date) for a period string. Handles both
+    `YYYY-MM` and multi-pay windows like `YYYY-MM-DD_YYYY-MM-DD (W07)`."""
+    import re as _re
+    m = _re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", period or "")
+    if m:
+        try:
+            return dt_date.fromisoformat(m.group(1)), dt_date.fromisoformat(m.group(2))
+        except Exception:
+            pass
+    if _re.match(r"^\d{4}-\d{2}$", period or ""):
+        y, mo = map(int, period.split("-"))
+        first = dt_date(y, mo, 1)
+        nxt = dt_date(y + (1 if mo == 12 else 0), 1 if mo == 12 else mo + 1, 1)
+        return first, nxt - td(days=1)
+    today = dt_date.today()
+    return today.replace(day=1), today
+
+
+def _worked_dates(timesheet: dict) -> set:
+    """Dates the staffer actually worked, from a timesheet's daily breakdown."""
+    out = set()
+    for e in ((timesheet or {}).get("entries") or []):
+        d = (e.get("date") or "")[:10]
+        if not d:
+            continue
+        if float(e.get("hours") or 0) > 0 or e.get("day_worked"):
+            out.add(d)
+    return out
+
+
+DEFAULT_HOLIDAY_HOURS = 8.0
+
+
+async def _holiday_credit(sal: dict, period: str, timesheet: dict) -> dict:
+    """Auto pay credit for public holidays inside `period` (iter 316).
+
+    Admin marks each holiday `paid` or `optional_paid` on the Calendar
+    (see routers/holidays.py). Rules:
+      • hourly → credited `holiday_hours` (default 8, per-staff override)
+        for a PAID holiday even when they also work it, so worked hours
+        stack on top. Optional-paid credits only when they don't work.
+      • daily  → credited a full day. A paid holiday they DO work becomes
+        double pay (the worked day + the holiday day).
+      • salaried/weekly/biweekly/monthly → already covered by base pay.
+    """
+    wage_type = (sal.get("wage_type") or "salary").lower()
+    empty = {"hours": 0.0, "days": 0.0, "dates": [], "note": ""}
+    if wage_type not in {"hourly", "daily"}:
+        return empty
+    from routers.holidays import observed_holidays
+    start, end = _period_bounds(period)
+    holidays = await observed_holidays(start, end)
+    if not holidays:
+        return empty
+    worked = _worked_dates(timesheet)
+    per_day_hours = float(sal.get("holiday_hours") or DEFAULT_HOLIDAY_HOURS)
+    hours = 0.0
+    days = 0.0
+    detail = []
+    for h in holidays:
+        was_worked = h["date"] in worked
+        if h["policy"] == "optional_paid" and was_worked:
+            continue  # chose to work an optional day off → normal pay only
+        if wage_type == "hourly":
+            hours += per_day_hours
+        else:
+            days += 1.0
+        detail.append({"date": h["date"], "name": h["name"], "policy": h["policy"], "worked": was_worked})
+    if not detail:
+        return empty
+    unit = f"{hours:g}h" if wage_type == "hourly" else f"{days:g} day(s)"
+    return {"hours": round(hours, 2), "days": days, "dates": detail,
+            "note": f"holiday credit {unit} ({len(detail)} holiday(s))"}
+
+
+def _compute_base_gross(sal: dict, period: str, working_days: Optional[int], days_worked: Optional[float], hours_worked: Optional[float]) -> tuple[float, str]:
     """Iter 336 — compute a payslip's BASE gross based on the salary's
     `wage_type`. Returns (gross, details_string) where details is a human
     breakdown like "60,000 × 10 days".
@@ -510,6 +586,8 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         # per-week (40h is US default; can be overridden per campus policy).
         "ot_threshold_hours": float(data.get("ot_threshold_hours") or 0),
         "ot_multiplier": float(data.get("ot_multiplier") or 1.5),
+        # iter 316 — hours credited for a paid public holiday (hourly staff).
+        "holiday_hours": float(data.get("holiday_hours") or 0) or DEFAULT_HOLIDAY_HOURS,
         "currency": data.get("currency", "UGX"),
         "pay_frequency": data.get("pay_frequency", "monthly"),
         "effective_date": data.get("effective_date", datetime.now(timezone.utc).isoformat()[:10]),
@@ -541,7 +619,9 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
                # iter 336: allow wage_type + type-specific rate edits.
                "wage_type", "hourly_rate", "daily_rate", "weekly_rate", "biweekly_rate",
                # iter 337: overtime tier.
-               "ot_threshold_hours", "ot_multiplier"}
+               "ot_threshold_hours", "ot_multiplier",
+               # iter 316: per-staff paid-holiday hours.
+               "holiday_hours"}
     update = {k: v for k, v in data.items() if k in allowed}
     if "department_splits" in update and update["department_splits"]:
         total_pct = sum(float(s.get("pct") or 0) for s in update["department_splits"])
@@ -795,9 +875,18 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
         override_days = days_worked_override.get(sal["staff_id"])
         hours_override = hours_worked_override.get(sal["staff_id"])
         eff_days = override_days if override_days is not None else max(0, working_days - unpaid_days)
+        hol = await _holiday_credit(sal, period, await db.hr_timesheets.find_one({"period": period, "staff_id": sal["staff_id"], "status": "approved"}, {"_id": 0}))
+        hours_for_calc = hours_override
+        days_for_calc = eff_days if wage_type in {"daily", "hourly"} else None
+        if wage_type == "hourly" and hol["hours"]:
+            hours_for_calc = (hours_override if hours_override is not None else float(eff_days) * 8.0) + hol["hours"]
+        elif wage_type == "daily" and hol["days"]:
+            days_for_calc = float(eff_days) + hol["days"]
         base_gross, wage_details = _compute_base_gross(
-            sal, period, working_days, eff_days if wage_type in {"daily", "hourly"} else None, hours_override,
+            sal, period, working_days, days_for_calc, hours_for_calc,
         )
+        if hol["note"]:
+            wage_details += f" — incl. {hol['note']}"
         skip_days_proration = wage_type in {"daily", "hourly"}
         proration_amount = 0.0
         effective_gross = base_gross
@@ -844,6 +933,7 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             "working_days": working_days,
             "days_worked": override_days if override_days is not None else max(0, working_days - unpaid_days),
             "pto_days": pto_days_override.get(sal["staff_id"], 0),
+            "holiday_credit": hol,
             "already_generated": already,
         })
 
@@ -1044,6 +1134,11 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
     if location_id:
         query["location_id"] = location_id
     salaries = await db.hr_salaries.find(query, {"_id": 0}).to_list(500)
+    # Approved timesheets for the period — used to know which days were
+    # actually worked so holiday credit can stack correctly (iter 316).
+    ts_by_staff = {}
+    async for _ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
+        ts_by_staff[_ts["staff_id"]] = _ts
     generated = []
     for sal in salaries:
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
@@ -1066,9 +1161,18 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         # otherwise; `_compute_base_gross` falls back to days × 8h.
         hours_override = hours_worked_override.get(sal["staff_id"])
         eff_days = override_days if override_days is not None else max(0, working_days_peek - unpaid_days_peek)
+        hol = await _holiday_credit(sal, period, ts_by_staff.get(sal["staff_id"]))
+        hours_for_calc = hours_override
+        days_for_calc = eff_days if wage_type in {"daily", "hourly"} else None
+        if wage_type == "hourly" and hol["hours"]:
+            hours_for_calc = (hours_override if hours_override is not None else float(eff_days) * 8.0) + hol["hours"]
+        elif wage_type == "daily" and hol["days"]:
+            days_for_calc = float(eff_days) + hol["days"]
         base_gross, wage_details = _compute_base_gross(
-            sal, period, working_days_peek, eff_days if wage_type in {"daily", "hourly"} else None, hours_override
+            sal, period, working_days_peek, days_for_calc, hours_for_calc
         )
+        if hol["note"]:
+            wage_details += f" — incl. {hol['note']}"
         deductions = 0
         allowances = 0
         items = []
@@ -1147,6 +1251,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "working_days": working_days,
             "days_worked": override_days if override_days is not None else (max(0, working_days - unpaid_days)),
             "hours_worked": hours_override,
+            "holiday_credit": hol,
             "pto_days": pto_days if pto_days is not None else 0,
             "unpaid_leave_proration": proration_amount,
             "currency": sal.get("currency", "UGX"),

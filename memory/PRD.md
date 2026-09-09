@@ -654,6 +654,26 @@ social work, sales/POS/shipments, and self-service user portal.
   the QR sits flush with the photo's bottom edge — anchored, not
   floating.
 
+### iter 316 additions
+- Calendar `New Event` regained Capacity / Free-vs-paid / Ticket price and
+  gained the Ticket Tiers builder (create + edit).
+- `EventsPage.jsx` deleted (was dead code; `/events` already redirected).
+  Registrations, check-ins, tiers summary, waitlist and Duplicate migrated
+  into the Calendar event drawer. `backend/routers/events.py` stays — it
+  powers public events, bookings, kiosk, check-ins and venues.
+- Fixed: board tasks never reached the shared calendar (.ics) feeds — the
+  feed filtered on `tasks.location_id`, which tasks don't have. Board
+  permission resolution is now shared via `resolve_allowed_board_ids`.
+- NEW: admin sets each public holiday to Paid / Optional paid / Unpaid /
+  Not observed by clicking it on the Calendar. Stored per holiday NAME so it
+  sticks every future year. Wired into payslips + timesheets: hourly staff
+  get their `holiday_hours` (default 8, per-staff) credited on paid holidays
+  and stacked on top of hours actually worked; daily-wage staff get the day
+  regardless, i.e. double pay when they work it.
+- NEW: event location is venue-first — our venues (restricted campuses
+  excluded) → external venues used before → add a new venue inline →
+  one-off typed address. `GET /api/venues` is now campus-scoped.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

@@ -1308,3 +1308,88 @@ backend endpoints are wired correctly.
 
 ---
 (prior entries iter 292–299 unchanged)
+
+## iter 315 — 2026-06 — Calendar quick-create: pricing fields restored
+
+- `CalendarPage.jsx` "New Event" dialog was missing **Capacity**, the
+  **Free event** toggle and the **Ticket price** field — they existed on
+  the edit drawer and on `EventsPage` but never on calendar quick-create,
+  so events made from the calendar always saved as free.
+- Added Capacity (beside Location), a Free-event checkbox and a
+  conditional Ticket price (UGX) input; `submitCreate` now posts
+  `is_free` + `price` (null when free). Reset state updated.
+- testids: `create-event-capacity`, `create-event-is-free`, `create-event-price`.
+- Verified in preview: dialog renders all fields, toggling free reveals price.
+
+## iter 316 — 2026-06 — Calendar consolidation, shared-feed task fix, holiday pay policies
+
+**1. Calendar event form — pricing restored + tiers**
+- `New Event` had lost Capacity / Free-vs-paid / Ticket price; restored and
+  added the full **Ticket Tiers** builder (new `components/TicketTiersEditor.jsx`)
+  to BOTH create and edit forms.
+
+**2. EventsPage deleted, features migrated**
+- `pages/EventsPage.jsx` (1009 lines) was dead code — `/events` already
+  redirected to `/calendar`. Deleted, import dropped from `App.js`, Layout
+  quick-nav `/events` → `/calendar`.
+- Its still-live features moved into the Calendar event drawer via new
+  `components/EventDetailTabs.jsx`: Registered (with mark-paid + CSV export),
+  Check-Ins (with check-out), Tiers summary, Waitlist (promote/cancel).
+  Drawer also gained **Duplicate**. `openItem()` now hydrates the full event
+  via `GET /api/events/{id}`.
+- **`backend/routers/events.py` stays** — it powers public events, public
+  bookings, kiosk, check-ins, venues and the calendar feeds (71 endpoints).
+
+**3. BUG — board tasks missing from shared calendar feeds**
+- `_fetch_tasks_for_config` filtered on `tasks.location_id`, a field tasks
+  never carry (visibility is decided by the BOARD), so campus-scoped share
+  links always returned zero tasks even with "include tasks" on.
+- Extracted `resolve_allowed_board_ids(user, restrict_to_locations)` in
+  `routers/tasks.py` (now the single source of truth, used by `/api/tasks`
+  AND the feeds). `mine` scope `$or` widened with `assignee_id`/`reporter_id`;
+  `due_date` now requires `$type: string` (null was slipping through).
+- Verified: task appears in `/api/public/calendar/user/{token}` JSON and in
+  the `.ics` as a `CATEGORIES:TASK` VEVENT; private boards stay hidden.
+
+**4. NEW — public holiday pay policies (admin-set, payroll-wired)**
+- `routers/holidays.py`: `holiday_policies` collection keyed by
+  `COUNTRY:slug(name)` so a choice sticks for every future occurrence while
+  dates keep auto-computing. Kinds: `paid`, `optional_paid`, `unpaid`
+  (default), `hidden`. `GET /api/holidays` merges policy + hides `hidden`;
+  `GET/PUT /api/holidays/policies`, `DELETE /api/holidays/policies/{key}`
+  (admin only). `observed_holidays(start,end)` dedupes by date (paid wins).
+- `routers/hr.py`: `_period_bounds()`, `_worked_dates()`, `_holiday_credit()`
+  wired into `_generate_payslips_for` + `/api/hr/payslips/preview`.
+  • hourly → `holiday_hours` (per-staff, default 8) credited on a PAID
+    holiday even when worked, so worked hours stack; optional-paid credits
+    only when NOT worked.
+  • daily → +1 day for a paid holiday whether worked or not (working it =
+    double pay); optional-paid only when not worked.
+  • salary/weekly/biweekly → untouched.
+  Credit is persisted as `payslip.holiday_credit` and appended to
+  `wage_details` ("— incl. holiday credit 8h (1 holiday(s))").
+- UI: `components/HolidayPolicyDialog.jsx` (click any holiday on the
+  Calendar), `salary-holiday-hours` field in the HR salary dialog,
+  amber holiday markers + explainer in the Portal weekly timesheet grid,
+  holiday credit line on portal payslip rows.
+
+**5. NEW — venue-first event location picker**
+- `components/EventVenuePicker.jsx` used by create + edit: grouped select of
+  **Our venues** (campus, restricted campuses excluded), **External venues
+  used before**, then "+ Add a new venue…" (inline create, saved for reuse)
+  and a "One-off — just type the place" fallback. Selecting a venue sets
+  `venue_id` + `location` + `location_id` on the event.
+- `GET /api/venues` is now scoped: campus venues limited to locations the
+  caller can see (was returning every venue in the DB); external/off-site
+  venues stay shared. `visible_locations(user)` extracted in
+  `routers/locations.py` and reused.
+
+**6. Fixes found along the way**
+- HR → Timesheets "Punches" button referenced undefined `setPunchTs` →
+  crashed the tab. Added the state + `ts-punches-dialog`.
+- PortalProfile payslip row had a `<Badge>` (div) inside a `<p>` → HTML
+  nesting console error. Now a `<div>`.
+
+**Tests** — `backend/tests/test_iter316_holiday_events_tasks.py`: 16/16 pass
+(`/app/test_reports/iteration_101.json`). Venue picker + edit hydration
+verified via Playwright at 1920px and 390px (no overflow).

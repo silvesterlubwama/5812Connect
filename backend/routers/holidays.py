@@ -11,10 +11,46 @@ Rules:
 
 Anyone can read this — it's public reference data, not tenant data.
 """
-from fastapi import APIRouter, Query
-from datetime import date
+from fastapi import APIRouter, Query, Depends, HTTPException
+from datetime import date, datetime, timezone
+import re
+import uuid
+
+from deps import db, get_current_user, require_admin
 
 router = APIRouter(prefix="/api/holidays", tags=["holidays"])
+
+# ── Holiday pay policies (iter 316) ──────────────────────────────────────
+# Admin decides, per holiday NAME (not per occurrence), how it is treated:
+#   paid          → paid holiday. Hourly staff are auto-credited their
+#                   holiday hours; if they also work that day the worked
+#                   hours stack on top. Daily-wage staff get the day whether
+#                   they work or not — and double when they do work.
+#   optional_paid → optional paid day off. Credited only when NOT worked
+#                   (they chose to work → normal pay, no extra).
+#   unpaid        → observed on the calendar, no pay effect (default).
+#   hidden        → not observed here; drop it off the calendar entirely.
+# Policies are stored by (name, country) so e.g. Thanksgiving keeps the
+# same treatment every year while the dates keep auto-computing.
+POLICY_KINDS = {"paid", "optional_paid", "unpaid", "hidden"}
+PAYABLE_KINDS = {"paid", "optional_paid"}
+
+
+def policy_key(name: str, country: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return f"{(country or 'ALL').upper()}:{slug}"
+
+
+async def _policy_map() -> dict:
+    docs = await db.holiday_policies.find({}, {"_id": 0}).to_list(500)
+    return {d["key"]: d for d in docs}
+
+
+def _apply_policy(h: dict, policies: dict) -> dict:
+    pol = policies.get(policy_key(h["name"], h["country"]))
+    kind = pol.get("kind") if pol else "unpaid"
+    return {**h, "policy": kind if kind in POLICY_KINDS else "unpaid",
+            "policy_key": policy_key(h["name"], h["country"])}
 
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
@@ -110,8 +146,9 @@ async def list_holidays(
     year: int = Query(..., ge=2020, le=2035),
     country: str = Query("all", regex="^(US|UG|all)$"),
     year_to: int = Query(0, ge=0, le=2035),
+    include_hidden: bool = Query(False),
 ):
-    """Return holidays for a year (or year..year_to range)."""
+    """Return holidays for a year (or year..year_to range) with pay policy."""
     start = year
     end = year_to if year_to and year_to >= year else year
     all_h = []
@@ -120,4 +157,70 @@ async def list_holidays(
             all_h.extend(_us_holidays(y))
         if country in ("UG", "all"):
             all_h.extend(_ug_holidays(y))
-    return sorted(all_h, key=lambda x: (x["date"], x["country"]))
+    policies = await _policy_map()
+    merged = [_apply_policy(h, policies) for h in all_h]
+    if not include_hidden:
+        merged = [h for h in merged if h["policy"] != "hidden"]
+    return sorted(merged, key=lambda x: (x["date"], x["country"]))
+
+
+async def observed_holidays(start: date, end: date) -> list:
+    """Holidays between start..end (inclusive) that carry a pay policy.
+
+    Used by payroll. Deduped by calendar date — if the same date is a
+    holiday in both countries, the stronger policy (paid) wins so nobody
+    gets credited twice for one day.
+    """
+    policies = await _policy_map()
+    out: dict = {}
+    for y in range(start.year, end.year + 1):
+        for h in _us_holidays(y) + _ug_holidays(y):
+            if not (start.isoformat() <= h["date"] <= end.isoformat()):
+                continue
+            merged = _apply_policy(h, policies)
+            if merged["policy"] not in PAYABLE_KINDS:
+                continue
+            prev = out.get(h["date"])
+            if prev and prev["policy"] == "paid":
+                continue
+            out[h["date"]] = merged
+    return sorted(out.values(), key=lambda x: x["date"])
+
+
+@router.get("/policies")
+async def list_policies(current_user: dict = Depends(get_current_user)):
+    return await db.holiday_policies.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.put("/policies")
+async def set_policy(data: dict, current_user: dict = Depends(require_admin)):
+    """Set how a holiday is treated. Body: {name, country, kind}.
+
+    Applies to every occurrence of that holiday (this year and all future
+    years) until an admin changes it again.
+    """
+    name = (data.get("name") or "").strip()
+    country = (data.get("country") or "").strip().upper()
+    kind = (data.get("kind") or "").strip()
+    if not name or country not in {"US", "UG"}:
+        raise HTTPException(status_code=400, detail="name and country (US|UG) required")
+    if kind not in POLICY_KINDS:
+        raise HTTPException(status_code=400, detail=f"kind must be one of {sorted(POLICY_KINDS)}")
+    key = policy_key(name, country)
+    doc = {
+        "key": key, "name": name, "country": country, "kind": kind,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": current_user["id"],
+        "updated_by_name": current_user.get("name", ""),
+    }
+    existing = await db.holiday_policies.find_one({"key": key}, {"_id": 0, "id": 1})
+    doc["id"] = existing["id"] if existing else f"holpol_{uuid.uuid4().hex[:8]}"
+    await db.holiday_policies.update_one({"key": key}, {"$set": doc}, upsert=True)
+    return doc
+
+
+@router.delete("/policies/{key}")
+async def reset_policy(key: str, current_user: dict = Depends(require_admin)):
+    """Reset a holiday back to the default (observed, no pay effect)."""
+    res = await db.holiday_policies.delete_one({"key": key})
+    return {"deleted": res.deleted_count}

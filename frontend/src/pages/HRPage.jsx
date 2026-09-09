@@ -165,6 +165,7 @@ export default function HRPage() {
           biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
           ot_threshold_hours: parseFloat(salaryForm.ot_threshold_hours) || 0,
           ot_multiplier: parseFloat(salaryForm.ot_multiplier) || 1.5,
+          holiday_hours: parseFloat(salaryForm.holiday_hours) || 8,
           line_items: salaryForm.line_items,
           department_ids: salaryForm.department_ids || [],
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
@@ -183,6 +184,7 @@ export default function HRPage() {
           biweekly_rate: salaryForm.wage_type === 'biweekly' ? parseFloat(salaryForm.base_salary) : 0,
           ot_threshold_hours: parseFloat(salaryForm.ot_threshold_hours) || 0,
           ot_multiplier: parseFloat(salaryForm.ot_multiplier) || 1.5,
+          holiday_hours: parseFloat(salaryForm.holiday_hours) || 8,
           location_id: activeCampus,
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
         });
@@ -206,6 +208,7 @@ export default function HRPage() {
       wage_type: s.wage_type || 'salary',
       ot_threshold_hours: String(s.ot_threshold_hours || ''),
       ot_multiplier: String(s.ot_multiplier || ''),
+      holiday_hours: String(s.holiday_hours || ''),
       currency: s.currency || 'UGX',
       pay_frequency: s.pay_frequency || 'monthly',
       line_items: s.line_items || [],
@@ -722,6 +725,11 @@ export default function HRPage() {
                   <Label className="text-xs">OT multiplier</Label>
                   <Input type="number" step="0.1" value={salaryForm.ot_multiplier || ''} onChange={e => setSalaryForm({...salaryForm, ot_multiplier: e.target.value})} placeholder="1.5" data-testid="salary-ot-multiplier" />
                   <p className="text-[10px] text-muted-foreground">Applied to hours worked beyond the weekly threshold. Threshold scales with the pay window (2× for biweekly).</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Paid-holiday hours</Label>
+                  <Input type="number" step="0.5" min="0" value={salaryForm.holiday_hours || ''} onChange={e => setSalaryForm({...salaryForm, holiday_hours: e.target.value})} placeholder="8" data-testid="salary-holiday-hours" />
+                  <p className="text-[10px] text-muted-foreground">Hours auto-credited for each holiday an admin marked paid on the Calendar. Blank = 8h. Work the holiday and those hours stack on top.</p>
                 </div>
               </div>
             )}
@@ -2262,6 +2270,7 @@ function TimesheetsPanel() {
   const [periodFilter, setPeriodFilter] = React.useState('');
   const [rejecting, setRejecting] = React.useState(null);
   const [rejectReason, setRejectReason] = React.useState('');
+  const [punchTs, setPunchTs] = React.useState(null);
   const [showLogFor, setShowLogFor] = React.useState(false);
   const [staffOptions, setStaffOptions] = React.useState([]);
   const [logForm, setLogForm] = React.useState({
@@ -2422,6 +2431,23 @@ function TimesheetsPanel() {
           </div>
         )}
       </CardContent>
+
+      <Dialog open={!!punchTs} onOpenChange={(o) => { if (!o) setPunchTs(null); }}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto" data-testid="ts-punches-dialog">
+          <DialogHeader><DialogTitle>Daily punches — {punchTs?.staff_name} · {punchTs?.period}</DialogTitle></DialogHeader>
+          <div className="space-y-1.5">
+            {(punchTs?.entries || []).map((e, i) => (
+              <div key={i} className="flex items-center justify-between text-sm border border-border rounded px-2 py-1.5" data-testid={`ts-punch-row-${i}`}>
+                <span>{e.date}</span>
+                <span className="text-muted-foreground text-xs">
+                  {e.hours != null ? `${e.hours}h` : e.day_worked ? 'worked' : '—'}
+                  {e.note ? ` · ${e.note}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!rejecting} onOpenChange={(o) => { if (!o) { setRejecting(null); setRejectReason(''); } }}>
         <DialogContent className="max-w-sm">

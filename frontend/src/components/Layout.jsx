@@ -745,7 +745,7 @@ export default function Layout() {
             {!searchQuery && (
               <div className="px-4 py-4 text-xs text-muted-foreground space-y-1">
                 <p className="font-medium text-foreground mb-2">Quick Navigation</p>
-                {['/dashboard', '/members', '/events', '/financial', '/sales', '/boards'].map(path => (
+                {['/dashboard', '/members', '/calendar', '/financial', '/sales', '/boards'].map(path => (
                   <button key={path} className="flex items-center gap-2 hover:text-foreground transition-colors w-full text-left" onClick={() => { navigate(path); setSearchOpen(false); }}>
                     <span className="text-primary">-</span> {path.replace('/', '').replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Dashboard'}
                   </button>

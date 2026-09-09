@@ -13,7 +13,11 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { eventsApi, exportApi, outreachApi, tasksApi, publicCalendarApi, boardsApi, locationsApi, holidaysApi } from '../services/api';
+import { eventsApi, exportApi, outreachApi, tasksApi, publicCalendarApi, boardsApi, locationsApi, holidaysApi, venuesApi } from '../services/api';
+import { TicketTiersEditor } from '../components/TicketTiersEditor';
+import { EventDetailTabs } from '../components/EventDetailTabs';
+import { HolidayPolicyDialog } from '../components/HolidayPolicyDialog';
+import { EventVenuePicker } from '../components/EventVenuePicker';
 import { secureStorage } from '../services/secureStorage';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -76,11 +80,13 @@ export default function CalendarPage() {
   const [editForm, setEditForm] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', description: '', is_public: false, capacity: 100, board_id: '', priority: 'medium' });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: '', description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [venues, setVenues] = useState([]);
   const [showShare, setShowShare] = useState(false);
   const [showRecurring, setShowRecurring] = useState(false);
   const [showImportCal, setShowImportCal] = useState(false);
@@ -116,22 +122,28 @@ export default function CalendarPage() {
   // are always populated regardless of which month the user paged to. This
   // is a public endpoint, cached in state so no repeated fetches during nav.
   const yearKey = cursor.getFullYear();
-  useEffect(() => {
+  const loadHolidays = useCallback(() => {
     holidaysApi.list({ year: yearKey, year_to: yearKey + 1, country: 'all' })
       .then(r => setHolidays(r.data || []))
       .catch(() => setHolidays([]));
   }, [yearKey]);
+  useEffect(() => { loadHolidays(); }, [loadHolidays]);
+
+  const reloadVenues = useCallback(async () => {
+    try { const r = await venuesApi.list(); setVenues(r.data || []); } catch { /* ignore */ }
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [evtRes, sessRes, progRes, taskRes, boardsRes, locsRes] = await Promise.all([
+      const [evtRes, sessRes, progRes, taskRes, boardsRes, locsRes, venuesRes] = await Promise.all([
         eventsApi.list().catch(() => ({ data: [] })),
         outreachApi.sessions().catch(() => ({ data: [] })),
         outreachApi.programs().catch(() => ({ data: [] })),
         tasksApi.list().catch(() => ({ data: [] })),
         boardsApi.list().catch(() => ({ data: [] })),
         locationsApi.list().catch(() => ({ data: [] })),
+        venuesApi.list().catch(() => ({ data: [] })),
       ]);
       // Convert outreach sessions to event-like objects
       const progMap = Object.fromEntries((progRes.data || []).map(p => [p.id, p]));
@@ -150,6 +162,7 @@ export default function CalendarPage() {
       setRawTasks((taskRes.data || []).filter(t => t.due_date && !t.is_archived));
       setBoards(boardsRes.data || []);
       setLocations(locsRes.data || []);
+      setVenues(venuesRes.data || []);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -191,6 +204,7 @@ export default function CalendarPage() {
       for (const h of holidays) {
         out.push({
           _kind: 'holiday', _readOnly: true, id: `hol_${h.country}_${h.date}`,
+          _holiday: h,
           title: h.name, type: h.country === 'US' ? 'holiday_us' : 'holiday_ug',
           date: h.date, time: '', location: h.country === 'US' ? '🇺🇸 United States' : '🇺🇬 Uganda',
           description: `${h.country === 'US' ? 'US Federal' : 'Uganda Public'} Holiday`,
@@ -252,6 +266,7 @@ export default function CalendarPage() {
       window.location.href = `/boards?board=${encodeURIComponent(it._boardId || '')}&task=${encodeURIComponent(it._taskId || '')}`;
       return;
     }
+    if (it._kind === 'holiday') { setHolidayItem(it._holiday); return; }
     if (it._isSession) return;
     setSelected(it);
     setEditMode(false);
@@ -259,9 +274,21 @@ export default function CalendarPage() {
       title: it.title || '', date: it.date || '', end_date: it.end_date || '',
       time: it.time || '', end_time: it.end_time || '', location: it.location || '',
       description: it.description || '', type: it.type || 'meeting',
+      venue_id: it.venue_id || '', location_id: it.location_id || '',
       capacity: it.capacity ?? 100, is_public: it.is_public ?? false,
       is_free: it.is_free !== false, price: it.price ?? null,
+      ticket_tiers: it.ticket_tiers || [],
     });
+    // Pull the full record so Registrations / Check-ins / Waitlist are live.
+    eventsApi.get(it.id).then(r => setSelected(s => (s && s.id === it.id ? { ...s, ...r.data } : s))).catch(() => {});
+  };
+  const refreshSelected = async () => {
+    if (!selected) return;
+    try { const r = await eventsApi.get(selected.id); setSelected(s => ({ ...s, ...r.data })); } catch { /* ignore */ }
+  };
+  const duplicateSelected = async () => {
+    try { await eventsApi.duplicate(selected.id); toast.success('Event duplicated'); setSelected(null); loadAll(); }
+    catch { toast.error('Duplicate failed'); }
   };
   const saveEdit = async (e) => {
     e.preventDefault(); setSavingEdit(true);
@@ -288,7 +315,7 @@ export default function CalendarPage() {
     e.preventDefault(); setSaving(true);
     try {
       if (createKind === 'event') {
-        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 100 };
+        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 100, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [] };
         await eventsApi.create(payload);
         toast.success('Event created');
       } else {
@@ -306,7 +333,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', description: '', is_public: false, capacity: 100, board_id: '', priority: 'medium' });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: '', description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -545,10 +572,13 @@ export default function CalendarPage() {
                 <Badge variant="outline" className="capitalize">{selected.type}</Badge>
                 {selected.is_public && <Badge variant="secondary">Public</Badge>}
                 <Badge variant="outline">{selected.registered ?? 0}/{selected.capacity ?? '∞'}</Badge>
+                {selected.is_free === false && <Badge variant="outline" data-testid="event-price-badge">{(selected.currency || 'UGX')} {Number(selected.price || 0).toLocaleString()}</Badge>}
               </div>
-              <div className="flex gap-2 pt-3">
+              <EventDetailTabs event={selected} onRefresh={refreshSelected} />
+              <div className="flex gap-2 pt-3 flex-wrap">
                 <Button variant="destructive" size="sm" onClick={deleteEvent} data-testid="delete-event-btn">Delete</Button>
                 <div className="flex-1" />
+                <Button variant="outline" size="sm" onClick={duplicateSelected} data-testid="duplicate-event-btn"><Copy size={14} className="mr-1" />Duplicate</Button>
                 <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(buildViewUrl('global', '', shareLinks?.global?.token || '')); toast.success('Link copied'); }} disabled={!shareLinks}><LinkIcon size={14} className="mr-1" />Copy</Button>
                 <Button size="sm" onClick={() => setEditMode(true)} data-testid="edit-event-btn">Edit</Button>
               </div>
@@ -572,7 +602,11 @@ export default function CalendarPage() {
                 </div>
                 <div><Label>Capacity</Label><Input type="number" min="0" value={editForm.capacity ?? ''} onChange={e => setEditForm({ ...editForm, capacity: e.target.value === '' ? null : parseInt(e.target.value) })} data-testid="edit-event-capacity" /></div>
               </div>
-              <div><Label>Location</Label><Input value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} /></div>
+              <EventVenuePicker
+                idPrefix="edit-venue" value={editForm} venues={venues} locations={locations}
+                onChange={patch => setEditForm(f => ({ ...f, ...patch }))}
+                onVenueCreated={reloadVenues}
+              />
               <div><Label>Description</Label><Textarea rows={2} value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} /></div>
               <div className="rounded-lg border border-border p-3 space-y-2">
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.is_free !== false} onChange={e => setEditForm({ ...editForm, is_free: e.target.checked, price: e.target.checked ? null : (editForm.price ?? 0) })} data-testid="edit-event-is-free" /> Free event (no ticket required)</label>
@@ -581,6 +615,9 @@ export default function CalendarPage() {
                 )}
               </div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.is_public} onChange={e => setEditForm({ ...editForm, is_public: e.target.checked })} /> Public event (appears on shared calendar)</label>
+              {editForm.is_free === false && (
+                <TicketTiersEditor idPrefix="edit-tier" tiers={editForm.ticket_tiers || []} onChange={tiers => setEditForm({ ...editForm, ticket_tiers: tiers })} />
+              )}
               <div className="flex gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setEditMode(false)}>Cancel</Button><div className="flex-1" /><Button type="submit" disabled={savingEdit} data-testid="save-event-btn">{savingEdit ? 'Saving…' : 'Save'}</Button></div>
             </form>
           )}
@@ -621,8 +658,24 @@ export default function CalendarPage() {
                     </Select>
                   </div>
                 </div>
-                <div><Label>Location</Label><Input value={createForm.location} onChange={e => setCreateForm({ ...createForm, location: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2"><EventVenuePicker
+                    idPrefix="create-venue" value={createForm} venues={venues} locations={locations}
+                    onChange={patch => setCreateForm(f => ({ ...f, ...patch }))}
+                    onVenueCreated={reloadVenues}
+                  /></div>
+                  <div><Label>Capacity</Label><Input type="number" min="0" value={createForm.capacity ?? ''} onChange={e => setCreateForm({ ...createForm, capacity: e.target.value === '' ? '' : parseInt(e.target.value) })} data-testid="create-event-capacity" /></div>
+                </div>
+                <div className="space-y-2 rounded-lg border p-3">
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_free !== false} onChange={e => setCreateForm({ ...createForm, is_free: e.target.checked, price: e.target.checked ? null : (createForm.price ?? 0) })} data-testid="create-event-is-free" /> Free event (no ticket required)</label>
+                  {createForm.is_free === false && (
+                    <div><Label className="text-xs">Ticket price (UGX)</Label><Input type="number" min="0" step="0.01" value={createForm.price ?? 0} onChange={e => setCreateForm({ ...createForm, price: parseFloat(e.target.value) || 0 })} data-testid="create-event-price" /></div>
+                  )}
+                </div>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_public} onChange={e => setCreateForm({ ...createForm, is_public: e.target.checked })} data-testid="create-is-public" /> Public event (appears on shared calendar)</label>
+                {createForm.is_free === false && (
+                  <TicketTiersEditor idPrefix="create-tier" tiers={createForm.ticket_tiers || []} onChange={tiers => setCreateForm({ ...createForm, ticket_tiers: tiers })} />
+                )}
               </>
             )}
             {createKind === 'task' && (
@@ -703,7 +756,12 @@ export default function CalendarPage() {
 
       {/* Recurring events (kept from previous) */}
       <RecurringEventsDialog open={showRecurring} onOpenChange={setShowRecurring} onCreated={loadAll} />
-      {/* Import iCal */}
+      <HolidayPolicyDialog
+        holiday={holidayItem}
+        canEdit={['admin', 'system_admin'].includes((user?.role || '').toLowerCase())}
+        onClose={() => setHolidayItem(null)}
+        onSaved={loadHolidays}
+      />      {/* Import iCal */}
       <ImportIcalDialog open={showImportCal} onOpenChange={setShowImportCal} onImported={loadAll} />
     </div>
   );

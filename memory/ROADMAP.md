@@ -4,7 +4,12 @@
 
 ## Approved backlog (user-requested only)
 
-_(no items currently open — server split finished in iter302)_
+_(no items currently open)_
+
+Deferred, not requested — do NOT start without the user asking:
+- `routers/events.py` split (2,726 lines / 71 endpoints: events, checkins,
+  kiosk, venues, public bookings). Kept whole in iter316 on purpose.
+- `CalendarPage.jsx` is ~880 lines; dialogs could be extracted further.
 
 ## Explicit user boundaries
 

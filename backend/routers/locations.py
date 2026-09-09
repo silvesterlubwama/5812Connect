@@ -85,15 +85,17 @@ class LocationUpdate(BaseModel):
     financial_apis_enabled: Optional[bool] = None
 
 
-@router.get("/locations")
-async def list_locations(current_user: dict = Depends(get_current_user)) -> list:
-    """List locations. Non-admins see only their campuses + non-restricted sub-locations + restricted ones they're explicitly assigned to."""
+async def visible_locations(user: dict) -> list:
+    """Locations `user` may see — own campuses + non-restricted sub-locations +
+    restricted ones they're explicitly assigned to. Shared by /api/locations
+    and anything else that must honour restricted campuses (e.g. venues).
+    """
     all_locs = await db.locations.find({}, {"_id": 0}).sort("name", 1).to_list(500)
-    if is_system_admin(current_user):
+    if is_system_admin(user):
         return all_locs
-    user_loc_ids = set(current_user.get("location_ids") or [])
-    if current_user.get("location_id"):
-        user_loc_ids.add(current_user["location_id"])
+    user_loc_ids = set(user.get("location_ids") or [])
+    if user.get("location_id"):
+        user_loc_ids.add(user["location_id"])
     # Include parent campuses of any assigned sub-location
     for loc in all_locs:
         if loc.get("id") in user_loc_ids and loc.get("parent_id"):
@@ -105,16 +107,16 @@ async def list_locations(current_user: dict = Depends(get_current_user)) -> list
         if loc_id in user_loc_ids:
             visible.append(loc)
             continue
-        # Top-level campus that user belongs to — visible
-        if loc.get("type") in ("main", "campus") and loc_id in user_loc_ids:
-            visible.append(loc)
-            continue
         # Sub-locations of user's campuses — visible only if NOT restricted
-        if loc.get("parent_id") in user_loc_ids:
-            if not loc.get("is_restricted"):
-                visible.append(loc)
-            # Restricted sub-locations are hidden unless explicitly assigned (already handled above)
+        if loc.get("parent_id") in user_loc_ids and not loc.get("is_restricted"):
+            visible.append(loc)
     return visible
+
+
+@router.get("/locations")
+async def list_locations(current_user: dict = Depends(get_current_user)) -> list:
+    """List locations. Non-admins see only their campuses + non-restricted sub-locations + restricted ones they're explicitly assigned to."""
+    return await visible_locations(current_user)
 
 
 @router.post("/locations")
