@@ -396,6 +396,9 @@ export const familiesApi = {
   removeGuardian: (familyId, guardianId) => api.delete(`/families/${familyId}/guardians/${guardianId}`),
   bulkUpdate: (ids, updates) => api.put('/families/bulk-update', { ids, updates }),
   bulkDelete: (ids) => api.post('/families/bulk-delete', { ids }),
+  pendingApprovals: () => api.get('/families/pending-approvals'),
+  decidePendingChild: (childId, action, reason = '') => api.post(`/families/pending-approvals/child/${childId}/decide`, { action, reason }),
+  decidePendingGuardian: (familyId, guardianId, action, reason = '') => api.post(`/families/pending-approvals/guardian/${familyId}/${guardianId}/decide`, { action, reason }),
 };
 export const childrenApi = {
   list: (params) => api.get('/children', { params }),

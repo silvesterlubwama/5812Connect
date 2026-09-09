@@ -7,7 +7,18 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
-## Current status (as of iter 344)
+### iter 344b — Approval bell · Family approval queue · Public event checkout
+- **Manager approval bell**: new `GET /api/hr/pending-count` returns `{leave, reimbursements, total}` scoped to the approver's campus and excluding their own requests. `Layout.jsx` polls it every 60s for manager+ / HR and paints a red numeric pip on the HR sidebar icon so pending decisions can't hide.
+- **Family approval queue** (parent-submitted children + guardians):
+  * New endpoints in `routers/members/families.py`:
+    * `GET /api/families/pending-approvals` — flattened queue of pending children + pending guardians (with family_name enrichment).
+    * `POST /api/families/pending-approvals/child/{child_id}/decide` — approve (unlocks the record) or reject (soft-deletes to `deleted_items`); notifies the parent either way.
+    * `POST /api/families/pending-approvals/guardian/{family_id}/{guardian_id}/decide` — approve (flips `approval_status`) or reject (`$pull` from array); notifies the parent.
+  * `UnifiedPeoplePage.jsx` — new **Family Approvals** tab, only visible when the queue is non-empty; shows child/guardian cards with Approve + Reject (with optional reason) actions.
+- **Public event checkout** — `PendingApprovalScreen.jsx` now renders a **Buy ticket** / **RSVP** action next to each public event that opens `/marketplace?event=<id>`, so pending guests can complete the purchase flow before an admin approves their profile.
+- **Route**: `/tickets` alias added for the marketplace page so the new call-to-action reads cleanly.
+
+
 
 ### iter 344 — HR crash · Guest portal lockdown · Time-off self-service · Cron deep-links
 - **HR page crash fix**: `HRPage.jsx` imported `FileDown` from `lucide-react` only implicitly — the Timesheets tab immediately threw `ReferenceError: FileDown is not defined`. Added `FileDown` to the lucide-react import.

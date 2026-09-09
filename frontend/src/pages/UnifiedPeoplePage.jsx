@@ -52,6 +52,20 @@ export default function UnifiedPeoplePage() {
   const [savingMember, setSavingMember] = useState(false);
   const [pendingMembers, setPendingMembers] = useState([]);
   const [badges, setBadges] = useState([]);
+  // iter344 — family approvals queue (parent-submitted children/guardians)
+  const [familyApprovals, setFamilyApprovals] = useState({ children: [], guardians: [] });
+  const [familyApprovalsLoading, setFamilyApprovalsLoading] = useState(false);
+  const reloadFamilyApprovals = React.useCallback(async () => {
+    setFamilyApprovalsLoading(true);
+    try {
+      const { familiesApi: f } = await import('../services/api');
+      const r = await f.pendingApprovals();
+      setFamilyApprovals(r.data || { children: [], guardians: [] });
+    } catch { /* silent — not everyone has access */ }
+    finally { setFamilyApprovalsLoading(false); }
+  }, []);
+  useEffect(() => { reloadFamilyApprovals(); }, [reloadFamilyApprovals]);
+  const familyApprovalCount = (familyApprovals.children?.length || 0) + (familyApprovals.guardians?.length || 0);
 
   // Import state
   const [showBulkImport, setShowBulkImport] = useState(false);
@@ -465,6 +479,7 @@ export default function UnifiedPeoplePage() {
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
           {pendingMembers.length > 0 && <TabsTrigger value="pending" className="gap-1.5" data-testid="tab-pending"><Award size={13} /> Pending ({pendingMembers.length})</TabsTrigger>}
+          {familyApprovalCount > 0 && <TabsTrigger value="family-approvals" className="gap-1.5" data-testid="tab-family-approvals"><Heart size={13} /> Family Approvals ({familyApprovalCount})</TabsTrigger>}
         </TabsList>
 
         {/* MEMBERS TAB removed — staff/users are managed in /admin; guests & parents below cover non-staff people */}
@@ -705,6 +720,87 @@ export default function UnifiedPeoplePage() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          </TabsContent>
+        )}
+
+        {/* FAMILY APPROVALS TAB — parent-submitted children + guardians awaiting review */}
+        {familyApprovalCount > 0 && (
+          <TabsContent value="family-approvals" className="mt-4" data-testid="family-approvals-tab">
+            <div className="space-y-4">
+              {familyApprovals.children?.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">Children awaiting review ({familyApprovals.children.length})</p>
+                  {familyApprovals.children.map(c => (
+                    <Card key={c.id} className="shadow-soft rounded-xl" data-testid={`fa-child-${c.id}`}>
+                      <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{c.name}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {c.family_name ? `Family: ${c.family_name}` : ''} {c.date_of_birth ? `· DOB: ${c.date_of_birth}` : ''} {c.class_group ? `· Class: ${c.class_group}` : ''}
+                          </p>
+                          {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1">Allergies: {c.allergies}</Badge>}
+                          {c.medical_notes && <p className="text-[11px] text-amber-700 mt-0.5">Medical: {c.medical_notes}</p>}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" className="h-7 gap-1 text-green-700 bg-green-100 hover:bg-green-200" data-testid={`fa-approve-child-${c.id}`} onClick={async () => {
+                            try {
+                              const { familiesApi: f } = await import('../services/api');
+                              await f.decidePendingChild(c.id, 'approve');
+                              toast.success(`${c.name} approved`); reloadFamilyApprovals();
+                            } catch (err) { toast.error(err.response?.data?.detail || 'Approve failed'); }
+                          }}>Approve</Button>
+                          <Button size="sm" variant="outline" className="h-7 gap-1 text-red-600" data-testid={`fa-reject-child-${c.id}`} onClick={async () => {
+                            const reason = window.prompt(`Reject ${c.name}? Optional reason (shared with the parent):`);
+                            if (reason === null) return;
+                            try {
+                              const { familiesApi: f } = await import('../services/api');
+                              await f.decidePendingChild(c.id, 'reject', reason || '');
+                              toast.success('Rejected'); reloadFamilyApprovals();
+                            } catch (err) { toast.error(err.response?.data?.detail || 'Reject failed'); }
+                          }}>Reject</Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              {familyApprovals.guardians?.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">Guardians awaiting review ({familyApprovals.guardians.length})</p>
+                  {familyApprovals.guardians.map(g => (
+                    <Card key={`${g.family_id}-${g.id}`} className="shadow-soft rounded-xl" data-testid={`fa-guardian-${g.id}`}>
+                      <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{g.name} <span className="text-xs text-muted-foreground font-normal">— {g.relationship || 'Guardian'}</span></p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Family: {g.family_name} {g.phone ? `· ${g.phone}` : ''} {g.email ? `· ${g.email}` : ''}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" className="h-7 gap-1 text-green-700 bg-green-100 hover:bg-green-200" data-testid={`fa-approve-guardian-${g.id}`} onClick={async () => {
+                            try {
+                              const { familiesApi: f } = await import('../services/api');
+                              await f.decidePendingGuardian(g.family_id, g.id, 'approve');
+                              toast.success(`${g.name} approved`); reloadFamilyApprovals();
+                            } catch (err) { toast.error(err.response?.data?.detail || 'Approve failed'); }
+                          }}>Approve</Button>
+                          <Button size="sm" variant="outline" className="h-7 gap-1 text-red-600" data-testid={`fa-reject-guardian-${g.id}`} onClick={async () => {
+                            const reason = window.prompt(`Reject ${g.name}? Optional reason (shared with the parent):`);
+                            if (reason === null) return;
+                            try {
+                              const { familiesApi: f } = await import('../services/api');
+                              await f.decidePendingGuardian(g.family_id, g.id, 'reject', reason || '');
+                              toast.success('Rejected'); reloadFamilyApprovals();
+                            } catch (err) { toast.error(err.response?.data?.detail || 'Reject failed'); }
+                          }}>Reject</Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              {familyApprovalsLoading && <div className="animate-pulse h-16 bg-muted rounded-xl" />}
             </div>
           </TabsContent>
         )}

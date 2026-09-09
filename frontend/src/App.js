@@ -135,6 +135,7 @@ function AppRoutes() {
       <Route path="/kiosk" element={<KioskPage />} />
       <Route path="/public-bookings" element={<PublicBookingsPage />} />
       <Route path="/marketplace" element={<PublicBookingsPage />} />
+      <Route path="/tickets" element={<PublicBookingsPage />} />
       <Route path="/shared/:shareToken" element={<SharedBoardPage />} />
       <Route path="/badge/:token" element={<WalletBadgePage />} />
       <Route path="/receipt/:receiptNumber" element={<ReceiptViewPage />} />

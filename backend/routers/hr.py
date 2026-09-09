@@ -306,6 +306,34 @@ def _is_hr_or_above(current_user: dict) -> bool:
 
 # ========== HR SETTINGS PER CAMPUS ==========
 
+@router.get("/pending-count")
+async def hr_pending_count(current_user: dict = Depends(get_current_user)):
+    """Counts of HR items awaiting the caller's decision — powers the red
+    pip on the HR sidebar nav. Restricted to manager+ / HR roles."""
+    role = (current_user.get("role") or "")
+    if role not in {"admin", "system_admin", "Executive Director", "Adviser", "Director",
+                    "Regional Director", "Manager", "Coordinator", "HR"}:
+        return {"leave": 0, "reimbursements": 0, "total": 0}
+    # Scope pending items to the approver's location(s) — admins see all.
+    location_scope = {}
+    if role not in {"admin", "system_admin", "Executive Director", "Adviser"}:
+        loc_ids = list(current_user.get("location_ids") or [])
+        if current_user.get("active_campus_id"):
+            loc_ids.append(current_user["active_campus_id"])
+        loc_ids = list(dict.fromkeys(loc_ids))
+        if loc_ids:
+            location_scope = {"location_id": {"$in": loc_ids}}
+    # Approvers should NOT count their own pending requests.
+    self_exclude = {"staff_id": {"$ne": current_user["id"]}}
+    leave = await db.hr_leave_requests.count_documents({
+        "status": "pending", **self_exclude, **location_scope,
+    })
+    reimb = await db.hr_reimbursements.count_documents({
+        "status": "pending", **{"staff_id": {"$ne": current_user["id"]}}, **location_scope,
+    })
+    return {"leave": leave, "reimbursements": reimb, "total": leave + reimb}
+
+
 @router.get("/settings/{location_id}")
 async def get_hr_settings(location_id: str, current_user: dict = Depends(require_hr)):
     doc = await db.hr_settings.find_one({"location_id": location_id}, {"_id": 0})

@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-09-09 — iter 344b (approval bell · family queue · pending-guest checkout)
+- Feat: `GET /api/hr/pending-count` (scoped to approver, self-excluded). `Layout.jsx` polls it and paints a red numeric pip on the HR sidebar icon.
+- Feat: Family approval queue. `GET /api/families/pending-approvals` + `POST .../child/{id}/decide` + `POST .../guardian/{family_id}/{guardian_id}/decide`. Parents get an in-app notification when their submission is approved or rejected. New **Family Approvals** tab on `UnifiedPeoplePage` (only visible when the queue is non-empty).
+- Feat: `PendingApprovalScreen` — every public event row now has a **Buy ticket** / **RSVP** button that deep-links to `/marketplace?event=<id>` so pending guests can complete checkout before admin approval.
+- Route: `/tickets` alias → PublicBookingsPage.
+
 ## 2026-09-09 — iter 344 (guest portal lockdown · time-off self-service · HR crash fix)
 - Fix: `HRPage.jsx` — `FileDown` was used on Timesheets tab but never imported (`ReferenceError` on tab click). Added to lucide-react import.
 - Fix: Tasks weren't broadcasting to newly-assigned users on creation. `routers/tasks.create_task` now fires in-app notification + email (previously only edits notified).

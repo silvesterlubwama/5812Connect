@@ -234,6 +234,25 @@ export default function Layout() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [campusFeatures, setCampusFeatures] = useState({ financial_enabled: true, marketplace_enabled: true, financial_apis_enabled: true, hr_enabled: true });
   const { addListener } = useWebSocket();
+  // iter344 — approval pip. Poll HR pending count for managers+, so the
+  // sidebar HR icon lights up red when leave/expense requests need action.
+  const [hrPendingCount, setHrPendingCount] = useState(0);
+  useEffect(() => {
+    const APPROVER_ROLES = ['admin', 'system_admin', 'Executive Director', 'Adviser',
+      'Director', 'Regional Director', 'Manager', 'Coordinator', 'HR'];
+    if (!user || !APPROVER_ROLES.includes(user.role)) return;
+    let cancelled = false;
+    const refresh = () => {
+      import('../services/api').then(({ default: api }) => {
+        api.get('/hr/pending-count').then(r => {
+          if (!cancelled) setHrPendingCount(r.data?.total || 0);
+        }).catch(() => {});
+      });
+    };
+    refresh();
+    const t = setInterval(refresh, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [user]);
   const { t, lang, changeLang, languages } = useI18n();
 
   // Fetch campuses for switcher and check feature flags
@@ -585,12 +604,23 @@ export default function Layout() {
                 )}
                 {(shouldShow || !section.collapsible) && (
                   <div className="space-y-0.5 mt-0.5">
-                    {visibleItems.map(({ to, icon: Icon, label }) => (
+                    {visibleItems.map(({ to, icon: Icon, label }) => {
+                      const showHrPip = to === '/hr' && hrPendingCount > 0;
+                      return (
                       <NavLink key={to} to={to} onClick={() => setSidebarOpen(false)} data-testid={`nav-${to.replace('/', '')}`}
                         className={({ isActive }) => `flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${isActive ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}`}>
-                        <Icon size={14} className="shrink-0" />{label}
+                        <span className="relative shrink-0">
+                          <Icon size={14} />
+                          {showHrPip && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-3.5 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none" data-testid="hr-approval-pip">
+                              {hrPendingCount > 9 ? '9+' : hrPendingCount}
+                            </span>
+                          )}
+                        </span>
+                        {label}
                       </NavLink>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

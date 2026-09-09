@@ -83,6 +83,160 @@ async def bulk_delete_guests(data: dict, current_user: dict = Depends(get_curren
     return {"deleted": result.deleted_count}
 
 
+@router.get("/families/pending-approvals")
+async def list_pending_family_approvals(current_user: dict = Depends(get_current_user)):
+    """List parent-submitted family changes (children + guardians) that
+    are awaiting admin review. Restricted to admin/director/manager roles."""
+    role = (current_user.get("role") or "")
+    if role not in {"admin", "system_admin", "Executive Director", "Adviser", "Director",
+                    "Regional Director", "Manager", "Coordinator", "HR"}:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    # Scope to caller's locations (admins see all)
+    from deps import get_campus_filter
+    campus = {} if role in {"admin", "system_admin", "Executive Director", "Adviser"} else await get_campus_filter(current_user)
+    pending_children = await db.children.find(
+        {"approval_status": "pending", **campus}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    # Guardians live inside families.guardians[] — pull all families that
+    # have at least one pending guardian, then flatten.
+    families_with_pg = await db.families.find(
+        {"guardians.approval_status": "pending", **campus}, {"_id": 0}
+    ).to_list(200)
+    pending_guardians = []
+    for fam in families_with_pg:
+        for g in (fam.get("guardians") or []):
+            if g.get("approval_status") == "pending":
+                pending_guardians.append({
+                    **g, "family_id": fam["id"], "family_name": fam.get("family_name"),
+                    "location_id": fam.get("location_id"),
+                })
+    # Enrich children with family name for readability
+    fam_ids = list({c.get("family_id") for c in pending_children if c.get("family_id")})
+    fam_names = {}
+    if fam_ids:
+        async for f in db.families.find({"id": {"$in": fam_ids}}, {"_id": 0, "id": 1, "family_name": 1}):
+            fam_names[f["id"]] = f.get("family_name", "")
+    for c in pending_children:
+        c["family_name"] = fam_names.get(c.get("family_id"), "")
+    return {"children": pending_children, "guardians": pending_guardians}
+
+
+@router.post("/families/pending-approvals/child/{child_id}/decide")
+async def decide_pending_child(child_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Approve or reject a parent-submitted child record.
+    Body: { action: 'approve' | 'reject', reason?: str }
+    Approve → clears the pending flag so badges/check-ins unlock.
+    Reject  → moves the record to `deleted_items` for audit."""
+    role = (current_user.get("role") or "")
+    if role not in {"admin", "system_admin", "Executive Director", "Adviser", "Director",
+                    "Regional Director", "Manager", "Coordinator", "HR"}:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    action = (data.get("action") or "").lower()
+    if action not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be approve or reject")
+    child = await db.children.find_one({"id": child_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    if (child.get("approval_status") or "") != "pending":
+        raise HTTPException(status_code=400, detail="Already decided")
+    now = datetime.now(timezone.utc).isoformat()
+    if action == "approve":
+        await db.children.update_one({"id": child_id}, {"$set": {
+            "approval_status": "approved",
+            "approved_at": now, "approved_by": current_user["id"],
+            "approved_by_name": current_user.get("name", ""),
+        }})
+        try:
+            from routers.notifications import create_notification
+            if child.get("created_by"):
+                await create_notification(
+                    "Family change approved",
+                    f"Your addition of {child.get('name','')} has been approved.",
+                    child["created_by"], "success", "/portal/family",
+                )
+        except Exception:
+            pass
+        await _audit(current_user["id"], "approve", "child", child_id, {"name": child.get("name")})
+        return {"decided": "approved", "child_id": child_id}
+    # Reject → soft-delete
+    child["_deleted_from"] = "children"
+    child["deleted_at"] = now
+    child["deleted_by"] = current_user["id"]
+    child["reject_reason"] = (data.get("reason") or "")[:300]
+    await db.deleted_items.insert_one(child)
+    await db.children.delete_one({"id": child_id})
+    try:
+        from routers.notifications import create_notification
+        if child.get("created_by"):
+            await create_notification(
+                "Family change rejected",
+                f"The addition of {child.get('name','')} was rejected"
+                + (f": {child['reject_reason']}" if child.get("reject_reason") else "."),
+                child["created_by"], "warning", "/portal/family",
+            )
+    except Exception:
+        pass
+    await _audit(current_user["id"], "reject", "child", child_id, {"name": child.get("name"), "reason": child.get("reject_reason")})
+    return {"decided": "rejected", "child_id": child_id}
+
+
+@router.post("/families/pending-approvals/guardian/{family_id}/{guardian_id}/decide")
+async def decide_pending_guardian(family_id: str, guardian_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Approve or reject a parent-submitted guardian on a family.
+    Body: { action: 'approve' | 'reject', reason?: str }"""
+    role = (current_user.get("role") or "")
+    if role not in {"admin", "system_admin", "Executive Director", "Adviser", "Director",
+                    "Regional Director", "Manager", "Coordinator", "HR"}:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    action = (data.get("action") or "").lower()
+    if action not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be approve or reject")
+    family = await db.families.find_one({"id": family_id}, {"_id": 0})
+    if not family:
+        raise HTTPException(status_code=404, detail="Family not found")
+    guardian = next((g for g in (family.get("guardians") or []) if g.get("id") == guardian_id), None)
+    if not guardian:
+        raise HTTPException(status_code=404, detail="Guardian not found")
+    if (guardian.get("approval_status") or "") != "pending":
+        raise HTTPException(status_code=400, detail="Already decided")
+    now = datetime.now(timezone.utc).isoformat()
+    if action == "approve":
+        await db.families.update_one(
+            {"id": family_id, "guardians.id": guardian_id},
+            {"$set": {
+                "guardians.$.approval_status": "approved",
+                "guardians.$.approved_at": now,
+                "guardians.$.approved_by": current_user["id"],
+                "guardians.$.approved_by_name": current_user.get("name", ""),
+            }},
+        )
+        try:
+            from routers.notifications import create_notification
+            if guardian.get("added_by"):
+                await create_notification(
+                    "Family change approved",
+                    f"Guardian {guardian.get('name','')} has been approved.",
+                    guardian["added_by"], "success", "/portal/family",
+                )
+        except Exception:
+            pass
+        return {"decided": "approved", "family_id": family_id, "guardian_id": guardian_id}
+    # Reject → pull guardian off the array
+    await db.families.update_one({"id": family_id}, {"$pull": {"guardians": {"id": guardian_id}}})
+    try:
+        from routers.notifications import create_notification
+        if guardian.get("added_by"):
+            await create_notification(
+                "Family change rejected",
+                f"Guardian {guardian.get('name','')} was rejected"
+                + (f": {data.get('reason')[:200]}" if data.get("reason") else "."),
+                guardian["added_by"], "warning", "/portal/family",
+            )
+    except Exception:
+        pass
+    return {"decided": "rejected", "family_id": family_id, "guardian_id": guardian_id}
+
+
 @router.put("/families/{family_id}")
 async def update_family(family_id: str, data: FamilyCreate, current_user: dict = Depends(get_current_user)):
     update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}

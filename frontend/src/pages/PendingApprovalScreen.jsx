@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, LogOut, Calendar, ShoppingBag, Heart, RefreshCw } from 'lucide-react';
+import { Clock, LogOut, Calendar, ShoppingBag, Heart, RefreshCw, Ticket } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -84,22 +84,35 @@ export default function PendingApprovalScreen() {
             </div>
             {loading && <div className="animate-pulse h-16 bg-muted rounded" />}
             {!loading && events.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No public events scheduled — check back soon.</p>}
-            {!loading && events.map(e => (
-              <div key={e.id} className="flex items-center justify-between border rounded-lg p-3" data-testid={`pending-event-${e.id}`}>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{e.title}</p>
-                  <p className="text-[11px] text-muted-foreground">{e.date}{e.time ? ` · ${e.time}` : ''}{e.location ? ` · ${e.location}` : ''}</p>
+            {!loading && events.map(e => {
+              const isTicketed = !e.is_free && (e.price || 0) > 0;
+              return (
+                <div key={e.id} className="flex items-center justify-between border rounded-lg p-3 gap-3 flex-wrap" data-testid={`pending-event-${e.id}`}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{e.title}</p>
+                    <p className="text-[11px] text-muted-foreground">{e.date}{e.time ? ` · ${e.time}` : ''}{e.location ? ` · ${e.location}` : ''}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isTicketed ? (
+                      <Badge variant="secondary" className="text-[10px]">{e.currency || 'UGX'} {(e.price || 0).toLocaleString()}</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px]">Free</Badge>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={isTicketed ? 'default' : 'outline'}
+                      className="h-8 gap-1"
+                      data-testid={`pending-buy-${e.id}`}
+                      onClick={() => navigate(`/marketplace?event=${e.id}`)}
+                    >
+                      <Ticket size={13} /> {isTicketed ? 'Buy ticket' : 'RSVP'}
+                    </Button>
+                  </div>
                 </div>
-                {!e.is_free && (e.price || 0) > 0 ? (
-                  <Badge variant="secondary" className="text-[10px]">Ticketed</Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[10px]">Free</Badge>
-                )}
-              </div>
-            ))}
+              );
+            })}
             <p className="text-[11px] text-muted-foreground pt-2 border-t border-border">
-              To buy a ticket, tap an event in the public listings on our website. Your check-in will only
-              be enabled for events you've paid for or been explicitly approved for.
+              Tickets you buy here stay tied to your account so check-in works the moment the event starts, even before your profile is fully approved.
             </p>
           </CardContent>
         </Card>
