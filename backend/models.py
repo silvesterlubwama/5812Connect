@@ -130,6 +130,9 @@ class GuestCreate(BaseModel):
     family_id: Optional[str] = None
     location_id: Optional[str] = None
     group: Optional[str] = None
+    # iter344f — spouse linkage. Set from Family editor (auto-paired when
+    # exactly 2 parents are on a family) or manually from the guest profile.
+    spouse_id: Optional[str] = None
 
 class EventCreate(BaseModel):
     title: str

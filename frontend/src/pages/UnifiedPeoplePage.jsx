@@ -162,6 +162,8 @@ export default function UnifiedPeoplePage() {
   // Edit family
   const [editFamily, setEditFamily] = useState(null);
   const [editFamilyForm, setEditFamilyForm] = useState({});
+  // iter344f — memberships editor
+  const [editFamilyMembers, setEditFamilyMembers] = useState({ parent_ids: [], guardian_ids: [], child_ids: [] });
   const [savingFamily, setSavingFamily] = useState(false);
 
   const [allLocations, setAllLocations] = useState([]);
@@ -424,7 +426,7 @@ export default function UnifiedPeoplePage() {
 
   const openEditGuest = (g) => {
     setEditGuest(g);
-    setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, is_medical: g.is_medical || false, is_resident: g.is_resident || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '' });
+    setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, is_medical: g.is_medical || false, is_resident: g.is_resident || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '', spouse_id: g.spouse_id || '', family_id: g.family_id || '' });
   };
 
   const saveEditGuest = async () => {
@@ -448,15 +450,27 @@ export default function UnifiedPeoplePage() {
   const openEditFamily = (f) => {
     setEditFamily(f);
     setEditFamilyForm({ family_name: f.family_name || '', primary_contact_name: f.primary_contact_name || '', primary_contact_email: f.primary_contact_email || '', primary_contact_phone: f.primary_contact_phone || '', address: f.address || '', notes: f.notes || '' });
+    // iter344f — preload the family's current members so the editor can
+    // show + edit parents / guardians / children with cap enforcement.
+    const famParents = guests.filter(g => g.family_id === f.id && g.is_parent).map(g => g.id);
+    const famChildren = children.filter(c => c.family_id === f.id).map(c => c.id);
+    setEditFamilyMembers({
+      parent_ids: famParents.slice(0, 2),
+      guardian_ids: (f.guardian_ids || []).slice(0, 6),
+      child_ids: famChildren,
+    });
   };
   const saveEditFamily = async () => {
     if (!editFamily) return;
     setSavingFamily(true);
     try {
       await familiesApi.update(editFamily.id, editFamilyForm);
-      setFamilies(prev => prev.map(f => f.id === editFamily.id ? { ...f, ...editFamilyForm } : f));
-      setEditFamily(null);
-      toast.success('Family updated');
+      // Push membership changes through the dedicated members endpoint —
+      // caps (2 parents, 6 guardians) are enforced server-side.
+      await api.put(`/families/${editFamily.id}/members`, editFamilyMembers);
+      setFamilies(prev => prev.map(f => f.id === editFamily.id ? { ...f, ...editFamilyForm, guardian_ids: editFamilyMembers.guardian_ids } : f));
+      toast.success('Family saved');
+      setEditFamily(null); fetchPeople();
     } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
     finally { setSavingFamily(false); }
   };
@@ -1298,6 +1312,81 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="space-y-1.5"><Label>Contact Email</Label><Input type="email" value={editFamilyForm.primary_contact_email || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, primary_contact_email: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Address</Label><Input value={editFamilyForm.address || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, address: e.target.value })} /></div>
+
+            {/* iter344f — Members editor: parents (max 2), guardians (max 6), children */}
+            <div className="pt-3 border-t space-y-3">
+              <div>
+                <Label className="text-xs">Parents ({editFamilyMembers.parent_ids.length}/2)</Label>
+                <div className="space-y-1.5 mt-1">
+                  {editFamilyMembers.parent_ids.map(pid => {
+                    const p = guests.find(g => g.id === pid);
+                    return (
+                      <div key={pid} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-parent-${pid}`}>
+                        <span className="text-xs truncate">{p?.name || pid}{p?.phone ? ` · ${p.phone}` : ''}</span>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => setEditFamilyMembers(m => ({ ...m, parent_ids: m.parent_ids.filter(x => x !== pid) }))} data-testid={`fam-parent-remove-${pid}`}><X size={12} /></Button>
+                      </div>
+                    );
+                  })}
+                  {editFamilyMembers.parent_ids.length < 2 && (
+                    <Select value="" onValueChange={v => setEditFamilyMembers(m => m.parent_ids.includes(v) ? m : { ...m, parent_ids: [...m.parent_ids, v].slice(0, 2) })}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="fam-add-parent"><SelectValue placeholder="Add parent…" /></SelectTrigger>
+                      <SelectContent>
+                        {guests.filter(g => g.is_parent && !editFamilyMembers.parent_ids.includes(g.id)).slice(0, 200).map(g => (
+                          <SelectItem key={g.id} value={g.id}>{g.name}{g.phone ? ` · ${g.phone}` : ''}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Guardians ({editFamilyMembers.guardian_ids.length}/6)</Label>
+                <div className="space-y-1.5 mt-1">
+                  {editFamilyMembers.guardian_ids.map(gid => {
+                    const g = guests.find(x => x.id === gid);
+                    return (
+                      <div key={gid} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-guardian-${gid}`}>
+                        <span className="text-xs truncate">{g?.name || gid}{g?.phone ? ` · ${g.phone}` : ''}</span>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => setEditFamilyMembers(m => ({ ...m, guardian_ids: m.guardian_ids.filter(x => x !== gid) }))} data-testid={`fam-guardian-remove-${gid}`}><X size={12} /></Button>
+                      </div>
+                    );
+                  })}
+                  {editFamilyMembers.guardian_ids.length < 6 && (
+                    <Select value="" onValueChange={v => setEditFamilyMembers(m => m.guardian_ids.includes(v) ? m : { ...m, guardian_ids: [...m.guardian_ids, v].slice(0, 6) })}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="fam-add-guardian"><SelectValue placeholder="Add guardian…" /></SelectTrigger>
+                      <SelectContent>
+                        {guests.filter(g => !editFamilyMembers.guardian_ids.includes(g.id) && !editFamilyMembers.parent_ids.includes(g.id)).slice(0, 200).map(g => (
+                          <SelectItem key={g.id} value={g.id}>{g.name}{g.phone ? ` · ${g.phone}` : ''}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Children ({editFamilyMembers.child_ids.length})</Label>
+                <div className="space-y-1.5 mt-1 max-h-32 overflow-y-auto">
+                  {editFamilyMembers.child_ids.map(cid => {
+                    const c = children.find(x => x.id === cid);
+                    return (
+                      <div key={cid} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-child-${cid}`}>
+                        <span className="text-xs truncate">{c?.name || cid}{c?.date_of_birth ? ` · DOB ${c.date_of_birth}` : ''}</span>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => setEditFamilyMembers(m => ({ ...m, child_ids: m.child_ids.filter(x => x !== cid) }))}><X size={12} /></Button>
+                      </div>
+                    );
+                  })}
+                  <Select value="" onValueChange={v => setEditFamilyMembers(m => m.child_ids.includes(v) ? m : { ...m, child_ids: [...m.child_ids, v] })}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="fam-add-child"><SelectValue placeholder="Add child…" /></SelectTrigger>
+                    <SelectContent>
+                      {children.filter(c => !editFamilyMembers.child_ids.includes(c.id)).slice(0, 200).map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}{c.date_of_birth ? ` · ${c.date_of_birth}` : ''}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditFamily(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-family-btn" onClick={saveEditFamily} disabled={savingFamily}>{savingFamily ? 'Saving...' : 'Save'}</Button>
@@ -1378,6 +1467,41 @@ export default function UnifiedPeoplePage() {
               </div>
             )}
             <div className="space-y-1.5"><Label>Referred By</Label><Input value={editGuestForm.referred_by || ''} onChange={e => setEditGuestForm({...editGuestForm, referred_by: e.target.value})} /></div>
+
+            {/* iter344f — Spouse picker + read-only kids-list so admins can spot family relations right from the profile */}
+            {editGuestForm.is_parent && (
+              <div className="space-y-1.5" data-testid="guest-spouse-picker">
+                <Label>Spouse</Label>
+                <Select value={editGuestForm.spouse_id || '__none__'} onValueChange={v => setEditGuestForm({ ...editGuestForm, spouse_id: v === '__none__' ? '' : v })}>
+                  <SelectTrigger><SelectValue placeholder="Unlinked" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Unlinked</SelectItem>
+                    {guests.filter(g => g.id !== editGuest?.id && g.is_parent).slice(0, 200).map(g => (
+                      <SelectItem key={g.id} value={g.id}>{g.name}{g.phone ? ` · ${g.phone}` : ''}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {editGuest && (() => {
+              const linkedKids = children.filter(c => (c.parent_ids || []).includes(editGuest.id) || (editGuest.family_id && c.family_id === editGuest.family_id));
+              if (linkedKids.length === 0) return null;
+              return (
+                <div data-testid="guest-children-list">
+                  <Label className="text-xs">Children on file ({linkedKids.length})</Label>
+                  <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
+                    {linkedKids.map(c => (
+                      <div key={c.id} className="flex items-center justify-between border rounded-lg p-2 text-xs" data-testid={`guest-child-${c.id}`}>
+                        <span className="truncate">{c.name}{c.date_of_birth ? ` · DOB ${c.date_of_birth}` : ''}{c.class_group ? ` · ${c.class_group}` : ''}</span>
+                        <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setEditGuest(null); setTimeout(() => openEditChild(c), 50); }}>Open</Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="space-y-1.5"><Label>Address</Label><Input value={editGuestForm.address || ''} onChange={e => setEditGuestForm({...editGuestForm, address: e.target.value})} /></div>
             <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={editGuestForm.notes || ''} onChange={e => setEditGuestForm({...editGuestForm, notes: e.target.value})} /></div>
             <div className="flex gap-3 pt-2">

@@ -535,10 +535,17 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
 
 @router.put("/families/{family_id}/members")
 async def update_family_members(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """Update which children and parents/guardians belong to a family"""
+    """Update which children and parents/guardians belong to a family.
+    iter344f — enforce hard caps: max 2 parents (mum+dad) and max 6
+    guardians (siblings, grandparents, emergency contacts). Refuses if
+    caps are exceeded so bad data can't creep in from the FE."""
     child_ids = data.get("child_ids", [])
     parent_ids = data.get("parent_ids", [])
     guardian_ids = data.get("guardian_ids", [])
+    if len(parent_ids) > 2:
+        raise HTTPException(status_code=400, detail="A family can have at most 2 parents. Remove one before adding another.")
+    if len(guardian_ids) > 6:
+        raise HTTPException(status_code=400, detail="A family can have at most 6 guardians.")
 
     # Unlink old children from this family
     await db.children.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
@@ -558,4 +565,9 @@ async def update_family_members(family_id: str, data: dict, current_user: dict =
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }})
 
+    # Auto-link spouses when exactly 2 parents are set so the guest profile
+    # can render the "married to" chip immediately.
+    if len(parent_ids) == 2:
+        await db.guests.update_one({"id": parent_ids[0]}, {"$set": {"spouse_id": parent_ids[1]}})
+        await db.guests.update_one({"id": parent_ids[1]}, {"$set": {"spouse_id": parent_ids[0]}})
     return {"message": "Family members updated", "children": len(child_ids), "parents": len(parent_ids), "guardians": len(guardian_ids)}
