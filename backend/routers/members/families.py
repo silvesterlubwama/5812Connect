@@ -238,7 +238,11 @@ async def update_my_family(data: dict, current_user: dict = Depends(get_current_
 
 @router.post("/portal/family/children")
 async def parent_add_child(data: ChildCreate, current_user: dict = Depends(get_current_user)):
-    """Parent adds a child to their own family."""
+    """Approved parent adds a child to their own family. New additions land
+    in a pending-approval state so admins vet them before badges/access are
+    granted (per iter343 guest-portal security lockdown)."""
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
     family_id = await _resolve_my_family_id(current_user)
     if not family_id:
         raise HTTPException(status_code=404, detail="No family found. Contact admin.")
@@ -247,17 +251,40 @@ async def parent_add_child(data: ChildCreate, current_user: dict = Depends(get_c
     doc = {
         "id": f"chd_{str(uuid.uuid4())[:8]}",
         **child_data,
+        "approval_status": "pending",
+        "submitted_by_parent": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
     await db.children.insert_one(doc)
     doc.pop("_id", None)
+    # Notify admins so they can approve the new child record
+    try:
+        from routers.notifications import create_notification
+        admins = await db.users.find(
+            {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}},
+            {"_id": 0, "id": 1},
+        ).to_list(50)
+        for a in admins:
+            try:
+                await create_notification(
+                    "Family change pending review",
+                    f"{current_user.get('name', 'A parent')} added child {doc.get('name','')} — needs approval",
+                    a["id"], "warning", f"/people?tab=children&child={doc['id']}",
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
     return doc
 
 
 @router.post("/portal/family/guardians")
 async def parent_add_guardian(data: dict, current_user: dict = Depends(get_current_user)):
-    """Parent adds a guardian to their family."""
+    """Approved parent adds a guardian to their family. Guardians are
+    pending-approval by default (must be vetted before pickup/access)."""
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
     family_id = await _resolve_my_family_id(current_user)
     if not family_id:
         raise HTTPException(status_code=404, detail="No family found. Contact admin.")
@@ -267,9 +294,29 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
         "phone": data.get("phone", ""),
         "email": data.get("email", ""),
         "relationship": data.get("relationship", "Guardian"),
+        "approval_status": "pending",
+        "submitted_by_parent": True,
         "added_at": datetime.now(timezone.utc).isoformat(),
+        "added_by": current_user["id"],
     }
     await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    try:
+        from routers.notifications import create_notification
+        admins = await db.users.find(
+            {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}},
+            {"_id": 0, "id": 1},
+        ).to_list(50)
+        for a in admins:
+            try:
+                await create_notification(
+                    "New guardian pending review",
+                    f"{current_user.get('name', 'A parent')} added guardian {guardian['name']} — needs approval",
+                    a["id"], "warning", f"/people?family={family_id}",
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
     return guardian
 
 

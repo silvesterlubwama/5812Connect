@@ -1,14 +1,20 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink, CalendarOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 
-const NAV = [
+// Full nav for staff members (they land in /portal when they visit their
+// own self-service). Non-staff guests get a sharply reduced set — no tasks,
+// no chat, no expenses, no time-off/timesheet-adjacent modules. They can
+// see their own family (view + edit contact + submit pending changes),
+// their own event RSVPs/tickets, their own purchase history, and profile.
+const STAFF_NAV = [
   { to: '/portal', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/portal/tasks', icon: ListTodo, label: 'My Tasks' },
   { to: '/portal/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/portal/events', icon: Calendar, label: 'Events & RSVP' },
+  { to: '/portal/time-off', icon: CalendarOff, label: 'Time Off' },
   { to: '/portal/expenses', icon: Receipt, label: 'Expenses' },
   { to: '/portal/sales', icon: ShoppingBag, label: 'My Sales' },
   { to: '/portal/documents', icon: FileText, label: 'Documents' },
@@ -16,10 +22,26 @@ const NAV = [
   { to: '/portal/profile', icon: User, label: 'Profile' },
 ];
 
+const GUEST_NAV = [
+  { to: '/portal', icon: LayoutDashboard, label: 'Dashboard', end: true },
+  { to: '/portal/events', icon: Calendar, label: 'Events & Tickets' },
+  { to: '/portal/sales', icon: ShoppingBag, label: 'My Purchases' },
+  { to: '/portal/family', icon: Heart, label: 'My Family' },
+  { to: '/portal/profile', icon: User, label: 'Profile' },
+];
+
+const STAFF_ROLES = new Set([
+  'admin', 'system_admin', 'Executive Director', 'Adviser', 'Director',
+  'Regional Director', 'Manager', 'Coordinator', 'Leader', 'Staff', 'HR',
+  'Volunteer', 'volunteer',
+]);
+
 export default function PortalLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const isAdmin = user?.role === 'admin' || user?.role === 'system_admin';
+  const isStaff = STAFF_ROLES.has(user?.role || '');
+  const NAV = isStaff ? STAFF_NAV : GUEST_NAV;
 
   return (
     <div className="flex h-screen bg-background" data-testid="portal-layout">

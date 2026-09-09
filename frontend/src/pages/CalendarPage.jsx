@@ -259,7 +259,8 @@ export default function CalendarPage() {
       title: it.title || '', date: it.date || '', end_date: it.end_date || '',
       time: it.time || '', end_time: it.end_time || '', location: it.location || '',
       description: it.description || '', type: it.type || 'meeting',
-      capacity: it.capacity || 100, is_public: it.is_public ?? false,
+      capacity: it.capacity ?? 100, is_public: it.is_public ?? false,
+      is_free: it.is_free !== false, price: it.price ?? null,
     });
   };
   const saveEdit = async (e) => {
@@ -562,8 +563,23 @@ export default function CalendarPage() {
                 <div><Label>Time</Label><Input type="time" value={editForm.time} onChange={e => setEditForm({ ...editForm, time: e.target.value })} /></div>
                 <div><Label>End Time</Label><Input type="time" value={editForm.end_time} onChange={e => setEditForm({ ...editForm, end_time: e.target.value })} /></div>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label>Type</Label>
+                  <Select value={editForm.type} onValueChange={v => setEditForm({ ...editForm, type: v })}>
+                    <SelectTrigger data-testid="edit-event-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>{Object.keys(TYPE_COLORS).filter(t => t !== 'imported' && t !== 'task' && t !== 'user_event' && !t.startsWith('holiday')).map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div><Label>Capacity</Label><Input type="number" min="0" value={editForm.capacity ?? ''} onChange={e => setEditForm({ ...editForm, capacity: e.target.value === '' ? null : parseInt(e.target.value) })} data-testid="edit-event-capacity" /></div>
+              </div>
               <div><Label>Location</Label><Input value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} /></div>
               <div><Label>Description</Label><Textarea rows={2} value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} /></div>
+              <div className="rounded-lg border border-border p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.is_free !== false} onChange={e => setEditForm({ ...editForm, is_free: e.target.checked, price: e.target.checked ? null : (editForm.price ?? 0) })} data-testid="edit-event-is-free" /> Free event (no ticket required)</label>
+                {editForm.is_free === false && (
+                  <div><Label className="text-xs">Ticket price</Label><Input type="number" min="0" step="0.01" value={editForm.price ?? 0} onChange={e => setEditForm({ ...editForm, price: parseFloat(e.target.value) || 0 })} data-testid="edit-event-price" /></div>
+                )}
+              </div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.is_public} onChange={e => setEditForm({ ...editForm, is_public: e.target.checked })} /> Public event (appears on shared calendar)</label>
               <div className="flex gap-2 pt-2"><Button type="button" variant="outline" onClick={() => setEditMode(false)}>Cancel</Button><div className="flex-1" /><Button type="submit" disabled={savingEdit} data-testid="save-event-btn">{savingEdit ? 'Saving…' : 'Save'}</Button></div>
             </form>

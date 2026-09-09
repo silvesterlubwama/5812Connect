@@ -753,6 +753,7 @@ export const portalApi = {
   updateFamily: (data) => api.put('/portal/family', data),
   addChild: (data) => api.post('/portal/family/children', data),
   addGuardian: (data) => api.post('/portal/family/guardians', data),
+  publicEvents: () => api.get('/public/events'),
 };
 
 // ---- ADMIN ----

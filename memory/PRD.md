@@ -7,7 +7,25 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
-## Current status (as of iter 341)
+## Current status (as of iter 344)
+
+### iter 344 — HR crash · Guest portal lockdown · Time-off self-service · Cron deep-links
+- **HR page crash fix**: `HRPage.jsx` imported `FileDown` from `lucide-react` only implicitly — the Timesheets tab immediately threw `ReferenceError: FileDown is not defined`. Added `FileDown` to the lucide-react import.
+- **Guest portal security overhaul (iter344)**:
+  * `RouteGuards.jsx` — pending users now land on a brand-new `PendingApprovalScreen` (public events browse + logout; NO family/tasks/expenses/badge). Explicit `STAFF_ROLES` set stops staff (with `is_parent=true` accidentally) from being redirected to `/portal`.
+  * New `PortalRoute` guard applied to `/portal`; pending guests get the same PendingApprovalScreen instead of the sidebar full portal.
+  * `PortalLayout` splits `STAFF_NAV` vs `GUEST_NAV` — guests only see Dashboard / Events & Tickets / My Purchases / My Family / Profile (Tasks/Chat/Expenses/Sales-admin/Documents/Time-Off hidden).
+  * `PortalFamily.jsx` — pending guests see a read-only banner + all edit/add buttons disabled; approved guests see a review-notice banner explaining that new children/guardians land in pending state.
+  * Backend `routers/members/families.py` — `parent_add_child` / `parent_add_guardian` gated on `status != 'pending'`; new records tagged `approval_status='pending'`, `submitted_by_parent=true`; admins get an in-app notification with deep-link to review.
+- **Tasks not posted when created (fix)**: `routers/tasks.create_task` now fires the same in-app notification + email chain that `update_task` already had — assignees learn about new cards immediately.
+- **HR delete draft payslip**: New `DELETE /api/hr/payslips/{payslip_id}` restricted to draft status; UI shows a red trash icon next to draft rows only.
+- **Time-off self-service (portal + admin)**:
+  * `PortalTimeOff.jsx` — full staff self-service: pick type, date range, half-day toggle + partial-day start/end times, notes; submit → manager notified. Live balance cards. Cancel / delete own pending requests.
+  * `GET /hr/leave/types` opened up to any authenticated user (was HR-only) so the portal can render the picker.
+  * `POST /hr/leave/requests` now dispatches an in-app notification to Manager+/HR at the requester's location — no manual polling needed.
+  * `LeavePanel` in HR page: "Manage types" dialog for HR/admins to add/rename/recolour leave types + set paid vs unpaid + default days; "Set allocations…" dropdown lets an admin override any staff member's per-year budget. Approve/decline UI already existed; added pending-count badge.
+- **Calendar event edit** — `CalendarPage.jsx` edit form restored the fields lost in the events/calendar unification: **type** picker, **capacity**, **is_free** toggle with a **price** field, plus visibility switch.
+- **Dashboard action-items deep-links**: overdue tasks → `/tasks?filter=overdue`, unassigned → `/tasks?filter=unassigned`, pending approvals → `/people?tab=pending`, expiring passes → `/access?filter=expiring`.
 
 ### iter 341 — Badge QR clarity · Guest portal security hardening
 - **Badges (`PrintableBadges.jsx` + `UnifiedBadge.jsx`)**: StaffBadge

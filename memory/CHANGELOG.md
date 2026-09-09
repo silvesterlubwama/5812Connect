@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 2026-09-09 — iter 344 (guest portal lockdown · time-off self-service · HR crash fix)
+- Fix: `HRPage.jsx` — `FileDown` was used on Timesheets tab but never imported (`ReferenceError` on tab click). Added to lucide-react import.
+- Fix: Tasks weren't broadcasting to newly-assigned users on creation. `routers/tasks.create_task` now fires in-app notification + email (previously only edits notified).
+- Feat: Guest portal security. `RouteGuards.jsx` gates pending accounts behind a new `PendingApprovalScreen` (public events browse + logout only). `STAFF_ROLES` set added so staff who happen to be parents never land on `/portal` by mistake. `PortalRoute` protects `/portal`. `PortalLayout` splits Staff vs Guest nav — guests can't reach Tasks/Chat/Expenses/Sales admin/Documents/Time-Off.
+- Feat: `PortalFamily.jsx` — pending guests see a read-only banner + disabled buttons; approved guests get a review-notice banner. Backend `parent_add_child` / `parent_add_guardian` require approval, stamp `approval_status='pending'`, notify admins.
+- Feat: HR — delete draft payslip. `DELETE /api/hr/payslips/{id}` restricted to `status=draft`. Red trash icon on draft rows.
+- Feat: Time-off self-service. New `PortalTimeOff.jsx` (portal). `/hr/leave/types` opened to any authenticated user. `/hr/leave/requests POST` dispatches in-app notifications to Manager+/HR at the requester's location. `LeavePanel` in HR page: "Manage types" dialog (add/edit/delete leave types, colour, paid flag, default days) + "Set allocations…" (per-staff override).
+- Feat: Calendar event edit restored `type`, `capacity`, `is_free` toggle + `price` (regression from events/calendar unification).
+- Feat: Dashboard action items deep-link (`/tasks?filter=overdue`, `/tasks?filter=unassigned`, `/people?tab=pending`, `/access?filter=expiring`).
+
+
 ## iter 341 — 2026-02 — Badge QR clarity · Guest portal security
 
 ### Badges — QR + photo split (print-safe)

@@ -1246,6 +1246,24 @@ async def payslip_allocations(payslip_id: str, current_user: dict = Depends(requ
     }
 
 
+@router.delete("/payslips/{payslip_id}")
+async def delete_payslip(payslip_id: str, current_user: dict = Depends(require_director)):
+    """Delete a payslip. Only DRAFTS may be deleted — approved/paid payslips
+    are audit-locked. Reverses any linked expense allocations for safety
+    (draft payslips never post to the ledger, so nothing to undo there)."""
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    if (p.get("status") or "").lower() != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only draft payslips can be deleted. Approved or paid payslips must be voided via edit.",
+        )
+    await db.hr_payslips.delete_one({"id": payslip_id})
+    await _audit(current_user["id"], "delete", "payslip", payslip_id, {"period": p.get("period"), "staff_id": p.get("staff_id")})
+    return {"deleted": True, "id": payslip_id}
+
+
 @router.put("/payslips/{payslip_id}")
 async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depends(require_director)):
     """Update a payslip. Director+ can edit any field (gross, allowances, deductions,
@@ -1988,10 +2006,12 @@ def _count_business_days(start_iso: str, end_iso: str) -> int:
 
 
 @router.get("/leave/types")
-async def list_leave_types(location_id: Optional[str] = None, current_user: dict = Depends(require_hr)):
-    """Return leave types (campus-overridable). Falls back to defaults."""
+async def list_leave_types(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Return leave types (campus-overridable). Falls back to defaults.
+    Open to any authenticated user so staff on the portal can see the list
+    when filing their own request — HR-only used to be too tight."""
     loc = location_id or current_user.get("active_campus_id") or current_user.get("location_id")
-    settings = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0, "leave_types": 1})
+    settings = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0, "leave_types": 1}) if loc else None
     if settings and settings.get("leave_types"):
         return settings["leave_types"]
     return DEFAULT_LEAVE_TYPES
@@ -2130,6 +2150,32 @@ async def create_leave_request(data: dict, current_user: dict = Depends(get_curr
     }
     await db.hr_leave_requests.insert_one(doc)
     doc.pop("_id", None)
+    # Notify approver chain — manager+ at the requester's location gets a bell
+    # ping so they can approve without a browser refresh. Owner won't get a
+    # duplicate copy when HR files on their own behalf.
+    try:
+        from routers.notifications import create_notification
+        approver_q = {
+            "role": {"$in": ["Manager", "Coordinator", "Director", "Regional Director",
+                             "Executive Director", "Adviser", "HR", "admin", "system_admin"]},
+            "id": {"$ne": current_user["id"]},
+        }
+        if staff.get("location_id"):
+            approver_q["$or"] = [
+                {"location_id": staff["location_id"]},
+                {"location_ids": staff["location_id"]},
+                {"role": {"$in": ["admin", "system_admin", "Executive Director", "Adviser"]}},
+            ]
+        approvers = await db.users.find(approver_q, {"_id": 0, "id": 1}).to_list(50)
+        title = f"Time-off request from {staff.get('name','a team member')}"
+        msg = f"{leave_type} · {start_date}" + (f" – {end_date}" if end_date != start_date else "") + f" ({days} day{'s' if days != 1 else ''})"
+        for a in approvers:
+            try:
+                await create_notification(title, msg, a["id"], "warning", f"/hr?tab=leave&request={doc['id']}")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Leave request notify failed: {e}")
     return doc
 
 

@@ -283,38 +283,38 @@ export default function DashboardPage() {
       {!loadingStats && actionItems && (actionItems.overdue_tasks > 0 || actionItems.pending_approvals > 0 || actionItems.expiring_passes > 0 || actionItems.unassigned_tasks > 0) && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {actionItems.overdue_tasks > 0 && (
-            <Card className="shadow-soft rounded-xl border-red-200 bg-red-50/50 dark:bg-red-950/20 dark:border-red-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/tasks')} data-testid="action-overdue-tasks">
+            <Card className="shadow-soft rounded-xl border-red-200 bg-red-50/50 dark:bg-red-950/20 dark:border-red-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/tasks?filter=overdue')} data-testid="action-overdue-tasks">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1"><AlertCircle size={14} className="text-red-600" /><p className="text-xs font-semibold text-red-700 dark:text-red-400">Overdue Tasks</p></div>
                 <p className="text-2xl font-bold text-red-600">{actionItems.overdue_tasks}</p>
-                <p className="text-[10px] text-red-500 mt-0.5">Past due date, needs attention</p>
+                <p className="text-[10px] text-red-500 mt-0.5">Tap to open overdue list</p>
               </CardContent>
             </Card>
           )}
           {actionItems.pending_approvals > 0 && (
-            <Card className="shadow-soft rounded-xl border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/members')} data-testid="action-pending-approvals">
+            <Card className="shadow-soft rounded-xl border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/people?tab=pending')} data-testid="action-pending-approvals">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1"><Users size={14} className="text-amber-600" /><p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Pending Approvals</p></div>
                 <p className="text-2xl font-bold text-amber-600">{actionItems.pending_approvals}</p>
-                <p className="text-[10px] text-amber-500 mt-0.5">Members awaiting approval</p>
+                <p className="text-[10px] text-amber-500 mt-0.5">Tap to review each account</p>
               </CardContent>
             </Card>
           )}
           {actionItems.expiring_passes > 0 && (
-            <Card className="shadow-soft rounded-xl border-orange-200 bg-orange-50/50 dark:bg-orange-950/20 dark:border-orange-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/access')} data-testid="action-expiring-passes">
+            <Card className="shadow-soft rounded-xl border-orange-200 bg-orange-50/50 dark:bg-orange-950/20 dark:border-orange-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/access?filter=expiring')} data-testid="action-expiring-passes">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1"><AlertCircle size={14} className="text-orange-600" /><p className="text-xs font-semibold text-orange-700 dark:text-orange-400">Expiring Passes</p></div>
                 <p className="text-2xl font-bold text-orange-600">{actionItems.expiring_passes}</p>
-                <p className="text-[10px] text-orange-500 mt-0.5">Guest passes expiring in 7 days</p>
+                <p className="text-[10px] text-orange-500 mt-0.5">Tap to renew or revoke</p>
               </CardContent>
             </Card>
           )}
           {actionItems.unassigned_tasks > 0 && (
-            <Card className="shadow-soft rounded-xl border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 dark:border-blue-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/tasks')} data-testid="action-unassigned-tasks">
+            <Card className="shadow-soft rounded-xl border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 dark:border-blue-800 cursor-pointer hover:shadow-md" onClick={() => navigate('/tasks?filter=unassigned')} data-testid="action-unassigned-tasks">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1"><CheckSquare size={14} className="text-blue-600" /><p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Unassigned Tasks</p></div>
                 <p className="text-2xl font-bold text-blue-600">{actionItems.unassigned_tasks}</p>
-                <p className="text-[10px] text-blue-500 mt-0.5">Tasks without assignees</p>
+                <p className="text-[10px] text-blue-500 mt-0.5">Tap to triage &amp; assign</p>
               </CardContent>
             </Card>
           )}

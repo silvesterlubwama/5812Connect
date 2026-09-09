@@ -65,6 +65,7 @@ import PortalDocuments from './pages/PortalDocuments';
 import SharedBoardPage from './pages/SharedBoardPage';
 import PortalSales from './pages/PortalSales';
 import PortalFamily from './pages/PortalFamily';
+import PortalTimeOff from './pages/PortalTimeOff';
 // New Feature Pages
 import AnalyticsPage from './pages/AnalyticsPage';
 import ReportBuilderPage from './pages/ReportBuilderPage';
@@ -89,7 +90,7 @@ import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { StaffRoute } from './components/RouteGuards';
+import { StaffRoute, PortalRoute } from './components/RouteGuards';
 import usePwaOfflinePrefetch from './hooks/usePwaOfflinePrefetch';
 
 const KIOSK_ONLY_ROLES = new Set(['Security Contractor', 'security_contractor']);
@@ -206,7 +207,7 @@ function AppRoutes() {
         <Route path="gdpr" element={<GdprSettingsPage />} />
       </Route>
       {/* Staff/Member Self-Service Portal */}
-      <Route path="/portal" element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
+      <Route path="/portal" element={<ProtectedRoute><PortalRoute><PortalLayout /></PortalRoute></ProtectedRoute>}>
         <Route index element={<PortalDashboard />} />
         <Route path="tasks" element={<PortalTasks />} />
         <Route path="chat" element={<CommsPage />} />
@@ -215,6 +216,7 @@ function AppRoutes() {
         <Route path="sales" element={<PortalSales />} />
         <Route path="documents" element={<PortalDocuments />} />
         <Route path="family" element={<PortalFamily />} />
+        <Route path="time-off" element={<PortalTimeOff />} />
         <Route path="profile" element={<PortalProfile />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />

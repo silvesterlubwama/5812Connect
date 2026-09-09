@@ -249,6 +249,46 @@ async def create_task(data: TaskCreate, current_user: dict = Depends(get_current
         "list_id": task.get("list_id"),
         "task": task,
     }, exclude_user=current_user["id"])
+    # In-app notification + email for every assignee (fixes "tasks not posted
+    # when created" — previously only edits triggered assignment alerts).
+    try:
+        assignees = list(dict.fromkeys([a for a in (task.get("assignees") or []) if a]))
+        if task.get("assignee") and task["assignee"] not in assignees:
+            assignees.append(task["assignee"])
+        if assignees:
+            board = await db.boards.find_one({"id": task.get("board_id")}, {"_id": 0, "name": 1}) if task.get("board_id") else None
+            board_name = board.get("name") if board else ""
+            from routers.notifications import create_notification
+            for uid in assignees:
+                if uid == current_user["id"]:
+                    continue
+                try:
+                    await create_notification(
+                        f"New task: {task.get('title', '')}",
+                        f"{current_user.get('name', 'Someone')} assigned you a task"
+                        + (f" on {board_name}" if board_name else "")
+                        + (f" — due {task.get('due_date')}" if task.get('due_date') else ""),
+                        uid,
+                        "info",
+                        f"/tasks?task={task['id']}",
+                    )
+                except Exception as ne:
+                    logger.warning(f"Task notify insert failed for {uid}: {ne}")
+            try:
+                from email_helpers import notify_task_assigned
+                for uid in assignees:
+                    if uid == current_user["id"]:
+                        continue
+                    u = await db.users.find_one({"id": uid}, {"_id": 0, "email": 1, "name": 1})
+                    if u and u.get("email"):
+                        await notify_task_assigned(
+                            u["email"], u.get("name", ""), task.get("title", ""),
+                            current_user.get("name", ""), board_name,
+                        )
+            except Exception as ee:
+                logger.warning(f"Task assign email skipped: {ee}")
+    except Exception as e:
+        logger.warning(f"Task create notify failed: {e}")
     return task
 
 

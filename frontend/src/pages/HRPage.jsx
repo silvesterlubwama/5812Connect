@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import AdminPage from './AdminPage';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench, FileDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/badge';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
 import { Switch } from '../components/ui/switch';
 import api from '../services/api';
 import { adminApi, locationsApi, departmentsApi } from '../services/api';
@@ -527,6 +527,14 @@ export default function HRPage() {
                         } catch { toast.error('Failed to load history'); }
                       }}><History size={12} /></Button>
                       {p.status === 'draft' && <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={async () => { await api.put(`/hr/payslips/${p.id}`, { status: 'approved' }); setPayslips(prev => prev.map(x => x.id === p.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); }}><CheckCircle size={12} /> Approve</Button>}
+                      {p.status === 'draft' && <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" data-testid={`payslip-delete-${p.id}`} title="Delete draft payslip" onClick={async () => {
+                        if (!window.confirm(`Delete draft payslip for ${p.staff_name} (${p.period})? This cannot be undone.`)) return;
+                        try {
+                          await api.delete(`/hr/payslips/${p.id}`);
+                          setPayslips(prev => prev.filter(x => x.id !== p.id));
+                          toast.success('Draft payslip deleted');
+                        } catch (err) { toast.error(err.response?.data?.detail || 'Delete failed'); }
+                      }}><Trash2 size={12} /></Button>}
                     </div>
                   </CardContent>
                 </Card>
@@ -1656,6 +1664,14 @@ function LeavePanel({ currentUser, staff }) {
   const [requestForm, setRequestForm] = useState({ leave_type: 'annual', start_date: '', end_date: '', half_day: false, notes: '', staff_id: '' });
   const [decideOn, setDecideOn] = useState(null);
   const [decisionNote, setDecisionNote] = useState('');
+  // iter344: admin management of leave types + per-staff allocations
+  const [showTypeMgr, setShowTypeMgr] = useState(false);
+  const [typeDraft, setTypeDraft] = useState([]);
+  const [savingTypes, setSavingTypes] = useState(false);
+  const [allocFor, setAllocFor] = useState(null);
+  const [allocDraft, setAllocDraft] = useState({});
+  const [savingAlloc, setSavingAlloc] = useState(false);
+  const isAdminOrHr = ['admin', 'system_admin', 'HR', 'Director', 'Executive Director', 'Regional Director', 'Manager', 'Coordinator'].includes(currentUser?.role);
   const reload = useCallback(async () => {
     setLoading(true);
     try {
@@ -1690,7 +1706,55 @@ function LeavePanel({ currentUser, staff }) {
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
+  const openTypeMgr = () => {
+    setTypeDraft(types.map(t => ({ ...t })));
+    setShowTypeMgr(true);
+  };
+  const saveTypes = async () => {
+    // Basic validation — every row needs id + name
+    const clean = typeDraft
+      .map(t => ({
+        id: (t.id || '').trim().toLowerCase().replace(/\s+/g, '_'),
+        name: (t.name || '').trim(),
+        default_days: parseInt(t.default_days) || 0,
+        paid: t.paid !== false,
+        color: t.color || '#6b7280',
+      }))
+      .filter(t => t.id && t.name);
+    if (clean.length === 0) { toast.error('At least one leave type is required'); return; }
+    const ids = clean.map(t => t.id);
+    if (new Set(ids).size !== ids.length) { toast.error('Duplicate type IDs — each must be unique'); return; }
+    setSavingTypes(true);
+    try {
+      await api.put('/hr/leave/types', { leave_types: clean });
+      toast.success('Leave types updated');
+      setShowTypeMgr(false);
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+    finally { setSavingTypes(false); }
+  };
+  const openAlloc = async (staffMember) => {
+    setAllocFor(staffMember);
+    try {
+      const r = await api.get('/hr/leave/balance', { params: { staff_id: staffMember.id } });
+      const seed = {};
+      (r.data?.balances || []).forEach(b => { seed[b.type] = b.allocated; });
+      setAllocDraft(seed);
+    } catch { setAllocDraft({}); }
+  };
+  const saveAlloc = async () => {
+    if (!allocFor) return;
+    setSavingAlloc(true);
+    try {
+      await api.put(`/hr/leave/allocation/${allocFor.id}`, { allocations: allocDraft });
+      toast.success(`Allocations saved for ${allocFor.name}`);
+      setAllocFor(null); setAllocDraft({});
+      reload();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+    finally { setSavingAlloc(false); }
+  };
   if (loading) return <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded" />)}</div>;
+  const pendingCount = requests.filter(r => r.status === 'pending' && r.staff_id !== currentUser?.id).length;
   return (
     <div className="space-y-4" data-testid="leave-panel">
       {/* Personal balances row */}
@@ -1705,9 +1769,25 @@ function LeavePanel({ currentUser, staff }) {
           ))}
         </div>
       )}
-      <div className="flex justify-between items-center">
-        <h3 className="text-sm font-semibold">Leave Requests</h3>
-        <Button size="sm" className="gap-1.5" onClick={() => setShowRequest(true)} data-testid="leave-new-btn"><Plus size={13} /> New Request</Button>
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">Leave Requests</h3>
+          {pendingCount > 0 && <Badge className="text-[10px] bg-amber-100 text-amber-700" data-testid="leave-pending-count">{pendingCount} awaiting your decision</Badge>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {isAdminOrHr && (
+            <>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={openTypeMgr} data-testid="leave-manage-types-btn"><Settings size={13} /> Manage types</Button>
+              {staff.length > 0 && (
+                <Select value="" onValueChange={(v) => { const s = staff.find(x => x.id === v); if (s) openAlloc(s); }}>
+                  <SelectTrigger className="h-8 text-xs w-[180px]" data-testid="leave-set-alloc-trigger"><SelectValue placeholder="Set allocations…" /></SelectTrigger>
+                  <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                </Select>
+              )}
+            </>
+          )}
+          <Button size="sm" className="gap-1.5" onClick={() => setShowRequest(true)} data-testid="leave-new-btn"><Plus size={13} /> New Request</Button>
+        </div>
       </div>
       {requests.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No leave requests.</p> : (
         <div className="space-y-2">
@@ -1800,6 +1880,67 @@ function LeavePanel({ currentUser, staff }) {
               <Button className="flex-1" onClick={() => decide('approved')} data-testid="leave-approve-btn">Approve</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Leave Types dialog — HR/Admin editor for the full type list */}
+      <Dialog open={showTypeMgr} onOpenChange={setShowTypeMgr}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Leave types &amp; default allocations</DialogTitle>
+            <DialogDescription>These apply to your active campus. Per-staff overrides live on each user profile.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2" data-testid="leave-types-editor">
+            <div className="grid grid-cols-[1fr,1fr,80px,60px,60px,32px] gap-2 text-[10px] uppercase text-muted-foreground px-1">
+              <span>ID</span><span>Name</span><span>Days</span><span>Paid</span><span>Colour</span><span></span>
+            </div>
+            {typeDraft.map((t, i) => (
+              <div key={i} className="grid grid-cols-[1fr,1fr,80px,60px,60px,32px] gap-2 items-center" data-testid={`leave-type-row-${i}`}>
+                <Input value={t.id} onChange={e => setTypeDraft(d => d.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="annual" className="h-8 text-xs" data-testid={`type-id-${i}`} />
+                <Input value={t.name} onChange={e => setTypeDraft(d => d.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} placeholder="Annual Leave" className="h-8 text-xs" data-testid={`type-name-${i}`} />
+                <Input type="number" min="0" value={t.default_days ?? 0} onChange={e => setTypeDraft(d => d.map((x, j) => j === i ? { ...x, default_days: e.target.value } : x))} className="h-8 text-xs" data-testid={`type-days-${i}`} />
+                <Switch checked={t.paid !== false} onCheckedChange={v => setTypeDraft(d => d.map((x, j) => j === i ? { ...x, paid: v } : x))} data-testid={`type-paid-${i}`} />
+                <Input type="color" value={t.color || '#6b7280'} onChange={e => setTypeDraft(d => d.map((x, j) => j === i ? { ...x, color: e.target.value } : x))} className="h-8 w-full p-0.5" data-testid={`type-color-${i}`} />
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={() => setTypeDraft(d => d.filter((_, j) => j !== i))} data-testid={`type-remove-${i}`}><Trash2 size={12} /></Button>
+              </div>
+            ))}
+            <Button variant="outline" size="sm" className="gap-1.5 mt-1" onClick={() => setTypeDraft(d => [...d, { id: '', name: '', default_days: 0, paid: true, color: '#6b7280' }])} data-testid="leave-type-add-btn"><Plus size={13} /> Add type</Button>
+            <p className="text-[10px] text-muted-foreground pt-2 border-t">
+              Existing requests keep their original type ID even if you rename it. Delete a type only when nothing references it, or the balance card will just show the raw ID.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTypeMgr(false)}>Cancel</Button>
+            <Button onClick={saveTypes} disabled={savingTypes} data-testid="leave-types-save-btn">{savingTypes ? 'Saving…' : 'Save types'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Per-staff allocation dialog */}
+      <Dialog open={!!allocFor} onOpenChange={(o) => { if (!o) { setAllocFor(null); setAllocDraft({}); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Allocations — {allocFor?.name}</DialogTitle>
+            <DialogDescription>Override the default per-year budget for this staff member. Leave blank to fall back to the type&apos;s default.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            {types.map(t => (
+              <div key={t.id} className="flex items-center justify-between gap-3" data-testid={`alloc-row-${t.id}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: t.color }} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{t.name}</p>
+                    <p className="text-[10px] text-muted-foreground">Default {t.default_days || 0}d {t.paid ? '' : '· unpaid'}</p>
+                  </div>
+                </div>
+                <Input type="number" min="0" value={allocDraft[t.id] ?? ''} onChange={e => setAllocDraft(d => ({ ...d, [t.id]: e.target.value === '' ? '' : parseInt(e.target.value) || 0 }))} className="h-8 w-24 text-xs" placeholder={String(t.default_days || 0)} data-testid={`alloc-input-${t.id}`} />
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setAllocFor(null); setAllocDraft({}); }}>Cancel</Button>
+            <Button onClick={saveAlloc} disabled={savingAlloc} data-testid="alloc-save-btn">{savingAlloc ? 'Saving…' : 'Save allocations'}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

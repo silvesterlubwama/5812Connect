@@ -117,6 +117,11 @@ export default function PortalFamily() {
   const children = familyData?.children || [];
   const parents = familyData?.parents || [];
   const guardians = family?.guardians || [];
+  // iter343 guest-portal lockdown — unapproved users must not add/remove
+  // family members. The screen still renders in read-only mode so they
+  // can view what's on file while an admin approves them.
+  const isPending = (user?.status || '').toLowerCase() === 'pending';
+  const isApproved = !isPending;
 
   if (!family) {
     return (
@@ -142,13 +147,27 @@ export default function PortalFamily() {
         </div>
         <Button variant="outline" size="sm" onClick={fetchFamily} data-testid="refresh-family"><RefreshCw size={14} /></Button>
       </div>
+      {isPending && (
+        <Card className="border-amber-200 bg-amber-50/40" data-testid="family-pending-banner">
+          <CardContent className="p-3 text-sm text-amber-800">
+            Your account is pending approval — you can view your family details but can&apos;t edit them yet.
+          </CardContent>
+        </Card>
+      )}
+      {isApproved && (
+        <Card className="border-blue-200 bg-blue-50/40" data-testid="family-review-notice">
+          <CardContent className="p-3 text-xs text-blue-800">
+            Note: adding a child or guardian creates a pending record — an admin reviews it before badges or check-ins are enabled.
+          </CardContent>
+        </Card>
+      )}
 
       {/* Family Info Card */}
       <Card className="shadow-soft rounded-xl" data-testid="family-info-card">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2"><Heart size={16} className="text-rose-500" /> Family Details</CardTitle>
-            <Button size="sm" variant="ghost" onClick={() => { setEditingFamily(true); setFamilyEditForm({ family_name: family.family_name, address: family.address || '', notes: family.notes || '', primary_contact_phone: family.primary_contact_phone || '' }); }} data-testid="edit-family-btn"><Edit size={13} /></Button>
+            <Button size="sm" variant="ghost" onClick={() => { setEditingFamily(true); setFamilyEditForm({ family_name: family.family_name, address: family.address || '', notes: family.notes || '', primary_contact_phone: family.primary_contact_phone || '' }); }} data-testid="edit-family-btn" disabled={!isApproved} title={!isApproved ? 'Available after your account is approved' : ''}><Edit size={13} /></Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -193,7 +212,7 @@ export default function PortalFamily() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2"><Baby size={16} className="text-emerald-500" /> Children ({children.length})</CardTitle>
-            <Button size="sm" className="gap-1.5" onClick={() => setShowAddChild(true)} data-testid="add-child-btn"><Plus size={13} /> Add Child</Button>
+            {isApproved && <Button size="sm" className="gap-1.5" onClick={() => setShowAddChild(true)} data-testid="add-child-btn"><Plus size={13} /> Add Child</Button>}
           </div>
         </CardHeader>
         <CardContent>
@@ -219,7 +238,7 @@ export default function PortalFamily() {
                         if (r.data?.token) window.open(`/badge/${r.data.token}`, '_blank');
                       } catch (e) { toast.error(e?.response?.data?.detail || 'Badge issuance failed'); }
                     }} data-testid={`child-badge-${c.id}`}>Badge</Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditChild(c); setEditChildForm({ name: c.name, date_of_birth: c.date_of_birth || '', gender: c.gender || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' }); }} data-testid={`edit-child-${c.id}`}><Edit size={13} /></Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditChild(c); setEditChildForm({ name: c.name, date_of_birth: c.date_of_birth || '', gender: c.gender || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' }); }} data-testid={`edit-child-${c.id}`} disabled={!isApproved} title={!isApproved ? 'Available after your account is approved' : ''}><Edit size={13} /></Button>
                   </div>
                 </div>
               ))}
@@ -233,7 +252,7 @@ export default function PortalFamily() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2"><Shield size={16} className="text-amber-500" /> Guardians ({guardians.length})</CardTitle>
-            <Button size="sm" className="gap-1.5" onClick={() => setShowAddGuardian(true)} data-testid="add-guardian-btn"><Plus size={13} /> Add Guardian</Button>
+            {isApproved && <Button size="sm" className="gap-1.5" onClick={() => setShowAddGuardian(true)} data-testid="add-guardian-btn"><Plus size={13} /> Add Guardian</Button>}
           </div>
         </CardHeader>
         <CardContent>
@@ -252,7 +271,7 @@ export default function PortalFamily() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-[10px]">{g.relationship}</Badge>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => handleRemoveGuardian(g.id)} data-testid={`remove-guardian-${g.id}`}><Trash2 size={13} /></Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => handleRemoveGuardian(g.id)} data-testid={`remove-guardian-${g.id}`} disabled={!isApproved} title={!isApproved ? 'Available after your account is approved' : ''}><Trash2 size={13} /></Button>
                   </div>
                 </div>
               ))}
