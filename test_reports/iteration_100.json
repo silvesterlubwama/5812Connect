@@ -1,0 +1,23 @@
+{
+  "summary": "Iter 100 P0 routing-bugs regression — 8/8 backend tests PASSED against preview URL, frontend smoke-verified. Verified: (1) finance journal list returns 48 rows, (2) POST /api/finance/journal hydrates account_code/account_name when caller omits them, (3) POST /api/finance/transfers returns 400 when location_id missing and 200 when present, (4) /api/chat/users returns 4 users including 2 admin-tier peers (visible across campuses despite lacking location_id), (5) /api/admin/users/directory returns 5 users (>=1 admin) and search=admin filter still works, (6) /api/chat/conversations responds 200 (ghost-filter clause in place), (7) auth/me works. Frontend visually verified: campus switcher lists all 4 sub-locations (58:12 Global Central, Kampala East, Entebbe Campus, Jinja Campus) and is selectable; Finance page loads (Overview/Journal/Review Queue/Chart of Accounts/Reports/Budgets/Dept P&L tabs) with Record expense / Record income / Record transfer buttons.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter100_p0_bugs.py",
+    "/app/test_reports/pytest/pytest_iter100.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "chat.py list_chat_users builds a large $or/$and query — fine functionally, but the STAFF_ROLES list is duplicated between chat.py and admin.py; consider centralising in deps.py to avoid drift.",
+    "TransferDialog frontend was not exercised end-to-end via Playwright due to campus-switcher aria-haspopup ambiguity with the language picker; consider adding data-testid=\"campus-switcher-trigger\" and data-testid=\"transfer-location-picker\" for reliable e2e.",
+    "Restricted-location isolation could not be exercised (seed contains no explicit restricted location marker); recommend adding a seeded restricted location so future regression can cover the leak path."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter100_p0_bugs.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "smoke-verified (login, campus switcher, finance page load)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test JE(s) posted with description prefix TEST_split_hydrate_* and TEST_transfer_* — safe to leave, they are balanced legitimate entries in 2026-01-15 period.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression file /app/backend/tests/test_iter100_p0_bugs.py covers the P0 routing fixes for iteration 344e. It reads REACT_APP_BACKEND_URL from env or falls back to /app/frontend/.env. Campus switcher uses `button[aria-haspopup]` which also matches the language selector; scope with a data-testid or the sidebar campus button. Restricted-location isolation was NOT tested (no restricted seed). Scheduler event-to-shift auto-time was not exercised in this run — recommend a follow-up frontend Playwright covering VolunteerSchedulingPage.",
+  "rca of the issue": "N/A — fixes verified. Journal cross-tab refresh is code-only (dataEvents.emit finance-changed) and cannot be asserted from the API layer; the visual smoke on the Overview → Journal navigation shows both tabs populate and the count is consistent with the backend (48 rows returned by GET)."
+}

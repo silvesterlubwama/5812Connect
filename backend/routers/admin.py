@@ -15,15 +15,29 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 async def user_directory(include_all: bool = False, search: Optional[str] = None, current_user: dict = Depends(get_current_user)) -> list:
     """Lightweight user list for cross-referencing in boards, tasks, etc.
     Scoped to current user's campus; returns active staff-capable users only.
-    Admins can pass include_all=true to bypass campus filter and search across all campuses."""
+    Admins can pass include_all=true to bypass campus filter and search across all campuses.
+
+    iter-directory-scope: even when `include_all` is set, we ALSO always
+    keep global-scope users (system admins / EDs / Advisers) visible so
+    directors browsing the assignee picker on a campus board still see
+    the admins who can be tagged on anything. Without the union, admin
+    accounts (which typically have no `location_id`/`location_ids`)
+    disappeared from every campus directory and users reported "can't
+    find admin".
+    """
     STAFF_ROLES = ["admin", "system_admin", "Executive Director", "Adviser", "Director",
                    "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"]
+    GLOBAL_ROLES = ["admin", "system_admin", "Executive Director", "Adviser"]
     base = {"status": "active", "role": {"$in": STAFF_ROLES}}
     if include_all and is_system_admin(current_user):
         query = dict(base)
     else:
         campus = await get_campus_filter(current_user)
-        query = {"$and": [base, campus]} if campus else base
+        if campus:
+            # Always keep global-scope users visible regardless of campus.
+            query = {"$and": [base, {"$or": [{"role": {"$in": GLOBAL_ROLES}}, campus]}]}
+        else:
+            query = base
     if search:
         s = search.strip()
         if s:

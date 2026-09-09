@@ -380,16 +380,20 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
               <div className="mt-2">
                 <Input
                   className="h-7 text-xs bg-[#0f172a] border-white/10 text-white placeholder:text-slate-500"
-                  placeholder="Search other campuses..."
+                  placeholder="Search staff in this campus…"
                   value={extQuery}
                   onChange={async (ev) => {
                     const q = ev.target.value;
                     setExtQuery(q);
                     if (q.trim().length < 2) { setExtResults([]); return; }
                     try {
-                      // Use staff-scoped, campus-scoped directory search.
-                      // include_all only takes effect for system admins on the backend.
-                      const res = await adminApi.userDirectory({ search: q.trim(), include_all: true });
+                      // iter-task-assignee-scope: DO NOT pass include_all
+                      // here — that flag bypasses `get_campus_filter` for
+                      // system admins on the backend and was leaking users
+                      // from other campuses into the task assignee picker.
+                      // The base userDirectory endpoint already returns
+                      // staff-role-only + campus-scoped results.
+                      const res = await adminApi.userDirectory({ search: q.trim() });
                       setExtResults((res.data || []).filter(u => !boardStaff.find(s => s.id === u.id)).slice(0, 10));
                     } catch (err) {
                       console.error('External user search failed:', err);

@@ -33,8 +33,12 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
                     other_ids.add(pid)
     live_ids: set = set()
     if other_ids:
+        # iter-chat-ghost: previously $ne "deleted" — that let users with
+        # status "inactive"/"suspended"/undefined leak through as chat
+        # sidebar rows. Require an explicit "active" status so soft-
+        # deleted / disabled accounts are treated as ghosts.
         async for u in db.users.find(
-            {"id": {"$in": list(other_ids)}, "status": {"$ne": "deleted"}},
+            {"id": {"$in": list(other_ids)}, "status": "active"},
             {"_id": 0, "id": 1},
         ):
             live_ids.add(u["id"])
@@ -72,7 +76,18 @@ async def list_chat_users(current_user: dict = Depends(get_current_user)):
         "id": {"$ne": current_user["id"], "$exists": True},
         "name": {"$exists": True, "$ne": ""},
     }
-    query = {"$and": [base, campus]} if campus else base
+    # iter-chat-admin-visible: system admins have no `location_id` /
+    # `location_ids` set (they have global scope) so applying
+    # `get_campus_filter` excluded them from every campus's directory —
+    # you literally could not DM another admin. Union in an explicit
+    # "global admin" branch so admins/EDs remain visible everywhere they
+    # can log in.
+    GLOBAL_ROLES = ["admin", "system_admin", "Executive Director", "Adviser"]
+    global_branch = {"role": {"$in": GLOBAL_ROLES}}
+    if campus:
+        query = {"$and": [base, {"$or": [global_branch, campus]}]}
+    else:
+        query = base
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(200)
     # Return only needed fields
     return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "location_id": u.get("location_id")} for u in users if u.get("id")]

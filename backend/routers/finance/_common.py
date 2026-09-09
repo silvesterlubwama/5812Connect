@@ -184,6 +184,13 @@ async def post_journal_entry(
     total_debit = Decimal("0")
     total_credit = Decimal("0")
     cleaned_lines = []
+    # iter-je-code-hydrate: front-ends that post via /finance/journal
+    # sometimes forget to include `account_code` / `account_name` (e.g. the
+    # split-transaction dialog when its CoA cache is still loading).
+    # Hydrate them here so the ledger row always renders with a readable
+    # account label — otherwise expanded JE rows show " — " and users
+    # think their split posted to nowhere.
+    _acct_cache: dict = {}
     for i, ln in enumerate(lines):
         if not ln.get("account_id"):
             raise HTTPException(status_code=400, detail=f"Line {i}: account_id required")
@@ -195,10 +202,19 @@ async def post_journal_entry(
             raise HTTPException(status_code=400, detail=f"Line {i}: debit or credit must be > 0")
         total_debit += d
         total_credit += c
+        acct_code = ln.get("account_code") or ""
+        acct_name = ln.get("account_name") or ""
+        if not (acct_code and acct_name):
+            aid = ln["account_id"]
+            if aid not in _acct_cache:
+                _acct_cache[aid] = await db.finance_chart_of_accounts.find_one({"id": aid}, {"_id": 0, "code": 1, "name": 1}) or {}
+            _cached = _acct_cache[aid]
+            acct_code = acct_code or _cached.get("code") or ""
+            acct_name = acct_name or _cached.get("name") or ""
         cleaned_lines.append({
             "account_id": ln["account_id"],
-            "account_code": ln.get("account_code") or "",
-            "account_name": ln.get("account_name") or "",
+            "account_code": acct_code,
+            "account_name": acct_name,
             "debit": float(d),
             "credit": float(c),
             "memo": (ln.get("memo") or "")[:200],

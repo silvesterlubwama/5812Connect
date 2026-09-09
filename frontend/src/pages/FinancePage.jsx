@@ -14,6 +14,7 @@ import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTri
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
 import { sublocationsApi, departmentsApi, locationsApi } from '../services/api';
+import { dataEvents } from '../services/dataEvents';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
@@ -93,6 +94,11 @@ function OverviewPanel() {
     setPnl(p.data); setBs(b.data); setRecent(r.data);
   };
   useEffect(() => { reload().catch(() => {}); }, []);
+  // iter-tx-refresh: any finance mutation from anywhere in the app pings
+  // 'finance-changed' — refresh the recent-activity + stat cards so users
+  // don't see stale totals after posting from the split dialog / transfer /
+  // JE edit / receipt scan.
+  useEffect(() => dataEvents.on('finance-changed', () => { reload().catch(() => {}); }), []);
 
   // iter 289 re-applied — sum EVERY active cash/bank/mobile-money account
   // (any asset flagged `is_cash: true`), not just accounts whose code starts
@@ -367,18 +373,46 @@ function ReceiptScanDialog({ open, onClose, onDone }) {
 // `fee`, Cr source (amount + fee) — source loses everything, destination
 // receives net amount, fee flows to the chosen expense account.
 function TransferDialog({ open, onClose, onDone }) {
+  const { user } = useAuth();
+  const defaultCampus = user?.active_campus_id || user?.location_id || '';
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm] = useState({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '' });
+  const [locations, setLocations] = useState([]);
+  const [subLocations, setSubLocations] = useState([]);
+  const [form, setForm] = useState({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '', location_id: defaultCampus });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     (async () => {
-      const r = await api.get('/finance/chart-of-accounts');
+      const [r, lc] = await Promise.all([
+        api.get('/finance/chart-of-accounts'),
+        locationsApi.list().catch(() => ({ data: [] })),
+      ]);
       setAccounts(r.data || []);
+      setLocations((lc.data || []).filter(l => !l.parent_id));
     })().catch(() => {});
-    setForm({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '' });
+    setForm({ from_account_id: '', to_account_id: '', amount: '', date: todayIso(), description: '', reference: '', fee_amount: '', fee_account_id: '', location_id: defaultCampus });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Resolve sub-locations for the picked campus so users can tag transfers
+  // down to a sub-campus (matches QuickPost). Same parent-vs-picked rule
+  // that survives picking a sub-location without wiping the list.
+  useEffect(() => {
+    if (!form.location_id) { setSubLocations([]); return; }
+    const picked = form.location_id;
+    const parent = locations.find(l => l.id === picked)
+      ? picked
+      : (subLocations.find(s => s.id === picked)?.location_id || picked);
+    sublocationsApi.list({ location_id: parent }).then(sl => {
+      const list = sl.data || [];
+      if (picked !== parent && !list.some(s => s.id === picked)) {
+        list.push({ id: picked, name: '(picked sub-location)', location_id: parent });
+      }
+      setSubLocations(list);
+    }).catch(() => setSubLocations([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.location_id]);
 
   const assetAccounts = accounts.filter(a => a.type === 'asset' && a.active !== false);
   const expenseAccounts = accounts.filter(a => a.type === 'expense' && a.active !== false);
@@ -386,6 +420,7 @@ function TransferDialog({ open, onClose, onDone }) {
   const submit = async () => {
     if (!form.from_account_id || !form.to_account_id || !form.amount) { toast.error('Source, destination and amount are required'); return; }
     if (form.from_account_id === form.to_account_id) { toast.error('Source and destination must be different'); return; }
+    if (!form.location_id) { toast.error('Pick a campus / sub-location'); return; }
     const fee = Number(form.fee_amount || 0);
     if (fee > 0 && !form.fee_account_id) { toast.error('Pick a fee expense account when entering a fee'); return; }
     setBusy(true);
@@ -399,8 +434,10 @@ function TransferDialog({ open, onClose, onDone }) {
         reference: form.reference,
         fee_amount: fee,
         fee_account_id: form.fee_account_id,
+        location_id: form.location_id,
       });
       toast.success('Transfer recorded');
+      dataEvents.emit('finance-changed', { source: 'transfer' });
       onDone();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
     setBusy(false);
@@ -413,6 +450,23 @@ function TransferDialog({ open, onClose, onDone }) {
         <div className="space-y-3">
           <div><Label>Amount</Label><Input data-testid="transfer-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+
+          {/* iter-transfer-loc: Campus / sub-location is REQUIRED on the
+              backend — without this control the transfer POST always 400'd
+              even though users had already picked the accounts, so nothing
+              new appeared on the ledger but users saw a "posted" toast. */}
+          <div>
+            <Label>Campus / sub-location <span className="text-red-500">*</span></Label>
+            <Select value={form.location_id} onValueChange={v => setForm({ ...form, location_id: v })}>
+              <SelectTrigger data-testid="transfer-location"><SelectValue placeholder="Choose campus / sub-location" /></SelectTrigger>
+              <SelectContent>
+                {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                {subLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {defaultCampus === form.location_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your active campus</p>}
+          </div>
+
           <div>
             <Label>From (source)</Label>
             <Select value={form.from_account_id} onValueChange={v => setForm({ ...form, from_account_id: v })}>
@@ -603,6 +657,11 @@ function QuickPostDialog({ mode, onClose, onDone }) {
           lines,
         });
         toast.success(`Split ${isExpense ? 'expense' : 'income'} recorded (${validPrimary.length}×${validCash.length} lines)`);
+        // iter-tx-refresh: broadcast so JournalPanel / OverviewPanel refetch
+        // when a split JE is posted from the QuickPost dialog — previously
+        // only the caller's own `onDone` ran, so the Journal tab still
+        // rendered stale data even though the account balances had moved.
+        dataEvents.emit('finance-changed', { source: isExpense ? 'expense_split' : 'income_split' });
         onDone();
       } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post split entry'); }
       setBusy(false);
@@ -627,6 +686,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         : { ...shared, revenue_account_id: form.account_id, deposited_to_account_id: form.paid_from_id };
       await api.post(url, payload);
       toast.success(`${isExpense ? 'Expense' : 'Income'} recorded`);
+      dataEvents.emit('finance-changed', { source: isExpense ? 'expense' : 'income' });
       onDone();
       setForm({
         amount: '', account_id: '', paid_from_id: '', date: todayIso(),
@@ -821,6 +881,13 @@ function JournalPanel() {
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { reload().catch(() => {}); }, [filters.date_from, filters.date_to, filters.source, filters.include_reversed]);
+  // iter-tx-refresh: when ANY finance mutation happens (split posts from
+  // QuickPost, plain expenses, transfers, JE edits, reversals) rebroadcast
+  // 'finance-changed' triggers a refetch here so users switching to the
+  // Journal tab always see the latest ledger — even if their filters
+  // haven't changed. Previously the Journal panel stayed on its stale
+  // useEffect cache and users reported "amounts subtracted but no rows".
+  useEffect(() => dataEvents.on('finance-changed', () => { reload().catch(() => {}); }), []);
 
   // When a JE is selected for editing, pre-fill the metadata form and pull
   // the current CoA once for the account-swap dropdown.
@@ -945,6 +1012,7 @@ function JournalPanel() {
       }
       await api.put(`/finance/journal/${editing.id}`, payload);
       toast.success(linesDirty ? 'Entry replaced (audit trail preserved)' : 'Entry updated in place');
+      dataEvents.emit('finance-changed', { source: 'edit' });
       setEditing(null); setLinesDirty(false);
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
@@ -956,6 +1024,7 @@ function JournalPanel() {
     try {
       await api.delete(`/finance/journal/${je.id}`);
       toast.success('Reversal deleted, original restored');
+      dataEvents.emit('finance-changed', { source: 'reversal_delete' });
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
   };
@@ -998,6 +1067,7 @@ function JournalPanel() {
     try {
       await api.post(`/finance/journal/${reversing.id}/reverse`, { reason });
       toast.success('Journal entry reversed');
+      dataEvents.emit('finance-changed', { source: 'reversal' });
       setReversing(null); setReason('');
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Reversal failed'); }

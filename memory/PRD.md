@@ -7,6 +7,16 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+
+### iter 344e — Routing/filtering hardening (2026-09-09)
+- **Transfer missing location**: `TransferDialog` had no campus/sub-location picker so every transfer POST failed silently. Added the required control (prefilled from active campus).
+- **Missing transactions post-deploy**: `JournalPanel` + `OverviewPanel` were stale after posts from `QuickPostDialog` (split), `TransferDialog`, JE edit/reversal/delete. Wired `dataEvents.emit('finance-changed', …)` on every mutation and subscribed both panels.
+- **Split JEs stored empty account_code/name**: `post_journal_entry` now hydrates missing fields from `finance_chart_of_accounts` so expanded rows always render a readable account label.
+- **Task assignee cross-campus leak**: `CardDetailDialog` was passing `include_all: true` to `/admin/users/directory`, which system admins used to bypass `get_campus_filter`. Dropped the flag — extended search remains inside the caller's campus.
+- **Chat ghost users**: `get_conversations` was matching `status != "deleted"`, letting `inactive`/`suspended`/missing-status accounts leak into the sidebar. Tightened to `status == "active"`.
+- **Admins invisible in chat/user directory**: `chat/users` and `/admin/users/directory` apply `get_campus_filter`, which excludes users with no `location_id`/`location_ids` — i.e. admins/EDs/Advisers (global scope). Unioned an explicit "global-role" branch so admins remain visible everywhere.
+
+
 ### iter 344c — Finance edits · Ticket wallet · Family audit · Approval delegation
 - **Finance editing**: The frontend was sending the full `lines[]` on every save which triggered a reverse-and-repost even for cosmetic edits. Added a `linesDirty` flag in `FinancePage.jsx` — only sends `lines` when an account swap or memo actually changed, so a description typo no longer produces two extra JEs.
 - **Delete a reversal**: New `DELETE /api/finance/journal/{je_id}` restricted to `source='reversal'` entries and refuses when the period is locked. Un-marks the original entry so it posts again cleanly. UI shows a "Delete reversal" button on reversal rows.

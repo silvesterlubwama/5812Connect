@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 2026-09-09 — iter 344e (routing/filtering hardening + finance list refresh)
+- **CRITICAL FIX — Transfer missing location**: `TransferDialog` (in `FinancePage.jsx`) had no campus/sub-location picker but the backend `POST /api/finance/transfers` rejects payloads without `location_id`. Every transfer 400'd silently: users saw the "Post transfer" click, no toast (because we swallowed the error), no ledger row. Added Campus/sub-location control (prefilled from active campus) and sub-location resolution mirroring `QuickPostDialog`.
+- **FIX — Missing transactions post-deploy**: `JournalPanel` and `OverviewPanel` did not refetch when a JE was posted from anywhere else (split dialog, transfer dialog, JE edit, reversal, delete). Wired `dataEvents.emit('finance-changed', ...)` on every mutation and subscribed both panels — the ledger stays in sync across tabs without a page reload.
+- **FIX — Split JE lines had empty account_code/name**: `post_journal_entry` (`_common.py`) now hydrates `account_code` + `account_name` from `finance_chart_of_accounts` when the caller forgot to include them (previously the JE stored `""` for both, so expanded rows rendered " — " and users thought the split was corrupt).
+- **CRITICAL FIX — Task assignee cross-campus leak**: `CardDetailDialog` (task detail) was passing `include_all: true` on the extended search box. That flag bypasses `get_campus_filter` for system admins on the backend — so system-admin users saw every user in every campus in the picker. Dropped `include_all` (the base `/admin/users/directory` endpoint is already staff-role-only + campus-scoped).
+- **FIX — Chat ghost-user filter**: `get_conversations` used `status != "deleted"` which let `inactive`/`suspended`/missing-status accounts leak through as sidebar rows. Tightened to `status == "active"`.
+- **FIX — Admins invisible in chat directory**: `chat/users` applied `get_campus_filter` which excludes users with no `location_id`/`location_ids` — but admins/EDs have exactly that (global scope). Unioned an explicit "global-role" branch so admins/EDs/Advisers stay visible in every campus's chat directory. Same union applied to `/admin/users/directory` so board/task pickers surface admins too.
+
+
 ## 2026-09-09 — iter 344d (task edit board_id wipe fix + prod prefetch cleanup)
 - **CRITICAL FIX**: `PUT /api/tasks/{id}` was overwriting `board_id`, `list_id`, `position`, and `is_archived` with `None` on every edit because `model_dump()` populated the missing Optional fields as `None` and the update loop wrote them back. Result: edited cards lost their parent board and vanished from the UI. Switched to `model_dump(exclude_unset=True)` so only client-sent fields are touched. Explicit clears for `due_date` / `description` / `assignee` still work.
 - Removed `/api/access/checkpoints`, `/api/members/{id}/qr-code`, `/api/members/{id}/profile-photo` from the PWA offline prefetch set (all three were 404-spamming production).
