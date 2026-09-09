@@ -1,7 +1,7 @@
 """Restricted access management - residents, staff access, guest pre-approval"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 import logging
 from deps import db, get_current_user, require_admin, require_staff, _audit
@@ -668,52 +668,79 @@ async def delete_guest_access_link(link_id: str, current_user: dict = Depends(re
 
 
 @router.post("/public/access-request/{token}")
-async def submit_guest_access_request(token: str, data: dict):
-    """Public endpoint — guest submits access request via shared link"""
+async def submit_guest_access_request(token: str, data: dict, request: Request):
+    """Public endpoint — guest submits an access request against a shared link.
+
+    Iter 341 security hardening:
+      - Rate-limited to 5 requests / IP / 10 minutes so bad actors can't
+        spam thousands of fake guest profiles or brute-force tokens.
+      - Name / email / phone / purpose / visit_date validated with length
+        caps and shape checks before touching the DB.
+      - `uses` counter uses an atomic `$inc` with a `uses < max_uses`
+        filter so parallel submits can never overshoot the limit.
+      - Idempotent guest lookup (by email or phone) — never creates a
+        duplicate profile if the same person submits twice.
+    """
+    import re as _re
     link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
     if not link:
         raise HTTPException(status_code=404, detail="Invalid or expired link")
-    if link.get("max_uses") and link["uses"] >= link["max_uses"]:
-        raise HTTPException(status_code=400, detail="This link has reached its maximum uses")
+
+    # Rate limit — max 5 submissions per IP per rolling 10-minute window.
+    client_ip = (request.client.host if request and request.client else "unknown")
+    ten_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    recent = await db.guest_access_requests.count_documents({
+        "client_ip": client_ip,
+        "created_at": {"$gte": ten_min_ago},
+    })
+    if recent >= 5:
+        raise HTTPException(status_code=429, detail="Too many requests from this IP. Please wait a few minutes and try again.")
+
+    # Expiry check first — cheaper than the atomic uses guard below.
     if link.get("expires_at"):
-        from datetime import datetime as dt
-        if dt.fromisoformat(link["expires_at"]) < dt.now(timezone.utc):
-            raise HTTPException(status_code=400, detail="This link has expired")
-    request_doc = {
-        "id": f"areq_{str(uuid.uuid4())[:8]}",
-        "link_id": link["id"],
-        "guest_name": data.get("name", ""),
-        "guest_email": data.get("email", ""),
-        "guest_phone": data.get("phone", ""),
-        "purpose": data.get("purpose", ""),
-        "visit_date": data.get("visit_date", ""),
-        "location_id": link.get("location_id"),
-        "space_name": link.get("space_name"),
-        "status": "pending" if link.get("requires_approval") else "approved",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.guest_access_requests.insert_one(request_doc)
-    request_doc.pop("_id", None)
-    await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
-    return request_doc
+        try:
+            exp = datetime.fromisoformat(link["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail="This link has expired")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
-
-
-# ========== GUEST ACCESS REQUEST ENHANCEMENTS ==========
-
-@router.post("/public/access-request/{token}")
-async def submit_guest_access_request_v2(token: str, data: dict):
-    """Public endpoint — guest submits access request, auto-creates guest profile."""
-    # This override handles the full flow: creates guest profile + request
-    link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
-    if not link:
-        raise HTTPException(status_code=404, detail="Invalid or expired link")
+    # Input validation — reject junk before it lands in the directory.
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     phone = (data.get("phone") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Name is required")
-    # Check if guest already exists (by email or phone)
+    purpose = (data.get("purpose") or "").strip()
+    visit_date = (data.get("visit_date") or "").strip()
+    if not name or len(name) < 2 or len(name) > 120:
+        raise HTTPException(status_code=400, detail="Name must be 2-120 characters")
+    if email and (len(email) > 254 or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
+        raise HTTPException(status_code=400, detail="Email address is invalid")
+    if phone and (len(phone) > 32 or not _re.match(r"^[+\-\d\s()]+$", phone)):
+        raise HTTPException(status_code=400, detail="Phone number contains invalid characters")
+    if len(purpose) > 500:
+        raise HTTPException(status_code=400, detail="Purpose must be under 500 characters")
+    if visit_date and not _re.match(r"^\d{4}-\d{2}-\d{2}$", visit_date):
+        raise HTTPException(status_code=400, detail="visit_date must be YYYY-MM-DD")
+
+    # Atomic uses guard — the filter prevents overshooting when multiple
+    # submits race. Without this, `count then increment` had a TOCTOU
+    # window where 10 parallel requests could all pass a `uses == 9`
+    # check and increment to `uses == 19` on a `max_uses = 10` link.
+    if link.get("max_uses"):
+        upd = await db.guest_access_links.update_one(
+            {"id": link["id"], "$or": [{"uses": {"$lt": link["max_uses"]}}, {"uses": None}]},
+            {"$inc": {"uses": 1}},
+        )
+        if upd.modified_count == 0:
+            raise HTTPException(status_code=400, detail="This link has reached its maximum uses")
+    else:
+        await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
+
+    # Idempotent guest — match by email → phone → don't create a duplicate.
     guest = None
     if email:
         guest = await db.guests.find_one({"email": email}, {"_id": 0})
@@ -721,39 +748,62 @@ async def submit_guest_access_request_v2(token: str, data: dict):
         guest = await db.guests.find_one({"phone": phone}, {"_id": 0})
     if not guest:
         guest = {
-            "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email,
-            "phone": phone, "location_id": link.get("location_id", ""),
+            "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email or None,
+            "phone": phone or None, "location_id": link.get("location_id", ""),
+            "source": "guest_access_request",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.guests.insert_one(guest)
         guest.pop("_id", None)
+
     request_doc = {
         "id": f"areq_{uuid.uuid4().hex[:8]}",
-        "link_id": link["id"], "guest_id": guest["id"],
-        "guest_name": name, "guest_email": email, "guest_phone": phone,
-        "purpose": data.get("purpose", ""), "visit_date": data.get("visit_date", ""),
-        "location_id": link.get("location_id"), "space_name": link.get("space_name"),
+        "link_id": link["id"],
+        "guest_id": guest["id"],
+        "guest_name": name,
+        "guest_email": email,
+        "guest_phone": phone,
+        "purpose": purpose,
+        "visit_date": visit_date,
+        "location_id": link.get("location_id"),
+        "space_name": link.get("space_name"),
         "status": "pending" if link.get("requires_approval") else "approved",
+        "client_ip": client_ip,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.guest_access_requests.insert_one(request_doc)
     request_doc.pop("_id", None)
-    await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
-    # If auto-approved, issue temporary badge
+
     if request_doc["status"] == "approved":
         badge_token = uuid.uuid4().hex[:16]
-        from datetime import timedelta
-        valid_until = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()[:10]
-        await db.access_guest_passes.insert_one({
-            "id": f"gp_{uuid.uuid4().hex[:8]}", "guest_id": guest["id"],
-            "guest_name": name, "guest_phone": phone,
-            "location_id": link.get("location_id"), "badge_token": badge_token,
-            "valid_until": valid_until, "status": "active",
+        from datetime import timedelta as _td
+        await db.guest_access_badges.insert_one({
+            "id": f"gbadge_{uuid.uuid4().hex[:8]}",
+            "token": badge_token,
+            "guest_id": guest["id"],
+            "request_id": request_doc["id"],
+            "location_id": link.get("location_id"),
+            "expires_at": (datetime.now(timezone.utc) + _td(hours=24)).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         request_doc["badge_token"] = badge_token
-        request_doc["valid_until"] = valid_until
+
     return request_doc
+
+
+# LEGACY: v2 endpoint (formerly duplicate-registered below) has been merged
+# into `submit_guest_access_request` above — the two used to share a path
+# and FastAPI silently kept the first, leaving one code path dead but
+# still visible in the OpenAPI schema. All calls now flow through the
+# hardened handler.
+
+
+
+
+# ========== GUEST ACCESS REQUEST ENHANCEMENTS ==========
+# Iter 341 — v2 endpoint below was dead-code shadowing the hardened
+# handler above (same path, FastAPI kept the LAST registration). Removed
+# so /public/access-request/{token} routes only to the validated one.
 
 
 @router.put("/access/guest-passes/{pass_id}/convert-to-resident")

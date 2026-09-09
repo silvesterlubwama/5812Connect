@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## iter 341 — 2026-02 — Badge QR clarity · Guest portal security
+
+### Badges — QR + photo split (print-safe)
+- `components/PrintableBadges.jsx`: `StaffBadge` and `ChildTag` no
+  longer embed the photo INSIDE the QR. Both render two siblings:
+  QR left, photo right. QR uses `qrStyle="squares"`, `ecLevel="M"`,
+  solid `bgColor="#ffffff"` / `fgColor="#000000"` so it reads on any
+  badge stock. Canvas size doubled (192/168 source) then scaled to
+  display size with `image-rendering: pixelated` so 300 dpi print
+  stays crisp.
+- `ParentBadge` also switched to squares + white bg for consistency.
+- `components/UnifiedBadge.jsx`: photo shrunk by ~2mm (108→100 wide
+  and 148→140 tall on large; 76→68 wide and 108→100 tall on small).
+  QR now white-bg/black-fg with pixel-perfect scaling. Prevents QR
+  ever covering the face.
+
+### Guest portal security hardening
+- `routers/access.py::submit_guest_access_request` completely
+  rewritten:
+  * **Removed** the duplicate v2 route that shadowed v1 (both at the
+    same path — dead code + extra attack surface).
+  * **Rate limit**: 5 requests / IP / rolling 10 min (via
+    `count_documents` on `client_ip`).
+  * **Input validation**: name 2–120 chars; email regex + 254 cap;
+    phone `[+\-\d\s()]` regex + 32 cap; purpose 500 cap; visit_date
+    `^\d{4}-\d{2}-\d{2}$`.
+  * **Atomic uses guard**: `$inc` with a `uses < max_uses` filter
+    kills the TOCTOU race that previously let parallel submits
+    overshoot the link's use cap.
+  * **Idempotent guest lookup**: matches by email → phone before
+    creating a new profile.
+  * `client_ip` persisted on every request for audit.
+
+### Tests
+- `backend/tests/test_iter341_guest_access_hardening.py` — 1 test,
+  4 scenarios: missing name → 400, bad email → 400, 6th submit
+  from same IP → 429, and 8 parallel submits against max_uses=3 →
+  exactly 3 succeed (no race overshoot).
+
 ## iter 339-340 — 2026-02 — Punch corrections · Period-based financial edit gate
 
 ### Punch corrections

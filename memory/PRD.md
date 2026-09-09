@@ -7,6 +7,36 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
+## Current status (as of iter 341)
+
+### iter 341 — Badge QR clarity · Guest portal security hardening
+- **Badges (`PrintableBadges.jsx` + `UnifiedBadge.jsx`)**: StaffBadge
+  and ChildTag no longer embed the photo INSIDE the QR (previous
+  `qrStyle="dots"` + logoImage produced a jumbled unreadable code
+  and covered the face). Both variants now render QR + photo as
+  siblings — QR uses `qrStyle="squares"`, solid white bg + black fg
+  (reads on any badge stock), higher-density canvas (192px source
+  scaled to 84px CSS with `image-rendering: pixelated`) so print at
+  300dpi stays crisp. Photo shrunk by ~2mm (108→100 large, 76→68
+  small). ParentBadge also switched to squares + white bg.
+- **Guest portal security**: `submit_guest_access_request` in
+  `routers/access.py` hardened:
+  * Removed the duplicate v2 route that silently shadowed the v1
+    (both were registered at the same path — dead code plus attack
+    surface).
+  * Rate-limited to 5 requests/IP/10 min via `count_documents` on
+    `client_ip` — stops fake-guest spam.
+  * Name (2–120 chars), email (regex + 254 cap), phone (regex + 32
+    cap), purpose (500 cap), visit_date (YYYY-MM-DD) all validated.
+  * `max_uses` guard now uses an atomic `$inc` with a `uses < max`
+    filter, killing the previous TOCTOU race where parallel submits
+    could overshoot the limit.
+  * Idempotent guest lookup — never creates a duplicate profile for
+    a returning submitter.
+  * `client_ip` persisted on every request for audit / abuse tracing.
+- Tests: `backend/tests/test_iter341_guest_access_hardening.py`
+  covers missing-name / bad-email / rate-limit / parallel-race.
+
 ## Current status (as of iter 339-340)
 
 ### iter 339-340 — Punch correction log · Period-based financial edit gate

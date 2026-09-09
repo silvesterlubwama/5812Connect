@@ -445,10 +445,11 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
               }}>
                 <QRCodeLogo
                   value={qrData}
-                  size={isSmall ? 68 : 92}
-                  bgColor={kioskMode ? '#ffffff' : bgColor}
-                  fgColor={kioskMode ? '#0f172a' : '#ffffff'}
-                  ecLevel="H"
+                  size={isSmall ? 168 : 220}
+                  style={{ width: isSmall ? '68px' : '92px', height: isSmall ? '68px' : '92px', imageRendering: 'pixelated' }}
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                  ecLevel="M"
                   qrStyle="squares"
                 />
               </div>
@@ -457,8 +458,11 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                   aspect-ratio gap when the source photo isn't the
                   same portrait as the container. */}
               <div style={{
-                width: isSmall ? '76px' : '108px',
-                height: isSmall ? '108px' : '148px',
+                // iter 341 — photo shrunk another ~2mm (108→100 wide, 148→140 tall
+                // large; 76→68 wide, 108→100 tall small) so the QR next to it
+                // reads cleanly without visual pressure on the face.
+                width: isSmall ? '68px' : '100px',
+                height: isSmall ? '100px' : '140px',
                 borderRadius: '10px',
                 overflow: 'hidden',
                 background: `${colors.accent}22`,

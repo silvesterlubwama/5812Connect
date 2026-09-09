@@ -62,7 +62,6 @@ function NfcIcon({ size = 12, color = '#fbbf24' }) {
 
 export function StaffBadge({ user, kioskMode = false }) {
   const ref = useRef(null);
-  const initials = (user.name || '').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const memberId = user.id?.slice(-8).toUpperCase() || 'N/A';
   const country = user.country || user.location_country || '';
   const countryCode = user.country_code || user.location_country_code || '';
@@ -74,9 +73,6 @@ export function StaffBadge({ user, kioskMode = false }) {
   const watermarkColor = kioskMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)';
   const logoFilter = kioskMode ? 'none' : 'brightness(0) invert(1)';
   const headerBg = kioskMode ? '#f0f0f5' : '#1a1a2e';
-  const initialsStyle = kioskMode
-    ? { background: '#e8e8f0', color: '#1a1a2e', border: '2px solid #1a1a2e' }
-    : { background: 'rgba(255,255,255,0.15)', color: '#fbbf24', border: '2px solid #fbbf24' };
 
   return (
     <div className="space-y-3">
@@ -91,15 +87,43 @@ export function StaffBadge({ user, kioskMode = false }) {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </span>
           </div>
+          {/* iter 341 — QR + photo split into two elements so the QR is
+              always scannable and never covers the face. Previous
+              variant embedded the photo INTO the QR as a logo which
+              produced a jumbled unreadable code on print. */}
           <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{user.name}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
               <div style={{ fontSize: '10px', color: subColor, marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{user.role}</div>
               {user.department && <div style={{ fontSize: '9px', color: kioskMode ? '#888' : '#666', marginTop: '1px' }}>{user.department}</div>}
               <div style={{ fontSize: '9px', color: kioskMode ? '#aaa' : '#888', marginTop: '4px' }}>ID: {memberId}</div>
             </div>
-            <div style={{ flexShrink: 0, borderRadius: '10px', overflow: 'hidden' }}>
-              <QRCodeLogo value={user.id || 'N/A'} size={96} bgColor="transparent" fgColor={textColor} ecLevel="H" logoImage={user.photo_url || generateInitialsImg(user.name, '#fbbf24', kioskMode ? '#fff' : '#1a1a2e')} logoWidth={36} logoHeight={36} logoPadding={3} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {/* QR — solid white bg + black fg so it reads on both
+                  kiosk-white AND dark badge stock. Squares (not dots)
+                  survive badge-printer rasterisation. Higher-density
+                  canvas (192px) that we render at 84px CSS keeps the
+                  code crisp at 300dpi print. */}
+              <QRCodeLogo
+                value={user.id || 'N/A'}
+                size={192}
+                style={{ width: '84px', height: '84px', imageRendering: 'pixelated' }}
+                bgColor="#ffffff"
+                fgColor="#000000"
+                ecLevel="M"
+                qrStyle="squares"
+              />
+              {/* Photo — separate, 2mm smaller than before (84 → 76 wide,
+                  108 → 100 tall). Never overlaps the QR. */}
+              <div style={{ width: '76px', height: '100px', borderRadius: '8px', overflow: 'hidden', background: kioskMode ? '#f0f0f5' : 'rgba(255,255,255,0.08)', border: `2px solid ${kioskMode ? '#1a1a2e' : '#fbbf24'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <img
+                  src={user.photo_url || generateInitialsImg(user.name, '#fbbf24', kioskMode ? '#fff' : '#1a1a2e', 220)}
+                  alt={user.name || 'photo'}
+                  crossOrigin="anonymous"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                  onError={(e) => { e.currentTarget.src = generateInitialsImg(user.name, '#fbbf24', kioskMode ? '#fff' : '#1a1a2e', 220); }}
+                />
+              </div>
             </div>
           </div>
           <div style={{ background: footerBg, padding: '4px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: footerColor, borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
@@ -136,8 +160,8 @@ export function ParentBadge({ parent, children: childList, kioskMode = false }) 
             <span style={{ color: '#34d399', fontSize: '8px', fontWeight: 700, letterSpacing: '1px', marginLeft: 'auto' }}>PARENT</span>
           </div>
           <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
-            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
-              <QRCodeLogo value={parent.id || parent.phone || 'N/A'} size={72} bgColor="transparent" fgColor={qrColor} ecLevel="H" qrStyle="dots" />
+            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden', background: '#ffffff', padding: '2px' }}>
+              <QRCodeLogo value={parent.id || parent.phone || 'N/A'} size={144} style={{ width: '68px', height: '68px', imageRendering: 'pixelated' }} bgColor="#ffffff" fgColor="#000000" ecLevel="M" qrStyle="squares" />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{parent.name}</div>
@@ -201,8 +225,28 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
                 <div key={i} style={{ fontSize: '7px', color: kioskMode ? '#666' : '#aaa', marginTop: i === 0 ? '3px' : '0px' }}>{line}</div>
               ))}
             </div>
-            <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden' }}>
-              <QRCodeLogo value={child.id || 'N/A'} size={80} bgColor="transparent" fgColor={qrColor} ecLevel="H" logoImage={child.photo_url || generateInitialsImg(child.name, '#a78bfa', '#fff')} logoWidth={30} logoHeight={30} logoPadding={2} logoPaddingStyle="circle" removeQrCodeBehindLogo={true} qrStyle="dots" />
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px' }}>
+              {/* iter 341 — split QR/photo. QR is always readable
+                  (white bg, black fg, `squares`, higher-density canvas
+                  scaled down) and NEVER embeds the photo. */}
+              <QRCodeLogo
+                value={child.id || 'N/A'}
+                size={168}
+                style={{ width: '72px', height: '72px', imageRendering: 'pixelated' }}
+                bgColor="#ffffff"
+                fgColor="#000000"
+                ecLevel="M"
+                qrStyle="squares"
+              />
+              <div style={{ width: '62px', height: '80px', borderRadius: '6px', overflow: 'hidden', background: kioskMode ? '#f0f0f5' : 'rgba(255,255,255,0.08)', border: `2px solid ${kioskMode ? '#1a1a2e' : '#a78bfa'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <img
+                  src={child.photo_url || generateInitialsImg(child.name, '#a78bfa', '#fff', 180)}
+                  alt={child.name || 'photo'}
+                  crossOrigin="anonymous"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                  onError={(e) => { e.currentTarget.src = generateInitialsImg(child.name, '#a78bfa', '#fff', 180); }}
+                />
+              </div>
             </div>
           </div>
           <div style={{ background: kioskMode ? '#f5f5f5' : 'rgba(255,255,255,0.05)', padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '7px', color: kioskMode ? '#777' : '#aaa', borderTop: kioskMode ? '1px solid #eee' : 'none' }}>
