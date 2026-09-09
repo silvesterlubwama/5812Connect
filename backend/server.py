@@ -141,34 +141,133 @@ async def readyz():
 
 
 # Rate limiting middleware — pure ASGI (see iter-middleware-asgi above).
+#
+# iter317: this used to key the bucket on `scope["client"]`, which behind the
+# K8s ingress + Cloudflare is ALWAYS the proxy pod IP. Every user on the
+# platform therefore shared one 120/min bucket, and since a single page load
+# fires 15-25 API calls, a handful of staff browsing at once produced spurious
+# 429s that the UI swallowed into empty panels.
+#
+# Now: authenticated callers get their OWN bucket keyed on the JWT subject;
+# anonymous traffic falls back to the real client IP (CF-Connecting-IP →
+# left-most X-Forwarded-For hop → socket). Auth endpoints keep a tight
+# per-IP bucket on top (the real brute-force lockout still lives in
+# `routers/auth.py` + the `login_attempts` collection — this is only a coarse
+# net in front of it).
+from jose import jwt as _rl_jwt, JWTError as _RLJWTError
+from deps import SECRET_KEY as _RL_SECRET, ALGORITHM as _RL_ALGO
+
+RL_AUTHENTICATED_PER_MIN = int(os.environ.get("RATE_LIMIT_AUTHENTICATED_PER_MIN", "600"))
+RL_ANONYMOUS_PER_MIN = int(os.environ.get("RATE_LIMIT_ANONYMOUS_PER_MIN", "120"))
+RL_AUTH_ROUTE_PER_MIN = int(os.environ.get("RATE_LIMIT_AUTH_ROUTES_PER_MIN", "20"))
+# Probes and the login flow's own guard shouldn't be throttled here.
+RL_EXEMPT_PATHS = {"/health", "/readyz", "/api/health"}
+# Login/registration/reset — tight per-IP bucket regardless of token.
+RL_AUTH_PREFIXES = ("/api/auth/login", "/api/auth/register", "/api/auth/forgot-password",
+                    "/api/auth/reset-password", "/api/auth/verify-2fa")
+
+
 class RateLimitMiddleware:
-    def __init__(self, app, requests_per_minute: int = 120):
+    def __init__(self, app):
         self.app = app
-        self.requests_per_minute = requests_per_minute
         self.request_counts: Dict[str, list] = defaultdict(list)
+        self._last_prune = time.time()
+
+    @staticmethod
+    def _real_ip(headers: dict, scope) -> str:
+        """Client IP behind Cloudflare + K8s ingress.
+
+        Only meaningful because every request reaches us THROUGH those proxies;
+        a direct caller could spoof these headers, which is why anonymous
+        traffic gets the tighter limit and never any authorisation weight.
+        """
+        cf = (headers.get("cf-connecting-ip") or "").strip()
+        if cf:
+            return cf
+        xff = headers.get("x-forwarded-for") or ""
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        client = scope.get("client") or ("unknown", 0)
+        return client[0] if isinstance(client, (tuple, list)) else "unknown"
+
+    @staticmethod
+    def _subject(headers: dict) -> Optional[str]:
+        """JWT subject, or None. Signature IS verified so a forged token can't
+        mint itself a private bucket; expiry is NOT enforced here because an
+        expired token still deserves its own bucket (the endpoint's own
+        dependency is what rejects it). Never raises, never leaks auth state.
+        """
+        auth = headers.get("authorization") or ""
+        if not auth.lower().startswith("bearer "):
+            return None
+        try:
+            payload = _rl_jwt.decode(
+                auth[7:].strip(), _RL_SECRET, algorithms=[_RL_ALGO],
+                options={"verify_exp": False},
+            )
+            sub = payload.get("sub")
+            return str(sub) if sub else None
+        except (_RLJWTError, Exception):
+            return None
+
+    def _prune(self, now: float):
+        """Drop cold buckets so the dict can't grow without bound."""
+        if now - self._last_prune < 60:
+            return
+        self._last_prune = now
+        window = now - 60
+        for key in [k for k, hits in self.request_counts.items() if not hits or hits[-1] <= window]:
+            self.request_counts.pop(key, None)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        # Skip websocket upgrade probes
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-        if headers.get("upgrade") == "websocket":
+        # Websocket upgrades, CORS preflight and health probes pass through.
+        if headers.get("upgrade") == "websocket" or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
-        client = scope.get("client") or ("unknown", 0)
-        client_ip = client[0] if isinstance(client, (tuple, list)) else "unknown"
+        path = scope.get("path") or ""
+        if path in RL_EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        ip = self._real_ip(headers, scope)
+        if path.startswith(RL_AUTH_PREFIXES):
+            key, limit = f"auth:{ip}", RL_AUTH_ROUTE_PER_MIN
+        else:
+            sub = self._subject(headers)
+            if sub:
+                key, limit = f"u:{sub}", RL_AUTHENTICATED_PER_MIN
+            else:
+                key, limit = f"ip:{ip}", RL_ANONYMOUS_PER_MIN
+
         now = time.time()
+        self._prune(now)
         window = now - 60
-        self.request_counts[client_ip] = [t for t in self.request_counts[client_ip] if t > window]
-        if len(self.request_counts[client_ip]) >= self.requests_per_minute:
-            response = JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again in a minute."})
+        hits = [t for t in self.request_counts[key] if t > window]
+        self.request_counts[key] = hits
+        if len(hits) >= limit:
+            retry_after = max(1, int(60 - (now - hits[0])))
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": f"Rate limit exceeded ({limit}/min). Try again in {retry_after}s."},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(limit),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
+            )
             await response(scope, receive, send)
             return
-        self.request_counts[client_ip].append(now)
+        hits.append(now)
         await self.app(scope, receive, send)
 
-app.add_middleware(RateLimitMiddleware, requests_per_minute=120)
+app.add_middleware(RateLimitMiddleware)
 
 
 # ============================================================

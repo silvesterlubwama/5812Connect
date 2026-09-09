@@ -1,11 +1,16 @@
 # ROADMAP — 58:12 Global Connect CRM
 
-## P0 — open (found in the iter317 audit, awaiting user's go-ahead)
-- **Rate limiter is global, not per user.** `RateLimitMiddleware` keys on the
-  ingress pod IP, so all users share one 120 req/min bucket → random empty
-  panels and failed saves under normal multi-user load. Fix: key on
-  authenticated user id + honour `X-Forwarded-For`, raise the authenticated
-  ceiling, keep a tight per-IP limit for public routes.
+## P0 — none open
+- ~~Rate limiter global, not per user~~ → fixed in iter318 (per-user JWT
+  buckets, real client IP for anonymous, tight per-IP bucket on auth routes).
+
+## Awaiting user decision
+- **Dashboard campus flip** — explained to the user in iter318, not built.
+  Proposal: a scope selector on the dashboard header with "All campuses I can
+  see" vs one specific campus, driving `dashboardApi.stats`,
+  `dashboardApi.actionItems` and `/reports/summary` (which already accept
+  `campus_id` / `location_id`). Independent of the global campus switcher in
+  the sidebar; resets on reload unless we persist it.
 
 ## P2 — nice-to-have hardening (not requested)
 - `server.py` imports all routers in one try/except logged as WARNING; one bad

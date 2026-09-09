@@ -1440,3 +1440,43 @@ verified via Playwright at 1920px and 390px (no overflow).
   module→router→page→collection map, background jobs, integrations.
 - `/app/memory/USER_REQUESTS.md` — every user request compiled from all
   handoffs, grouped by module, with removed/out-of-scope sections.
+
+## iter 318 — 2026-06 — Rate limiter: per-user buckets (P0 from the iter317 audit)
+
+`server.py::RateLimitMiddleware` rewritten (still pure ASGI).
+
+**Before** — one bucket keyed on `scope["client"]`, which behind the K8s
+ingress + Cloudflare is always the proxy pod IP → all users of the platform
+shared a single 120 req/min ceiling.
+
+**Now**
+- Authenticated → own bucket keyed on the JWT `sub`. Signature IS verified
+  (`jose.jwt.decode`, `verify_exp: False`) so a forged token can't mint itself
+  a private bucket; expiry is ignored here because the endpoint's own
+  dependency is what rejects expired tokens. Never raises, never leaks auth
+  state from the limiter. Default **600/min**.
+- Anonymous → bucket keyed on the real client IP: `CF-Connecting-IP` →
+  left-most `X-Forwarded-For` hop → socket. Default **120/min**.
+- `/api/auth/login|register|forgot-password|reset-password|verify-2fa` → tight
+  per-IP bucket, default **20/min**, on top of the existing `login_attempts`
+  brute-force lockout in `routers/auth.py` (which is untouched and remains the
+  real protection).
+- Exempt: websocket upgrades, CORS preflight `OPTIONS`, `/health`, `/readyz`.
+- 429 now carries `Retry-After` + `RateLimit-Limit/Remaining/Reset` and a
+  message stating the limit and the wait. (Cloudflare strips the RateLimit-*
+  headers at the edge; verified present at origin.)
+- Cold buckets pruned every 60s — the old dict grew unbounded (slow leak).
+- Tunable via env without a code change: `RATE_LIMIT_AUTHENTICATED_PER_MIN`,
+  `RATE_LIMIT_ANONYMOUS_PER_MIN`, `RATE_LIMIT_AUTH_ROUTES_PER_MIN`.
+
+**Verified live**
+- User A: 300 consecutive requests → 300×200.
+- User B immediately after, same source IP → 40×200 (separate bucket).
+- Auth-route burst of 32 parallel logins (bogus account) → 14×401 then 18×429.
+- Authenticated request straight after that auth bucket was exhausted → 200
+  (proves the buckets don't bleed into each other).
+- Forged-signature token → no private bucket, endpoint returns 401.
+- Browser sweep of 25 page loads: **0 × 429, 0 other failures** (the same
+  sweep before the fix produced 237 console errors, nearly all 429s).
+
+**Still open / discussed, NOT built**: dashboard campus flip (see ROADMAP).
