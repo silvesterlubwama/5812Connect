@@ -6,10 +6,14 @@ import { useAuth } from '../context/AuthContext';
  * ask the service worker to preload the "offline essentials" set:
  *   • auth/me, dashboard stats, locations
  *   • today's roster (events + tasks + director-digest-preview)
- *   • the caller's own wallet badge (via /members/{id}/qr-code + /profile-photo)
- *   • checkpoint scanners list (so security desks can operate offline)
  *
  * Runs once per session. The SW handles the actual caching + revalidation.
+ *
+ * iter344c — dropped `/api/access/checkpoints`, `/members/{id}/qr-code`,
+ * and `/members/{id}/profile-photo` from the prefetch set. Those routes
+ * don't exist as generic user-id endpoints (badges are looked up by
+ * member_id, not user.id), so prefetching them just spammed production
+ * logs with 404s.
  */
 export default function usePwaOfflinePrefetch() {
   const { user } = useAuth();
@@ -26,12 +30,7 @@ export default function usePwaOfflinePrefetch() {
       '/api/tasks',
       `/api/events?from=${today}&to=${today}`,
       '/api/tasks/director-digest-preview',
-      '/api/access/checkpoints',
     ];
-    if (user.id) {
-      urls.push(`/api/members/${user.id}/qr-code`);
-      urls.push(`/api/members/${user.id}/profile-photo`);
-    }
 
     // Auth token so the SW can authenticate against the API for these preloads
     let token = null;
