@@ -18,12 +18,42 @@ router = APIRouter(prefix="/api/sublocations", tags=["sublocations"])
 
 @router.get("")
 async def list_sublocations(location_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
-    """Lightweight sub-location list — id, name, location_id, budget."""
+    """Lightweight sub-location list — id, name, location_id, budget.
+
+    iter344e — unions two collections because sub-locations historically
+    live in BOTH `db.sublocations` (finance rollups) and `db.locations`
+    (rows with `parent_id` set). The transaction dropdown was only
+    reading the first, so campuses that only registered their sub-
+    locations via Admin → Locations were coming up empty. Filter by
+    parent campus when `location_id` is supplied so the picker stays
+    scoped to the currently-selected transaction campus.
+    """
     scope = await get_campus_filter(current_user)
-    q: dict = {**scope}
+    rows = []
+    seen = set()
+    # 1) Finance-native sub-locations
+    q1: dict = {**scope}
     if location_id:
-        q["location_id"] = location_id
-    rows = await db.sublocations.find(q, {"_id": 0, "id": 1, "name": 1, "location_id": 1, "budget": 1}).sort("name", 1).to_list(200)
+        q1["location_id"] = location_id
+    async for r in db.sublocations.find(q1, {"_id": 0, "id": 1, "name": 1, "location_id": 1, "budget": 1}):
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        rows.append(r)
+    # 2) Campus/venue children living in db.locations (parent_id set)
+    q2: dict = {"parent_id": {"$ne": None}}
+    if location_id:
+        q2["parent_id"] = location_id
+    async for r in db.locations.find(q2, {"_id": 0, "id": 1, "name": 1, "parent_id": 1, "budget": 1}):
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        rows.append({
+            "id": r["id"], "name": r.get("name", ""),
+            "location_id": r.get("parent_id"),
+            "budget": r.get("budget"),
+        })
+    rows.sort(key=lambda x: (x.get("name") or "").lower())
     return rows
 
 
