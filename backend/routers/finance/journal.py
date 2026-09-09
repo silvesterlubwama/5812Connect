@@ -94,11 +94,18 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
 
     lines_changed = "lines" in data and data["lines"] is not None
     if not lines_changed:
-        # Safe in-place edit — only metadata / date fields.
-        allowed = {"description", "reference", "date"}
+        # Safe in-place edit — metadata / date / scope fields. `location_id`
+        # and `department_id` land here too so admins can retag a JE
+        # without a reverse+repost when the amounts are right but the
+        # cost centre or campus was wrong at post time (iter344e).
+        allowed = {"description", "reference", "date", "location_id", "department_id"}
         update = {k: v for k, v in data.items() if k in allowed}
         if not update:
             return doc
+        # Refuse retagging into a locked target campus for non-admins.
+        if update.get("location_id") and update["location_id"] != doc.get("location_id"):
+            if await period_is_locked(new_date, update["location_id"]):
+                raise HTTPException(status_code=400, detail=f"Target campus fiscal period covering {new_date} is locked — pick a date outside the closed period")
         update["updated_at"] = _now()
         update["updated_by"] = current_user["id"]
         await db.finance_journal_entries.update_one({"id": je_id}, {"$set": update, "$push": {"edit_history": {"at": _now(), "by": current_user["id"], "changes": list(update.keys())}}})

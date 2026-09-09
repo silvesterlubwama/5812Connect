@@ -653,8 +653,13 @@ function JournalPanel() {
   const [expanded, setExpanded] = useState({});
   const [reversing, setReversing] = useState(null); // je object being reversed
   const [editing, setEditing] = useState(null); // je object being edited (metadata only)
-  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', lines: null });
+  const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', location_id: '', department_id: '', lines: null });
   const [editAccounts, setEditAccounts] = useState([]); // CoA cache for the line-editor account swap
+  // iter344e — retag a JE's campus/sub-location + department without a
+  // full reverse+repost. Loaded lazily when the edit dialog opens.
+  const [editLocations, setEditLocations] = useState([]);
+  const [editSubLocations, setEditSubLocations] = useState([]);
+  const [editDepartments, setEditDepartments] = useState([]);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   // Filters — kept in the URL query string on submit so the exact list can be shared
@@ -683,12 +688,38 @@ function JournalPanel() {
   // the current CoA once for the account-swap dropdown.
   useEffect(() => {
     if (!editing) return;
-    setEditForm({ description: editing.description || '', reference: editing.reference || '', date: editing.date || '', lines: null });
+    setEditForm({
+      description: editing.description || '',
+      reference: editing.reference || '',
+      date: editing.date || '',
+      location_id: editing.location_id || '',
+      department_id: editing.department_id || '',
+      lines: null,
+    });
     if (editAccounts.length === 0) {
       api.get('/finance/chart-of-accounts').then(r => setEditAccounts(r.data || [])).catch(() => {});
     }
+    // Load top-level campuses + child sublocations + this campus's departments
+    if (editLocations.length === 0) {
+      locationsApi.list().then(r => setEditLocations((r.data || []).filter(l => !l.parent_id))).catch(() => setEditLocations([]));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
+
+  // Chain department + sublocation fetch off the currently-picked location.
+  useEffect(() => {
+    if (!editing) return;
+    const loc = editForm.location_id;
+    if (!loc) { setEditSubLocations([]); setEditDepartments([]); return; }
+    Promise.all([
+      sublocationsApi.list({ location_id: loc }).catch(() => ({ data: [] })),
+      departmentsApi.list({ location_id: loc }).catch(() => ({ data: [] })),
+    ]).then(([sl, dp]) => {
+      setEditSubLocations(sl.data || []);
+      setEditDepartments(dp.data || []);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editForm.location_id, editing?.id]);
 
   // Enter line-edit mode = clone the JE's lines into editForm.lines so
   // users can swap accounts / tweak memos without touching the amounts.
@@ -718,7 +749,19 @@ function JournalPanel() {
       // repost path fires for every cosmetic edit (a description typo
       // would post two extra JEs). Frontend now tracks a `linesDirty`
       // flag that flips on any account swap / memo edit.
-      const payload = { description: editForm.description, reference: editForm.reference, date: editForm.date };
+      const payload = {
+        description: editForm.description,
+        reference: editForm.reference,
+        date: editForm.date,
+      };
+      // Retag campus / sub-location + department only when they actually
+      // changed so we don't churn the JE's edit_history unnecessarily.
+      if (editForm.location_id && editForm.location_id !== editing.location_id) {
+        payload.location_id = editForm.location_id;
+      }
+      if ((editForm.department_id || '') !== (editing.department_id || '')) {
+        payload.department_id = editForm.department_id || null;
+      }
       if (linesDirty && editForm.lines) {
         payload.lines = editForm.lines.map(ln => ({
           account_id: ln.account_id, account_code: ln.account_code, account_name: ln.account_name,
@@ -881,6 +924,28 @@ function JournalPanel() {
             <div className="grid grid-cols-2 gap-3">
               <div><Label className="text-xs">Reference / receipt #</Label><Input value={editForm.reference} onChange={e => setEditForm({ ...editForm, reference: e.target.value })} data-testid="journal-edit-reference" /></div>
               <div><Label className="text-xs">Date</Label><Input type="date" value={editForm.date} onChange={e => setEditForm({ ...editForm, date: e.target.value })} data-testid="journal-edit-date" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Campus / sub-location</Label>
+                <Select value={editForm.location_id} onValueChange={v => setEditForm({ ...editForm, location_id: v, department_id: '' })}>
+                  <SelectTrigger data-testid="journal-edit-location"><SelectValue placeholder="Pick a campus" /></SelectTrigger>
+                  <SelectContent>
+                    {editLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    {editSubLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Department</Label>
+                <Select value={editForm.department_id || '__none__'} onValueChange={v => setEditForm({ ...editForm, department_id: v === '__none__' ? '' : v })}>
+                  <SelectTrigger data-testid="journal-edit-department" disabled={!editForm.location_id}><SelectValue placeholder={editForm.location_id ? 'Untagged' : 'Pick a campus first'} /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Untagged</SelectItem>
+                    {editDepartments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div className="pt-2 border-t">
