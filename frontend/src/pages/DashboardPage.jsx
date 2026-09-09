@@ -137,10 +137,10 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold font-heading">Welcome, {user?.name?.split(' ')[0]}</h1>
-            <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2">
+            <div className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2">
               <Badge variant="outline" className="text-xs capitalize">{user?.role}</Badge>
               <span>58:12 Global Connect</span>
-            </p>
+            </div>
           </div>
           <Button variant="outline" size="sm" onClick={fetchAll}><RefreshCw size={14} /></Button>
         </div>
@@ -207,14 +207,14 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold font-heading">Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+          <div className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
             <span>Welcome back, {user?.name?.split(' ')[0]}</span>
             {/* The dashboard follows the campus switcher in the sidebar — this
                 just makes the scope of the numbers below explicit. */}
             <Badge variant="outline" className="text-xs" data-testid="dashboard-scope">
               <MapPin size={10} className="mr-1" />{scopeLabel}
             </Badge>
-          </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>

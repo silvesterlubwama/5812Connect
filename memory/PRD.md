@@ -674,6 +674,21 @@ social work, sales/POS/shipments, and self-service user portal.
   excluded) → external venues used before → add a new venue inline →
   one-off typed address. `GET /api/venues` is now campus-scoped.
 
+### iter 317-319 additions
+- Rate limiter now per-user (was one shared bucket for the whole platform).
+- HR → **Holidays** screen: every public holiday and how it's paid.
+- Dashboard follows the sidebar campus switcher (no second control, by the
+  user's explicit choice) + a scope badge.
+- **Public online shop**: staff tick "Sell this online" per product; the public
+  page lists them and can order. Server re-prices everything from the DB.
+- Campus Reports page **removed** at the user's request.
+- Fixed: non-cash sales (card/bank/mobile-money/online) never reached the
+  ledger when confirmed — now posted on paid and reversed on un-paid.
+- Reconnected dead-but-live features: customer directory, customer statements,
+  payment reminders, POS store settings, Invoices tab, member document
+  download/archive, member bulk export, single-resource fetch, HR account seed.
+- `scripts/audit_api_paths.py` guards against UI-calls-a-dead-path regressions.
+
 ### Remaining backlog (agreed with user)
 - (nothing user-requested currently open)
 

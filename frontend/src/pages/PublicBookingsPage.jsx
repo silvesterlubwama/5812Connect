@@ -274,15 +274,20 @@ export default function PublicBookingsPage() {
                 ))}
               </SelectContent>
             </Select>
-            {/* Country filter (duplicate in header for mobile) */}
-            <Select value={countryFilter} onValueChange={setCountryFilter}>
-              <SelectTrigger className="w-full sm:w-[170px] h-10 text-xs sm:hidden" data-testid="country-filter-mobile">
-                <div className="flex items-center gap-1.5"><Globe size={12} /><SelectValue /></div>
-              </SelectTrigger>
-              <SelectContent>
-                {COUNTRIES.map(c => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {/* Country filter — mobile only. iter319: the whole subtree is
+                hidden on desktop now; hiding just the trigger left this
+                duplicate Select mounted, and its open-state overlay swallowed
+                clicks meant for the tabs underneath. */}
+            <div className="w-full sm:hidden">
+              <Select value={countryFilter} onValueChange={setCountryFilter}>
+                <SelectTrigger className="w-full h-10 text-xs" data-testid="country-filter-mobile">
+                  <div className="flex items-center gap-1.5"><Globe size={12} /><SelectValue /></div>
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTRIES.map(c => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           {/* Date range row */}
           <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">

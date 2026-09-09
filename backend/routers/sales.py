@@ -498,8 +498,31 @@ async def update_sale_payment_status(sale_id: str, data: dict, current_user: dic
             {"id": sale["customer_id"], "receipt_history.receipt_number": sale.get("receipt_number") or sale_id},
             {"$set": {"receipt_history.$.payment_status": new_status}}
         )
+    # iter319 — THE LEDGER MUST FOLLOW THE STATUS.
+    # Only cash sales are 'paid' at creation, which is the only moment
+    # `_auto_post_sale_journal_entry` used to run. Every card / bank /
+    # mobile-money / online sale is created 'pending' and confirmed HERE —
+    # and nothing posted it, so those sales never reached the ledger at all.
+    merged = {**sale, **update}
+    if new_status == "paid":
+        await _auto_post_sale_journal_entry(merged, current_user)
+    else:
+        # Un-paying must not leave revenue sitting in the ledger.
+        prior = await db.finance_journal_entries.find_one(
+            {"idempotency_key": f"sale:{sale_id}", "reversed": {"$ne": True}},
+            {"_id": 0, "id": 1},
+        )
+        if prior:
+            from routers.finance._common import reverse_journal_entry
+            try:
+                await reverse_journal_entry(
+                    prior["id"], reason=f"Sale {sale_id} reverted to pending", current_user=current_user,
+                )
+            except Exception as ex:
+                logger.error(f"[finance] could not reverse JE for un-paid sale {sale_id}: {ex}")
+
     await _audit(current_user["id"], "update", "sale_payment_status", sale_id, {"new_status": new_status})
-    return {**sale, **update}
+    return merged
 
 
 @router.put("/sales/{sale_id}")

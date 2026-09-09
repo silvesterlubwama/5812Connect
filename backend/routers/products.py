@@ -91,6 +91,9 @@ class ProductCreate(BaseModel):
     # sold unit becomes an `event_ticket` row so families walking in can just
     # buy at the door and get a scannable ticket.
     event_id: Optional[str] = None
+    # iter319: publish to the public Shop tab. Opt-in — nothing is exposed
+    # to anonymous visitors unless a staffer ticks this.
+    sell_online: bool = False
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -103,6 +106,7 @@ class ProductUpdate(BaseModel):
     is_exit_restricted: Optional[bool] = None
     resource_id: Optional[str] = None
     event_id: Optional[str] = None
+    sell_online: Optional[bool] = None
 
 # ========== PRODUCTS ==========
 

@@ -505,6 +505,12 @@ try:
     # iter319: POS store config — lifted out of the legacy financial router so
     # Kiosk / Products / POS Setup stop calling a 404.
     from routers.store_settings import router as store_settings_router
+    # iter319: public online shop (products flagged `sell_online` + orders).
+    from routers.public_shop import router as public_shop_router
+    # iter319: customer directory (extracted from the offline financial.py) and
+    # customer statements / payment reminders — both had live UI hitting 404s.
+    from routers.customers import router as customers_router
+    from routers.statements import router as statements_router
     # iter246 dropped the old financial/accounting/statements routers. The
     # INVOICES router is back (iter319, user request): the Sales→Invoices tab,
     # the Accounts-Receivable data and the public quote-acceptance page were
@@ -534,6 +540,9 @@ try:
     app.include_router(sales_router)
     app.include_router(sheet_import_router)
     app.include_router(store_settings_router)
+    app.include_router(public_shop_router)
+    app.include_router(customers_router)
+    app.include_router(statements_router)
     app.include_router(invoices_router)
     app.include_router(approvals_router)
     app.include_router(departments_router)

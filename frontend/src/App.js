@@ -48,7 +48,6 @@ import ResourcesPage from './pages/ResourcesPage';
 import TicketScannerPage from './pages/TicketScannerPage';
 import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
-import CampusReportsPage from './pages/CampusReportsPage';
 import AdminPage from './pages/AdminPage';
 import AppSettingsPage from './pages/AppSettingsPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
@@ -194,7 +193,6 @@ function AppRoutes() {
         <Route path="ticket-scanner" element={<TicketScannerPage />} />
         <Route path="access" element={<AccessPage />} />
         <Route path="reports" element={<ReportsPage />} />
-        <Route path="campus-reports" element={<CampusReportsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="app-settings" element={<AppSettingsPage />} />
         {/* New Feature Routes */}

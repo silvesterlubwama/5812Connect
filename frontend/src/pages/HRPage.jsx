@@ -1614,8 +1614,11 @@ export default function HRPage() {
                       onClick={async () => {
                         setRepairModal({ ...repairModal, busy: true });
                         try {
-                          const seedRes = await api.post('/accounting/seed-bulk', { location_ids: d.locations_missing_accounts });
-                          const seeded = seedRes.data.total_accounts_seeded || 0;
+                          // iter319: /accounting/seed-bulk died with the old
+                          // accounting router. The chart of accounts is global
+                          // now, so one idempotent seed covers every campus.
+                          const seedRes = await api.post('/finance/chart-of-accounts/seed', {});
+                          const seeded = seedRes.data.inserted || 0;
                           toast.success(`Auto-wired ${seeded} accounts. Re-running fixer…`);
                           const rerun = await api.post('/hr/repair-payslip-journals', { apply: true });
                           const na = rerun.data.pass_a_missing_je || {};

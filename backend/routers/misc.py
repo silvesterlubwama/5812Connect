@@ -302,6 +302,18 @@ async def delete_resource_booking(booking_id: str, current_user: dict = Depends(
     await db.resource_bookings.delete_one({"id": booking_id}); return {"message": "Deleted"}
 
 
+# NOTE: keep this LAST of the /resources routes. A parameterized path matches
+# literals like /resources/bookings, so declaring it earlier hides them.
+@router.get("/resources/{res_id}")
+async def get_resource(res_id: str, current_user: dict = Depends(get_current_user)):
+    """Single resource — the serving-conversions editor fetched this and
+    always got a 404 (only PUT/DELETE and the sub-routes existed)."""
+    resource = await db.resources.find_one({"id": res_id}, {"_id": 0})
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return resource
+
+
 # ========== CONSUMABLE STOCK & USAGE TRACKING ==========
 # Every "in" (restock) or "out" (usage) is a row in `resource_movements`; the
 # on-hand quantity is `SUM(in - out)` computed on demand so we never fall out

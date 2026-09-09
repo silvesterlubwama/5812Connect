@@ -1588,3 +1588,77 @@ which had live UI hitting nothing.
 **Testing note for future agents**: `ProductsPage` is mounted at **`/sales`**,
 not `/products`. App.js's catch-all sends unknown paths to `/login`, so a wrong
 URL guess looks exactly like a session/auth bug. Wasted a cycle on that here.
+
+## iter 319b — 2026-06 — Public shop, Campus Reports dropped, whole-app data-flow audit
+
+**1. Public product sales — BUILT (`routers/public_shop.py`, NEW)**
+- `GET /api/public/products` — only products a staffer ticked **Sell this
+  online** (`sell_online`, new opt-in checkbox on the product form). Sold-out
+  items excluded; `?country=` filter resolves each product's country by walking
+  up its location's parents.
+- `POST /api/public/orders` — no auth. **Every price and total is recomputed
+  from the database**; the basket the browser posts is untrusted input.
+  Verified: a tampered `price: 1` on a 25,000 product still charged 25,000.
+  Caps at 50/line and 20 lines; rejects missing name/email, empty baskets,
+  unpublished products and over-stock quantities.
+- Orders delegate to `routers.sales.create_sale` with a synthetic `public_web`
+  user, so stock decrement, resource bookings, event tickets, customer accounts
+  and ledger rules are identical to a POS sale — no second code path.
+- Orders land `payment_status: pending`, `channel: online`,
+  `cashier: "Website order"`. Nothing hits the ledger until staff confirm.
+
+**2. Campus Reports — DROPPED (user's call)**
+Route, sidebar entry, `CampusReportsPage.jsx` and `reportsApi.campusDetail` all
+deleted. Its endpoint had never existed.
+
+**3. THE BIG ONE — non-cash sales never reached the ledger**
+`update_sale_payment_status` flipped a sale to paid but never posted.
+`_auto_post_sale_journal_entry` only ran at CREATE time, and only cash sales
+are paid at creation — so **every card / bank / mobile-money sale ever
+confirmed was missing from the ledger**. Now: paid → posts (idempotent by
+`sale:{id}`, so a double-click can't double-post); un-paid → the JE is
+**reversed** so the ledger can't disagree with the sale. Verified through the
+full pending→paid→pending→paid cycle.
+
+**4. Whole-app data-flow audit (`scripts/audit_api_paths.py`, NEW — keep it)**
+Diffs every API call in the frontend (api.js **and** inline calls in 154 files,
+1,029 calls) against the live route table. Was 86 dead → now only false
+positives (dynamic path segments) plus the intentionally-dead legacy
+`financialApi` block, which is now labelled with a DO-NOT-USE header.
+Reconnected in the process:
+- **Customer directory** → `routers/customers.py` (NEW, extracted from the
+  offline legacy `financial.py`). Sales portal customer list + create, Products
+  Customers tab were all 404ing.
+- **Customer statements + payment reminders** → `routers/statements.py`
+  registered. Whole Statements page, the portal statements section and the
+  Accounts-Receivable reminder button were dead.
+- **`GET /api/resources/{res_id}`** (NEW) — the serving-conversions editor
+  fetched it and always 404'd.
+- **HR repair tool** → `/accounting/seed-bulk` (gone) repointed to the
+  idempotent `/finance/chart-of-accounts/seed`.
+- **Member document archive** — inline call in `UnifiedPeoplePage` still used
+  the dead `PUT …/archive`; now `DELETE /documents/{id}`.
+
+**5. Cosmetic fixes**
+All 5 remaining `<Badge>`-inside-`<p>` hydration warnings app-wide (Dashboard,
+Access ×2, Bank, Approvals) — **0 left**. Public bookings: the mobile country
+filter was only hiding its trigger on desktop, leaving a mounted Select whose
+overlay swallowed clicks on the tabs; the whole subtree is now `sm:hidden`.
+
+**Verified** — `/app/test_reports/iteration_103.json`: **22/22 backend**, 6/6
+frontend flows, plus my own browser pass (Shop tab clickable without force,
+zero console errors across 4 pages, dashboard money cards live). Test data
+cleaned; Gala Ticket back to stock 97 / `sell_online: false`.
+
+> Run `python3 /app/scripts/audit_api_paths.py` after any router change. This
+> class of bug (UI calling a path that no longer exists, 404 swallowed by a
+> `catch`) has now bitten this app at least 20 times.
+
+### iter319b follow-up — route shadowing self-inflicted, caught by lint
+My new `GET /api/resources/{res_id}` was declared at misc.py:207, ABOVE the
+literal `GET /api/resources/bookings` (line 289) — a parameterized path matches
+literal siblings, so it silently swallowed the bookings endpoint. Moved it
+below every 2-segment literal `/resources/...` route with a comment saying why.
+Verified: `/resources/bookings` → 200 `[]`, `/resources/{id}` → the resource,
+`/resources/consumables/lookup` → 200. App-wide shadow check: **0 shadowed
+routes** across all 1008.

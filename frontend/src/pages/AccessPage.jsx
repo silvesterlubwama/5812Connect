@@ -470,7 +470,7 @@ export default function AccessPage() {
                       <CardContent className="p-4 flex items-center gap-4">
                         <Shield size={18} className="text-primary shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm">{conn.name} <Badge variant="outline" className="text-[10px] ml-1">{conn.type}</Badge> <Badge variant="outline" className="text-[10px] ml-1">{conn.provider}</Badge></p>
+                          <div className="font-medium text-sm">{conn.name} <Badge variant="outline" className="text-[10px] ml-1">{conn.type}</Badge> <Badge variant="outline" className="text-[10px] ml-1">{conn.provider}</Badge></div>
                           <p className="text-xs text-muted-foreground truncate">{conn.api_url} {conn.door_name ? `| ${conn.door_name}` : ''}</p>
                         </div>
                         <Badge className={`text-[10px] ${conn.enabled ? 'bg-green-100 text-green-700' : 'bg-slate-100'}`}>{conn.enabled ? 'Active' : 'Off'}</Badge>
@@ -641,7 +641,7 @@ export default function AccessPage() {
                   <p>Guest: <span className="font-medium text-foreground">{validateResult.pass.guest_name}</span></p>
                   <p>Location: <span className="font-medium text-foreground">{validateResult.location_name}</span></p>
                   <p>Valid: {validateResult.pass.valid_from} to {validateResult.pass.valid_until}</p>
-                  <p>Status: <Badge variant="outline" className="text-xs">{validateResult.pass.status}</Badge></p>
+                  <div>Status: <Badge variant="outline" className="text-xs">{validateResult.pass.status}</Badge></div>
                 </div>
               )}
             </div>

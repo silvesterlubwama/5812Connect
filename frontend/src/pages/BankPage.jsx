@@ -322,7 +322,7 @@ export default function BankPage() {
                 <Card key={a.id} className={`rounded-xl ${a.active === false ? 'opacity-60' : ''}`} data-testid={`bank-account-${a.id}`}>
                   <CardContent className="p-3 flex items-center justify-between flex-wrap gap-2">
                     <div>
-                      <p className="font-medium">{a.name}{a.active === false && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100">CLOSED</Badge>}</p>
+                      <div className="font-medium">{a.name}{a.active === false && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100">CLOSED</Badge>}</div>
                       <p className="text-xs text-muted-foreground">{a.bank_name} · {a.branch || '—'} · {a.account_number || '—'}</p>
                       <div className="flex items-center gap-1 mt-1">
                         <Badge variant="outline" className="text-[10px]">{a.account_type}</Badge>

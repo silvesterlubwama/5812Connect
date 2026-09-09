@@ -241,6 +241,12 @@ export const kioskApi = {
 };
 
 // ---- FINANCIAL ----
+// ⚠️ LEGACY. Every `/financial/*` method below is DEAD — that router lost its
+// HTTP surface in the iter246 finance reset and the one balanced ledger now
+// lives at `/api/finance/*` (see financeApi). Nothing in the app calls them;
+// they are kept only so old branches still compile. DO NOT wire anything new
+// to them — run `python3 /app/scripts/audit_api_paths.py` if unsure.
+// `summary` is the exception: it was repointed to a live endpoint in iter317.
 export const financialApi = {
   // iter317: was hitting a non-existent /financial/summary (silent 404 → the
   // dashboard's money cards always read 0). /reports/summary is the real one.
@@ -844,7 +850,6 @@ export const emailApi = {
 export const reportsApi = {
   summary: (params) => api.get('/reports/summary', { params }),
   campusComparison: (params) => api.get('/reports/campus-comparison', { params }),
-  campusDetail: (locationId, params) => api.get(`/reports/campus/${locationId}`, { params }),
   pdf: (params) => api.get('/reports/pdf', { params, responseType: 'blob' }),
 };
 

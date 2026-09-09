@@ -178,7 +178,7 @@ export default function ApprovalsPage() {
               <CardContent className="p-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div>
-                    <p className="text-sm font-medium">{wf.name} <Badge variant="outline" className="text-[10px] ml-1 capitalize">{wf.kind}</Badge></p>
+                    <div className="text-sm font-medium">{wf.name} <Badge variant="outline" className="text-[10px] ml-1 capitalize">{wf.kind}</Badge></div>
                     <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1 flex-wrap">
                       {wf.steps.map((s, i) => (
                         <React.Fragment key={s.id || `${wf.id}-step-${i}`}>

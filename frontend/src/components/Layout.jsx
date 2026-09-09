@@ -457,7 +457,6 @@ export default function Layout() {
       '/pos-setup': { roles: null, module: 'sales' },
       '/barcode-reissue': { roles: null, module: 'sales' },
       '/location-analytics': { roles: MANAGER_PLUS, module: null },
-      '/campus-reports': { roles: MANAGER_PLUS, module: null },
       '/reports': { roles: MANAGER_PLUS, module: null },
       '/report-builder': { roles: MANAGER_PLUS, module: null },
       '/analytics': { roles: MANAGER_PLUS, module: null },

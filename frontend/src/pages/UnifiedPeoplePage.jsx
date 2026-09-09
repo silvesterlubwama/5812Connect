@@ -951,7 +951,7 @@ export default function UnifiedPeoplePage() {
                       <div><p className="font-medium">{d.label}</p><p className="text-xs text-muted-foreground">{d.original_filename} &middot; {d.created_at?.slice(0, 10)}</p></div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" className="h-7" onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/documents/${d.id}/file`, '_blank')}>View</Button>
-                        <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={async () => { await api.put(`/documents/${d.id}/archive`); toast.success('Archived'); setMemberDocuments(prev => prev.filter(p => p.id !== d.id)); }}>Archive</Button>
+                        <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={async () => { await api.delete(`/documents/${d.id}`); toast.success('Archived'); setMemberDocuments(prev => prev.filter(p => p.id !== d.id)); }}>Archive</Button>
                       </div>
                     </div>
                   ))}</div>

@@ -50,7 +50,7 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false };
 
 export default function ProductsPage() {
   const { user } = useAuth();
@@ -576,7 +576,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online });
     setShowProductModal(true);
   };
 
@@ -1229,6 +1229,21 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
             </div>
+            {/* iter319: opt-in publishing to the public shop. Off by default —
+                nothing reaches the public page unless someone ticks it. */}
+            <label className="flex items-start gap-2 text-xs cursor-pointer p-2 rounded border bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40" data-testid="product-sell-online-row">
+              <input
+                type="checkbox"
+                className="accent-blue-600 mt-0.5"
+                checked={!!productForm.sell_online}
+                onChange={e => setProductForm({ ...productForm, sell_online: e.target.checked })}
+                data-testid="product-sell-online-checkbox"
+              />
+              <span>
+                <strong>Sell this online</strong>
+                <span className="block text-[10px] text-muted-foreground">Shows on the public Shop tab while stock lasts. Orders arrive as pending sales for you to confirm payment — nothing posts to the ledger until you do.</span>
+              </span>
+            </label>
             {/* Exit-restriction flag — used by the Security Checkpoint receipt exit-scan */}
             <label className="flex items-start gap-2 text-xs cursor-pointer p-2 rounded border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40" data-testid="product-exit-restricted-row">
               <input
