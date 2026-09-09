@@ -72,9 +72,12 @@ export const membersApi = {
   documents: (id) => api.get(`/members/${id}/documents`),
   latestIdScan: (id) => api.get(`/members/${id}/documents/id-scan`),
   uploadDocument: (id, formData) => api.post(`/members/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  downloadDocument: (docId) => api.get(`/documents/${docId}/download`, { responseType: 'blob' }),
-  archiveDocument: (docId) => api.put(`/documents/${docId}/archive`),
-  bulkExport: (ids) => api.post('/members/bulk-export', { ids }),
+  // iter319: these three pointed at routes that don't exist (leftovers of the
+  // iter246 finance/router reset), so download, archive and bulk export had
+  // been silently failing. Repointed to the live endpoints.
+  downloadDocument: (docId) => api.get(`/documents/${docId}/file`, { responseType: 'blob' }),
+  archiveDocument: (docId) => api.delete(`/documents/${docId}`),
+  bulkExport: (ids) => api.post('/admin/members/bulk-export', { ids }),
 };
 
 // ---- EVENTS ----
@@ -281,7 +284,8 @@ export const financialApi = {
 
 // ---- CHART ACCOUNTS (cash / bank / mobile money — assigned to users) ----
 export const chartAccountsApi = {
-  list: (params) => api.get('/financial/chart-accounts', { params }),
+  // iter318: repointed from the non-existent /financial/chart-accounts.
+  list: (params) => api.get('/finance/chart-of-accounts', { params }),
   mine: () => api.get('/financial/chart-accounts/mine'),
   get: (id) => api.get(`/financial/chart-accounts/${id}`),
   create: (data) => api.post('/financial/chart-accounts', data),

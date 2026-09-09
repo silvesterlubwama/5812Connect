@@ -73,6 +73,9 @@ export const HolidayPolicyDialog = ({ holiday, onClose, onSaved, canEdit }) => {
               <Info size={13} className="mt-0.5 shrink-0" />
               Applies to every {holiday.name} — this year and all future years — until an admin changes it. Holiday dates keep updating on their own.
             </p>
+            <a href="/hr" className="text-xs text-primary hover:underline" data-testid="holiday-manage-all-link">
+              See every holiday and how it's paid → HR · Holidays
+            </a>
           </>
         )}
       </DialogContent>

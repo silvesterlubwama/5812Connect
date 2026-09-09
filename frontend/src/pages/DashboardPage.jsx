@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2, ShieldCheck, ShieldX } from 'lucide-react';
+import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2, ShieldCheck, ShieldX, MapPin } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -46,11 +46,20 @@ export default function DashboardPage() {
   const [loadingStats, setLoadingStats] = useState(true);
   const [deptData, setDeptData] = useState([]);
   const [actionItems, setActionItems] = useState(null);
+  // Scope label — the numbers follow the sidebar campus switcher
+  // (`active_campus_id`, honoured server-side by get_campus_filter).
+  const [scopeLabel, setScopeLabel] = useState('All my campuses');
+  useEffect(() => {
+    const active = user?.active_campus_id;
+    if (!active) { setScopeLabel('All my campuses'); return; }
+    locationsApi.list()
+      .then(r => setScopeLabel((r.data || []).find(l => l.id === active)?.name || 'Current campus'))
+      .catch(() => setScopeLabel('Current campus'));
+  }, [user?.active_campus_id]);
 
   const fetchAll = async () => {
     setLoadingStats(true);
     try {
-      const campusParam = {};
       // Money cards are month-to-date; /reports/summary keys on location_id.
       const _now = new Date();
       const monthParams = {
@@ -66,14 +75,14 @@ export default function DashboardPage() {
         // financialApi.summary for staff without finance access) doesn't poison the
         // whole dashboard with "Failed to load". Each section degrades independently.
         const results = await Promise.allSettled([
-          dashboardApi.stats(campusParam),
+          dashboardApi.stats(),
           eventsApi.list({ status: 'upcoming' }),
           tasksApi.list(),
           financialApi.summary(monthParams),
           familiesApi.list(),
           childrenApi.list(),
           productsApi.list(),
-          dashboardApi.actionItems(campusParam),
+          dashboardApi.actionItems(),
         ]);
         const data = (i) => results[i].status === 'fulfilled' ? results[i].value?.data : null;
         const statsData = data(0);
@@ -198,7 +207,14 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold font-heading">Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Welcome back, {user?.name?.split(' ')[0]}</p>
+          <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+            <span>Welcome back, {user?.name?.split(' ')[0]}</span>
+            {/* The dashboard follows the campus switcher in the sidebar — this
+                just makes the scope of the numbers below explicit. */}
+            <Badge variant="outline" className="text-xs" data-testid="dashboard-scope">
+              <MapPin size={10} className="mr-1" />{scopeLabel}
+            </Badge>
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>

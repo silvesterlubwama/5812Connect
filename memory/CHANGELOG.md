@@ -1480,3 +1480,111 @@ shared a single 120 req/min ceiling.
   sweep before the fix produced 237 console errors, nearly all 429s).
 
 **Still open / discussed, NOT built**: dashboard campus flip (see ROADMAP).
+
+## iter 318b — 2026-06 — Holiday policy screen + dashboard follows the sidebar switcher
+
+**1. HR → Holidays tab (`components/HolidayPolicyPanel.jsx`)**
+One screen listing every public holiday and how payroll treats it. Year picker
+(prev/current/+2), country filter (All / US federal / Uganda public), four
+summary cards each spelling out the payroll effect, and a per-row select of
+Paid holiday / Optional paid day off / Unpaid day off / Not observed. Hidden
+("not observed") holidays still show HERE (`include_hidden=true`) so an admin
+can restore them, while staying off the calendar. Read-only for non-admins.
+The per-holiday dialog on the Calendar now links across to this screen.
+
+**2. Dashboard follows the sidebar campus switcher (user's choice)**
+No dashboard-level campus dropdown — deliberately dropped. `get_campus_filter`
+already honours `active_campus_id`, and the switcher reloads the page, so the
+dashboard simply inherits the scope. Added a `dashboard-scope` badge naming the
+current campus so the numbers' scope is explicit, and removed the dead
+`campuses`/`selectedCampus`/`campusName` state left from the old picker.
+
+**3. Fix — payslip "cash account to pay from" picker was always empty**
+`HRPage` fetched `/financial/chart-accounts`, which doesn't exist (the router
+was dropped in the iter246 finance reset). Payroll therefore could never choose
+which account a payslip is paid from. Repointed to
+`/finance/chart-of-accounts`, filtered to `is_cash`, labelled `code · name`.
+`chartAccountsApi.list` (used by ProductsPage) repointed too.
+
+**4. Fix — remaining `<Badge>` inside `<p>` in PortalProfile** (2 more spots;
+timesheet + PTO rows) → hydration warning gone.
+
+**Verified** — `/app/test_reports/iteration_102.json`: backend 11/11 pytest,
+frontend 9/10 flows (the payslip picker couldn't be driven through the UI
+because the tenant has 0 payslips; the endpoint returns the 3 expected cash
+accounts). Critically confirmed through the UI: setting 2026 Thanksgiving to
+Paid also reads Paid in 2027 and 2028. Test artefacts (policies + a test staff
+user) cleaned out.
+
+---
+
+### AUDIT FINDING — 13 dead endpoint paths still called by live UI
+An `api.js`-vs-route-table diff (71 of 627 declared paths are dead; 13 of them
+are reachable from real screens). All are leftovers of the **iter246 finance
+reset**, which deliberately dropped the old `invoices` / `statements` /
+`accounting` / `chart_accounts` routers but left the frontend calling them.
+Reported to the user; NOT fixed without direction.
+
+| Broken feature | Screen | Calls | Real route (where one exists) |
+|---|---|---|---|
+| Invoices tab (list/create/update/delete/convert) | Products/Sales page | `/api/invoices*` | none — router intentionally dropped |
+| POS store settings (read + write) | KioskPage, ProductsPage, PosKioskSetupPage | `/api/store-settings/{loc}` | none |
+| Member document download | MembersPage | `/api/documents/{id}/download` | `/api/documents/{doc_id}/file` |
+| Member document archive | MembersPage | `PUT /api/documents/{id}/archive` | `DELETE /api/documents/{doc_id}` |
+| Member bulk CSV export | MembersPage | `/api/members/bulk-export` | `/api/admin/members/bulk-export` |
+| Campus detail report | CampusReportsPage (routed + in nav) | `/api/reports/campus/{loc}` | none |
+| Public product list + order | PublicBookingsPage | `/api/public/products`, `/api/public/orders` | none |
+
+Four are one-line repoints; three (invoices, store-settings, campus report)
+need a backend or the UI removing.
+
+## iter 319 — 2026-06 — Reconnecting the dead endpoints (user-directed)
+
+The iter246 finance reset dropped several routers but left the frontend
+calling them. Answer to the user's question: **yes, the code already existed —
+it just had no HTTP surface.** Nothing was rebuilt from scratch.
+
+**1. Three one-line repoints (`services/api.js`) — user said "fix all three"**
+- `membersApi.downloadDocument` → `/documents/{id}/file` (was `/download`)
+- `membersApi.archiveDocument` → `DELETE /documents/{id}` (was `PUT …/archive`;
+  the DELETE handler soft-marks `is_deleted`, which is what "archive" means here)
+- `membersApi.bulkExport` → `/admin/members/bulk-export` (was `/members/…`)
+  Verified: both document routes now answer with the app's own 404
+  ("File not found") rather than FastAPI's route-missing 404; bulk-export → 200.
+  Note: the tenant has 0 uploaded documents, so download/archive were verified
+  at route level only.
+
+**2. POS store settings — reconnected (`routers/store_settings.py`, NEW)**
+The handlers were sitting inside the dead `routers/financial.py`. Lifted the
+three of them (`GET /store-settings`, `GET/PUT /store-settings/{location_id}`)
+into their own router and registered it. Nothing touches the ledger — it's shop
+config (receipt layout, payment methods, tax rate, till/bank/momo account).
+Defaults are merged OVER stored docs so locations saved before a key existed
+still return the full schema. Verified: GET returns the schema, PUT persists,
+Kiosk / Sales / POS-Setup pages load with zero failures.
+
+**3. Invoices — router re-registered AND reworked so it can't fork the ledger**
+`routers/invoices.py` (518 lines: invoice CRUD, convert-to-sale, accounts
+receivable, payment promises/reminders, public quote lookup + acceptance) was
+excluded in iter246. Re-registering it as-is would have been dangerous: its
+`convert` wrote straight into `db.sales`, bypassing the POS path's
+`_auto_post_sale_journal_entry`, so invoice-born sales would never have hit the
+balanced ledger — exactly the double-truth the finance reset existed to kill.
+Fixed by running the SAME side-effects as the POS path after the insert:
+`_ensure_customer_account` + `_auto_post_sale_journal_entry` (which only posts
+when the sale is settled and is idempotent by sale id).
+Verified end to end: invoice for 10,000 → convert → sale marked paid, customer
+account auto-created, and a balanced JE appeared (1010 Dr 10,000 / 4100 Cr
+10,000, "Sale — invoice INV-20260909-0001"). All test data removed afterwards.
+Also brought back to life by this registration: `/api/accounts-receivable`
+(+ payment promises) and the public `/quote/:quoteNumber/accept` page, both of
+which had live UI hitting nothing.
+
+**Still undecided by the user (left dead, listed in ROADMAP)**
+- `CampusReportsPage` → `/api/reports/campus/{loc}` never existed
+- `PublicBookingsPage` product list + ordering → `/api/public/products`,
+  `/api/public/orders` never existed
+
+**Testing note for future agents**: `ProductsPage` is mounted at **`/sales`**,
+not `/products`. App.js's catch-all sends unknown paths to `/login`, so a wrong
+URL guess looks exactly like a session/auth bug. Wasted a cycle on that here.

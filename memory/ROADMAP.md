@@ -4,7 +4,20 @@
 - ~~Rate limiter global, not per user~~ → fixed in iter318 (per-user JWT
   buckets, real client IP for anonymous, tight per-IP bucket on auth routes).
 
-## Awaiting user decision
+## Awaiting user decision — 2 dead screens left (was 13 paths, iter318 audit)
+Fixed in iter319: member document download/archive, member bulk export, POS
+store settings, Invoices tab (+ accounts-receivable and public quote accept,
+which came back with it). Still dead, need a decision — rebuild or remove:
+- **CampusReportsPage** — in the nav, but `/api/reports/campus/{loc}` never existed
+- **Public product ordering** (PublicBookingsPage) — `/api/public/products`
+  and `/api/public/orders` never existed; is the public page events-only?
+
+## Resolved this iteration
+- Holiday policy screen (HR → Holidays) — shipped iter318b.
+- Dashboard campus flip — user chose "follow the sidebar switcher"; shipped
+  (scope badge only, no second control).
+
+## Previously awaiting user decision
 - **Dashboard campus flip** — explained to the user in iter318, not built.
   Proposal: a scope selector on the dashboard header with "All campuses I can
   see" vs one specific campus, driving `dashboardApi.stats`,

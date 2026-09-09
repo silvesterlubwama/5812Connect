@@ -1,0 +1,32 @@
+{
+  "summary": "iter318 review — HR Holidays panel + dashboard-follows-sidebar-switcher + payslip 'paid from' cash-picker. Backend: 11/11 pytest cases pass (holiday policy CRUD, per-name-applies-every-year across 2026/2027/2028, hidden filter, admin-only 403, non-admin read, invalid kind rejection, chart-of-accounts is_cash returns codes 1000/1010/1020, /api/financial/chart-accounts is 404 as expected, /api/reports/summary honours date_from/date_to, /api/dashboard/stats works without campus param). Frontend: dashboard-scope badge reads '58:12 Global (Central)' with no campus dropdown in main content and zero /api/financial/summary requests emitted; HR → Holidays tab opens holiday-policy-panel with 25 rows for 2026, all four count testids render, setting Thanksgiving to 'Paid holiday' via holiday-kind-US:thanksgiving-day updated the count to 1 and — critically — the count stayed 1 after switching holiday-year-select to 2027 and 2028 (per-name persistence confirmed end-to-end through the UI); resetting to 'Unpaid day off' cleared it to 0; country filter US-only returns 11 rows and UG-only returns 14 rows (total 25). Kind options: 'Paid holiday / Optional paid day off / Unpaid day off / Not observed'. Mobile 390px HR tab strip scrolls horizontally (scrollWidth 830 vs clientWidth 318, overflow-x auto) — pre-existing cosmetic overflow acknowledged. HR Payslip edit dialog paid-from dropdown could NOT be exercised through the UI because the tenant currently has 0 payslips; however the underlying /api/finance/chart-of-accounts endpoint returns the three expected is_cash accounts (1000 Cash on Hand, 1010 Bank — Operating, 1020 Bank — Reserves), so the picker will populate when a payslip exists.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "HR tabs @ 390px", "issues": ["Tab strip overflows (scrollWidth 830 > clientWidth 318) — scrolls horizontally as intended; pre-existing, called out by the review request as known."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter318_holidays_and_dashboard.py",
+    "/app/test_reports/pytest/iter318_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routers/holidays.py: policy_key(name,country) slug is deterministic across years — verified via UI that setting 2026 Thanksgiving to paid also shows paid on 2027 and 2028.",
+    "routers/holidays.py PUT/DELETE /api/holidays/policies correctly gate on require_admin — staff account gets 403 for both.",
+    "routers/finance/chart_of_accounts.py GET does NOT expose an is_cash query param; the HR page must filter client-side. Works fine because only ~19 rows are returned, but it would be cleaner to accept ?is_cash=true.",
+    "HRPage.jsx line 902 renders the option label as 'code · name' as required.",
+    "DashboardPage.jsx removes any dashboard-level campus dropdown, delegates to sidebar switcher, and renders dashboard-scope badge. Confirmed no request goes to the non-existent /api/financial/summary.",
+    "Pre-existing PortalProfile.jsx <div>-inside-<p> hydration warning (from iter316) still fires on every route change — worth cleaning up when convenient."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter318_holidays_and_dashboard.py (new)"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "9/10 flows verified — payslip 'paid from' picker not exercisable (no payslips in tenant); backend confirms population."},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (see /app/memory/test_credentials.md). Non-admin staff account created for RBAC: test_iter318_staff@example.com / Test@5812!",
+  "seed_data_creation": "All holiday policies created during the tests (US:thanksgiving-day, US:columbus-day, and any UI-driven change) were deleted or reset via UI/DELETE before finishing. No stray policies remain. One TEST_iter318_staff user created for RBAC checks — left in tenant (staff role, harmless); main agent can delete if desired.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login submit has data-testid='login-submit-button' (avoid get_by_role Sign In — 3 buttons match). Login inputs have no name/type=email; use positional inputs[0] (identifier) + inputs[1] (password). Radix Select options are queried via [role='option'] after clicking the trigger with force=True. HR tab strip trigger testids follow hr-tab-<name>. To exercise the payslip paid-from picker end-to-end you first need to generate at least one payslip; the tenant currently has 0 draft/finalised payslips, which is why the UI half of that check was skipped.",
+  "rca of the issue": "N/A — all iter318 behaviour works as designed. Only observation: chart-of-accounts endpoint doesn't accept an is_cash query param, so the HR page filters client-side."
+}

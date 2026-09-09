@@ -502,8 +502,16 @@ try:
     from routers.products import router as products_router
     from routers.sales import router as sales_router
     from routers.sheet_import import router as sheet_import_router
-    # Old invoices/statements/accounting routers deliberately dropped in the
-    # iter 246 finance reset — kept as files for reference but no HTTP surface.
+    # iter319: POS store config — lifted out of the legacy financial router so
+    # Kiosk / Products / POS Setup stop calling a 404.
+    from routers.store_settings import router as store_settings_router
+    # iter246 dropped the old financial/accounting/statements routers. The
+    # INVOICES router is back (iter319, user request): the Sales→Invoices tab,
+    # the Accounts-Receivable data and the public quote-acceptance page were
+    # all calling it. Its convert-to-sale now runs the same customer-link and
+    # ledger posting as the POS path, so money still flows through the one
+    # balanced ledger.
+    from routers.invoices import router as invoices_router
     from routers.approvals import router as approvals_router
     from routers.social_work import router as social_work_router, portal_router as school_portal_router
     from routers.bank import router as bank_router
@@ -525,6 +533,8 @@ try:
     app.include_router(products_router)
     app.include_router(sales_router)
     app.include_router(sheet_import_router)
+    app.include_router(store_settings_router)
+    app.include_router(invoices_router)
     app.include_router(approvals_router)
     app.include_router(departments_router)
     app.include_router(reports_departments_router)

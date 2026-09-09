@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import AdminPage from './AdminPage';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench, FileDown } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench, FileDown, CalendarDays } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -9,6 +9,7 @@ import { Badge } from '../components/ui/badge';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { HolidayPolicyPanel } from '../components/HolidayPolicyPanel';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
 import { Switch } from '../components/ui/switch';
 import api from '../services/api';
@@ -77,8 +78,12 @@ export default function HRPage() {
   const [cashAccountOptions, setCashAccountOptions] = useState([]);
   const [locationOptions, setLocationOptions] = useState([]);
   useEffect(() => {
-    api.get('/financial/chart-accounts', { params: { active_only: false, limit: 200 } })
-      .then(r => setCashAccountOptions(r.data || [])).catch(() => {});
+    // iter318: was calling /financial/chart-accounts, which doesn't exist —
+    // the picker had been silently empty, so payroll could never choose which
+    // account a payslip is paid from. Real router: /finance/chart-of-accounts.
+    api.get('/finance/chart-of-accounts', { params: { active_only: false } })
+      .then(r => setCashAccountOptions((r.data || []).filter(a => a.is_cash)))
+      .catch(() => setCashAccountOptions([]));
     api.get('/locations').then(r => setLocationOptions(r.data || [])).catch(() => {});
     // iter-departments: load cost-centre list so the salary form's picker
     // and splits editor always reflect the current department catalogue.
@@ -355,6 +360,7 @@ export default function HRPage() {
           <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
           <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
           <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
+          <TabsTrigger value="holidays" data-testid="hr-tab-holidays"><CalendarDays size={13} className="mr-1" /> Holidays</TabsTrigger>
           <TabsTrigger value="time-off" data-testid="hr-tab-time-off"><Clock size={13} className="mr-1" /> Time Off</TabsTrigger>
           <TabsTrigger value="onboarding" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
           {isAdmin && <TabsTrigger value="staff" data-testid="hr-tab-staff"><Users size={13} className="mr-1" /> Staff & Users</TabsTrigger>}
@@ -619,6 +625,9 @@ export default function HRPage() {
         </TabsContent>
         <TabsContent value="timesheets" className="mt-4">
           <TimesheetsPanel />
+        </TabsContent>
+        <TabsContent value="holidays" className="mt-4">
+          <HolidayPolicyPanel canEdit={isAdmin} />
         </TabsContent>
         <TabsContent value="time-off" className="mt-4">
           <TimeOffPanel />
@@ -893,7 +902,7 @@ export default function HRPage() {
                     <SelectTrigger data-testid="edit-payslip-paid-from"><SelectValue placeholder="Location default" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="default">Location default</SelectItem>
-                      {cashAccountOptions.map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.currency} {(a.balance || 0).toLocaleString()}</SelectItem>)}
+                      {cashAccountOptions.map(a => <SelectItem key={a.id} value={a.id}>{a.code} · {a.name}{a.bank_subtype ? ` (${a.bank_subtype})` : ''}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>

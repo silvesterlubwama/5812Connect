@@ -470,10 +470,10 @@ export default function PortalProfile() {
                 <div key={t.id} className="py-2 flex items-center justify-between gap-2" data-testid={`timesheet-row-${t.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{t.period} · {t.days_worked} day(s){t.pto_days ? ` + ${t.pto_days} PTO` : ''}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px] text-muted-foreground">
                       <Badge variant={t.status === 'approved' ? 'default' : t.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px] mr-1">{t.status}</Badge>
                       {t.review_notes || t.notes || 'Awaiting review'}
-                    </p>
+                    </div>
                   </div>
                   {(t.status !== 'approved') && (
                     <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => withdrawTimesheet(t)}>Withdraw</Button>
@@ -503,10 +503,10 @@ export default function PortalProfile() {
                 <div key={p.id} className="py-2 flex items-center justify-between gap-2" data-testid={`pto-row-${p.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{p.start_date}{p.end_date && p.end_date !== p.start_date ? ` → ${p.end_date}` : ''} · {p.days || 1} day{(p.days || 1) > 1 ? 's' : ''}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <div className="text-[11px] text-muted-foreground">
                       <Badge variant={p.status === 'approved' ? 'default' : p.status === 'rejected' ? 'destructive' : 'secondary'} className="text-[10px] mr-1">{p.status}</Badge>
                       {p.review_notes || p.reason || 'Awaiting review'}
-                    </p>
+                    </div>
                   </div>
                   {p.status === 'pending' && (
                     <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => withdrawPto(p)}>Withdraw</Button>

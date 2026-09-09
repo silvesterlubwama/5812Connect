@@ -8,7 +8,7 @@ Workflow:
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from deps import db, get_current_user, require_staff, _audit, get_campus_filter, is_system_admin
+from deps import db, get_current_user, require_staff, _audit, get_campus_filter, is_system_admin, logger
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -255,6 +255,22 @@ async def convert_invoice_to_sale(invoice_id: str, data: dict = None, current_us
         }}
     )
     sale.pop("_id", None)
+
+    # iter319: an invoice-born sale must not become a second source of truth.
+    # Run the SAME side-effects the POS path runs — customer account link and
+    # the one balanced ledger posting (which itself only posts when the sale is
+    # actually settled, and is idempotent by sale id).
+    try:
+        from routers.sales import _ensure_customer_account, _auto_post_sale_journal_entry
+        if not sale.get("customer_id"):
+            cust_id = await _ensure_customer_account(sale, current_user)
+            if cust_id:
+                await db.sales.update_one({"id": receipt_number}, {"$set": {"customer_id": cust_id}})
+                sale["customer_id"] = cust_id
+        await _auto_post_sale_journal_entry(sale, current_user)
+    except Exception as ex:
+        logger.warning(f"invoice→sale side-effects skipped for {receipt_number}: {ex}")
+
     await _audit(current_user["id"], "convert", "invoice_to_sale", f"{invoice_id}→{receipt_number}")
     return {"invoice_id": invoice_id, "sale": sale, "receipt_number": receipt_number}
 
