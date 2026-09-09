@@ -514,6 +514,15 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   });
   const [vendorMatches, setVendorMatches] = useState([]);
   const [busy, setBusy] = useState(false);
+  // iter344j — Split mode. One transaction, N category rows + M cash rows.
+  // Backend hit swaps from /transactions/expense to /finance/journal (custom JE).
+  const [split, setSplit] = useState(false);
+  const emptyLeg = () => ({ account_id: '', amount: '', memo: '' });
+  const [primaryLegs, setPrimaryLegs] = useState([emptyLeg()]);   // expense/revenue side
+  const [cashLegs, setCashLegs] = useState([emptyLeg()]);         // paid-from / deposited-to side
+  const primarySum = primaryLegs.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const cashSum = cashLegs.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const balanced = split && primarySum > 0 && Math.abs(primarySum - cashSum) < 0.01;
 
   useEffect(() => {
     if (!mode) return;
@@ -563,6 +572,42 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   const cashAccounts = accounts.filter(a => a.type === 'asset');
 
   const submit = async () => {
+    // Split-mode branch — post directly to /finance/journal so the caller
+    // can debit N expense accounts and credit M cash accounts (or the
+    // inverse for income) in a single balanced JE.
+    if (split) {
+      if (!form.location_id) { toast.error('Pick a campus / sub-location'); return; }
+      const validPrimary = primaryLegs.filter(l => l.account_id && Number(l.amount) > 0);
+      const validCash = cashLegs.filter(l => l.account_id && Number(l.amount) > 0);
+      if (!validPrimary.length || !validCash.length) { toast.error('Add at least one category row and one cash row'); return; }
+      if (Math.abs(primarySum - cashSum) >= 0.01) { toast.error(`Debits/credits mismatch: ${primarySum.toFixed(2)} vs ${cashSum.toFixed(2)}`); return; }
+      setBusy(true);
+      try {
+        const idx = (id) => accounts.find(a => a.id === id) || {};
+        // Expense JE: debit expense accounts, credit cash accounts.
+        // Income JE:  debit cash accounts,    credit revenue accounts.
+        const lines = isExpense ? [
+          ...validPrimary.map(l => { const a = idx(l.account_id); return { account_id: a.id, account_code: a.code, account_name: a.name, debit: Number(l.amount), credit: 0, memo: l.memo || '' }; }),
+          ...validCash.map(l => { const a = idx(l.account_id); return { account_id: a.id, account_code: a.code, account_name: a.name, debit: 0, credit: Number(l.amount), memo: l.memo || '' }; }),
+        ] : [
+          ...validCash.map(l => { const a = idx(l.account_id); return { account_id: a.id, account_code: a.code, account_name: a.name, debit: Number(l.amount), credit: 0, memo: l.memo || '' }; }),
+          ...validPrimary.map(l => { const a = idx(l.account_id); return { account_id: a.id, account_code: a.code, account_name: a.name, debit: 0, credit: Number(l.amount), memo: l.memo || '' }; }),
+        ];
+        await api.post('/finance/journal', {
+          date: form.date,
+          description: form.description || (isExpense ? 'Split expense' : 'Split income'),
+          reference: form.reference,
+          location_id: form.location_id,
+          department_id: form.department_id || null,
+          vendor: form.vendor || null,
+          lines,
+        });
+        toast.success(`Split ${isExpense ? 'expense' : 'income'} recorded (${validPrimary.length}×${validCash.length} lines)`);
+        onDone();
+      } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post split entry'); }
+      setBusy(false);
+      return;
+    }
     if (!form.amount || !form.account_id || !form.paid_from_id) { toast.error('Amount and both accounts are required'); return; }
     if (!form.location_id) { toast.error('Pick a campus / sub-location'); return; }
     setBusy(true);
@@ -594,10 +639,18 @@ function QuickPostDialog({ mode, onClose, onDone }) {
 
   return (
     <Dialog open={!!mode} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>{isExpense ? 'Record expense' : 'Record income'}</DialogTitle></DialogHeader>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center justify-between">
+            <span>{isExpense ? 'Record expense' : 'Record income'}</span>
+            <label className="flex items-center gap-2 text-xs font-normal" data-testid="split-toggle-wrapper">
+              <input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} data-testid="quick-post-split-toggle" />
+              Split across multiple accounts
+            </label>
+          </DialogTitle>
+        </DialogHeader>
         <div className="space-y-3">
-          <div><Label>Amount</Label><Input data-testid="quick-post-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
+          {!split && <div><Label>Amount</Label><Input data-testid="quick-post-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>}
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
 
           {/* Campus / sub-location — required, defaults to user's active campus */}
@@ -637,17 +690,52 @@ function QuickPostDialog({ mode, onClose, onDone }) {
 
           <div>
             <Label>{isExpense ? 'Expense account' : 'Revenue account'}</Label>
-            <Select value={form.account_id} onValueChange={v => setForm({ ...form, account_id: v })}>
-              <SelectTrigger data-testid="quick-post-account"><SelectValue placeholder="Choose account" /></SelectTrigger>
-              <SelectContent>{primary.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-            </Select>
+            {split ? (
+              <div className="space-y-1.5" data-testid="split-primary-legs">
+                {primaryLegs.map((leg, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_100px_28px] gap-1.5 items-center" data-testid={`split-primary-row-${i}`}>
+                    <Select value={leg.account_id} onValueChange={v => setPrimaryLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Account" /></SelectTrigger>
+                      <SelectContent>{primary.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <Input type="number" step="0.01" placeholder="Amount" className="h-8 text-xs" value={leg.amount} onChange={e => setPrimaryLegs(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} data-testid={`split-primary-amount-${i}`} />
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" disabled={primaryLegs.length === 1} onClick={() => setPrimaryLegs(rows => rows.filter((_, j) => j !== i))}>×</Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" className="h-7 text-xs w-full" onClick={() => setPrimaryLegs(rows => [...rows, emptyLeg()])} data-testid="split-add-primary">+ Add {isExpense ? 'expense' : 'revenue'} line</Button>
+              </div>
+            ) : (
+              <Select value={form.account_id} onValueChange={v => setForm({ ...form, account_id: v })}>
+                <SelectTrigger data-testid="quick-post-account"><SelectValue placeholder="Choose account" /></SelectTrigger>
+                <SelectContent>{primary.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+              </Select>
+            )}
           </div>
           <div>
             <Label>{isExpense ? 'Paid from (cash/bank)' : 'Deposited to (cash/bank)'}</Label>
-            <Select value={form.paid_from_id} onValueChange={v => setForm({ ...form, paid_from_id: v })}>
-              <SelectTrigger data-testid="quick-post-paid-from"><SelectValue placeholder="Choose account" /></SelectTrigger>
-              <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-            </Select>
+            {split ? (
+              <div className="space-y-1.5" data-testid="split-cash-legs">
+                {cashLegs.map((leg, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_100px_28px] gap-1.5 items-center" data-testid={`split-cash-row-${i}`}>
+                    <Select value={leg.account_id} onValueChange={v => setCashLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Cash / bank" /></SelectTrigger>
+                      <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <Input type="number" step="0.01" placeholder="Amount" className="h-8 text-xs" value={leg.amount} onChange={e => setCashLegs(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} data-testid={`split-cash-amount-${i}`} />
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" disabled={cashLegs.length === 1} onClick={() => setCashLegs(rows => rows.filter((_, j) => j !== i))}>×</Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" className="h-7 text-xs w-full" onClick={() => setCashLegs(rows => [...rows, emptyLeg()])} data-testid="split-add-cash">+ Add cash / bank line</Button>
+                <div className={`text-[11px] mt-1 px-2 py-1 rounded ${balanced ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`} data-testid="split-balance-badge">
+                  {isExpense ? 'Debits' : 'Credits'} {primarySum.toFixed(2)} · {isExpense ? 'Credits' : 'Debits'} {cashSum.toFixed(2)} {balanced ? '· balanced ✓' : `· off by ${(primarySum - cashSum).toFixed(2)}`}
+                </div>
+              </div>
+            ) : (
+              <Select value={form.paid_from_id} onValueChange={v => setForm({ ...form, paid_from_id: v })}>
+                <SelectTrigger data-testid="quick-post-paid-from"><SelectValue placeholder="Choose account" /></SelectTrigger>
+                <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+              </Select>
+            )}
           </div>
           <div><Label>Reference / receipt #</Label><Input data-testid="quick-post-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
           {isExpense && (
