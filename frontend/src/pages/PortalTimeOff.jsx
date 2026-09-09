@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { CalendarDays, Plus, Trash2, RefreshCw, Check, X, Clock, Info } from 'lucide-react';
+import { CalendarDays, Plus, Trash2, RefreshCw, Check, X, Clock, Info, UserCheck } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -26,8 +26,18 @@ export default function PortalTimeOff() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ leave_type: '', start_date: '', end_date: '', half_day: false, start_time: '', end_time: '', notes: '' });
+  const [form, setForm] = useState({ leave_type: '', start_date: '', end_date: '', half_day: false, start_time: '', end_time: '', notes: '', approval_delegate_to: '' });
   const [saving, setSaving] = useState(false);
+  // Approval delegation — only show for users who are themselves approvers
+  const APPROVER_ROLES = new Set(['admin', 'system_admin', 'Executive Director', 'Adviser',
+    'Director', 'Regional Director', 'Manager', 'Coordinator', 'HR']);
+  const isApprover = APPROVER_ROLES.has(user?.role || '');
+  const [colleagues, setColleagues] = useState([]);
+  useEffect(() => {
+    if (!isApprover) return;
+    api.get('/admin/users').then(r => setColleagues((r.data || []).filter(u => u.id !== user?.id && APPROVER_ROLES.has(u.role)))).catch(() => setColleagues([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isApprover]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -64,6 +74,9 @@ export default function PortalTimeOff() {
         half_day: !!form.half_day,
         notes: (timeNote + (form.notes || '')).trim(),
       };
+      if (isApprover && form.approval_delegate_to) {
+        payload.approval_delegate_to = form.approval_delegate_to;
+      }
       await api.post('/hr/leave/requests', payload);
       toast.success('Time-off request submitted — manager notified');
       setShowNew(false);
@@ -216,6 +229,21 @@ export default function PortalTimeOff() {
               </div>
             )}
             <div className="space-y-1.5"><Label className="text-xs">Notes (visible to approver)</Label><Textarea rows={3} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Reason, coverage plan, contact number…" data-testid="timeoff-notes" /></div>
+            {isApprover && (
+              <div className="space-y-1.5" data-testid="delegate-picker">
+                <Label className="text-xs flex items-center gap-1"><UserCheck size={11} /> Delegate my approvals to (optional)</Label>
+                <Select value={form.approval_delegate_to} onValueChange={v => setForm(f => ({ ...f, approval_delegate_to: v }))}>
+                  <SelectTrigger data-testid="delegate-select"><SelectValue placeholder="Pick a backup approver…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No delegate — leave the queue as-is</SelectItem>
+                    {colleagues.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name} <span className="text-[10px] text-muted-foreground">· {c.role}</span></SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">Kicks in automatically the day your leave starts and clears the day after it ends.</p>
+              </div>
+            )}
             <div className="flex items-start gap-2 text-[11px] text-muted-foreground bg-muted/40 rounded p-2">
               <Info size={12} className="mt-0.5 shrink-0" />
               <span>Business-day math is applied automatically. Weekends and holidays are excluded.</span>

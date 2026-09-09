@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink, CalendarOff } from 'lucide-react';
+import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink, CalendarOff, Ticket } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 
@@ -14,6 +14,7 @@ const STAFF_NAV = [
   { to: '/portal/tasks', icon: ListTodo, label: 'My Tasks' },
   { to: '/portal/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/portal/events', icon: Calendar, label: 'Events & RSVP' },
+  { to: '/portal/tickets', icon: Ticket, label: 'My Tickets' },
   { to: '/portal/time-off', icon: CalendarOff, label: 'Time Off' },
   { to: '/portal/expenses', icon: Receipt, label: 'Expenses' },
   { to: '/portal/sales', icon: ShoppingBag, label: 'My Sales' },
@@ -25,6 +26,7 @@ const STAFF_NAV = [
 const GUEST_NAV = [
   { to: '/portal', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/portal/events', icon: Calendar, label: 'Events & Tickets' },
+  { to: '/portal/tickets', icon: Ticket, label: 'My Tickets' },
   { to: '/portal/sales', icon: ShoppingBag, label: 'My Purchases' },
   { to: '/portal/family', icon: Heart, label: 'My Family' },
   { to: '/portal/profile', icon: User, label: 'Profile' },

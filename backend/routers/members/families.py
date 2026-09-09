@@ -6,6 +6,29 @@ from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
+
+async def _log_family_event(family_id: Optional[str], action: str, actor: dict, meta: Optional[dict] = None):
+    """Append a family-scoped audit record. Powers the timeline shown on
+    the admin Family Approvals tab and per-family review dialog."""
+    if not family_id:
+        return
+    try:
+        doc = {
+            "id": f"fah_{uuid.uuid4().hex[:10]}",
+            "family_id": family_id,
+            "action": action,
+            "actor_id": actor.get("id"),
+            "actor_name": actor.get("name", ""),
+            "actor_role": actor.get("role", ""),
+            "at": datetime.now(timezone.utc).isoformat(),
+            "meta": meta or {},
+        }
+        await db.family_audit.insert_one(doc)
+    except Exception:
+        # audit failures never block user-facing actions
+        pass
+
+
 router = APIRouter(prefix="/api", tags=["members"])
 
 
@@ -157,6 +180,9 @@ async def decide_pending_child(child_id: str, data: dict, current_user: dict = D
         except Exception:
             pass
         await _audit(current_user["id"], "approve", "child", child_id, {"name": child.get("name")})
+        await _log_family_event(child.get("family_id"), "child_approved", current_user, {
+            "child_id": child_id, "child_name": child.get("name"),
+        })
         return {"decided": "approved", "child_id": child_id}
     # Reject → soft-delete
     child["_deleted_from"] = "children"
@@ -177,6 +203,9 @@ async def decide_pending_child(child_id: str, data: dict, current_user: dict = D
     except Exception:
         pass
     await _audit(current_user["id"], "reject", "child", child_id, {"name": child.get("name"), "reason": child.get("reject_reason")})
+    await _log_family_event(child.get("family_id"), "child_rejected", current_user, {
+        "child_id": child_id, "child_name": child.get("name"), "reason": child.get("reject_reason"),
+    })
     return {"decided": "rejected", "child_id": child_id}
 
 
@@ -220,6 +249,9 @@ async def decide_pending_guardian(family_id: str, guardian_id: str, data: dict, 
                 )
         except Exception:
             pass
+        await _log_family_event(family_id, "guardian_approved", current_user, {
+            "guardian_id": guardian_id, "guardian_name": guardian.get("name"),
+        })
         return {"decided": "approved", "family_id": family_id, "guardian_id": guardian_id}
     # Reject → pull guardian off the array
     await db.families.update_one({"id": family_id}, {"$pull": {"guardians": {"id": guardian_id}}})
@@ -234,7 +266,26 @@ async def decide_pending_guardian(family_id: str, guardian_id: str, data: dict, 
             )
     except Exception:
         pass
+    await _log_family_event(family_id, "guardian_rejected", current_user, {
+        "guardian_id": guardian_id, "guardian_name": guardian.get("name"),
+        "reason": (data.get("reason") or "")[:200],
+    })
     return {"decided": "rejected", "family_id": family_id, "guardian_id": guardian_id}
+
+
+@router.get("/families/{family_id}/audit")
+async def get_family_audit(family_id: str, current_user: dict = Depends(get_current_user)):
+    """Chronological audit trail for a family — every submission,
+    approval, rejection, plus who did it and when. Powers the History
+    modal on the admin Family Approvals tab.
+    Restricted to staff+ so parents can't scrape other families."""
+    role = (current_user.get("role") or "")
+    if role in {"Guest", "guest", "Visitor", "visitor"}:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rows = await db.family_audit.find(
+        {"family_id": family_id}, {"_id": 0}
+    ).sort("at", -1).to_list(500)
+    return rows
 
 
 @router.put("/families/{family_id}")
@@ -412,6 +463,9 @@ async def parent_add_child(data: ChildCreate, current_user: dict = Depends(get_c
     }
     await db.children.insert_one(doc)
     doc.pop("_id", None)
+    await _log_family_event(family_id, "child_submitted", current_user, {
+        "child_id": doc["id"], "child_name": doc.get("name"),
+    })
     # Notify admins so they can approve the new child record
     try:
         from routers.notifications import create_notification
@@ -454,6 +508,9 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
         "added_by": current_user["id"],
     }
     await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    await _log_family_event(family_id, "guardian_submitted", current_user, {
+        "guardian_id": guardian["id"], "guardian_name": guardian["name"], "relationship": guardian.get("relationship"),
+    })
     try:
         from routers.notifications import create_notification
         admins = await db.users.find(

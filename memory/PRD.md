@@ -7,7 +7,14 @@ strict location enforcement, HR/payroll with weekly & multi-cadence pay,
 kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
-### iter 344b — Approval bell · Family approval queue · Public event checkout
+### iter 344c — Finance edits · Ticket wallet · Family audit · Approval delegation
+- **Finance editing**: The frontend was sending the full `lines[]` on every save which triggered a reverse-and-repost even for cosmetic edits. Added a `linesDirty` flag in `FinancePage.jsx` — only sends `lines` when an account swap or memo actually changed, so a description typo no longer produces two extra JEs.
+- **Delete a reversal**: New `DELETE /api/finance/journal/{je_id}` restricted to `source='reversal'` entries and refuses when the period is locked. Un-marks the original entry so it posts again cleanly. UI shows a "Delete reversal" button on reversal rows.
+- **Ticket wallet**: `GET /api/portal/tickets` flattens every ticket the caller owns (public bookings + admin auto-issues) into passes with event context and redemption status. New `PortalTickets.jsx` renders a QR pass per ticket via `react-qrcode-logo` — door staff can scan and redeem through the existing `POST /api/tickets/{id}/redeem`. Nav item added to both staff and guest portals.
+- **Family change history**: New `GET /api/families/{id}/audit` returns a chronological trail. Every submission / approval / rejection now writes a `family_audit` doc via `_log_family_event`. The People page **Family Approvals** tab gained a **Change history** button that opens a per-family-or-global timeline dialog.
+- **Approval delegation**: Managers can now name a delegate when filing their own leave. On approval the backend stamps `approval_delegate_to/from/until` on their user record. `GET /hr/pending-count` bundles delegated items on top of the delegate's own queue and returns a `delegated_from` list. `PortalTimeOff.jsx` renders the delegate picker for approver-role users only. The delegate gets a notification when the delegation activates.
+
+
 - **Manager approval bell**: new `GET /api/hr/pending-count` returns `{leave, reimbursements, total}` scoped to the approver's campus and excluding their own requests. `Layout.jsx` polls it every 60s for manager+ / HR and paints a red numeric pip on the HR sidebar icon so pending decisions can't hide.
 - **Family approval queue** (parent-submitted children + guardians):
   * New endpoints in `routers/members/families.py`:

@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2026-09-09 — iter 344c (finance edits · ticket wallet · family audit · delegation)
+- Fix: Finance edits fired reverse-and-repost even for cosmetic changes. `FinancePage.jsx` now tracks a `linesDirty` flag and only sends `lines` when accounts/memos actually changed.
+- Feat: `DELETE /api/finance/journal/{je_id}` for reversal entries (source='reversal') while the period is open — un-marks the original entry so it posts again. UI shows a "Delete reversal" button on reversal rows.
+- Feat: Ticket wallet — `GET /api/portal/tickets` returns flattened passes (event context + redemption status). New `PortalTickets.jsx` renders scannable QR passes via `react-qrcode-logo`. Nav entries added to both staff & guest portal.
+- Feat: Family audit trail — new `family_audit` collection, `_log_family_event` helper writes on every submission/approval/rejection, `GET /api/families/{family_id}/audit` exposes the trail. **Change history** button on People → Family Approvals opens a per-family-or-global timeline dialog.
+- Feat: Approval delegation — Managers can name a delegate when filing leave. On approve, backend stamps `approval_delegate_to/from/until` on their user row. `/hr/pending-count` folds delegated items into the delegate's queue and returns `delegated_from[]`. `PortalTimeOff.jsx` shows the delegate picker for approver roles only.
+
 ## 2026-09-09 — iter 344b (approval bell · family queue · pending-guest checkout)
 - Feat: `GET /api/hr/pending-count` (scoped to approver, self-excluded). `Layout.jsx` polls it and paints a red numeric pip on the HR sidebar icon.
 - Feat: Family approval queue. `GET /api/families/pending-approvals` + `POST .../child/{id}/decide` + `POST .../guardian/{family_id}/{guardian_id}/decide`. Parents get an in-app notification when their submission is approved or rejected. New **Family Approvals** tab on `UnifiedPeoplePage` (only visible when the queue is non-empty).

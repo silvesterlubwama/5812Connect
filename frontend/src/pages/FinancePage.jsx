@@ -697,35 +697,49 @@ function JournalPanel() {
     setEditForm(f => ({ ...f, lines: (editing.lines || []).map(ln => ({ ...ln })) }));
   };
   const cancelLineEdit = () => setEditForm(f => ({ ...f, lines: null }));
+  const [linesDirty, setLinesDirty] = useState(false);
   const swapAccount = (idx, acctId) => {
     const acct = editAccounts.find(a => a.id === acctId);
     if (!acct) return;
+    setLinesDirty(true);
     setEditForm(f => ({
       ...f,
       lines: f.lines.map((ln, i) => i === idx ? { ...ln, account_id: acct.id, account_code: acct.code, account_name: acct.name } : ln),
     }));
   };
-  const setLineMemo = (idx, memo) => setEditForm(f => ({ ...f, lines: f.lines.map((ln, i) => i === idx ? { ...ln, memo } : ln) }));
+  const setLineMemo = (idx, memo) => { setLinesDirty(true); setEditForm(f => ({ ...f, lines: f.lines.map((ln, i) => i === idx ? { ...ln, memo } : ln) })); };
 
   const saveEdit = async () => {
     if (!editing) return;
     setBusy(true);
     try {
+      // iter344c — only pass `lines` when the caller actually retagged an
+      // account or edited a memo. Without this the backend reverse-and-
+      // repost path fires for every cosmetic edit (a description typo
+      // would post two extra JEs). Frontend now tracks a `linesDirty`
+      // flag that flips on any account swap / memo edit.
       const payload = { description: editForm.description, reference: editForm.reference, date: editForm.date };
-      if (editForm.lines) {
-        // Backend reverse-and-repost path expects the full lines array —
-        // strip client-only fields, keep the balanced debit/credit values.
+      if (linesDirty && editForm.lines) {
         payload.lines = editForm.lines.map(ln => ({
           account_id: ln.account_id, account_code: ln.account_code, account_name: ln.account_name,
           debit: Number(ln.debit || 0), credit: Number(ln.credit || 0), memo: ln.memo || '',
         }));
       }
       await api.put(`/finance/journal/${editing.id}`, payload);
-      toast.success(editForm.lines ? 'Entry replaced (audit trail preserved)' : 'Entry updated');
-      setEditing(null);
+      toast.success(linesDirty ? 'Entry replaced (audit trail preserved)' : 'Entry updated in place');
+      setEditing(null); setLinesDirty(false);
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
     setBusy(false);
+  };
+
+  const deleteReversal = async (je) => {
+    if (!window.confirm(`Delete this reversal (${je.description})? The original entry it reverses will be un-marked and post again. Only allowed while the fiscal period is open.`)) return;
+    try {
+      await api.delete(`/finance/journal/${je.id}`);
+      toast.success('Reversal deleted, original restored');
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
   };
 
   // Text search is client-side across description + line account names/codes
@@ -831,6 +845,9 @@ function JournalPanel() {
                             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(je)} data-testid={`journal-edit-${je.id}`}>Edit</Button>
                             <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>Reverse</Button>
                           </>
+                        )}
+                        {je.source === 'reversal' && (
+                          <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" title="Deletes this reversal and restores the original entry. Only allowed while the fiscal period is open." onClick={() => deleteReversal(je)} data-testid={`journal-delete-reversal-${je.id}`}>Delete reversal</Button>
                         )}
                       </TableCell>
                     )}

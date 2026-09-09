@@ -431,3 +431,64 @@ async def portal_sales(current_user: dict = Depends(get_current_user)):
         {"created_by": current_user["id"]}, {"_id": 0}
     ).sort("created_at", -1).to_list(200)
     return sales
+
+
+@router.get("/tickets")
+async def portal_tickets(current_user: dict = Depends(get_current_user)):
+    """Ticket wallet — every event ticket bought or auto-issued to the
+    caller, plus enough event context (title/date/venue) to render a
+    scannable pass. Consumed by `PortalTickets.jsx`.
+
+    Matches on either `auto_member_id` (admin-issued tickets) or the
+    caller's email (public checkout tickets). Tickets are flattened out
+    of `public_bookings.ticket_ids[]` so each row is a scannable pass.
+    """
+    email = (current_user.get("email") or "").strip().lower()
+    match: list = [{"auto_member_id": current_user["id"]}]
+    if email:
+        match.append({"email": email})
+    bookings = await db.public_bookings.find(
+        {"$or": match, "status": {"$ne": "cancelled"}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(300)
+    # Pull all events referenced so we can attach date/venue etc.
+    event_ids = list({b["event_id"] for b in bookings if b.get("event_id")})
+    events = {}
+    if event_ids:
+        async for ev in db.events.find(
+            {"id": {"$in": event_ids}},
+            {"_id": 0, "id": 1, "title": 1, "date": 1, "time": 1, "end_time": 1, "end_date": 1, "location": 1},
+        ):
+            events[ev["id"]] = ev
+    # Redemption status (event_tickets rows track used/void)
+    all_ticket_ids = [tid for b in bookings for tid in (b.get("ticket_ids") or [])]
+    used_map = {}
+    if all_ticket_ids:
+        async for t in db.event_tickets.find(
+            {"id": {"$in": all_ticket_ids}}, {"_id": 0, "id": 1, "status": 1, "used_at": 1},
+        ):
+            used_map[t["id"]] = {"status": t.get("status"), "used_at": t.get("used_at")}
+    passes = []
+    for b in bookings:
+        ev = events.get(b.get("event_id"), {}) or {}
+        for tid in (b.get("ticket_ids") or [b.get("id")]):
+            u = used_map.get(tid, {})
+            passes.append({
+                "ticket_id": tid,
+                "booking_id": b.get("id"),
+                "event_id": b.get("event_id"),
+                "event_title": ev.get("title") or b.get("event_title", ""),
+                "event_date": ev.get("date") or b.get("event_date", ""),
+                "event_time": ev.get("time") or b.get("event_time", ""),
+                "event_location": ev.get("location", ""),
+                "holder_name": b.get("name"),
+                "tier_name": b.get("tier_name"),
+                "price": b.get("price") or 0,
+                "currency": b.get("currency") or "UGX",
+                "is_free": b.get("is_free", False),
+                "auto_issued": b.get("auto_issued", False),
+                "purchased_at": b.get("created_at"),
+                "status": u.get("status") or ("used" if u.get("used_at") else "valid"),
+                "used_at": u.get("used_at"),
+            })
+    return passes
+

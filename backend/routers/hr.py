@@ -309,11 +309,13 @@ def _is_hr_or_above(current_user: dict) -> bool:
 @router.get("/pending-count")
 async def hr_pending_count(current_user: dict = Depends(get_current_user)):
     """Counts of HR items awaiting the caller's decision — powers the red
-    pip on the HR sidebar nav. Restricted to manager+ / HR roles."""
+    pip on the HR sidebar nav. Restricted to manager+ / HR roles.
+    Also counts items delegated to the caller while their original
+    approver is out on approved leave."""
     role = (current_user.get("role") or "")
     if role not in {"admin", "system_admin", "Executive Director", "Adviser", "Director",
                     "Regional Director", "Manager", "Coordinator", "HR"}:
-        return {"leave": 0, "reimbursements": 0, "total": 0}
+        return {"leave": 0, "reimbursements": 0, "total": 0, "delegated_from": []}
     # Scope pending items to the approver's location(s) — admins see all.
     location_scope = {}
     if role not in {"admin", "system_admin", "Executive Director", "Adviser"}:
@@ -331,7 +333,46 @@ async def hr_pending_count(current_user: dict = Depends(get_current_user)):
     reimb = await db.hr_reimbursements.count_documents({
         "status": "pending", **{"staff_id": {"$ne": current_user["id"]}}, **location_scope,
     })
-    return {"leave": leave, "reimbursements": reimb, "total": leave + reimb}
+    # Delegation pass — anyone currently on approved leave who delegated to
+    # this caller adds their pending items on top. Only counts while today
+    # falls inside the delegate window (inclusive).
+    today = datetime.now(timezone.utc).date().isoformat()
+    delegators = await db.users.find(
+        {"approval_delegate_to": current_user["id"]},
+        {"_id": 0, "id": 1, "name": 1, "approval_delegate_from": 1, "approval_delegate_until": 1},
+    ).to_list(50)
+    delegated_from = []
+    delegated_leave = 0
+    delegated_reimb = 0
+    for d in delegators:
+        d_from = d.get("approval_delegate_from") or ""
+        d_until = d.get("approval_delegate_until") or ""
+        if d_from and today < d_from:
+            continue
+        if d_until and today > d_until:
+            continue
+        delegated_from.append({"id": d["id"], "name": d.get("name", "")})
+        # Items originally waiting on this delegator at their location.
+        d_locs = []
+        u = await db.users.find_one({"id": d["id"]}, {"_id": 0, "location_id": 1, "location_ids": 1})
+        if u:
+            d_locs = list(u.get("location_ids") or [])
+            if u.get("location_id"):
+                d_locs.append(u["location_id"])
+        d_scope = {"location_id": {"$in": list(dict.fromkeys(d_locs))}} if d_locs else {}
+        delegated_leave += await db.hr_leave_requests.count_documents({
+            "status": "pending", "staff_id": {"$nin": [current_user["id"], d["id"]]}, **d_scope,
+        })
+        delegated_reimb += await db.hr_reimbursements.count_documents({
+            "status": "pending", "staff_id": {"$nin": [current_user["id"], d["id"]]}, **d_scope,
+        })
+    total = leave + reimb + delegated_leave + delegated_reimb
+    return {
+        "leave": leave + delegated_leave,
+        "reimbursements": reimb + delegated_reimb,
+        "total": total,
+        "delegated_from": delegated_from,
+    }
 
 
 @router.get("/settings/{location_id}")
@@ -2232,6 +2273,37 @@ async def update_leave_request(request_id: str, data: dict, current_user: dict =
         "decision_note": (data.get("decision_note") or "")[:500],
     }
     await db.hr_leave_requests.update_one({"id": request_id}, {"$set": update})
+    # iter344c — Approval Delegation: on approve, if the requester carries
+    # an `approval_delegate_to` on their profile OR passed one in when
+    # filing, stamp it on their user row for the leave window. Managers
+    # who are away won't ghost approvals — the /hr/pending-count query
+    # routes their pending items to the delegate automatically.
+    if status == "approved":
+        try:
+            delegate_id = (lr.get("approval_delegate_to") or "").strip()
+            if delegate_id:
+                await db.users.update_one(
+                    {"id": lr["staff_id"]},
+                    {"$set": {
+                        "approval_delegate_to": delegate_id,
+                        "approval_delegate_from": lr.get("start_date"),
+                        "approval_delegate_until": lr.get("end_date"),
+                        "approval_delegate_leave_id": request_id,
+                    }},
+                )
+                # Poke the delegate so they know the ball is in their court.
+                try:
+                    from routers.notifications import create_notification
+                    who = lr.get("staff_name") or "A manager"
+                    await create_notification(
+                        "Approval delegation active",
+                        f"{who} is on leave {lr.get('start_date')} – {lr.get('end_date')}. Their approvals now route to you.",
+                        delegate_id, "info", "/hr?tab=leave",
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Approval delegation stamp failed: {e}")
     return await db.hr_leave_requests.find_one({"id": request_id}, {"_id": 0})
 
 

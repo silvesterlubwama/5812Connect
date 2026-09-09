@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield, ExternalLink } from 'lucide-react';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield, ExternalLink, History } from 'lucide-react';
 import ClickToCallButton from '../components/ClickToCallButton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -66,6 +66,33 @@ export default function UnifiedPeoplePage() {
   }, []);
   useEffect(() => { reloadFamilyApprovals(); }, [reloadFamilyApprovals]);
   const familyApprovalCount = (familyApprovals.children?.length || 0) + (familyApprovals.guardians?.length || 0);
+  // iter344c — family change history modal (per-family audit trail)
+  const [historyDialog, setHistoryDialog] = useState({ open: false, familyId: null, familyName: '', rows: [] });
+  const openHistoryFor = async (familyId, familyName) => {
+    setHistoryDialog({ open: true, familyId, familyName, rows: [] });
+    try {
+      const { familiesApi: f } = await import('../services/api');
+      // Global timeline when no familyId (aggregate the most recent 200)
+      if (!familyId) {
+        const fams = await f.list();
+        const audits = await Promise.all((fams.data || []).slice(0, 20).map(x => f.audit(x.id).catch(() => ({ data: [] }))));
+        const all = [];
+        audits.forEach((r, i) => (r.data || []).forEach(row => all.push({ ...row, _family_name: fams.data[i].family_name })));
+        all.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+        setHistoryDialog(prev => ({ ...prev, rows: all.slice(0, 200) }));
+      } else {
+        const r = await f.audit(familyId);
+        setHistoryDialog(prev => ({ ...prev, rows: r.data || [] }));
+      }
+    } catch (err) { toast.error(err.response?.data?.detail || 'History unavailable'); }
+  };
+  // Auto-load when dialog opens without preloaded rows (from the header button)
+  useEffect(() => {
+    if (historyDialog.open && !historyDialog.rows.length && historyDialog.familyName === 'All families') {
+      openHistoryFor(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyDialog.open]);
 
   // Import state
   const [showBulkImport, setShowBulkImport] = useState(false);
@@ -727,6 +754,10 @@ export default function UnifiedPeoplePage() {
         {/* FAMILY APPROVALS TAB — parent-submitted children + guardians awaiting review */}
         {familyApprovalCount > 0 && (
           <TabsContent value="family-approvals" className="mt-4" data-testid="family-approvals-tab">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-muted-foreground">Every action here is appended to the family&apos;s audit trail.</p>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setHistoryDialog({ open: true, familyId: null, familyName: 'All families', rows: [] })} data-testid="fa-open-history"><History size={13} /> Change history</Button>
+            </div>
             <div className="space-y-4">
               {familyApprovals.children?.length > 0 && (
                 <div className="space-y-2">
@@ -805,6 +836,41 @@ export default function UnifiedPeoplePage() {
           </TabsContent>
         )}
       </Tabs>
+
+      {/* ADD MEMBER DIALOG */}
+      <Dialog open={historyDialog.open} onOpenChange={(o) => setHistoryDialog(prev => ({ ...prev, open: o }))}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="family-history-dialog">
+          <DialogHeader>
+            <DialogTitle>Family change history — {historyDialog.familyName}</DialogTitle>
+            <DialogDescription>Every submission, approval, or rejection with the actor and timestamp. Perfect audit fodder.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            {historyDialog.rows.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">No family changes recorded yet.</p>
+            ) : historyDialog.rows.map(r => {
+              const actionColor = r.action.includes('approved') ? 'bg-green-100 text-green-700' : r.action.includes('rejected') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+              return (
+                <div key={r.id} className="flex items-start gap-3 border-l-2 pl-3 py-1" style={{ borderColor: r.action.includes('approved') ? '#10b981' : r.action.includes('rejected') ? '#ef4444' : '#f59e0b' }} data-testid={`fa-history-${r.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge className={`${actionColor} text-[10px] capitalize`}>{r.action.replace(/_/g, ' ')}</Badge>
+                      {r._family_name && <span className="text-[10px] text-muted-foreground">· {r._family_name}</span>}
+                    </div>
+                    <p className="text-xs mt-0.5">
+                      <strong>{r.actor_name || 'Unknown'}</strong>
+                      <span className="text-muted-foreground"> ({r.actor_role || '—'})</span>
+                      {r.meta?.child_name && <> · child: <em>{r.meta.child_name}</em></>}
+                      {r.meta?.guardian_name && <> · guardian: <em>{r.meta.guardian_name}</em></>}
+                      {r.meta?.reason && <> · reason: <em>{r.meta.reason}</em></>}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">{r.at ? new Date(r.at).toLocaleString() : '—'}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ADD MEMBER DIALOG */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>

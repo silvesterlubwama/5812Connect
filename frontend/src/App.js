@@ -66,6 +66,7 @@ import SharedBoardPage from './pages/SharedBoardPage';
 import PortalSales from './pages/PortalSales';
 import PortalFamily from './pages/PortalFamily';
 import PortalTimeOff from './pages/PortalTimeOff';
+import PortalTickets from './pages/PortalTickets';
 // New Feature Pages
 import AnalyticsPage from './pages/AnalyticsPage';
 import ReportBuilderPage from './pages/ReportBuilderPage';
@@ -217,6 +218,7 @@ function AppRoutes() {
         <Route path="sales" element={<PortalSales />} />
         <Route path="documents" element={<PortalDocuments />} />
         <Route path="family" element={<PortalFamily />} />
+        <Route path="tickets" element={<PortalTickets />} />
         <Route path="time-off" element={<PortalTimeOff />} />
         <Route path="profile" element={<PortalProfile />} />
       </Route>

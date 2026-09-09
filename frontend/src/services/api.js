@@ -399,6 +399,7 @@ export const familiesApi = {
   pendingApprovals: () => api.get('/families/pending-approvals'),
   decidePendingChild: (childId, action, reason = '') => api.post(`/families/pending-approvals/child/${childId}/decide`, { action, reason }),
   decidePendingGuardian: (familyId, guardianId, action, reason = '') => api.post(`/families/pending-approvals/guardian/${familyId}/${guardianId}/decide`, { action, reason }),
+  audit: (familyId) => api.get(`/families/${familyId}/audit`),
 };
 export const childrenApi = {
   list: (params) => api.get('/children', { params }),

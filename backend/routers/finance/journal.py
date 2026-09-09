@@ -126,3 +126,30 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
 async def reverse_entry(je_id: str, data: dict, current_user: dict = Depends(require_director)):
     reason = (data or {}).get("reason") or "No reason provided"
     return await reverse_journal_entry(je_id, reason=reason, current_user=current_user)
+
+
+@router.delete("/{je_id}")
+async def delete_entry(je_id: str, current_user: dict = Depends(require_director)):
+    """Delete a reversal JE (source='reversal') and un-mark the entry it
+    reversed so the original posts again. Refuses when the fiscal period
+    covering the entry is locked. Non-reversal JEs must go through
+    /reverse — deleting a live posted transaction outright would break
+    the audit trail."""
+    from .setup import period_is_locked
+    doc = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if doc.get("source") != "reversal":
+        raise HTTPException(status_code=400, detail="Only reversal entries can be deleted directly. Use /reverse on live entries.")
+    if await period_is_locked(doc.get("date") or "", doc.get("location_id")):
+        raise HTTPException(status_code=400, detail="Fiscal period is locked — reversal cannot be undone")
+    original_id = doc.get("reverses_id") or doc.get("reversed_je_id") or doc.get("reverses")
+    # Delete this reversal + un-mark the original
+    await db.finance_journal_entries.delete_one({"id": je_id})
+    if original_id:
+        await db.finance_journal_entries.update_one(
+            {"id": original_id},
+            {"$unset": {"reversed": "", "reversed_at": "", "reversed_by": "", "reversed_reason": "", "reversed_by_je": ""}},
+        )
+    return {"deleted": je_id, "restored_original": original_id}
+
