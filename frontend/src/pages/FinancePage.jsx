@@ -509,9 +509,10 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   const defaultDept = (user?.department_ids || [])[0] || '';
   const [form, setForm] = useState({
     amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-    description: '', reference: '',
+    description: '', reference: '', vendor: '',
     location_id: defaultCampus, department_id: defaultDept,
   });
+  const [vendorMatches, setVendorMatches] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -527,7 +528,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     // Reset form to prefilled defaults whenever the dialog opens.
     setForm({
       amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-      description: '', reference: '',
+      description: '', reference: '', vendor: '',
       location_id: defaultCampus, department_id: defaultDept,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -572,6 +573,9 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         description: form.description, reference: form.reference,
         location_id: form.location_id,
         department_id: form.department_id || undefined,
+        // iter344h — pass vendor free-text so the backend auto-upserts
+        // and returns a linked vendor_id on the resulting expense.
+        vendor: form.vendor || undefined,
       };
       const payload = isExpense
         ? { ...shared, expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id }
@@ -581,7 +585,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
       onDone();
       setForm({
         amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-        description: '', reference: '',
+        description: '', reference: '', vendor: '',
         location_id: defaultCampus, department_id: defaultDept,
       });
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
@@ -646,6 +650,39 @@ function QuickPostDialog({ mode, onClose, onDone }) {
             </Select>
           </div>
           <div><Label>Reference / receipt #</Label><Input data-testid="quick-post-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
+          {isExpense && (
+            <div className="relative">
+              <Label>Vendor</Label>
+              <Input
+                data-testid="quick-post-vendor"
+                value={form.vendor || ''}
+                placeholder="Start typing a vendor name…"
+                onChange={async e => {
+                  const v = e.target.value;
+                  setForm({ ...form, vendor: v });
+                  if (v && v.length >= 1) {
+                    try {
+                      const { vendorsApi } = await import('../services/api');
+                      const r = await vendorsApi.suggest(v);
+                      setVendorMatches(r.data || []);
+                    } catch { setVendorMatches([]); }
+                  } else setVendorMatches([]);
+                }}
+                onBlur={() => setTimeout(() => setVendorMatches([]), 200)}
+              />
+              {vendorMatches.length > 0 && (
+                <div className="absolute z-50 left-0 right-0 top-full mt-1 border rounded-lg bg-popover shadow max-h-48 overflow-y-auto" data-testid="vendor-suggest-list">
+                  {vendorMatches.map(v => (
+                    <button key={v.id} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent" onClick={() => { setForm(f => ({ ...f, vendor: v.name })); setVendorMatches([]); }} data-testid={`vendor-suggest-${v.id}`}>
+                      <div className="font-medium">{v.name}</div>
+                      {(v.email || v.phone || v.category) && <div className="text-[10px] text-muted-foreground">{[v.category, v.phone, v.email].filter(Boolean).join(' · ')}</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground mt-1">Auto-links to an existing vendor profile, or creates one on the fly.</p>
+            </div>
+          )}
           <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What was this for?" /></div>
         </div>
         <DialogFooter>

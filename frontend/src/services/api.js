@@ -746,7 +746,17 @@ export const webAuthnApi = {
   removeCredential: (id) => api.delete(`/webauthn/credentials/${id}`),
 };
 
-// ---- PORTAL (SELF-SERVICE) ----
+// ---- VENDORS (transactions integration) ----
+export const vendorsApi = {
+  list: (params) => api.get('/vendors', { params }),
+  suggest: (q) => api.get('/vendors/suggest', { params: { q } }),
+  get: (id) => api.get(`/vendors/${id}`),
+  transactions: (id) => api.get(`/vendors/${id}/transactions`),
+  create: (data) => api.post('/vendors', data),
+  update: (id, data) => api.put(`/vendors/${id}`, data),
+};
+
+
 export const portalApi = {
   dashboard: () => api.get('/portal/dashboard'),
   profile: () => api.get('/portal/profile'),
