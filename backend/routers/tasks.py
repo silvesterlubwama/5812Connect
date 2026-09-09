@@ -333,16 +333,28 @@ async def bulk_archive_tasks(data: dict, current_user: dict = Depends(get_curren
 
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, data: TaskUpdate, current_user: dict = Depends(get_current_user)) -> dict:
-    raw = data.model_dump()
+    # iter344d — only touch fields the CLIENT actually sent. Old code used
+    # `model_dump()` which populated every Optional field as `None` and then
+    # wrote those `None` values back into Mongo, wiping `board_id`,
+    # `list_id`, `position`, `is_archived` on every save. Edited cards
+    # disappeared off the board because they lost their parent references.
+    raw = data.model_dump(exclude_unset=True)
     update_data = {}
     for k, v in raw.items():
         if v is not None:
             update_data[k] = v
         elif k in {"assignees", "labels", "checklist", "attachments", "tags"}:
-            # Allow clearing list fields explicitly
+            # Allow explicit clearing of list fields
             update_data[k] = []
-        elif k in {"list_id", "board_id", "position", "assignee", "is_archived"}:
-            update_data[k] = v
+        elif k in {"due_date", "description", "assignee", "recurrence_pattern",
+                   "priority", "status"}:
+            # Explicit-null: clearing a due date, description, or the single
+            # assignee slot is a legitimate edit (was previously silently
+            # skipped).
+            update_data[k] = None
+        # else: `board_id`, `list_id`, `position`, `is_archived` and any
+        # unknown field falls through — never set to None unless the caller
+        # explicitly did so.
     update_data.pop("id", None)
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.tasks.update_one({"id": task_id}, {"$set": update_data})

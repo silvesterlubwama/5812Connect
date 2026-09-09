@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 2026-09-09 — iter 344d (task edit board_id wipe fix + prod prefetch cleanup)
+- **CRITICAL FIX**: `PUT /api/tasks/{id}` was overwriting `board_id`, `list_id`, `position`, and `is_archived` with `None` on every edit because `model_dump()` populated the missing Optional fields as `None` and the update loop wrote them back. Result: edited cards lost their parent board and vanished from the UI. Switched to `model_dump(exclude_unset=True)` so only client-sent fields are touched. Explicit clears for `due_date` / `description` / `assignee` still work.
+- Removed `/api/access/checkpoints`, `/api/members/{id}/qr-code`, `/api/members/{id}/profile-photo` from the PWA offline prefetch set (all three were 404-spamming production).
+
 ## 2026-09-09 — iter 344c (finance edits · ticket wallet · family audit · delegation)
 - Fix: Finance edits fired reverse-and-repost even for cosmetic changes. `FinancePage.jsx` now tracks a `linesDirty` flag and only sends `lines` when accounts/memos actually changed.
 - Feat: `DELETE /api/finance/journal/{je_id}` for reversal entries (source='reversal') while the period is open — un-marks the original entry so it posts again. UI shows a "Delete reversal" button on reversal rows.
