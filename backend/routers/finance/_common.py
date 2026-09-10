@@ -82,6 +82,9 @@ SEED_ACCOUNTS = [
     {"code": "1000", "name": "Cash on Hand", "type": "asset", "is_cash": True},
     {"code": "1010", "name": "Bank — Operating", "type": "asset", "is_cash": True},
     {"code": "1020", "name": "Bank — Reserves", "type": "asset", "is_cash": True},
+    # iter320: online/gateway takings kept separate from till and bank cash so
+    # a payout can be reconciled on its own.
+    {"code": "1030", "name": "Online Payments", "type": "asset", "is_cash": True},
     {"code": "1200", "name": "Accounts Receivable", "type": "asset"},
     {"code": "1500", "name": "Inventory", "type": "asset"},
     # Liabilities

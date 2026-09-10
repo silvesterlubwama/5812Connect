@@ -118,7 +118,7 @@ export default function FinancialApisPage() {
     setForm({
       name: api.name,
       provider: api.provider,
-      api_key: api.api_key || '',
+      api_key: '',  // blank = keep the stored secret (it is never sent to the browser)
       secret_key: '', // Don't populate secret for security
       webhook_url: api.webhook_url || '',
       is_active: api.is_active !== false,
@@ -129,11 +129,6 @@ export default function FinancialApisPage() {
   };
 
   const getProviderInfo = (provider) => API_PROVIDERS.find(p => p.value === provider) || { icon: '🔧', label: provider };
-
-  const maskKey = (key) => {
-    if (!key || key.length < 8) return '••••••••';
-    return key.slice(0, 4) + '••••' + key.slice(-4);
-  };
 
   return (
     <div className="p-6 space-y-6" data-testid="financial-apis-page">
@@ -157,7 +152,7 @@ export default function FinancialApisPage() {
           <div>
             <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Security Notice</p>
             <p className="text-xs text-amber-700 dark:text-amber-500 mt-1">
-              API keys are encrypted and stored securely. Never share your secret keys. Use sandbox/test mode for development.
+              Keys are encrypted at rest and never sent back to the browser — you'll only ever see the last 4 characters. Admins only. Use sandbox/test keys until you go live.
             </p>
           </div>
         </CardContent>
@@ -201,7 +196,7 @@ export default function FinancialApisPage() {
                   <div className="space-y-2 mb-4">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-muted-foreground">API Key</span>
-                      <code className="font-mono bg-muted px-1.5 py-0.5 rounded">{maskKey(api.api_key)}</code>
+                      <code className="font-mono bg-muted px-1.5 py-0.5 rounded" data-testid={`api-key-mask-${api.id}`}>{api.key_set ? `••••••••${api.key_last4 || ''}` : 'not set'}</code>
                     </div>
                     {api.webhook_url && (
                       <div className="flex items-center justify-between text-xs">
@@ -258,7 +253,7 @@ export default function FinancialApisPage() {
 
             <div className="space-y-2">
               <Label>API Key / Public Key</Label>
-              <Input placeholder="pk_test_..." value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })} data-testid="api-key-input" />
+              <Input type="password" placeholder={showEdit ? 'Leave blank to keep the current key' : 'pk_test_...'} value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })} data-testid="api-key-input" autoComplete="new-password" />
             </div>
 
             <div className="space-y-2">

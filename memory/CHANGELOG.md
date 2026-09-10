@@ -1662,3 +1662,56 @@ below every 2-segment literal `/resources/...` route with a comment saying why.
 Verified: `/resources/bookings` → 200 `[]`, `/resources/{id}` → the resource,
 `/resources/consumables/lookup` → 200. App-wide shadow check: **0 shadowed
 routes** across all 1008.
+
+## iter 320 — 2026-06 — Email wired, product galleries, API-key vault certified & fixed
+
+**1. Resend wired — email had been DEAD app-wide**
+`RESEND_API_KEY` was missing, so `/api/email/send` returned "Email service not
+configured" for everything — overdue digests, payslips, approvals, password
+resets. Key + `SENDER_EMAIL` + `ORDER_ALERT_EMAIL` added to backend/.env.
+Verified: a live test email sent (Resend id eee7e224…).
+⚠️ **`5812-global.org` is NOT verified in Resend**, so the sender fell back to
+`onboarding@resend.dev`, and Resend's test mode only delivers to the account
+owner (silvester@lubwamas.org). Everything is wired; delivery to staff/parents/
+customers starts the moment the domain is verified at resend.com/domains and
+`SENDER_EMAIL` is switched back to `uganda@5812-Global.org`.
+
+**2. Order notifications** — `routers/email.py::send_email_internal` (NEW:
+server-side send for schedulers/hooks, never raises so a mail failure can't
+lose an order) + `_notify_order` in public_shop: itemised alert to
+`ORDER_ALERT_EMAIL` and a "we got your order" receipt to the buyer. Verified
+both landed in `email_log` after a real order.
+
+**3. Product photo galleries** — `POST/DELETE /api/products/{id}/images`
+(existing object storage, ≤8 photos, ≤5 MB, image-only), `images[]` on
+Product create/update, first photo is the cover. New
+`components/ProductGalleryEditor.jsx` in the product form; public shop cards
+now show a cover image with a thumbnail strip. Verified upload → serve
+(200 image/png) → public listing → delete; non-image rejected.
+   *Bug of my own making:* the guard used `find_one(..., {"_id":0,"images":1})`
+   — for a product with no images that returns `{}`, which is falsy, so the
+   FIRST upload always said "Product not found". Projection now includes `id`.
+
+**4. "Certify the API-keys entry point" — it did NOT work. Four faults:**
+   1. `/financial-apis` was routed to `<FinancePage />` in App.js — the
+      301-line `FinancialApisPage` was **unreachable**.
+   2. `GET /api/financial-apis` used `get_current_user`, so **any** logged-in
+      user (volunteer, parent, guest) could read the keys.
+   3. Keys were stored and returned **in plaintext** while the UI claimed
+      "API keys are encrypted and stored securely".
+   4. **Nothing consumed them** — no payment call, no webhook receiver, no
+      transaction linkage anywhere in the codebase.
+   Fixed 1-3: page routed; admin-only on every verb; secrets encrypted at rest
+   with a SECRET_KEY-derived Fernet key (`encrypt_api_key`/`decrypt_api_key`);
+   reads return only `key_last4` + `key_set`; blank key on edit = keep current;
+   every change audit-logged. Verified: ciphertext in Mongo, plaintext absent,
+   server can decrypt, list/create leak nothing.
+   **Fault 4 remains** — a real checkout needs provider-specific calls +
+   webhook handling, and the user hasn't named their provider yet.
+
+**5. Public page mobile layout** — 5 tabs in a 4-column grid clipped
+("Book SpaceBook Resource") and the date range overflowed at 390px. Tabs now
+2/3/5 columns responsive, date row wraps. Overflow at 390px: **0**.
+
+Test data cleaned; Gala Ticket left published with one real generated photo so
+the shop is demonstrable (stock 97).

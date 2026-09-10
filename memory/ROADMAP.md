@@ -4,6 +4,16 @@
 - ~~Rate limiter global, not per user~~ → fixed in iter318 (per-user JWT
   buckets, real client IP for anonymous, tight per-IP bucket on auth routes).
 
+## BLOCKED ON USER (iter320)
+1. **Verify `5812-global.org` in Resend** → then set `SENDER_EMAIL` back to
+   `uganda@5812-Global.org`. Until then email only reaches the Resend account
+   owner. Everything else is wired.
+2. **Online payments**: user said "something else you already use" but never
+   named the provider. The API-key vault is now secure and reachable, but no
+   code charges anything — a checkout needs provider-specific calls + a webhook
+   receiver + transaction records. Blocked until they name the provider
+   (Flutterwave would cover UGX + MTN/Airtel mobile money).
+
 ## Dead endpoints — CLEARED (iter319)
 All resolved: public product sales BUILT, Campus Reports DROPPED, customers +
 statements + reminders + single-resource GET reconnected, HR seed repointed.

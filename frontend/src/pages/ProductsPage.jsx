@@ -22,6 +22,7 @@ import ActivityFeed from '../components/ActivityFeed';
 import VariantPickerDialog from '../components/VariantPickerDialog';
 import ReceiptComponent from '../components/Receipt';
 import InvoicesTab from '../components/sales/InvoicesTab';
+import { ProductGalleryEditor } from '../components/ProductGalleryEditor';
 import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
@@ -50,7 +51,7 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [] };
 
 export default function ProductsPage() {
   const { user } = useAuth();
@@ -576,7 +577,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [] });
     setShowProductModal(true);
   };
 
@@ -1229,6 +1230,14 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
             </div>
+            <ProductGalleryEditor
+              productId={editingProduct?.id}
+              images={productForm.images || []}
+              onChange={imgs => {
+                setProductForm(f => ({ ...f, images: imgs }));
+                setProducts(prev => prev.map(p => (p.id === editingProduct?.id ? { ...p, images: imgs, image_url: imgs[0] || '' } : p)));
+              }}
+            />
             {/* iter319: opt-in publishing to the public shop. Off by default —
                 nothing reaches the public page unless someone ticks it. */}
             <label className="flex items-start gap-2 text-xs cursor-pointer p-2 rounded border bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/40" data-testid="product-sell-online-row">

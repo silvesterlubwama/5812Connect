@@ -1,5 +1,5 @@
 """Product CRUD + variant management — extracted from financial.py"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view, default_creation_location
 from datetime import datetime, timezone
@@ -94,6 +94,8 @@ class ProductCreate(BaseModel):
     # iter319: publish to the public Shop tab. Opt-in — nothing is exposed
     # to anonymous visitors unless a staffer ticks this.
     sell_online: bool = False
+    # iter320: public shop gallery — ordered list of image URLs, first is the cover.
+    images: List[str] = []
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -107,6 +109,7 @@ class ProductUpdate(BaseModel):
     resource_id: Optional[str] = None
     event_id: Optional[str] = None
     sell_online: Optional[bool] = None
+    images: Optional[List[str]] = None
 
 # ========== PRODUCTS ==========
 
@@ -461,3 +464,50 @@ async def resolve_pricelist(customer_id: str, product_id: str, variant_id: Optio
             "pricelist_id": pl["id"], "pricelist_name": pl.get("name"),
         }
     return {"price": base_price, "source": "base", "currency": product.get("currency", "UGX")}
+
+
+# ---- Product gallery (iter320) --------------------------------------------
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGES_PER_PRODUCT = 8
+
+
+@router.post("/products/{product_id}/images")
+async def upload_product_image(product_id: str, file: UploadFile = File(...),
+                               current_user: dict = Depends(get_current_user)):
+    """Add a photo to a product's gallery. First image is the shop cover."""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0, "id": 1, "images": 1})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = product.get("images") or []
+    if len(images) >= MAX_IMAGES_PER_PRODUCT:
+        raise HTTPException(status_code=400, detail=f"A product can have at most {MAX_IMAGES_PER_PRODUCT} photos")
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="That file isn't an image")
+    data = await file.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Each photo must be under 5 MB")
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "jpg"
+    unique = f"{product_id}-{uuid.uuid4().hex[:8]}.{ext}"
+    try:
+        from upload_helper import save_upload_sync
+        url = save_upload_sync("product-images", unique, data, file.content_type)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not save the photo: {e}")
+    images.append(url)
+    await db.products.update_one({"id": product_id}, {"$set": {"images": images, "image_url": images[0]}})
+    return {"images": images, "url": url}
+
+
+@router.delete("/products/{product_id}/images")
+async def delete_product_image(product_id: str, url: str,
+                               current_user: dict = Depends(get_current_user)):
+    """Remove one photo. The cover follows whatever is left in first position."""
+    product = await db.products.find_one({"id": product_id}, {"_id": 0, "id": 1, "images": 1})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = [i for i in (product.get("images") or []) if i != url]
+    await db.products.update_one(
+        {"id": product_id},
+        {"$set": {"images": images, "image_url": images[0] if images else ""}},
+    )
+    return {"images": images}

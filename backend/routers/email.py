@@ -81,6 +81,32 @@ TEMPLATES = {
 
 # ---- endpoints ----
 
+async def send_email_internal(to: list, subject: str, html: str, kind: str = "system") -> dict:
+    """Send an email from server-side code (schedulers, order hooks, …).
+
+    The HTTP endpoint below needs a logged-in staff member; background work has
+    no such user, so it calls this instead. Never raises — a failed courtesy
+    email must not fail the operation that triggered it.
+    """
+    if not RESEND_API_KEY:
+        logger.warning(f"[email] {kind} to {to} not sent — RESEND_API_KEY missing")
+        return {"status": "skipped", "reason": "not_configured"}
+    try:
+        result = await asyncio.to_thread(resend.Emails.send, {
+            "from": SENDER_EMAIL, "to": to, "subject": subject, "html": html,
+        })
+        email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", str(result))
+        await db.email_log.insert_one({
+            "id": str(uuid.uuid4()), "to": to, "subject": subject,
+            "template": kind, "resend_id": email_id, "sent_by": "system",
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return {"status": "sent", "email_id": email_id}
+    except Exception as e:
+        logger.error(f"[email] {kind} to {to} failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
 @router.post("/email/send")
 async def send_email(data: EmailSend, current_user: dict = Depends(require_staff)):
     """Send an email using Resend. Supports templates or raw HTML."""

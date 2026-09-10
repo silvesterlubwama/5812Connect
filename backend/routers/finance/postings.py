@@ -11,10 +11,19 @@ from deps import db, logger
 from ._common import post_journal_entry, get_account_by_code, _q
 
 
-async def _cash_account_id(location_id: Optional[str] = None) -> Optional[dict]:
-    """Pick the location-configured cash account if set, else the default
-    Bank — Operating (1010). NB: falls back to Cash on Hand (1000) as a
-    last resort so even the fresh-install path posts something."""
+async def _cash_account_id(location_id: Optional[str] = None, channel: Optional[str] = None) -> Optional[dict]:
+    """Pick the account the money lands in.
+
+    iter320: online orders land in their OWN account (1030 Online Payments) —
+    the user asked to keep web takings separate from till/bank cash, so a
+    gateway payout can be reconciled on its own. Everything else keeps the
+    location-configured cash account, then 1010 Bank — Operating, then 1000
+    Cash on Hand as a last resort.
+    """
+    if channel == "online":
+        online = await get_account_by_code("1030")
+        if online:
+            return online
     if location_id:
         s = await db.store_settings.find_one({"location_id": location_id}, {"_id": 0, "default_cash_account_id": 1})
         cash_id = (s or {}).get("default_cash_account_id")
@@ -78,7 +87,7 @@ async def post_sale(sale: dict, current_user: dict) -> Optional[dict]:
     revenue_acct = await get_account_by_code("4100")
     if not revenue_acct:
         return None
-    cash_acct = await _cash_account_id(sale.get("location_id"))
+    cash_acct = await _cash_account_id(sale.get("location_id"), sale.get("channel"))
     if not cash_acct:
         return None
     return await post_journal_entry(

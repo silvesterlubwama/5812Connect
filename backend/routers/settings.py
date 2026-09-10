@@ -85,31 +85,115 @@ async def anonymize_user(user_id: str, current_user: dict = Depends(require_admi
 
 # ========== FINANCIAL API MANAGEMENT ==========
 
+# ========== PROVIDER API CREDENTIALS (payments, banking, SMS…) ==========
+# iter320 SECURITY FIX. This vault used to be readable by ANY logged-in user
+# (`get_current_user`) and returned `api_key` in plaintext, while the UI
+# promised "API keys are encrypted and stored securely". Now:
+#   • admin-only on every verb,
+#   • secrets are encrypted at rest with a SECRET_KEY-derived Fernet key,
+#   • reads NEVER return a secret — only `key_last4` + `key_set`,
+#   • `decrypt_api_key()` is the one server-side way back to the plaintext,
+#     for the code that actually calls the provider.
+
+def _fernet():
+    """Fernet keyed off SECRET_KEY. Rotating SECRET_KEY invalidates stored
+    secrets by design — they must then be re-entered, which is the safe
+    failure mode for credentials."""
+    import base64, hashlib
+    from cryptography.fernet import Fernet
+    secret = os.environ["SECRET_KEY"].encode()
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret).digest()))
+
+
+def encrypt_api_key(plaintext: str) -> str:
+    if not plaintext:
+        return ""
+    return _fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_api_key(stored: str) -> str:
+    """Plaintext for server-side provider calls. Returns "" if undecryptable
+    (e.g. a legacy plaintext row or a rotated SECRET_KEY)."""
+    if not stored:
+        return ""
+    try:
+        return _fernet().decrypt(stored.encode()).decode()
+    except Exception:
+        return ""
+
+
+def _safe_api(doc: dict) -> dict:
+    """Public shape — no secret material ever leaves the server."""
+    doc = {k: v for k, v in doc.items() if k not in {"api_key", "api_key_enc", "_id"}}
+    return doc
+
+
 @router.get("/financial-apis")
-async def list_financial_apis(current_user: dict = Depends(get_current_user)):
-    return await db.financial_apis.find({}, {"_id": 0}).to_list(50)
+async def list_financial_apis(current_user: dict = Depends(require_admin)):
+    docs = await db.financial_apis.find({}, {"_id": 0}).to_list(50)
+    return [_safe_api(d) for d in docs]
+
 
 @router.post("/financial-apis")
 async def add_financial_api(data: dict, current_user: dict = Depends(require_admin)):
-    import uuid
     api_id = f"fapi_{str(uuid.uuid4())[:8]}"
-    doc = {"id": api_id, "name": data.get("name", ""), "type": data.get("type", "payment"), "provider": data.get("provider", ""), "api_url": data.get("api_url", ""), "api_key": data.get("api_key", ""), "webhook_url": data.get("webhook_url", ""), "location_id": data.get("location_id"), "enabled": data.get("enabled", True), "config": data.get("config", {}), "created_by": current_user["id"], "created_at": datetime.now(timezone.utc).isoformat()}
+    raw_key = (data.get("api_key") or "").strip()
+    doc = {
+        "id": api_id,
+        "name": data.get("name", ""),
+        "type": data.get("type", "payment"),
+        "provider": data.get("provider", ""),
+        "api_url": data.get("api_url", ""),
+        "api_key_enc": encrypt_api_key(raw_key),
+        "key_last4": raw_key[-4:] if len(raw_key) >= 4 else "",
+        "key_set": bool(raw_key),
+        "webhook_url": data.get("webhook_url", ""),
+        "location_id": data.get("location_id"),
+        "enabled": data.get("enabled", True),
+        "config": data.get("config", {}),
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     await db.financial_apis.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    await db.audit_log.insert_one({
+        "user_id": current_user["id"], "action": "create", "entity": "financial_api",
+        "entity_id": api_id, "detail": f"{doc['provider']} ({doc['type']})",
+        "timestamp": doc["created_at"],
+    })
+    return _safe_api(doc)
+
 
 @router.put("/financial-apis/{api_id}")
 async def update_financial_api(api_id: str, data: dict, current_user: dict = Depends(require_admin)):
     data.pop("_id", None)
     data.pop("id", None)
+    data.pop("api_key_enc", None)
+    raw_key = data.pop("api_key", None)
+    if raw_key:  # blank means "leave the stored secret alone"
+        raw_key = raw_key.strip()
+        data["api_key_enc"] = encrypt_api_key(raw_key)
+        data["key_last4"] = raw_key[-4:] if len(raw_key) >= 4 else ""
+        data["key_set"] = True
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.financial_apis.update_one({"id": api_id}, {"$set": data})
-    return {"id": api_id, **data}
+    await db.audit_log.insert_one({
+        "user_id": current_user["id"], "action": "update", "entity": "financial_api",
+        "entity_id": api_id, "detail": "secret rotated" if raw_key else "settings changed",
+        "timestamp": data["updated_at"],
+    })
+    doc = await db.financial_apis.find_one({"id": api_id}, {"_id": 0})
+    return _safe_api(doc or {"id": api_id})
+
 
 @router.delete("/financial-apis/{api_id}")
 async def delete_financial_api(api_id: str, current_user: dict = Depends(require_admin)):
     await db.financial_apis.delete_one({"id": api_id})
+    await db.audit_log.insert_one({
+        "user_id": current_user["id"], "action": "delete", "entity": "financial_api",
+        "entity_id": api_id, "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
     return {"message": "API removed"}
+
 
 # ========== INVENTORY ALERTS ==========
 

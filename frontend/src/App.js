@@ -201,7 +201,7 @@ function AppRoutes() {
         <Route path="volunteer-scheduling" element={<VolunteerSchedulingPage />} />
         <Route path="email-templates" element={<EmailTemplatesPage />} />
         {/* financial-apis retired — finance is one page now */}
-        <Route path="financial-apis" element={<FinancePage />} />
+        <Route path="financial-apis" element={<FinancialApisPage />} />
         <Route path="hr" element={<HRPage />} />
         <Route path="gdpr" element={<GdprSettingsPage />} />
       </Route>

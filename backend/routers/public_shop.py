@@ -17,9 +17,13 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timezone
 
+import os
+
 from deps import db, logger
 
 router = APIRouter(prefix="/api/public", tags=["public-shop"])
+
+ORDER_ALERT_EMAIL = os.environ.get("ORDER_ALERT_EMAIL", "")
 
 MAX_LINE_QTY = 50
 MAX_LINES = 20
@@ -53,7 +57,8 @@ async def public_products(country: Optional[str] = Query(None)):
     products = await db.products.find(
         {"sell_online": True, "is_archived": {"$ne": True}},
         {"_id": 0, "id": 1, "name": 1, "description": 1, "price": 1, "currency": 1,
-         "stock": 1, "image_url": 1, "category": 1, "location_id": 1, "track_stock": 1},
+         "stock": 1, "image_url": 1, "images": 1, "category": 1, "location_id": 1,
+         "track_stock": 1},
     ).sort("name", 1).to_list(200)
 
     out = []
@@ -142,9 +147,66 @@ async def public_create_order(data: dict):
     except Exception as ex:
         logger.warning(f"online order {sale.get('id')} tagging skipped: {ex}")
 
+    await _notify_order(sale, name, email, phone, sale_items, currency or "UGX")
+
     return {
         "id": sale["id"], "receipt_number": sale.get("receipt_number"),
         "total": sale.get("total"), "currency": currency or "UGX",
         "payment_status": sale.get("payment_status"),
         "message": "Order received — we'll email you to arrange payment and collection.",
     }
+
+
+def _money(currency: str, amount) -> str:
+    return f"{currency} {float(amount or 0):,.0f}"
+
+
+async def _notify_order(sale: dict, name: str, email: str, phone: str, items: list, currency: str):
+    """Tell the team an order landed, and tell the buyer how to pay.
+
+    Both are courtesy emails — `send_email_internal` swallows its own errors so
+    a mail problem can never lose somebody's order.
+    """
+    from routers.email import send_email_internal, _base_html
+
+    rows = "".join(
+        f"<tr><td style='padding:6px 0'>{i['name']} × {i['qty']}</td>"
+        f"<td style='padding:6px 0;text-align:right'>{_money(currency, i['price'] * i['qty'])}</td></tr>"
+        for i in items
+    )
+    total_row = (
+        f"<tr><td style='padding:8px 0;border-top:1px solid #e5e7eb'><strong>Total</strong></td>"
+        f"<td style='padding:8px 0;border-top:1px solid #e5e7eb;text-align:right'>"
+        f"<strong>{_money(currency, sale.get('total'))}</strong></td></tr>"
+    )
+    table = f"<table style='width:100%;font-size:14px;color:#444'>{rows}{total_row}</table>"
+    ref = sale.get("receipt_number") or sale.get("id")
+
+    if ORDER_ALERT_EMAIL:
+        await send_email_internal(
+            [ORDER_ALERT_EMAIL],
+            f"New online order {ref} — {_money(currency, sale.get('total'))}",
+            _base_html(
+                f"<h2 style='color:#1a1a2e;margin:0 0 8px'>New online order</h2>"
+                f"<p style='color:#444'><strong>{name}</strong> · {email}{' · ' + phone if phone else ''}</p>"
+                f"{table}"
+                f"<p style='color:#444;font-size:13px;margin-top:16px'>It's waiting in Sales as "
+                f"<strong>pending payment</strong> — confirm it there once the money arrives and it will "
+                f"post to the ledger automatically.</p>"
+            ),
+            kind="online_order_alert",
+        )
+
+    await send_email_internal(
+        [email],
+        f"We got your order ({ref})",
+        _base_html(
+            f"<h2 style='color:#1a1a2e;margin:0 0 8px'>Thanks, {name}!</h2>"
+            f"<p style='color:#444;line-height:1.6'>Your order <strong>{ref}</strong> is reserved. "
+            f"Here's what you asked for:</p>"
+            f"{table}"
+            f"<p style='color:#444;line-height:1.6;margin-top:16px'>We'll be in touch shortly to arrange "
+            f"payment and collection. Reply to this email if anything needs changing.</p>"
+        ),
+        kind="online_order_receipt",
+    )

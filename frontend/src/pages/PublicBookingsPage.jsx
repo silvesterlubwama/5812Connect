@@ -57,6 +57,7 @@ export default function PublicBookingsPage() {
   const [policies, setPolicies] = useState(null);
   const [shopProducts, setShopProducts] = useState([]);
   const [shopCart, setShopCart] = useState([]);
+  const [shopImageIdx, setShopImageIdx] = useState({});
   const [shopOrder, setShopOrder] = useState({ name: '', email: '', phone: '', payment_method: 'card' });
 
   // Auto-detect country
@@ -291,11 +292,11 @@ export default function PublicBookingsPage() {
           </div>
           {/* Date range row */}
           <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-            <div className="flex items-center gap-2 flex-1">
+            <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
               <Label className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
-              <Input type="date" className="h-9 text-xs flex-1" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="date-from" />
+              <Input type="date" className="h-9 text-xs flex-1 min-w-[8.5rem]" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="date-from" />
               <Label className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
-              <Input type="date" className="h-9 text-xs flex-1" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="date-to" />
+              <Input type="date" className="h-9 text-xs flex-1 min-w-[8.5rem]" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="date-to" />
               {(dateFrom || dateTo || typeFilter !== 'all' || searchQuery) && (
                 <Button size="sm" variant="ghost" className="text-xs h-9 shrink-0" onClick={() => { setSearchQuery(''); setTypeFilter('all'); setDateFrom(''); setDateTo(''); }} data-testid="clear-filters">Clear</Button>
               )}
@@ -305,12 +306,12 @@ export default function PublicBookingsPage() {
         </div>
 
         <Tabs defaultValue="events" className="space-y-6">
-          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4">
-            <TabsTrigger value="events" className="gap-2"><Ticket size={15} />Events</TabsTrigger>
-            <TabsTrigger value="shop" className="gap-2"><ShoppingCart size={15} />Shop</TabsTrigger>
-            <TabsTrigger value="venues" className="gap-2"><Building size={15} />Book Space</TabsTrigger>
-            <TabsTrigger value="resources" className="gap-2" data-testid="public-tab-resources"><Package size={15} />Book Resource</TabsTrigger>
-            <TabsTrigger value="status" className="gap-2"><Search size={15} />My Orders</TabsTrigger>
+          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 h-auto gap-1">
+            <TabsTrigger value="events" className="gap-1.5 text-xs sm:text-sm"><Ticket size={15} />Events</TabsTrigger>
+            <TabsTrigger value="shop" className="gap-1.5 text-xs sm:text-sm"><ShoppingCart size={15} />Shop</TabsTrigger>
+            <TabsTrigger value="venues" className="gap-1.5 text-xs sm:text-sm"><Building size={15} />Book Space</TabsTrigger>
+            <TabsTrigger value="resources" className="gap-1.5 text-xs sm:text-sm" data-testid="public-tab-resources"><Package size={15} />Book Resource</TabsTrigger>
+            <TabsTrigger value="status" className="gap-1.5 text-xs sm:text-sm"><Search size={15} />My Orders</TabsTrigger>
           </TabsList>
 
           {/* EVENTS TAB - organized by type in columns */}
@@ -375,7 +376,34 @@ export default function PublicBookingsPage() {
             ) : (
               <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {shopProducts.map(p => (
-                  <Card key={p.id} className="rounded-xl hover:shadow-md transition-shadow">
+                  <Card key={p.id} className="rounded-xl hover:shadow-md transition-shadow overflow-hidden">
+                    {/* iter320: shop gallery — cover photo plus a thumb strip */}
+                    {(p.images?.length || p.image_url) ? (
+                      <div className="aspect-[4/3] bg-muted overflow-hidden" data-testid={`shop-product-image-${p.id}`}>
+                        <img
+                          src={(p.images && p.images[shopImageIdx[p.id] || 0]) || p.image_url}
+                          alt={p.name} loading="lazy"
+                          className="w-full h-full object-cover hover:scale-[1.03] transition-transform duration-300"
+                        />
+                      </div>
+                    ) : (
+                      <div className="aspect-[4/3] bg-muted flex items-center justify-center text-muted-foreground">
+                        <ShoppingCart size={26} className="opacity-30" />
+                      </div>
+                    )}
+                    {p.images?.length > 1 && (
+                      <div className="flex gap-1 px-3 pt-2" data-testid={`shop-product-thumbs-${p.id}`}>
+                        {p.images.slice(0, 5).map((img, i) => (
+                          <button
+                            key={img} type="button"
+                            onClick={() => setShopImageIdx(prev => ({ ...prev, [p.id]: i }))}
+                            className={`h-8 w-8 rounded border overflow-hidden ${(shopImageIdx[p.id] || 0) === i ? 'border-primary ring-1 ring-primary' : 'border-border opacity-70 hover:opacity-100'}`}
+                          >
+                            <img src={img} alt="" className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <CardContent className="p-4">
                       <h4 className="font-semibold text-sm mb-1">{p.name}</h4>
                       {p.description && <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{p.description}</p>}
