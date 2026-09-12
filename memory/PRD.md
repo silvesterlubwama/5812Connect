@@ -8,6 +8,44 @@ kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
 
+## iter347 — P2/P3 backlog cleared (2026-06)
+
+### DONE (tested — `/app/test_reports/iteration_231.json`, `backend/tests/test_iter347_p2p3_backlog.py`)
+- **Rejected requests tab** (Access → Rejected): every blocked public
+  access-link hit is now recorded in `db.access_request_rejections` with a
+  reason (`rate_limited` / `invalid_link` / `expired` / `max_uses` /
+  `validation`), the attempted name/email/phone, the IP and the status code.
+  `GET /api/access/rejected-requests` returns the rows plus per-reason counts
+  and the top offending IPs; admins can Clear all. The Access page tabs now
+  render even with zero restricted locations — previously the whole tab strip
+  (including Guest Links) was hidden behind that guard.
+  Hardening: the 5-per-IP-per-10-min rate limit now counts blocked attempts
+  too, so junk payloads can no longer be used to brute-force tokens forever.
+- **Missed call log**: `VoipContext` watches every inbound SIP session and,
+  when it ends or fails without ever being answered, posts to
+  `POST /api/voip/me/missed-calls` (reason `no_answer` / `declined` / `busy`).
+  That writes `db.missed_calls` (90-second dedupe for UCM ring-retries) and
+  raises a notification linking to `/comms?room=phone&call=<number>`. The
+  Phone room shows a Missed calls card with Call back / Dismiss, and the deep
+  link auto-selects the Phone room and prefills the dial pad.
+- **Badge 200% preview**: new `BadgeZoomDialog` (exported from
+  `UnifiedBadge.jsx`) renders the exact `html-to-image` raster that goes to
+  the printer at 2× (720px), with Close / Print it. Wired to the staff badge
+  ("Preview 200%") and the member badge at `/portal/badge` ("200%").
+  `skipFonts: true` added to every badge export to kill the cross-origin
+  Google-Fonts SecurityError noise.
+- **Migrate legacy departments**: `GET /api/departments/legacy-scan` groups
+  hand-typed `department` strings on users/members/expenses/assets/POs that
+  aren't linked to a real department record; `POST /api/departments/migrate-legacy`
+  (with `dry_run`) matches case/whitespace-insensitively inside the record's own
+  campus, creates what's missing and back-fills `department_ids` /
+  `department_id`. System Console → Departments → "Migrate legacy" shows the
+  preview then runs it. Live run folded "Food " and "Test" into real departments.
+- **Latent bug swept**: `_audit(..., data=...)` — the helper's kwarg is
+  `details=`. Six call sites (all department CRUD, sub-location budget, bulk
+  department tagging, and the new endpoints) were 500-ing the first time a real
+  user triggered them. All fixed and re-verified.
+
 ## iter346 — Sub-location boards · Consumable sheet printing · Flutterwave online payments (2026-06)
 
 ### DONE (tested — `/app/test_reports/iteration_106.json`, `backend/tests/test_iter346_flutterwave.py`)

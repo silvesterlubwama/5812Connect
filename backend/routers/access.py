@@ -675,6 +675,75 @@ async def delete_guest_access_link(link_id: str, current_user: dict = Depends(re
     return {"message": "Link deleted"}
 
 
+async def _reject_access_request(*, token: str, client_ip: str, reason: str,
+                                 detail: str, status_code: int, data: dict,
+                                 link: Optional[dict] = None):
+    """Record a blocked public access-request hit, then raise.
+
+    iter347 — these used to vanish into a 4xx with nothing for admins to see,
+    so nobody knew a link was being hammered or that a real guest kept
+    fat-fingering their phone number. Surfaced in Access → Rejected.
+    """
+    try:
+        await db.access_request_rejections.insert_one({
+            "id": f"arej_{uuid.uuid4().hex[:8]}",
+            "token": token,
+            "link_id": (link or {}).get("id"),
+            "space_name": (link or {}).get("space_name"),
+            "location_id": (link or {}).get("location_id"),
+            "reason": reason,                       # rate_limited | invalid_link | expired | max_uses | validation
+            "detail": detail,
+            "client_ip": client_ip,
+            "status_code": status_code,
+            "attempted_name": str(data.get("name") or "")[:120],
+            "attempted_email": str(data.get("email") or "")[:254],
+            "attempted_phone": str(data.get("phone") or "")[:32],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        logger.warning(f"could not log rejected access request: {ex}")
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+@router.get("/access/rejected-requests")
+async def list_rejected_access_requests(
+    location_id: Optional[str] = None,
+    reason: Optional[str] = None,
+    limit: int = 200,
+    current_user: dict = Depends(require_staff),
+):
+    """Blocked public access-request hits — rate limits, bad links, junk input."""
+    q: dict = {}
+    if location_id:
+        q["location_id"] = location_id
+    if reason:
+        q["reason"] = reason
+    rows = await db.access_request_rejections.find(q, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 500))
+    counts: dict = {}
+    for r in rows:
+        counts[r.get("reason", "other")] = counts.get(r.get("reason", "other"), 0) + 1
+    top_ips: dict = {}
+    for r in rows:
+        ip = r.get("client_ip") or "unknown"
+        top_ips[ip] = top_ips.get(ip, 0) + 1
+    return {
+        "rejections": rows,
+        "total": len(rows),
+        "by_reason": counts,
+        "top_ips": sorted(
+            [{"ip": k, "count": v} for k, v in top_ips.items()],
+            key=lambda x: -x["count"],
+        )[:5],
+    }
+
+
+@router.delete("/access/rejected-requests")
+async def clear_rejected_access_requests(current_user: dict = Depends(require_admin)):
+    res = await db.access_request_rejections.delete_many({})
+    await _audit(current_user["id"], "clear", "access_rejections", "all", details={"deleted": res.deleted_count})
+    return {"deleted": res.deleted_count}
+
+
 @router.post("/public/access-request/{token}")
 async def submit_guest_access_request(token: str, data: dict, request: Request):
     """Public endpoint — guest submits an access request against a shared link.
@@ -690,32 +759,45 @@ async def submit_guest_access_request(token: str, data: dict, request: Request):
         duplicate profile if the same person submits twice.
     """
     import re as _re
+    client_ip = (request.client.host if request and request.client else "unknown")
     link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
     if not link:
-        raise HTTPException(status_code=404, detail="Invalid or expired link")
+        await _reject_access_request(token=token, client_ip=client_ip, reason="invalid_link",
+                                     detail="Invalid or expired link", status_code=404, data=data)
 
     # Rate limit — max 5 submissions per IP per rolling 10-minute window.
-    client_ip = (request.client.host if request and request.client else "unknown")
+    # Counts BOTH accepted requests and blocked attempts, otherwise someone
+    # could brute-force tokens forever by always sending invalid payloads.
     ten_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     recent = await db.guest_access_requests.count_documents({
         "client_ip": client_ip,
         "created_at": {"$gte": ten_min_ago},
     })
+    recent += await db.access_request_rejections.count_documents({
+        "client_ip": client_ip,
+        "reason": {"$ne": "rate_limited"},
+        "created_at": {"$gte": ten_min_ago},
+    })
     if recent >= 5:
-        raise HTTPException(status_code=429, detail="Too many requests from this IP. Please wait a few minutes and try again.")
+        await _reject_access_request(
+            token=token, client_ip=client_ip, reason="rate_limited", link=link, data=data,
+            detail="Too many requests from this IP. Please wait a few minutes and try again.",
+            status_code=429,
+        )
 
     # Expiry check first — cheaper than the atomic uses guard below.
     if link.get("expires_at"):
+        expired = False
         try:
             exp = datetime.fromisoformat(link["expires_at"])
             if exp.tzinfo is None:
                 exp = exp.replace(tzinfo=timezone.utc)
-            if exp < datetime.now(timezone.utc):
-                raise HTTPException(status_code=400, detail="This link has expired")
-        except HTTPException:
-            raise
+            expired = exp < datetime.now(timezone.utc)
         except Exception:
-            pass
+            expired = False
+        if expired:
+            await _reject_access_request(token=token, client_ip=client_ip, reason="expired", link=link,
+                                         data=data, detail="This link has expired", status_code=400)
 
     # Input validation — reject junk before it lands in the directory.
     name = (data.get("name") or "").strip()
@@ -723,16 +805,20 @@ async def submit_guest_access_request(token: str, data: dict, request: Request):
     phone = (data.get("phone") or "").strip()
     purpose = (data.get("purpose") or "").strip()
     visit_date = (data.get("visit_date") or "").strip()
+    bad = None
     if not name or len(name) < 2 or len(name) > 120:
-        raise HTTPException(status_code=400, detail="Name must be 2-120 characters")
-    if email and (len(email) > 254 or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
-        raise HTTPException(status_code=400, detail="Email address is invalid")
-    if phone and (len(phone) > 32 or not _re.match(r"^[+\-\d\s()]+$", phone)):
-        raise HTTPException(status_code=400, detail="Phone number contains invalid characters")
-    if len(purpose) > 500:
-        raise HTTPException(status_code=400, detail="Purpose must be under 500 characters")
-    if visit_date and not _re.match(r"^\d{4}-\d{2}-\d{2}$", visit_date):
-        raise HTTPException(status_code=400, detail="visit_date must be YYYY-MM-DD")
+        bad = "Name must be 2-120 characters"
+    elif email and (len(email) > 254 or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
+        bad = "Email address is invalid"
+    elif phone and (len(phone) > 32 or not _re.match(r"^[+\-\d\s()]+$", phone)):
+        bad = "Phone number contains invalid characters"
+    elif len(purpose) > 500:
+        bad = "Purpose must be under 500 characters"
+    elif visit_date and not _re.match(r"^\d{4}-\d{2}-\d{2}$", visit_date):
+        bad = "visit_date must be YYYY-MM-DD"
+    if bad:
+        await _reject_access_request(token=token, client_ip=client_ip, reason="validation", link=link,
+                                     data=data, detail=bad, status_code=400)
 
     # Atomic uses guard — the filter prevents overshooting when multiple
     # submits race. Without this, `count then increment` had a TOCTOU
@@ -744,7 +830,9 @@ async def submit_guest_access_request(token: str, data: dict, request: Request):
             {"$inc": {"uses": 1}},
         )
         if upd.modified_count == 0:
-            raise HTTPException(status_code=400, detail="This link has reached its maximum uses")
+            await _reject_access_request(token=token, client_ip=client_ip, reason="max_uses", link=link,
+                                         data=data, detail="This link has reached its maximum uses",
+                                         status_code=400)
     else:
         await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
 

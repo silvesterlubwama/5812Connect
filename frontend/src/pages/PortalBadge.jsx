@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { IdCard, Download, Printer, RefreshCw, Ticket } from 'lucide-react';
+import { IdCard, Download, Printer, RefreshCw, Ticket, ZoomIn } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { UnifiedBadge } from '../components/UnifiedBadge';
+import { UnifiedBadge, BadgeZoomDialog } from '../components/UnifiedBadge';
 import api from '../services/api';
 import { toast } from 'sonner';
 
@@ -13,6 +13,8 @@ export default function PortalBadge() {
   const [badge, setBadge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [zoomUrl, setZoomUrl] = useState(null);
+  const [zooming, setZooming] = useState(false);
   const badgeRef = useRef(null);
 
   const load = async () => {
@@ -39,7 +41,7 @@ export default function PortalBadge() {
       // dropping both.
       const { toPng } = await import('html-to-image');
       const url = await toPng(badgeRef.current, {
-        pixelRatio: 3, cacheBust: true, fetchRequestInit: { mode: 'cors' },
+        pixelRatio: 3, cacheBust: true, skipFonts: true, fetchRequestInit: { mode: 'cors' },
       });
       const a = document.createElement('a');
       const safe = (badge?.name || 'badge').replace(/[^a-z0-9-]+/gi, '_').toLowerCase();
@@ -49,6 +51,20 @@ export default function PortalBadge() {
       toast.error('Could not save the image — try Print instead');
     }
     setBusy(false);
+  };
+
+  const openZoom = async () => {
+    if (!badgeRef.current) return;
+    setZooming(true);
+    try {
+      const { toPng } = await import('html-to-image');
+      setZoomUrl(await toPng(badgeRef.current, {
+        pixelRatio: 3, cacheBust: true, skipFonts: true, fetchRequestInit: { mode: 'cors' },
+      }));
+    } catch {
+      toast.error('Could not build the preview');
+    }
+    setZooming(false);
   };
 
   const person = badge && {
@@ -90,6 +106,9 @@ export default function PortalBadge() {
             <UnifiedBadge person={person} showActions={false} />
           </div>
           <div className="flex gap-2 no-print w-full max-w-sm">
+            <Button variant="outline" className="flex-1 gap-2" onClick={openZoom} disabled={zooming} data-testid="portal-badge-zoom">
+              <ZoomIn size={15} /> {zooming ? 'Building…' : '200%'}
+            </Button>
             <Button className="flex-1 gap-2" onClick={downloadPng} disabled={busy} data-testid="portal-badge-download">
               <Download size={15} /> {busy ? 'Saving…' : 'Save image'}
             </Button>
@@ -97,6 +116,7 @@ export default function PortalBadge() {
               <Printer size={15} /> Print
             </Button>
           </div>
+          <BadgeZoomDialog url={zoomUrl} onClose={() => setZoomUrl(null)} onPrint={() => window.print()} />
         </div>
       )}
 

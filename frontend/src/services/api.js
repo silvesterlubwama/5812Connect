@@ -336,6 +336,8 @@ export const departmentsApi = {
   pnl: (params) => api.get('/reports-department/pnl', { params }),
   entries: (id, params) => api.get(`/reports-department/${id}/entries`, { params }),
   bulkTagUsers: (userIds, departmentId, mode = 'add') => api.post('/admin/users/bulk-department', { user_ids: userIds, department_id: departmentId, mode }),
+  legacyScan: () => api.get('/departments/legacy-scan'),
+  migrateLegacy: (data) => api.post('/departments/migrate-legacy', data),
 };
 
 // ---- PRODUCTS & SALES ----
@@ -676,6 +678,9 @@ export const accessApi = {
   createApiConnection: (data) => api.post('/access/api-connections', data),
   updateApiConnection: (id, data) => api.put(`/access/api-connections/${id}`, data),
   deleteApiConnection: (id) => api.delete(`/access/api-connections/${id}`),
+  // Blocked public access-request hits (rate limits, bad links, junk input)
+  rejectedRequests: (params) => api.get('/access/rejected-requests', { params }),
+  clearRejectedRequests: () => api.delete('/access/rejected-requests'),
   // Shareable guest access links
   listGuestLinks: () => api.get('/access/guest-links'),
   createGuestLink: (data) => api.post('/access/guest-links', data),
@@ -1051,6 +1056,9 @@ export const voipApi = {
   deleteVoicemail: (msgId) => api.delete(`/voip/me/voicemails/${msgId}`),
   myCallHistory: (limit = 50) => api.get(`/voip/me/call-history?limit=${limit}`),
   blf: () => api.get('/voip/blf'),
+  logMissedCall: (data) => api.post('/voip/me/missed-calls', data),
+  myMissedCalls: (params) => api.get('/voip/me/missed-calls', { params }),
+  markMissedCallHandled: (id) => api.put(`/voip/me/missed-calls/${id}/handled`),
   unreadVoicemailCount: () => api.get('/voip/me/voicemails/unread-count'),
 };
 

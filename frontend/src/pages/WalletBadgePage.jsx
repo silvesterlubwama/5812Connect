@@ -43,7 +43,7 @@ export default function WalletBadgePage() {
       // dropping both.
       const { toPng } = await import('html-to-image');
       const url = await toPng(badgeRef.current, {
-        pixelRatio: 3, cacheBust: true, fetchRequestInit: { mode: 'cors' },
+        pixelRatio: 3, cacheBust: true, skipFonts: true, fetchRequestInit: { mode: 'cors' },
       });
       const a = document.createElement('a');
       const safe = (badge?.name || 'badge').replace(/[^a-z0-9-]+/gi, '_').toLowerCase();

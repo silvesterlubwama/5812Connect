@@ -53,21 +53,30 @@ export default function PhoneRoom() {
   const [dialString, setDialString] = useState('');
   const [directory, setDirectory] = useState([]);
   const [history, setHistory] = useState([]);
+  const [missed, setMissed] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+
+  // A "Call back" notification lands here as /comms?room=phone&call=0700…
+  useEffect(() => {
+    const n = new URLSearchParams(window.location.search).get('call');
+    if (n) setDialString(n);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       try {
-        const [d, h] = await Promise.all([
+        const [d, h, m] = await Promise.all([
           api.get('/voip/me/directory'),
           api.get('/voip/me/call-history?limit=30').catch(() => ({ data: [] })),
+          api.get('/voip/me/missed-calls?limit=20').catch(() => ({ data: [] })),
         ]);
         if (!cancelled) {
           setDirectory(d.data || []);
           setHistory(h.data || []);
+          setMissed(m.data || []);
         }
       } catch { /* ignore */ } finally {
         if (!cancelled) setLoading(false);
@@ -77,6 +86,19 @@ export default function PhoneRoom() {
     const id = setInterval(load, 60000);   // gentle refresh
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  const callBack = async (m) => {
+    call(m.peer);
+    try {
+      await api.put(`/voip/me/missed-calls/${m.id}/handled`);
+      setMissed(prev => prev.filter(x => x.id !== m.id));
+    } catch { /* keep it listed if the mark fails */ }
+  };
+
+  const dismissMissed = async (m) => {
+    setMissed(prev => prev.filter(x => x.id !== m.id));
+    try { await api.put(`/voip/me/missed-calls/${m.id}/handled`); } catch { /* ignore */ }
+  };
 
   const filteredDirectory = useMemo(() => {
     if (!filter.trim()) return directory;
@@ -139,6 +161,43 @@ export default function PhoneRoom() {
 
       {/* ── directory + history stacked ────────────────── */}
       <div className="space-y-4 min-w-0">
+        {/* Missed calls — rings nobody picked up, with one-tap call-back */}
+        {missed.length > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50/60" data-testid="missed-calls-card">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-amber-200">
+              <div className="flex items-center gap-2">
+                <PhoneMissed size={15} className="text-red-500" />
+                <div>
+                  <div className="font-medium text-sm">Missed calls</div>
+                  <div className="text-[11px] text-slate-600">{missed.length} waiting on a call-back</div>
+                </div>
+              </div>
+            </div>
+            <ul className="divide-y divide-amber-200/70 max-h-56 overflow-y-auto">
+              {missed.map(m => (
+                <li key={m.id} className="flex items-center gap-3 px-4 py-2" data-testid={`missed-call-row-${m.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{m.caller_name || m.peer}</div>
+                    <div className="text-[11px] text-slate-600">
+                      {m.caller_name ? `${m.peer} · ` : ''}
+                      {m.reason === 'declined' ? 'Declined' : m.reason === 'busy' ? 'You were busy' : 'No answer'}
+                      {' · '}{relTime(m.created_at)}
+                    </div>
+                  </div>
+                  <Button size="sm" className="h-7 bg-emerald-600 hover:bg-emerald-700 text-[11px]"
+                          onClick={() => callBack(m)} data-testid={`missed-call-back-btn-${m.id}`}>
+                    <Phone size={11} className="mr-1" /> Call back
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-[11px]"
+                          onClick={() => dismissMissed(m)} data-testid={`missed-call-dismiss-btn-${m.id}`}>
+                    Dismiss
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Directory */}
         <div className="rounded-lg border border-slate-200 bg-white">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">

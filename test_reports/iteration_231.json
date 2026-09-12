@@ -1,0 +1,46 @@
+{
+  "summary": "iter347 (P2/P3 backlog: rejected access-request tab, missed-call log, 200% badge zoom, legacy-department migration) tested end-to-end on preview URL. Backend: /app/backend/tests/test_iter347_p2p3_backlog.py — 6/6 PASS after fixing one server bug. (1) TestRejectedAccessRequests.test_rejection_flow_and_admin_endpoints — create guest link, then bogus token -> 404 invalid_link, name='X' -> 400 validation, email='not-an-email' -> 400 validation, valid submission -> 200 (NOT logged), second submission on max_uses=1 -> 400 max_uses; GET /api/access/rejected-requests returns rejections + by_reason + top_ips with all 3 reasons present and no _id leaked. (2) test_rate_limit_after_5_hits — 7 valid submissions from same IP -> 429 fires after the 5th and a rate_limited row lands in the admin GET (query ?reason=rate_limited works). (3) test_clear_all_requires_admin — DELETE /api/access/rejected-requests now returns 200 {deleted:N} (was 500 — see fix below). (4) TestMissedCalls.test_post_get_dedupe_handled — POST /api/voip/me/missed-calls returns doc, second POST for same peer inside 90s returns {duplicate:true}; GET lists unhandled; a notification with link `/comms?room=phone&call=<peer>` is created; PUT /me/missed-calls/{id}/handled removes it from the default list. (5) TestLegacyDeptMigration.test_scan_returns_shape — GET /api/departments/legacy-scan returns {groups,total_records,existing_departments}. (6) test_dry_run_no_creation — POST /migrate-legacy {dry_run:true} does NOT create departments (before/after id sets match). Frontend E2E on preview URL: (a) /access — tab-rejected renders even with 0 restricted locations (fixed as promised). With no data: rejections-empty visible, refresh-rejections-btn present; rejection-stats + clear-rejections-btn only mount when there is data. Seeded 2 rejections -> rejection-stats, refresh-rejections-btn, clear-rejections-btn, 2x rejection-row-* all render; clicking Clear all shows 'Cleared' toast and returns to rejections-empty. (b) /portal/badge — portal-badge-zoom opens badge-zoom-dialog with badge-zoom-image at exactly 720x478 px and Close + Print it buttons; matches spec of ~720px wide. (c) /admin -> Departments -> migrate-legacy-depts-btn opens legacy-depts-dialog showing legacy-depts-empty and disabled 'Migrate 0 record(s)' button — confirms 'nothing to migrate' state after the main-agent's earlier live migration (Food + Test departments already exist in the console list). (d) Seeded a missed call via authed fetch, then /comms?room=phone&call=0700123456 — Phone room auto-selected, dial pad input[1] value = '0700123456', missed-calls-card with '1 waiting on a call-back', 1x missed-call-row-* including 'Call back' + 'Dismiss'; clicking Dismiss removes the row (0 remaining) and marks it handled server-side.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/access/rejected-requests", "issue": "Was 500-ing due to `_audit(..., data=...)` — the helper's kwarg is `details=`, not `data=`. Fixed inline in access.py:743. Same latent bug pattern in /app/backend/routers/departments.py at lines 101, 139, 188, 206, 325 — every _audit call there passes data=... instead of details=... so the audit row is dropped and the whole endpoint 500s the first time it's triggered. Recommend a codebase-wide `git grep '_audit(.*data='` sweep."},
+      {"endpoint": "POST /api/public/access-request/{token}", "issue": "Rate-limit window (5 hits / IP / 10 min) counts ONLY the successful `guest_access_requests` collection. A bad actor can spam validation-invalid payloads forever without ever tripping the 429 — the whole point of the counter is to stop token brute-force. Should also count access_request_rejections (or a shared attempts table) toward the window."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AccessPage tabs", "issue": "The 'Guest Links' tab visible in the DOM has no `data-testid=\"tab-guest-links\"` — only the button label. Not a functional bug but the referenced testid in the review request is missing.", "selector": "tab labelled 'Guest Links'", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "PortalBadge zoom dialog", "issues": ["html-to-image logs a SecurityError while trying to inline fonts.googleapis.com CSS rules — the image still renders correctly (fallback), but the console noise is worth silencing with a try/catch or by passing skipFonts:true to toPng()."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter347_p2p3_backlog.py",
+    "/app/test_reports/pytest/iter347.xml"
+  ],
+  "action_items": [
+    "Sweep /app/backend/routers/departments.py for `_audit(..., data=...)` — 5 more call sites will 500 the first time each of add/edit/reassign/delete/migrate departments is exercised by a real user. Rename kwarg to `details`.",
+    "Include rejected/invalid hits (or a shared 'attempts' counter) in the rate-limit window on POST /api/public/access-request/{token} — currently, only successful hits count, which defeats the anti-abuse intent.",
+    "(LOW) Add `data-testid=\"tab-guest-links\"` on the Access page tab.",
+    "(LOW) Silence the html-to-image cross-origin font warning in BadgeZoomDialog (skipFonts:true) so the 200%-preview open doesn't spam the console."
+  ],
+  "critical_code_review_comments": [
+    "access.py `_audit(user_id, action, resource, resource_id, details=...)` is called with `data=` in 6 places across access.py + departments.py — this is a systemic kwarg mismatch introduced with the same commit pattern. Consider adding a **kwargs shim to _audit to log a warning instead of raising, so future typos don't 500 production endpoints.",
+    "Rate limiter is best-effort — counting only successful requests means a scripted attacker gets unlimited validation-failed attempts (perfect for token brute-force at 4xx). Route the counter through access_request_rejections OR a Redis attempt-bucket keyed by client_ip.",
+    "voip.log_missed_call dedupes on ts >= now-90 (Unix seconds). Good. But note that `handled: {\"$ne\": True}` in list_missed_calls uses a $ne — an index on (user_id, handled, ts DESC) is worth adding once volumes grow.",
+    "departments.migrate_legacy_departments is idempotent by (location_id, name.lower()) and stamps `migrated_from_legacy=True` on new deps — clean design. Nice touch persisting the original text into `department` alongside setting `department_ids`."
+  ],
+  "updated_files": [
+    "/app/backend/routers/access.py (fix: _audit kwarg data -> details on line 743)",
+    "/app/backend/tests/test_iter347_p2p3_backlog.py (new)"
+  ],
+  "success_rate": {"backend": "100% (6/6 pytest after the audit-kwarg fix)", "frontend": "100% on all iter347 flows tested"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "During testing: created guest_access_links `TEST_iter347`, `TEST_iter347_rl`, `TEST_iter347_ui` — the UI test tried to clean these up but skipped when the /api/access/guest-links call returned a non-array. Also inserted ~10 access_request_rejections rows in TestRejectedAccessRequests and TestRateLimit, then cleared them via the UI 'Clear all' button at the end. Left one missed_call row seeded during the UI test — dismissed via UI so it's `handled:true` and no longer surfaces.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login: use `[data-testid=\"login-submit-button\"]` — get_by_role('button', name='Sign In') hits 3 buttons (passkey + google + submit). Access page: rejection-stats + clear-rejections-btn only mount when there are rows; use rejections-empty for the empty-state assertion. The rate-limit path counts only SUCCESSFUL guest_access_requests, not validation-rejected ones — so to seed a rate_limited row in the DB you must send 6 well-formed submissions (name>=2 chars, valid email) against a max_uses=0 link.",
+  "rca of the issue": "DELETE /api/access/rejected-requests returned 500 because access.py:743 called `_audit(..., data={...})` but deps._audit's kwarg is `details=`. Python's late binding meant the TypeError only surfaced when the endpoint was actually hit — and it's a brand-new endpoint from iter347 so no earlier smoke tests caught it. Fixed by renaming the kwarg. Same regression pattern exists in departments.py at 5 other call sites and needs a follow-up sweep."
+}

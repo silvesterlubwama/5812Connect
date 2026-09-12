@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Shield, ScanLine, UserPlus, KeyRound, Users, Clock, CheckCircle, XCircle, AlertTriangle, QrCode, Timer } from 'lucide-react';
+import { Shield, ScanLine, UserPlus, KeyRound, Users, Clock, CheckCircle, XCircle, AlertTriangle, QrCode, Timer, ShieldAlert } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
@@ -18,6 +18,10 @@ const STATUS_VARIANT = { approved: 'outline', rejected: 'destructive', pending: 
 const STATUS_CLASS = { approved: 'border-green-500 text-green-600', rejected: '', pending: '' };
 const PASS_STATUS_CLASS = { active: 'border-green-500 text-green-600', expired: 'border-red-400 text-red-500' };
 const CHECKIN_TYPE_MAP = { staff: 'Staff Check-in (with children)', parent: 'Parent Check-in (with children)', guest: 'Guest Check-in (with children)', child_self: 'Child Self Check-in' };
+const REJECT_LABELS = {
+  rate_limited: 'Rate limited', invalid_link: 'Bad link', expired: 'Link expired',
+  max_uses: 'Link used up', validation: 'Invalid details',
+};
 
 export default function AccessPage() {
   const [locations, setLocations] = useState([]);
@@ -56,6 +60,9 @@ export default function AccessPage() {
   const [guestLinks, setGuestLinks] = useState([]);
   const [showGuestLinkForm, setShowGuestLinkForm] = useState(false);
   const [guestLinkForm, setGuestLinkForm] = useState({ space_name: '', location_id: '', max_uses: 0, requires_approval: true, expires_at: '' });
+  // Blocked public access-request hits (rate limits / bad links / junk input)
+  const [rejections, setRejections] = useState([]);
+  const [rejectionStats, setRejectionStats] = useState(null);
   const isAdmin = true; // This page is already admin-restricted
 
   const fetchData = useCallback(async () => {
@@ -88,6 +95,16 @@ export default function AccessPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  const fetchRejections = useCallback(async () => {
+    try {
+      const res = await accessApi.rejectedRequests({ limit: 200 });
+      setRejections(res.data?.rejections || []);
+      setRejectionStats(res.data || null);
+    } catch (e) { console.warn(e.message || e); }
+  }, []);
+
+  useEffect(() => { fetchRejections(); }, [fetchRejections]);
 
   const fetchLocationData = useCallback(async () => {
     if (!selectedLocation) return;
@@ -266,8 +283,8 @@ export default function AccessPage() {
 
       {restrictedLocations.length === 0 ? (
         <Card className="shadow-soft rounded-xl">
-          <CardContent className="py-16 text-center">
-            <Shield size={48} className="mx-auto mb-3 opacity-30 text-muted-foreground" />
+          <CardContent className="py-10 text-center">
+            <Shield size={40} className="mx-auto mb-3 opacity-30 text-muted-foreground" />
             <p className="text-muted-foreground">No restricted locations configured.</p>
             <p className="text-xs text-muted-foreground mt-1">Mark a sub-location as "restricted" in Locations to enable access control.</p>
           </CardContent>
@@ -290,14 +307,22 @@ export default function AccessPage() {
             <Card className="shadow-soft rounded-xl"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Pending Guests</p><p className="text-2xl font-semibold mt-1" data-testid="pending-guest-count">{guestRequests.filter(g => g.status === 'pending').length}</p></CardContent></Card>
             <Card className="shadow-soft rounded-xl"><CardContent className="p-4"><p className="text-xs text-muted-foreground">Scans Today</p><p className="text-2xl font-semibold mt-1" data-testid="scans-today">{scanLog.filter(s => s.timestamp?.startsWith(new Date().toISOString().split('T')[0])).length}</p></CardContent></Card>
           </div>
+        </>
+      )}
 
-          <Tabs defaultValue="residents">
-            <TabsList className="flex-wrap">
+      {/* Guest links and rejected hits aren't tied to a restricted space, so
+          the tabs render even before any space is marked restricted. */}
+      <Tabs defaultValue={restrictedLocations.length > 0 ? 'residents' : 'rejected'}>
+          <TabsList className="flex-wrap">
               <TabsTrigger value="residents" data-testid="tab-residents"><Users size={13} className="mr-1.5" /> Residents</TabsTrigger>
               <TabsTrigger value="staff" data-testid="tab-staff"><KeyRound size={13} className="mr-1.5" /> Staff Access</TabsTrigger>
               <TabsTrigger value="guests" data-testid="tab-guests"><UserPlus size={13} className="mr-1.5" /> Guest Requests</TabsTrigger>
               <TabsTrigger value="passes" data-testid="tab-passes"><QrCode size={13} className="mr-1.5" /> Guest Passes</TabsTrigger>
               <TabsTrigger value="log" data-testid="tab-scan-log"><Clock size={13} className="mr-1.5" /> Scan Log</TabsTrigger>
+              <TabsTrigger value="rejected" data-testid="tab-rejected">
+                <ShieldAlert size={13} className="mr-1.5" /> Rejected
+                {rejections.length > 0 && <span className="ml-1.5 text-[10px] rounded-full bg-red-100 text-red-700 px-1.5">{rejections.length}</span>}
+              </TabsTrigger>
               <TabsTrigger value="doors" data-testid="tab-doors"><Shield size={13} className="mr-1.5" /> Door APIs</TabsTrigger>
               <TabsTrigger value="links" data-testid="tab-links"><KeyRound size={13} className="mr-1.5" /> Guest Links</TabsTrigger>
             </TabsList>
@@ -455,6 +480,66 @@ export default function AccessPage() {
               )}
             </TabsContent>
 
+            {/* Blocked public access-request hits */}
+            <TabsContent value="rejected" className="mt-4">
+              <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
+                <div>
+                  <p className="text-sm font-medium">Rejected requests</p>
+                  <p className="text-xs text-muted-foreground">
+                    Public link submissions that never made it through — rate limits, dead links and junk input.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={fetchRejections} data-testid="refresh-rejections-btn">Refresh</Button>
+                  {rejections.length > 0 && (
+                    <Button size="sm" variant="outline" className="text-destructive" data-testid="clear-rejections-btn"
+                      onClick={async () => {
+                        if (!window.confirm('Clear the whole rejected list?')) return;
+                        try { await accessApi.clearRejectedRequests(); setRejections([]); setRejectionStats(null); toast.success('Cleared'); }
+                        catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                      }}>Clear all</Button>
+                  )}
+                </div>
+              </div>
+
+              {rejectionStats?.by_reason && Object.keys(rejectionStats.by_reason).length > 0 && (
+                <div className="flex gap-2 flex-wrap mb-3" data-testid="rejection-stats">
+                  {Object.entries(rejectionStats.by_reason).map(([reason, count]) => (
+                    <Badge key={reason} variant="outline" className="text-xs">{REJECT_LABELS[reason] || reason}: {count}</Badge>
+                  ))}
+                  {(rejectionStats.top_ips || []).slice(0, 3).map(ip => (
+                    <Badge key={ip.ip} variant="secondary" className="text-xs font-mono">{ip.ip} ×{ip.count}</Badge>
+                  ))}
+                </div>
+              )}
+
+              {rejections.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-10" data-testid="rejections-empty">
+                  Nothing blocked yet — every public request has gone through cleanly.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {rejections.map(r => (
+                    <div key={r.id} className="flex items-start justify-between gap-3 p-3 rounded-lg border border-border text-sm" data-testid={`rejection-row-${r.id}`}>
+                      <div className="flex items-start gap-3 min-w-0">
+                        <Badge variant="outline" className={`text-xs shrink-0 ${r.reason === 'rate_limited' ? 'border-red-400 text-red-600' : r.reason === 'validation' ? 'border-amber-400 text-amber-600' : 'border-slate-400 text-slate-600'}`}>
+                          {REJECT_LABELS[r.reason] || r.reason}
+                        </Badge>
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{r.attempted_name || '(no name given)'}{r.space_name ? ` → ${r.space_name}` : ''}</p>
+                          <p className="text-xs text-muted-foreground truncate">{r.detail}</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5 font-mono">
+                            {r.client_ip} · {r.attempted_email || r.attempted_phone || 'no contact'} · {new Date(r.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant="secondary" className="text-[10px] shrink-0">{r.status_code}</Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
             {/* Door/Access Control API Connections */}
             <TabsContent value="doors" className="mt-4">
               <div className="flex justify-between items-center mb-4">
@@ -512,8 +597,6 @@ export default function AccessPage() {
               )}
             </TabsContent>
           </Tabs>
-        </>
-      )}
 
       {/* Assign Resident Dialog */}
       <Dialog open={showAssignResident} onOpenChange={setShowAssignResident}>

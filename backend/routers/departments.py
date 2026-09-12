@@ -98,7 +98,7 @@ async def create_department(data: DepartmentCreate, current_user: dict = Depends
         raise HTTPException(status_code=409, detail=f"A department named '{data.name}' already exists in this campus")
     await db.departments.insert_one(dept)
     dept.pop("_id", None)
-    await _audit(current_user["id"], "create", "department", dept["id"], data={"name": data.name, "location_id": data.location_id})
+    await _audit(current_user["id"], "create", "department", dept["id"], details={"name": data.name, "location_id": data.location_id})
     return dept
 
 
@@ -136,7 +136,7 @@ async def update_department(dept_id: str, data: DepartmentUpdate, current_user: 
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.departments.update_one({"id": dept_id}, {"$set": update})
     doc = await db.departments.find_one({"id": dept_id}, {"_id": 0})
-    await _audit(current_user["id"], "update", "department", dept_id, data=update)
+    await _audit(current_user["id"], "update", "department", dept_id, details=update)
     return doc
 
 
@@ -185,7 +185,7 @@ async def reassign_department(dept_id: str, data: dict, current_user: dict = Dep
     # Expenses: swap direct department_id
     await db.expenses.update_many({"department_id": dept_id}, {"$set": {"department_id": target}})
     await db.expense_allocations.update_many({"department_id": dept_id}, {"$set": {"department_id": target}})
-    await _audit(current_user["id"], "reassign", "department", dept_id, data={"to": target})
+    await _audit(current_user["id"], "reassign", "department", dept_id, details={"to": target})
     return {"ok": True}
 
 
@@ -203,5 +203,129 @@ async def delete_department(dept_id: str, hard: bool = False, current_user: dict
         await db.departments.delete_one({"id": dept_id})
     else:
         await db.departments.update_one({"id": dept_id}, {"$set": {"active": False, "deactivated_at": datetime.now(timezone.utc).isoformat()}})
-    await _audit(current_user["id"], "delete", "department", dept_id, data={"hard": hard})
+    await _audit(current_user["id"], "delete", "department", dept_id, details={"hard": hard})
     return {"ok": True}
+
+
+# ── legacy migration ─────────────────────────────────────────────
+# Before departments became real records, staff/members/expenses carried a
+# free-text `department` string typed by hand ("Food ", "food", "Kitchen").
+# Those rows are invisible to department P&L and staffing reports. This pair
+# of endpoints surfaces them and folds them into proper department records.
+
+_LEGACY_SOURCES = [
+    # collection, legacy text field, target field, is_array
+    ("users", "department", "department_ids", True),
+    ("members", "department", "department_id", False),
+    ("expenses", "department", "department_id", False),
+    ("assets", "department", "department_id", False),
+    ("purchase_orders", "department", "department_id", False),
+]
+
+
+async def _legacy_rows(coll: str, text_field: str, target_field: str):
+    q = {
+        text_field: {"$nin": [None, ""]},
+        "$or": [{target_field: {"$in": [None, "", []]}}, {target_field: {"$exists": False}}],
+    }
+    return await db[coll].find(
+        q, {"_id": 0, "id": 1, text_field: 1, "location_id": 1, "location_ids": 1, "name": 1}
+    ).to_list(2000)
+
+
+@router.get("/legacy-scan")
+async def scan_legacy_departments(current_user: dict = Depends(require_admin)):
+    """Group hand-typed department names that aren't linked to a real record."""
+    existing = await db.departments.find({}, {"_id": 0, "id": 1, "name": 1, "location_id": 1, "active": 1}).to_list(500)
+    by_key = {(d["location_id"], (d.get("name") or "").strip().lower()): d for d in existing}
+    groups: dict = {}
+    for coll, text_field, target_field, _arr in _LEGACY_SOURCES:
+        for row in await _legacy_rows(coll, text_field, target_field):
+            raw = str(row.get(text_field) or "").strip()
+            if not raw:
+                continue
+            key = raw.lower()
+            g = groups.setdefault(key, {
+                "legacy_name": raw, "clean_name": raw, "count": 0,
+                "collections": {}, "location_ids": [], "samples": [],
+                "matches_existing": None,
+            })
+            g["count"] += 1
+            g["collections"][coll] = g["collections"].get(coll, 0) + 1
+            loc = row.get("location_id") or (row.get("location_ids") or [None])[0]
+            if loc and loc not in g["location_ids"]:
+                g["location_ids"].append(loc)
+            if row.get("name") and len(g["samples"]) < 3:
+                g["samples"].append(row["name"])
+            if g["matches_existing"] is None and loc:
+                hit = by_key.get((loc, key))
+                if hit:
+                    g["matches_existing"] = {"id": hit["id"], "name": hit["name"]}
+    return {
+        "groups": sorted(groups.values(), key=lambda x: -x["count"]),
+        "total_records": sum(g["count"] for g in groups.values()),
+        "existing_departments": len(existing),
+    }
+
+
+@router.post("/migrate-legacy")
+async def migrate_legacy_departments(data: dict = None, current_user: dict = Depends(require_admin)):
+    """Fold hand-typed department names into real department records.
+
+    Body: {"dry_run": bool, "default_location_id": str?}
+    Matching is case/whitespace-insensitive within the record's own campus;
+    anything unmatched gets a new department created in that campus.
+    """
+    data = data or {}
+    dry_run = bool(data.get("dry_run"))
+    default_loc = data.get("default_location_id") or ""
+    if not default_loc:
+        main = await db.locations.find_one({"type": "main"}, {"_id": 0, "id": 1}) \
+            or await db.locations.find_one({}, {"_id": 0, "id": 1})
+        default_loc = (main or {}).get("id", "")
+
+    existing = await db.departments.find({}, {"_id": 0, "id": 1, "name": 1, "location_id": 1}).to_list(500)
+    index = {(d["location_id"], (d.get("name") or "").strip().lower()): d["id"] for d in existing}
+    created: list = []
+    updated: dict = {}
+    skipped = 0
+
+    for coll, text_field, target_field, is_array in _LEGACY_SOURCES:
+        for row in await _legacy_rows(coll, text_field, target_field):
+            raw = str(row.get(text_field) or "").strip()
+            if not raw:
+                continue
+            loc = row.get("location_id") or (row.get("location_ids") or [None])[0] or default_loc
+            if not loc:
+                skipped += 1
+                continue
+            key = (loc, raw.lower())
+            dept_id = index.get(key)
+            if not dept_id:
+                dept_id = f"dept_{uuid.uuid4().hex[:8]}"
+                new_dept = {
+                    "id": dept_id, "name": raw, "description": "Migrated from legacy free-text department",
+                    "location_id": loc, "sublocation_id": None, "color": None, "budget": None,
+                    "active": True, "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_by": current_user["id"], "migrated_from_legacy": True,
+                }
+                if not dry_run:
+                    await db.departments.insert_one(new_dept)
+                index[key] = dept_id
+                created.append({"id": dept_id, "name": raw, "location_id": loc})
+            if not dry_run:
+                value = [dept_id] if is_array else dept_id
+                await db[coll].update_one(
+                    {"id": row["id"]},
+                    {"$set": {target_field: value, "department": raw, "department_migrated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            updated[coll] = updated.get(coll, 0) + 1
+
+    if not dry_run:
+        await _audit(current_user["id"], "migrate", "departments", "legacy",
+                     details={"created": len(created), "updated": updated})
+    return {
+        "dry_run": dry_run, "departments_created": created,
+        "records_updated": updated,
+        "records_total": sum(updated.values()), "skipped_no_campus": skipped,
+    }

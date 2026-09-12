@@ -83,6 +83,6 @@ async def set_sublocation_budget(subloc_id: str, data: dict, current_user: dict 
         except Exception:
             raise HTTPException(status_code=400, detail="budget must be a number or null")
     await db.sublocations.update_one({"id": subloc_id}, {"$set": update})
-    await _audit(current_user["id"], "update", "sublocation-budget", subloc_id, data={"budget": update["budget"]})
+    await _audit(current_user["id"], "update", "sublocation-budget", subloc_id, details={"budget": update["budget"]})
     doc = await db.sublocations.find_one({"id": subloc_id}, {"_id": 0})
     return doc

@@ -324,7 +324,7 @@ async def bulk_tag_department(data: dict, current_user: dict = Depends(require_a
             new_ids = list(dict.fromkeys([*(u.get("department_ids") or []), dept_id]))
         await db.users.update_one({"id": uid}, {"$set": {"department_ids": new_ids, "updated_at": datetime.now(timezone.utc).isoformat()}})
         updated += 1
-    await _audit(current_user["id"], "bulk-tag-department", "users", f"{updated} users", data={"department_id": dept_id, "mode": mode})
+    await _audit(current_user["id"], "bulk-tag-department", "users", f"{updated} users", details={"department_id": dept_id, "mode": mode})
     return {"updated": updated, "department": dept}
 
 

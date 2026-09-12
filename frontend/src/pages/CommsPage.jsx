@@ -221,6 +221,11 @@ export default function CommsPage() {
     return unsub;
   }, [addListener, selectedRoom?.id]);
 
+  // A missed-call notification deep-links here as ?room=phone&call=0700…
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('room') === 'phone') setSelectedRoom(PHONE_ROOM);
+  }, []);
 
   const selectRoom = async (room) => {
     setSelectedRoom(room);

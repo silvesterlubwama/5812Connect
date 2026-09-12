@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Building2, Plus, Trash2, Edit2, Save, X } from 'lucide-react';
+import { Building2, Plus, Trash2, Edit2, Save, X, Wand2 } from 'lucide-react';
 import { Card, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Badge } from '../ui/badge';
 import { Switch } from '../ui/switch';
@@ -32,6 +33,38 @@ export function DepartmentsManager() {
   const empty = { name: '', description: '', location_id: '', sublocation_id: '', color: DEFAULT_COLORS[0], budget: '', active: true };
   const [form, setForm] = useState(empty);
   const [editingId, setEditingId] = useState(null);
+
+  // Legacy free-text department migration
+  const [legacy, setLegacy] = useState(null);      // { groups, total_records }
+  const [showLegacy, setShowLegacy] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState(null);
+
+  const openLegacy = async () => {
+    setShowLegacy(true);
+    setMigrateResult(null);
+    try {
+      const res = await departmentsApi.legacyScan();
+      setLegacy(res.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not scan for legacy departments');
+      setLegacy({ groups: [], total_records: 0 });
+    }
+  };
+
+  const runMigration = async () => {
+    setMigrating(true);
+    try {
+      const res = await departmentsApi.migrateLegacy({ dry_run: false });
+      setMigrateResult(res.data);
+      toast.success(`Migrated ${res.data.records_total} record(s) into ${res.data.departments_created.length} department(s)`);
+      await fetchAll();
+      const rescan = await departmentsApi.legacyScan();
+      setLegacy(rescan.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Migration failed');
+    } finally { setMigrating(false); }
+  };
 
   const fetchAll = async () => {
     try {
@@ -178,11 +211,64 @@ export function DepartmentsManager() {
               <Switch checked={showInactive} onCheckedChange={setShowInactive} data-testid="dept-show-inactive" />
               Show inactive
             </label>
+            <Button size="sm" variant="outline" onClick={openLegacy} data-testid="migrate-legacy-depts-btn">
+              <Wand2 size={13} className="mr-1" /> Migrate legacy
+            </Button>
             <Button size="sm" onClick={() => { setEditingId(null); setForm(empty); setShowAdd(true); }} data-testid="add-department-btn">
               <Plus size={13} className="mr-1" /> Add
             </Button>
           </div>
         </div>
+
+        <Dialog open={showLegacy} onOpenChange={setShowLegacy}>
+          <DialogContent className="max-w-[620px]" data-testid="legacy-depts-dialog">
+            <DialogHeader>
+              <DialogTitle className="text-base">Migrate legacy departments</DialogTitle>
+            </DialogHeader>
+            <p className="text-xs text-muted-foreground">
+              Before departments were real records, they were typed in by hand on staff, members and expenses.
+              Those rows never show up in department P&amp;L or staffing reports. This folds each typed name into a
+              proper department inside the same campus (matching existing ones, ignoring case and stray spaces).
+            </p>
+            {!legacy ? (
+              <p className="text-sm py-6 text-center text-muted-foreground">Scanning…</p>
+            ) : legacy.groups.length === 0 ? (
+              <p className="text-sm py-6 text-center text-muted-foreground" data-testid="legacy-depts-empty">
+                Nothing to migrate — every record already points at a real department.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-[45vh] overflow-y-auto">
+                {legacy.groups.map(g => (
+                  <div key={g.legacy_name} className="rounded-lg border p-2.5 text-sm" data-testid={`legacy-group-${g.legacy_name.trim().replace(/\s+/g, '-').toLowerCase()}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">"{g.legacy_name}"</span>
+                      <Badge variant="outline" className="text-[10px]">{g.count} record{g.count === 1 ? '' : 's'}</Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      {Object.entries(g.collections).map(([c, n]) => `${n} ${c}`).join(' · ')}
+                      {g.matches_existing ? ` → links to existing "${g.matches_existing.name}"` : ' → a new department will be created'}
+                    </p>
+                    {g.samples?.length > 0 && (
+                      <p className="text-[11px] text-muted-foreground">e.g. {g.samples.join(', ')}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {migrateResult && (
+              <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-2.5 text-xs" data-testid="legacy-migrate-result">
+                Created {migrateResult.departments_created.length} department(s) and updated {migrateResult.records_total} record(s).
+                {migrateResult.skipped_no_campus > 0 && ` ${migrateResult.skipped_no_campus} skipped (no campus on the record).`}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={() => setShowLegacy(false)} data-testid="legacy-depts-close">Close</Button>
+              <Button size="sm" disabled={migrating || !legacy?.groups?.length} onClick={runMigration} data-testid="legacy-depts-run-btn">
+                {migrating ? 'Migrating…' : `Migrate ${legacy?.total_records || 0} record(s)`}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {showAdd && (
           <div className="rounded-lg border p-3 space-y-3 bg-muted/30">

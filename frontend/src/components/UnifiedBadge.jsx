@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Download, Printer, Smartphone, Wifi } from 'lucide-react';
+import { Download, Printer, Smartphone, Wifi, ZoomIn } from 'lucide-react';
 import { Button } from './ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import DOMPurify from 'dompurify';
 import { toast } from 'sonner';
 import { QRCodeSVG } from 'qrcode.react';
@@ -120,6 +121,8 @@ function NfcSymbol({ size = 14, color = '#fbbf24' }) {
 export function UnifiedBadge({ person, size = 'normal', showActions = true, kioskMode = false, canWriteNfc = false }) {
   const badgeRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
+  const [zoomUrl, setZoomUrl] = useState(null);
+  const [zooming, setZooming] = useState(false);
   const [nfcWriting, setNfcWriting] = useState(false);
   const type = getBadgeType(person);
   const colors = BADGE_COLORS[type] || BADGE_COLORS.member;
@@ -197,6 +200,9 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     return toPng(el, {
       pixelRatio: 3,
       cacheBust: true,
+      // Google Fonts CSS is cross-origin — inlining it throws a SecurityError
+      // and spams the console. The badge uses Arial fallbacks anyway.
+      skipFonts: true,
       // Fetch cross-origin images (photos, company logos) as data URLs
       // otherwise the canvas render leaves them blank.
       fetchRequestInit: { mode: 'cors' },
@@ -208,8 +214,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     try {
       const dataUrl = await renderBadgePng();
       const win = window.open('', '_blank', 'width=420,height=320');
-      if (!win) { toast.error('Popup blocked — enable popups to print'); return; }
-      const doc = win.document;
+      if (!win) { toast.error('Popup blocked — enable popups to print'); return; }      const doc = win.document;
       doc.open(); doc.write('<!DOCTYPE html>'); doc.close();
       doc.head.innerHTML = DOMPurify.sanitize(
         '<title>Badge</title><style>*{margin:0;padding:0;box-sizing:border-box}body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;font-family:Arial,sans-serif}img{max-width:100%;height:auto}@media print{body{min-height:auto}@page{margin:0}}</style>',
@@ -223,6 +228,18 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
       console.error(e);
       toast.error('Could not print — try Download instead');
     }
+  };
+
+  const openZoom = async () => {
+    setZooming(true);
+    try {
+      // Uses the exact same raster the printer gets, blown up 2× — what you
+      // check here is literally what comes out of the badge printer.
+      setZoomUrl(await renderBadgePng());
+    } catch (e) {
+      console.error(e);
+      toast.error('Could not build the preview');
+    } finally { setZooming(false); }
   };
 
   const downloadBadge = async () => {
@@ -508,6 +525,9 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
 
       {showActions && (
         <div className="flex justify-center gap-2 flex-wrap">
+          <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={openZoom} disabled={zooming} data-testid="zoom-badge">
+            <ZoomIn size={12} /> {zooming ? 'Building…' : 'Preview 200%'}
+          </Button>
           <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={printBadge} data-testid="print-badge">
             <Printer size={12} /> Print
           </Button>
@@ -524,10 +544,51 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
           )}
         </div>
       )}
+
+      {/* 200% print check — inspect the actual raster before wasting badge stock */}
+      <BadgeZoomDialog
+        url={zoomUrl}
+        onClose={() => setZoomUrl(null)}
+        onPrint={printBadge}
+        width={(isSmall ? 280 : 360) * 2}
+      />
     </div>
   );
 }
 
 export function BadgePreview({ person }) {
   return <UnifiedBadge person={person} size="small" showActions={false} />;
+}
+
+/**
+ * 200% print check — shows the exact raster that goes to the printer so
+ * staff can spot a soft QR or a cropped photo before burning badge stock.
+ */
+export function BadgeZoomDialog({ url, onClose, onPrint, width = 720 }) {
+  return (
+    <Dialog open={!!url} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[860px]" data-testid="badge-zoom-dialog">
+        <DialogHeader>
+          <DialogTitle className="text-base">Print preview · 200%</DialogTitle>
+        </DialogHeader>
+        <div className="overflow-auto max-h-[65vh] rounded-lg bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#ffffff_0%_50%)] bg-[length:16px_16px] p-4">
+          {url && (
+            <img src={url} alt="Badge at 200%" data-testid="badge-zoom-image"
+                 style={{ width: `${width}px`, display: 'block', margin: '0 auto' }} />
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          This is the exact image sent to the printer. Check the QR squares are crisp and the photo isn't cropped before printing.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onClose} data-testid="badge-zoom-close">Close</Button>
+          {onPrint && (
+            <Button size="sm" onClick={() => { onClose(); onPrint(); }} data-testid="badge-zoom-print">
+              <Printer size={12} className="mr-1.5" /> Print it
+            </Button>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }

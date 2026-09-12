@@ -364,6 +364,85 @@ async def my_directory(current_user: dict = Depends(get_current_user)):
     return rows
 
 
+# ── missed calls ──────────────────────────────────────────────────
+# iter347 — a ring that is never answered used to leave no trace at all:
+# the softphone toast faded after 15 s and nothing was written anywhere. The
+# browser reports every unanswered inbound session here so it lands in the
+# notification bell with a one-tap call-back.
+
+class MissedCallIn(BaseModel):
+    peer: str = Field(default="", max_length=64)
+    caller_name: Optional[str] = Field(default=None, max_length=120)
+    reason: str = Field(default="no_answer", max_length=32)   # no_answer | declined | busy | failed
+
+
+@router.post("/me/missed-calls")
+async def log_missed_call(data: MissedCallIn, current_user: dict = Depends(get_current_user)):
+    """Record an unanswered inbound ring + raise a call-back notification."""
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+
+    peer = (data.peer or "").strip() or "Unknown"
+    reason = data.reason if data.reason in ("no_answer", "declined", "busy", "failed") else "no_answer"
+    # Collapse ring-retries: the UCM often re-offers the same call within
+    # seconds, which would otherwise spam the bell with duplicates.
+    recent_cut = (_dt.now(_tz.utc).timestamp() - 90)
+    dupe = await db.missed_calls.find_one({
+        "user_id": current_user["id"], "peer": peer,
+        "ts": {"$gte": recent_cut},
+    }, {"_id": 0, "id": 1})
+    if dupe:
+        return {"id": dupe["id"], "duplicate": True}
+
+    doc = {
+        "id": f"mcall_{_uuid.uuid4().hex[:8]}",
+        "user_id": current_user["id"],
+        "peer": peer,
+        "caller_name": (data.caller_name or "").strip() or None,
+        "reason": reason,
+        "handled": False,
+        "ts": _dt.now(_tz.utc).timestamp(),
+        "created_at": _dt.now(_tz.utc).isoformat(),
+    }
+    await db.missed_calls.insert_one(doc)
+    doc.pop("_id", None)
+
+    label = {"no_answer": "Missed call", "declined": "Call declined",
+             "busy": "Missed call (you were busy)", "failed": "Missed call"}[reason]
+    who = doc["caller_name"] or peer
+    try:
+        from routers.notifications import create_notification
+        await create_notification(
+            title=f"{label} from {who}",
+            message=f"{who} rang and didn't get through. Tap to call {peer} back.",
+            user_id=current_user["id"],
+            notif_type="call",
+            link=f"/comms?room=phone&call={peer}",
+        )
+    except Exception as ex:
+        logger.warning(f"missed-call notification skipped: {ex}")
+    return doc
+
+
+@router.get("/me/missed-calls")
+async def list_missed_calls(limit: int = 20, include_handled: bool = False,
+                            current_user: dict = Depends(get_current_user)):
+    q: Dict[str, Any] = {"user_id": current_user["id"]}
+    if not include_handled:
+        q["handled"] = {"$ne": True}
+    rows = await db.missed_calls.find(q, {"_id": 0}).sort("ts", -1).to_list(min(limit, 100))
+    return rows
+
+
+@router.put("/me/missed-calls/{call_id}/handled")
+async def mark_missed_call_handled(call_id: str, current_user: dict = Depends(get_current_user)):
+    res = await db.missed_calls.update_one(
+        {"id": call_id, "user_id": current_user["id"]}, {"$set": {"handled": True}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Missed call not found")
+    return {"ok": True}
+
+
 @router.get("/me/voicemails")
 async def my_voicemails(current_user: dict = Depends(get_current_user)):
     ext = await _current_user_ext(current_user)

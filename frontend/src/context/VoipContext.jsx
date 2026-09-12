@@ -72,6 +72,16 @@ export function VoipProvider({ children }) {
   const blfSubsRef = useRef({});   // extension → JsSIP.Subscriber
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
+  const declinedRef = useRef(false);   // true when WE hung up on a ring
+
+  // Log an unanswered inbound ring so it shows up in the bell + Phone room.
+  const logMissedCall = (peer, callerName, reason) => {
+    api.post('/voip/me/missed-calls', {
+      peer: String(peer || '').slice(0, 64),
+      caller_name: callerName || null,
+      reason,
+    }).catch(() => { /* never block the UI on logging */ });
+  };
 
   // ── audio element ───────────────────────────────────────────
   useEffect(() => {
@@ -135,11 +145,16 @@ export function VoipProvider({ children }) {
           if (sessionRef.current) {
             // Second call arrives while we're already on one — reject busy.
             try { session.terminate({ status_code: 486, reason_phrase: 'Busy Here' }); } catch {}
+            const busyPeer = request?.from?.uri?.user || '';
+            logMissedCall(busyPeer, request?.from?.display_name, 'busy');
             return;
           }
           sessionRef.current = session;
           const isIncoming = session.direction === 'incoming';
           const peer = (isIncoming ? (request?.from?.display_name || request?.from?.uri?.user) : (session.remote_identity?.uri?.user)) || '';
+          const peerNumber = (isIncoming ? request?.from?.uri?.user : session.remote_identity?.uri?.user) || peer;
+          const callerName = isIncoming ? (request?.from?.display_name || '') : '';
+          let answered = false;
           setRemotePeer(peer);
           setCallState(isIncoming ? 'incoming' : 'outgoing');
           setHasRemoteVideo(false);
@@ -147,13 +162,31 @@ export function VoipProvider({ children }) {
           if (isIncoming) toast.info(`Incoming call from ${peer}`, { duration: 15000 });
 
           session.on('confirmed', () => {
+            answered = true;
             setCallState('in-call');
             setCallDurationSec(0);
             if (timerRef.current) clearInterval(timerRef.current);
             timerRef.current = setInterval(() => setCallDurationSec(s => s + 1), 1000);
           });
-          session.on('ended', () => teardown());
-          session.on('failed', (e) => { teardown(); toast.error(`Call ended: ${e?.cause || 'failed'}`); });
+          // iter347 — a ring nobody picked up used to disappear without a
+          // trace once the toast faded. Log it so it lands in the bell with
+          // a call-back link.
+          session.on('ended', () => {
+            if (isIncoming && !answered) logMissedCall(peerNumber, callerName, declinedRef.current ? 'declined' : 'no_answer');
+            declinedRef.current = false;
+            teardown();
+          });
+          session.on('failed', (e) => {
+            if (isIncoming && !answered) {
+              const cause = String(e?.cause || '').toLowerCase();
+              const reason = declinedRef.current || cause.includes('reject') || cause.includes('busy')
+                ? 'declined' : 'no_answer';
+              logMissedCall(peerNumber, callerName, reason);
+            }
+            declinedRef.current = false;
+            teardown();
+            toast.error(`Call ended: ${e?.cause || 'failed'}`);
+          });
           session.on('peerconnection', ({ peerconnection }) => {
             peerconnection.addEventListener('track', (ev) => {
               const stream = ev.streams?.[0];
@@ -283,9 +316,11 @@ export function VoipProvider({ children }) {
   const hangup = useCallback(() => {
     const s = sessionRef.current;
     if (!s) return;
+    // Mark an un-answered inbound hangup as a decline (vs. caller giving up).
+    if (s.direction === 'incoming' && callState === 'incoming') declinedRef.current = true;
     try { s.terminate(); } catch {}
     teardown();
-  }, [teardown]);
+  }, [teardown, callState]);
 
   const toggleMute = useCallback(() => {
     const s = sessionRef.current;
