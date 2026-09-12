@@ -226,7 +226,9 @@ async def list_tasks(
     if priority and priority != "all":
         query["priority"] = priority
     if assignee:
-        query["assignee"] = assignee
+        # Cards carry either the `assignees` array (boards) or the legacy
+        # singular `assignee`; filtering on one alone silently hid the other.
+        query["$or"] = [{"assignees": assignee}, {"assignee": assignee}]
     if board_id:
         query["board_id"] = board_id
     if list_id:

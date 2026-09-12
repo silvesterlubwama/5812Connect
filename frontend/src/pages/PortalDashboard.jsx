@@ -76,7 +76,9 @@ export default function PortalDashboard() {
           <CardContent className="p-4 space-y-3">
             <p className="text-xs font-semibold text-muted-foreground">Profile Actions</p>
             <Button variant="outline" className="w-full gap-2 text-sm" onClick={async () => {
-              try { const res = await api.get(`/members/${user?.member_id || user?.id}/profile-pdf`, { responseType: 'blob' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })); const a = document.createElement('a'); a.href = url; a.download = `profile-${user?.name?.replace(/\s/g, '_')}.pdf`; a.click(); toast.success('PDF downloaded'); }
+              // Self-service endpoint: the old one was staff-only and took a
+              // MEMBER id, so it 403'd/404'd from the portal.
+              try { const res = await api.get('/portal/profile-pdf', { responseType: 'blob' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })); const a = document.createElement('a'); a.href = url; a.download = `profile-${user?.name?.replace(/\s/g, '_')}.pdf`; a.click(); toast.success('PDF downloaded'); }
               catch { toast.error('PDF download failed'); }
             }} data-testid="portal-download-pdf"><Download size={14} /> Download Profile PDF</Button>
             <Button variant="outline" className="w-full gap-2 text-sm" onClick={() => navigate('/portal/profile')} data-testid="portal-edit-profile"><User size={14} /> Edit My Profile</Button>
@@ -129,9 +131,16 @@ export default function PortalDashboard() {
                 <div key={c.id || i} className="flex items-center justify-between py-2 border-b last:border-0">
                   <div className="flex items-center gap-2">
                     <Clock size={14} className="text-muted-foreground" />
-                    <span className="text-sm">{c.event_name || c.type || 'Check-in'}</span>
+                    <div className="min-w-0">
+                      <span className="text-sm block truncate">{c.label || c.event_title || c.event_name || c.type || 'Check-in'}</span>
+                      {(c.location_name || c.method) && (
+                        <span className="text-[11px] text-muted-foreground block truncate">
+                          {[c.location_name, (c.method || '').replace(/_/g, ' ')].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <span className="text-xs text-muted-foreground">{new Date(c.check_in_time || c.timestamp).toLocaleDateString()}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">{new Date(c.when || c.check_in_time || c.timestamp).toLocaleDateString()}</span>
                 </div>
               ))}
             </div>

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from deps import db, get_current_user, _audit, logger, get_campus_filter
 from datetime import datetime, timezone
 from typing import Optional
+import re
 import uuid
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
@@ -135,27 +136,25 @@ async def portal_issue_own_badge(current_user: dict = Depends(get_current_user))
         member = await db.members.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
     subject_id = member["id"] if member else uid
     subject = member or current_user
+    # A photo (or a rename, or a transfer) that lands AFTER the badge was first
+    # minted must show up on the badge. The old code returned the stored
+    # snapshot untouched, which is why a photo visible on the dashboard was
+    # missing from the badge tab.
+    live = await _badge_display_fields(subject, uid)
     existing = await db.wallet_badges.find_one(
         {"member_id": subject_id, "status": {"$ne": "invalidated"}}, {"_id": 0},
     )
     if existing:
+        drifted = {k: v for k, v in live.items() if v and existing.get(k) != v}
+        if drifted:
+            await db.wallet_badges.update_one({"member_id": subject_id}, {"$set": drifted})
+            existing.update(drifted)
         return existing
     token = uuid.uuid4().hex[:16]
-    loc = await db.locations.find_one(
-        {"id": subject.get("location_id") or subject.get("active_campus_id") or ""},
-        {"_id": 0, "name": 1, "country": 1, "country_code": 1},
-    ) if (subject.get("location_id") or subject.get("active_campus_id")) else None
     badge = {
         "id": f"wbadge_{token}", "token": token,
         "member_id": subject_id,
-        "name": subject.get("name", ""),
-        "role": subject.get("role", subject.get("membership_type", "")),
-        "title": subject.get("title", ""),
-        "department": subject.get("department", ""),
-        "photo_url": subject.get("photo_url", ""),
-        "location_name": loc.get("name") if loc else "",
-        "country": loc.get("country") if loc else "",
-        "country_code": loc.get("country_code") if loc else "",
+        **live,
         "qr_data": subject_id,
         "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -164,6 +163,34 @@ async def portal_issue_own_badge(current_user: dict = Depends(get_current_user))
     }
     await db.wallet_badges.update_one({"member_id": subject_id}, {"$set": badge}, upsert=True)
     return badge
+
+
+async def _badge_display_fields(subject: dict, uid: str) -> dict:
+    """The parts of a badge that can change after it's issued."""
+    loc_id = subject.get("location_id") or subject.get("active_campus_id") or ""
+    loc = await db.locations.find_one(
+        {"id": loc_id}, {"_id": 0, "name": 1, "country": 1, "country_code": 1},
+    ) if loc_id else None
+    photo = subject.get("photo_url") or subject.get("picture") or ""
+    if not photo:
+        # Photos are uploaded against either record; check the other one.
+        other = await db.users.find_one({"id": uid}, {"_id": 0, "photo_url": 1, "picture": 1})
+        if not (other and (other.get("photo_url") or other.get("picture"))):
+            other = await db.members.find_one(
+                {"$or": [{"user_id": uid}, {"id": subject.get("id", "")}]},
+                {"_id": 0, "photo_url": 1},
+            )
+        photo = (other or {}).get("photo_url") or (other or {}).get("picture") or ""
+    return {
+        "name": subject.get("name", ""),
+        "role": subject.get("role", subject.get("membership_type", "")),
+        "title": subject.get("title", ""),
+        "department": subject.get("department", ""),
+        "photo_url": photo,
+        "location_name": loc.get("name") if loc else "",
+        "country": loc.get("country") if loc else "",
+        "country_code": loc.get("country_code") if loc else "",
+    }
 
 
 @router.post("/children/{child_id}/wallet-badge")
@@ -183,6 +210,13 @@ async def portal_issue_child_badge(child_id: str, current_user: dict = Depends(g
         {"member_id": child_id, "status": {"$ne": "invalidated"}}, {"_id": 0},
     )
     if existing:
+        # Keep the child's photo/name current — see _badge_display_fields note.
+        drift = {k: v for k, v in
+                 {"name": child.get("name", ""), "photo_url": child.get("photo_url", "")}.items()
+                 if v and existing.get(k) != v}
+        if drift:
+            await db.wallet_badges.update_one({"member_id": child_id}, {"$set": drift})
+            existing.update(drift)
         return existing
     token = uuid.uuid4().hex[:16]
     loc = await db.locations.find_one({"id": child.get("location_id", "")}, {"_id": 0, "name": 1, "country": 1, "country_code": 1, "contact_phone": 1}) if child.get("location_id") else None
@@ -211,27 +245,43 @@ async def portal_issue_child_badge(child_id: str, current_user: dict = Depends(g
     return badge
 
 
+def _assignee_match(current_user: dict) -> dict:
+    """Match a task to the caller however it was assigned.
+
+    Boards write the multi-assignee array `assignees`; older/imported cards use
+    the singular `assignee`. The portal only checked the singular field, so
+    anyone assigned through the Kanban board saw an empty Tasks tab.
+    """
+    ids = [v for v in (
+        current_user.get("id"),
+        (current_user.get("email") or "").strip(),
+        (current_user.get("name") or "").strip(),
+    ) if v]
+    return {"$or": [{"assignees": {"$in": ids}}, {"assignee": {"$in": ids}}]}
+
+
 @router.get("/tasks")
 async def portal_tasks(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    """Get tasks assigned to the current user"""
-    uid = current_user["id"]
-    name = current_user.get("name", "")
-    email = current_user.get("email", "")
-    query = {"assignee": {"$in": [uid, email, name]}}
+    """Tasks assigned to the caller — archived cards are never shown."""
+    query = {**_assignee_match(current_user), "is_archived": {"$ne": True}}
     if status:
         query["status"] = status
     tasks = await db.tasks.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    board_ids = list({t.get("board_id") for t in tasks if t.get("board_id")})
+    boards = {}
+    if board_ids:
+        async for b in db.boards.find({"id": {"$in": board_ids}}, {"_id": 0, "id": 1, "name": 1}):
+            boards[b["id"]] = b.get("name", "")
+    for t in tasks:
+        t["board_name"] = boards.get(t.get("board_id"), "")
     return tasks
 
 
 @router.put("/tasks/{task_id}/status")
 async def update_portal_task_status(task_id: str, data: dict, current_user: dict = Depends(get_current_user)):
     """Update task status (only if assigned to me)"""
-    uid = current_user["id"]
-    name = current_user.get("name", "")
-    email = current_user.get("email", "")
     task = await db.tasks.find_one(
-        {"id": task_id, "assignee": {"$in": [uid, email, name]}},
+        {"id": task_id, **_assignee_match(current_user)},
         {"_id": 0}
     )
     if not task:
@@ -425,21 +475,69 @@ async def portal_event_rsvp(event_id: str, current_user: dict = Depends(get_curr
 
 @router.get("/checkins")
 async def portal_checkins(current_user: dict = Depends(get_current_user)):
-    """My check-in/access history"""
-    email = current_user.get("email", "")
-    member = await db.members.find_one({"email": email}, {"_id": 0, "id": 1}) if email else None
-    member_id = member["id"] if member else current_user["id"]
+    """My check-in/access history, readable.
+
+    Raw rows only carry `location_id` / `checkpoint_id`, so the portal used to
+    show "Check-in · manual" with no idea WHERE it happened. Every row now
+    carries a resolved campus name, the space/event it was for, and a
+    normalised timestamp.
+    """
+    ids = await _my_identity_ids(current_user)
+    name = current_user.get("name", "")
 
     checkins = await db.checkins.find(
-        {"$or": [{"member_id": member_id}, {"member_name": current_user.get("name", "")}]},
-        {"_id": 0}
+        {"$or": [{"member_id": {"$in": ids}}, {"member_name": name}]}, {"_id": 0},
     ).sort("check_in_time", -1).limit(50).to_list(50)
-
     access_logs = await db.access_logs.find(
-        {"member_id": member_id}, {"_id": 0}
+        {"$or": [{"member_id": {"$in": ids}}, {"person_id": {"$in": ids}}]}, {"_id": 0},
     ).sort("timestamp", -1).limit(50).to_list(50)
 
+    loc_ids = {r.get("location_id") for r in (checkins + access_logs) if r.get("location_id")}
+    event_ids = {r.get("event_id") for r in checkins if r.get("event_id")}
+    locations, events = {}, {}
+    if loc_ids:
+        async for loc in db.locations.find({"id": {"$in": list(loc_ids)}}, {"_id": 0, "id": 1, "name": 1}):
+            locations[loc["id"]] = loc.get("name", "")
+    if event_ids:
+        async for ev in db.events.find({"id": {"$in": list(event_ids)}}, {"_id": 0, "id": 1, "title": 1, "date": 1}):
+            events[ev["id"]] = ev
+
+    for c in checkins:
+        ev = events.get(c.get("event_id"), {})
+        c["location_name"] = locations.get(c.get("location_id")) or c.get("location_name") or ""
+        c["event_title"] = ev.get("title") or c.get("event_name") or c.get("event_title") or ""
+        c["when"] = c.get("check_in_time") or c.get("created_at") or ""
+        c["label"] = c["event_title"] or (c.get("type") or "Check-in").replace("_", " ").title()
+    for a in access_logs:
+        a["location_name"] = locations.get(a.get("location_id")) or a.get("space_name") or ""
+        a["when"] = a.get("timestamp") or a.get("created_at") or ""
+        a["label"] = (a.get("action") or a.get("direction") or "Access").replace("_", " ").title()
+
     return {"checkins": checkins, "access_logs": access_logs}
+
+
+async def _my_identity_ids(current_user: dict) -> list:
+    """Every id this person is known by: user, member and guest rows.
+
+    Tickets, check-ins and access logs are written against whichever record
+    the staff member happened to be looking at, so a portal query on the user
+    id alone misses anything issued against the member/guest row.
+    """
+    uid = current_user.get("id") or ""
+    email = (current_user.get("email") or "").strip().lower()
+    ids = [uid] if uid else []
+    ors: list = []
+    if uid:
+        ors.append({"user_id": uid})
+    if email:
+        ors.append({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}})
+    if not ors:
+        return ids
+    for coll in (db.members, db.guests):
+        async for row in coll.find({"$or": ors}, {"_id": 0, "id": 1}):
+            if row["id"] not in ids:
+                ids.append(row["id"])
+    return ids
 
 
 @router.get("/documents")
@@ -585,7 +683,8 @@ async def portal_tickets(current_user: dict = Depends(get_current_user)):
     of `public_bookings.ticket_ids[]` so each row is a scannable pass.
     """
     email = (current_user.get("email") or "").strip().lower()
-    match: list = [{"auto_member_id": current_user["id"]}]
+    my_ids = await _my_identity_ids(current_user)
+    match: list = [{"auto_member_id": {"$in": my_ids}}, {"member_id": {"$in": my_ids}}]
     if email:
         match.append({"email": email})
     bookings = await db.public_bookings.find(
@@ -634,9 +733,11 @@ async def portal_tickets(current_user: dict = Depends(get_current_user)):
                 "used_at": u.get("used_at"),
             })
     # Tickets issued straight into `event_tickets` (POS / marketplace sales)
-    # never had a public_bookings row — pull them in too (iter345).
+    # never had a public_bookings row — pull them in too (iter345). Matching on
+    # every identity id, not just the user id: a ticket sold at the POS is
+    # tagged with the member/guest row, so those were invisible here (iter349).
     from routers.event_tickets import ticket_flags_for
-    for t in await ticket_flags_for([current_user["id"]], email):
+    for t in await ticket_flags_for(my_ids, email):
         if t["ticket_id"] in seen:
             continue
         seen.add(t["ticket_id"])
@@ -647,5 +748,63 @@ async def portal_tickets(current_user: dict = Depends(get_current_user)):
             "auto_issued": True, "purchased_at": None,
             "status": "used" if t.get("used_at") else (t.get("status") or "valid"),
         })
+    # Access passes (guest/visitor day passes) live in their own collection but
+    # belong in the same wallet — they're what door staff scan.
+    async for gp in db.guest_passes.find(
+        {"$or": [{"member_id": {"$in": my_ids}}, {"guest_id": {"$in": my_ids}},
+                 {"guest_email": email}] if email else
+                [{"member_id": {"$in": my_ids}}, {"guest_id": {"$in": my_ids}}],
+         "status": {"$nin": ["revoked", "void"]}},
+        {"_id": 0},
+    ):
+        pid = gp.get("id") or gp.get("code")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        passes.append({
+            "ticket_id": pid,
+            "booking_id": None,
+            "event_id": None,
+            "event_title": gp.get("space_name") or "Access pass",
+            "event_date": (gp.get("valid_from") or "")[:10],
+            "event_time": "",
+            "event_location": gp.get("space_name") or "",
+            "holder_name": gp.get("guest_name") or current_user.get("name", ""),
+            "tier_name": "Access pass",
+            "price": 0, "currency": "UGX", "is_free": True,
+            "auto_issued": True,
+            "purchased_at": gp.get("created_at"),
+            "status": "used" if gp.get("used_at") else (gp.get("status") or "valid"),
+            "used_at": gp.get("used_at"),
+            "kind": "access_pass",
+            "code": gp.get("code"),
+            "valid_to": gp.get("valid_to"),
+        })
     return passes
+
+
+@router.get("/profile-pdf")
+async def portal_profile_pdf(current_user: dict = Depends(get_current_user)):
+    """My own profile as a PDF.
+
+    The portal button used to call the staff-only
+    `/api/members/{id}/profile-pdf` with the caller's USER id — so it 404'd on
+    the id lookup, or 403'd for anyone who isn't staff. This resolves the
+    caller's own member row (falling back to their user record) and renders the
+    same document.
+    """
+    email = (current_user.get("email") or "").strip().lower()
+    member = None
+    if email:
+        member = await db.members.find_one(
+            {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}}, {"_id": 0})
+    if not member:
+        member = await db.members.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    if not member:
+        # No member row (bare staff account) — build one from the user record
+        # so the download still works instead of erroring.
+        member = {k: v for k, v in current_user.items() if k not in ("password_hash", "pin_hash", "_id")}
+        member.setdefault("id", current_user["id"])
+    from routers.members.pdf import render_member_profile_pdf
+    return await render_member_profile_pdf(member)
 

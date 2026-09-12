@@ -8,6 +8,74 @@ kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
 
+## iter349 — Phase 1 of the reported-bug backlog (2026-06)
+
+User reported ~17 issues across BOTH preview and production. Agreed phases:
+P1 user-facing breakage (this iteration), P2 finance/data trust, P3 security &
+HR, P4 social work + sponsor stories, P5 chat org chart.
+User choices: sponsor stories → **Claude Sonnet 4.6**; pay periods →
+**admin-configurable cycle + anchor date**; badge-less checkpoint entry →
+**national ID / barcode, passport, phone, in-app ID** (no photo-confirm step).
+
+### DONE (tested — `/app/test_reports/iteration_232.json`, 7/7 backend + 3/3 board flows, zero console errors)
+- **Badge photo missing on the Badge tab**: the wallet badge was a one-time
+  snapshot — `existing` was returned untouched forever, so a photo (or rename,
+  or campus move) that landed AFTER the badge was minted never appeared. Badge
+  reads now diff and refresh the mutable display fields
+  (`_badge_display_fields`), look for the photo on whichever record has it
+  (member OR user), and `UnifiedBadge` accepts `photo_url | picture |
+  avatar_url` so a Google-SSO avatar renders too. Child badges refresh as well.
+- **Family not showing**: `_resolve_my_family_id` now also matches
+  `members.user_id` (a member row with an empty email only matched by NAME
+  before — one rename and the household vanished) and falls back to
+  `children.parent_ids`, because households created from a child's record
+  don't always back-fill `families.parent_ids`.
+- **Tasks tab empty**: `/api/portal/tasks` only matched the legacy singular
+  `assignee`, while the Kanban board writes the `assignees` ARRAY — so anyone
+  assigned through a board saw nothing. Now matches both (shared
+  `_assignee_match`), hides archived cards, and returns `board_name`.
+  `/api/tasks?assignee=` had the same blind spot and is fixed too.
+- **Stale/archived cards on the board**: `archiveCard`/`deleteCard` removed the
+  card only from `task.list_id`, which goes stale after a drag; `bulkArchive`
+  called `fetchBoards()` (board LIST) instead of reloading the open board's
+  cards; and `selectAllInList` called `tasks.filter` on an object keyed by list
+  id, throwing `tasks.filter is not a function`. All three fixed; board render
+  also skips `is_archived` defensively.
+- **Tickets & passes missing**: `/api/portal/tickets` matched only the caller's
+  USER id, so a ticket sold at the POS (tagged with the member/guest row) was
+  invisible. Now resolves every identity the person has (`_my_identity_ids`:
+  user + members + guests) and folds in `guest_passes` access passes, which had
+  no home in the wallet at all.
+- **Profile PDF failed**: the portal button called the staff-only
+  `/api/members/{id}/profile-pdf` with a USER id → 404 for staff, 403 for
+  members. New `GET /api/portal/profile-pdf` resolves the caller's own member
+  row (falling back to their user record) and reuses the extracted
+  `render_member_profile_pdf`.
+- **Check-in history wrong/missing info**: rows only carried `location_id`, so
+  the portal showed "Check-in · manual" with no place. `/api/portal/checkins`
+  now resolves campus names + event titles, adds `label`/`when`, matches
+  records written against the member id, and both portal surfaces display the
+  location.
+
+### NEXT (Phase 2 — finance & data trust)
+- Receipt review: preview the receipt image, edit misread sums/details, reject
+  with a reason (not clear / not an approved purchase / other)
+- Manual transactions: type-ahead staff search for who received income or made
+  the expense; automatic entries must show their source
+- My Expenses total to include user-uploaded receipts
+- Vendors list showing stale rows from the old finance UI
+- Donors: verify giving data is gathered from the right place
+- Audit trail must show a user's name, not an id
+
+### THEN
+- Phase 3: checkpoint unauthorised beep + red flash then auto-return to scan;
+  badge-less entry via national ID/passport/phone/in-app ID; timesheets must
+  never show pay rates or types; admin-configurable pay-period cycle + anchor
+  honoured by every payroll/timesheet endpoint
+- Phase 4: social-work reviews yearly for sponsored children (not 90 days),
+  multi-select support needed/given, one-click sponsor story (Claude Sonnet 4.6)
+- Phase 5: chat org chart placing some users at the wrong level
+
 ## iter348 — Code-review remediation (2026-06)
 
 ### DONE (verified — `pytest tests/test_iter347_p2p3_backlog.py tests/test_iter346_api_integration.py tests/test_iter296_indexes.py tests/test_iter345_* tests/test_iter292_regression_smoke.py` = 106 passed)

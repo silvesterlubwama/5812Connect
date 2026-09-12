@@ -160,6 +160,7 @@ export default function TasksPage() {
       const grouped = {};
       for (const list of bRes.data.lists || []) grouped[list.id] = [];
       for (const t of (tRes.data || [])) {
+        if (t.is_archived) continue;   // belt and braces: never paint an archived card
         const lid = t.list_id || '__none__';
         if (!grouped[lid]) grouped[lid] = [];
         grouped[lid].push(t);
@@ -338,7 +339,10 @@ export default function TasksPage() {
     const { tasksExtApi } = await import('../services/api');
     try {
       await tasksExtApi.archive(task.id);
-      setTasks(prev => { const next = { ...prev }; next[task.list_id] = (next[task.list_id] || []).filter(t => t.id !== task.id); return next; });
+      // Drop it from EVERY list, not just `task.list_id` — after a drag the
+      // card's stored list_id can be stale, which left archived cards on the
+      // board until a manual refresh.
+      setTasks(prev => { const next = { ...prev }; for (const lid of Object.keys(next)) next[lid] = (next[lid] || []).filter(t => t.id !== task.id); return next; });
       if (openCard?.id === task.id) setOpenCard(null);
       toast.success('Card archived');
     } catch { toast.error('Failed to archive card'); }
@@ -348,7 +352,7 @@ export default function TasksPage() {
     if (!window.confirm('Delete this card permanently?')) return;
     try {
       await tasksApi.delete(task.id);
-      setTasks(prev => { const next = { ...prev }; next[task.list_id] = (next[task.list_id] || []).filter(t => t.id !== task.id); return next; });
+      setTasks(prev => { const next = { ...prev }; for (const lid of Object.keys(next)) next[lid] = (next[lid] || []).filter(t => t.id !== task.id); return next; });
       if (openCard?.id === task.id) setOpenCard(null);
       toast.success('Card deleted');
     } catch { toast.error('Failed to delete card'); }
@@ -418,7 +422,8 @@ export default function TasksPage() {
     });
   };
   const selectAllInList = (listId) => {
-    const listTasks = tasks.filter(t => t.list_id === listId && !t.is_archived);
+    // `tasks` is keyed by list id, not an array — tasks.filter threw here.
+    const listTasks = (tasks[listId] || []).filter(t => !t.is_archived);
     setSelectedCards(prev => {
       const next = new Set(prev);
       listTasks.forEach(t => next.add(t.id));
@@ -430,7 +435,9 @@ export default function TasksPage() {
     try {
       await tasksApi.bulkArchive([...selectedCards], true);
       toast.success(`${selectedCards.size} cards archived`);
-      setSelectedCards(new Set()); setBulkMode(false); fetchBoards();
+      // fetchBoards() only reloads the board LIST — the archived cards stayed
+      // on screen. Reload the open board's cards instead.
+      setSelectedCards(new Set()); setBulkMode(false); fetchBoardDetail();
     } catch (e) { toast.error(e.message || 'Bulk archive failed'); }
   };
   const bulkMoveToList = async (targetListId, targetListName) => {

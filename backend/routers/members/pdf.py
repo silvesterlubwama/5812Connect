@@ -13,6 +13,12 @@ async def download_member_profile_pdf(member_id: str, current_user: dict = Depen
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    return await render_member_profile_pdf(member)
+
+
+async def render_member_profile_pdf(member: dict):
+    """Shared renderer — also used by the portal's own self-service download."""
+    member_id = member.get("id", "")
     # Get linked user info
     user_info = None
     if member.get("user_id"):

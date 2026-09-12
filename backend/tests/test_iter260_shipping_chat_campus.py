@@ -8,7 +8,7 @@ import pytest
 import requests
 from dotenv import dotenv_values
 
-import creds  # env-backed logins, see tests/creds.py
+from creds import NEW_USER_PASSWORD  # env-backed; the local `creds` fixture below is unrelated
 
 frontend_env = dotenv_values("/app/frontend/.env")
 base_url = os.environ.get("REACT_APP_BACKEND_URL") or frontend_env.get("REACT_APP_BACKEND_URL")
@@ -274,7 +274,7 @@ def director(admin, created):
     email = f"{PREFIX.lower()}director@test.local"
     r = admin.post(f"{API}/admin/users", json={
         "name": f"{PREFIX}Director", "email": email, "role": "Director",
-        "status": "active", "password": creds.NEW_USER_PASSWORD,
+        "status": "active", "password": NEW_USER_PASSWORD,
         "location_id": assigned[0], "location_ids": assigned}, timeout=30)
     assert r.status_code in (200, 201), r.text[:300]
     body = r.json()
@@ -283,7 +283,7 @@ def director(admin, created):
 
     s = requests.Session()
     s.headers.update({"Content-Type": "application/json"})
-    lr = s.post(f"{API}/auth/login", json={"identifier": email, "password": creds.NEW_USER_PASSWORD}, timeout=30)
+    lr = s.post(f"{API}/auth/login", json={"identifier": email, "password": NEW_USER_PASSWORD}, timeout=30)
     assert lr.status_code == 200, lr.text[:300]
     tok = lr.json().get("access_token") or lr.json().get("token")
     s.headers.update({"Authorization": f"Bearer {tok}"})

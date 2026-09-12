@@ -390,7 +390,7 @@ async def _resolve_my_family_id(current_user: dict) -> Optional[str]:
     if current_user.get("family_id"):
         return current_user["family_id"]
 
-    ident: list = [{"id": uid}] if uid else []
+    ident: list = [{"id": uid}, {"user_id": uid}] if uid else []
     if email:
         ident.append({"email": {"$regex": f"^{_esc(email)}$", "$options": "i"}})
     if name:
@@ -418,6 +418,24 @@ async def _resolve_my_family_id(current_user: dict) -> Optional[str]:
         family = await db.families.find_one({"$or": fam_or}, {"_id": 0, "id": 1})
         if family:
             return family["id"]
+
+    # Last resort: a child lists me as a parent. Households created from the
+    # child's record don't always back-fill `families.parent_ids`, which left
+    # parents staring at "no household on file" (iter349).
+    child_or: list = [{"parent_ids": uid}] if uid else []
+    member_ids = []
+    if ident:
+        async for row in db.members.find({"$or": ident}, {"_id": 0, "id": 1}):
+            member_ids.append(row["id"])
+        async for row in db.guests.find({"$or": ident}, {"_id": 0, "id": 1}):
+            member_ids.append(row["id"])
+    if member_ids:
+        child_or.append({"parent_ids": {"$in": member_ids}})
+    if child_or:
+        child = await db.children.find_one(
+            {"$or": child_or, "family_id": {"$nin": [None, ""]}}, {"_id": 0, "family_id": 1})
+        if child:
+            return child["family_id"]
     return None
 
 

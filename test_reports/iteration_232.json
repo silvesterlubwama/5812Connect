@@ -1,0 +1,22 @@
+{
+  "summary": "Phase 1 bug regression pass. Backend: 7/7 tests pass — portal badge photo, family resolution, portal tasks (excludes archived, includes board_name), portal tickets (event + POS + guest_passes), portal profile-pdf (member-scoped), staff /api/members/{id}/profile-pdf still works, portal check-ins carry location_name+when. Frontend Tasks board: 3/3 core flows pass — single-card archive via modal removes card immediately, bulk archive via bulk-archive-btn removes selected cards immediately, list select-all (data-testid select-all-{listId}) does NOT throw 'tasks.filter is not a function' and correctly toggles selection state (Selected: 1 shown). Zero pageerrors / zero console errors during full session.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter232_phase1_bugs.py",
+    "/app/test_reports/pytest/iter232.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "TasksPage.jsx is 928 lines; consider splitting bulk-actions and board-detail logic into hooks per the file-size guideline (>700 lines).",
+    "There are two 'Archive' buttons visible in bulk-mode (bulk-archive-btn and the board-level Archive viewer). Naming/labels are duplicative — consider renaming the archive-viewer button to 'View Archived' for clarity."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter232_phase1_bugs.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (3/3 tasks board flows)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ; member@5812uganda.org / Member@5812",
+  "seed_data_creation": "Test cards created during frontend testing (TEST_ARCH_1, TEST_BULK_1, TEST_BULK_2) were archived by the tests themselves. Seed data from main agent (task_repro_*, fam_repro_a, ci_repro_1, al_repro_1, TKT-POS1, gp_repro_1, Mary Member photo_url) was NOT modified.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 1 is fully green. Seeded repro tasks live on synthetic board_id='board_x' which is not in task_boards, so admin GET /api/tasks?assignee=<uid> naturally returns [] due to board-scope guard — this is not a bug, it's the seed. Portal endpoint bypasses that scope and is validated structurally (no archived, board_name key present) using the member@5812uganda.org account. If Phase 2+ needs Test User portal access, main agent should either seed a real board_id for board_x or set a password/email on that user.",
+  "rca of the issue": "N/A — all Phase 1 fixes verified. Earlier confusion during frontend testing: selecting a generic 'button:has-text(\"Archive\")' matched the archive-viewer button (top-right) instead of the bulk-archive-btn — resolved by targeting data-testid='bulk-archive-btn'."
+}

@@ -172,8 +172,11 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
   const [photoDataUrl, setPhotoDataUrl] = useState(null);
   useEffect(() => {
     let cancelled = false;
-    if (!person.photo_url) { setPhotoDataUrl(null); return; }
-    fetch(person.photo_url, { mode: 'cors', credentials: 'omit' })
+    // Photos land on different fields depending on where they came from:
+    // an upload writes photo_url, Google SSO writes picture.
+    const src = person.photo_url || person.picture || person.avatar_url;
+    if (!src) { setPhotoDataUrl(null); return; }
+    fetch(src, { mode: 'cors', credentials: 'omit' })
       .then(r => r.ok ? r.blob() : Promise.reject(r.status))
       .then(blob => new Promise((res, rej) => {
         const fr = new FileReader();
@@ -184,7 +187,7 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
       .then(url => { if (!cancelled) setPhotoDataUrl(url); })
       .catch(() => { if (!cancelled) setPhotoDataUrl(null); });
     return () => { cancelled = true; };
-  }, [person.photo_url]);
+  }, [person.photo_url, person.picture, person.avatar_url]);
   const photoSrc = photoDataUrl || generateInitialsImage(person.name, colors.accent, '#1a1a2e', 220);
 
   // Rendering the badge to PNG relies on html-to-image so the QR canvas

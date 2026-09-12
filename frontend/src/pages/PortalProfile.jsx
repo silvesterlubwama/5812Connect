@@ -397,20 +397,24 @@ export default function PortalProfile() {
             <div className="divide-y">
               {(checkins.checkins || []).slice(0, 10).map((c, i) => (
                 <div key={c.id || c.check_in_time || `c-${i}`} className="flex items-center justify-between py-2.5">
-                  <div>
-                    <p className="text-sm">{c.event_name || c.type || 'Check-in'}</p>
-                    <p className="text-xs text-muted-foreground">{c.method || 'manual'}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm truncate">{c.label || c.event_title || c.event_name || c.type || 'Check-in'}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {[c.location_name, (c.method || 'manual').replace(/_/g, ' ')].filter(Boolean).join(' · ')}
+                    </p>
                   </div>
-                  <span className="text-xs text-muted-foreground">{new Date(c.check_in_time || c.timestamp).toLocaleString()}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">{new Date(c.when || c.check_in_time || c.timestamp).toLocaleString()}</span>
                 </div>
               ))}
               {(checkins.access_logs || []).slice(0, 10).map((a, i) => (
                 <div key={`a${i}`} className="flex items-center justify-between py-2.5">
-                  <div>
-                    <p className="text-sm">Access — {a.action || 'scan'}</p>
-                    <p className="text-xs text-muted-foreground">{a.access_type || 'access'}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm truncate">Access — {a.label || a.action || 'scan'}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {[a.location_name, a.access_type || 'access'].filter(Boolean).join(' · ')}
+                    </p>
                   </div>
-                  <span className="text-xs text-muted-foreground">{new Date(a.timestamp).toLocaleString()}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">{new Date(a.when || a.timestamp).toLocaleString()}</span>
                 </div>
               ))}
             </div>
