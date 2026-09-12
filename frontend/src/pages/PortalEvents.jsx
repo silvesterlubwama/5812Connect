@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Calendar, MapPin, Users, Check } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -9,6 +10,7 @@ import { toast } from 'sonner';
 
 export default function PortalEvents() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -21,8 +23,8 @@ export default function PortalEvents() {
 
   const handleRsvp = async (eventId) => {
     try {
-      await portalApi.rsvpEvent(eventId);
-      toast.success('RSVP confirmed!');
+      const r = await portalApi.rsvpEvent(eventId);
+      toast.success(r.data?.message || 'RSVP confirmed — your pass is in My Tickets');
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, attendees: [...(e.attendees || []), user.id] } : e));
     } catch (err) { toast.error(err.response?.data?.detail || 'RSVP failed'); }
   };
@@ -62,7 +64,12 @@ export default function PortalEvents() {
                     </div>
                     <div className="ml-4">
                       {isRegistered ? (
-                        <Badge className="bg-green-100 text-green-700 gap-1"><Check size={12} /> Registered</Badge>
+                        <div className="flex flex-col items-end gap-1.5">
+                          <Badge className="bg-green-100 text-green-700 gap-1"><Check size={12} /> Ticketed</Badge>
+                          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => navigate('/portal/tickets')} data-testid={`view-ticket-${event.id}`}>
+                            View pass
+                          </Button>
+                        </div>
                       ) : (
                         <Button size="sm" onClick={() => handleRsvp(event.id)} data-testid={`rsvp-${event.id}`}>RSVP</Button>
                       )}

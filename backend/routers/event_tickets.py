@@ -22,12 +22,143 @@ router = APIRouter(prefix="/api/events", tags=["event-tickets"])
 tickets_router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 
+# ============================================================
+# Canonical ticket rows (iter345)
+# ============================================================
+# Every ticket-issuing path — public checkout, admin auto-issue, POS sale and
+# portal RSVP — now writes a row in `event_tickets`. Before this, auto-issued
+# and RSVP tickets only existed inside `public_bookings`, so the door scanner
+# 404'd on them and the portal wallet never showed an RSVP. `event_tickets` is
+# the single source of truth for "does this person hold a pass".
+
+async def ensure_ticket_row(
+    ticket_id: str,
+    event: dict,
+    *,
+    holder_name: str = "",
+    holder_person_id: str = "",
+    holder_email: str = "",
+    holder_phone: str = "",
+    booking_id: str = "",
+    price: float = 0,
+    tier_name: Optional[str] = None,
+    source: str = "",
+) -> dict:
+    """Idempotently create the scannable `event_tickets` row for a ticket id."""
+    existing = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if existing:
+        return existing
+    doc = {
+        "id": ticket_id,
+        "event_id": event.get("id"),
+        "event_title": event.get("title", ""),
+        "event_date": event.get("date") or event.get("event_date") or "",
+        "booking_id": booking_id or None,
+        "holder_name": holder_name or "Guest",
+        "holder_person_id": holder_person_id or None,
+        "holder_email": (holder_email or "").strip().lower() or None,
+        "holder_phone": holder_phone or "",
+        "price": float(price or 0),
+        "tier_name": tier_name,
+        "status": "issued",
+        "source": source or "manual",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.event_tickets.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def ticket_flags_for(
+    person_ids: Optional[list] = None,
+    email: str = "",
+    on_date: Optional[str] = None,
+) -> list:
+    """Live "is this person ticketed?" lookup used by kiosks, checkpoints and
+    the badge view. Matches on any identity we hold for the person; when
+    `on_date` is given, only events on that date are returned."""
+    ids = [i for i in (person_ids or []) if i]
+    email = (email or "").strip().lower()
+    match: list = []
+    if ids:
+        match += [{"holder_person_id": {"$in": ids}}, {"holder_id": {"$in": ids}}]
+    if email:
+        match.append({"holder_email": email})
+    if not match:
+        return []
+    rows = await db.event_tickets.find(
+        {"$or": match, "status": {"$ne": "void"}}, {"_id": 0},
+    ).sort("created_at", -1).to_list(200)
+    if not rows:
+        return []
+    # Hydrate event context (older rows only stored event_id).
+    ev_ids = list({r.get("event_id") for r in rows if r.get("event_id")})
+    events: dict = {}
+    if ev_ids:
+        async for ev in db.events.find(
+            {"id": {"$in": ev_ids}},
+            {"_id": 0, "id": 1, "title": 1, "date": 1, "time": 1, "location": 1, "location_id": 1},
+        ):
+            events[ev["id"]] = ev
+    out = []
+    for r in rows:
+        ev = events.get(r.get("event_id"), {}) or {}
+        date = ev.get("date") or r.get("event_date") or ""
+        if on_date and date != on_date:
+            continue
+        out.append({
+            "ticket_id": r["id"],
+            "event_id": r.get("event_id"),
+            "event_title": ev.get("title") or r.get("event_title") or "",
+            "event_date": date,
+            "event_time": ev.get("time") or "",
+            "event_location": ev.get("location") or "",
+            "tier_name": r.get("tier_name"),
+            "status": r.get("status") or "issued",
+            "used_at": r.get("used_at"),
+            "holder_name": r.get("holder_name"),
+        })
+    return out
+
+
+@tickets_router.get("/flags")
+async def get_ticket_flags(
+    person_id: Optional[str] = None,
+    email: Optional[str] = None,
+    date: Optional[str] = None,
+    current_user: dict = Depends(require_staff),
+):
+    """Door/kiosk helper — every pass held by one person, optionally for a
+    single date. `today=1`-style use: pass `date=YYYY-MM-DD`."""
+    flags = await ticket_flags_for([person_id] if person_id else [], email or "", date)
+    return {"count": len(flags), "tickets": flags}
+
+
+async def _resolve_ticket(ticket_id: str) -> Optional[dict]:
+    """Find a ticket row, backfilling from `public_bookings` for legacy
+    tickets that were only ever recorded inside a booking (iter345)."""
+    t = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if t:
+        return t
+    b = await db.public_bookings.find_one({"ticket_ids": ticket_id}, {"_id": 0})
+    if not b:
+        return None
+    ev = await db.events.find_one({"id": b.get("event_id")}, {"_id": 0}) or {"id": b.get("event_id")}
+    return await ensure_ticket_row(
+        ticket_id, ev,
+        holder_name=b.get("name") or "", holder_person_id=b.get("auto_member_id") or "",
+        holder_email=b.get("email") or "", holder_phone=b.get("phone") or "",
+        booking_id=b.get("id"), price=b.get("price") or 0,
+        tier_name=b.get("tier_name"), source="backfill_booking",
+    )
+
+
 @tickets_router.get("/{ticket_id}")
 async def get_ticket(ticket_id: str, current_user: dict = Depends(require_staff)):
     """Look up a marketplace-issued ticket. Returns the ticket plus a
     minimal event summary so the scanner can show the door staff the
     event name / date and the current status."""
-    t = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    t = await _resolve_ticket(ticket_id)
     if not t:
         raise HTTPException(status_code=404, detail="Ticket not found")
     ev = None
@@ -41,7 +172,7 @@ async def redeem_ticket(ticket_id: str, current_user: dict = Depends(require_sta
     """Mark a ticket as used at the door. Idempotent-ish: re-scanning a
     used ticket returns 409 with the original redemption timestamp so
     door staff can see when it was first used."""
-    t = await db.event_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    t = await _resolve_ticket(ticket_id)
     if not t:
         raise HTTPException(status_code=404, detail="Ticket not found")
     if t.get("status") == "used":
@@ -160,6 +291,13 @@ async def issue_tickets(
             "created_at": now_iso,
         }
         await db.public_bookings.insert_one(booking)
+        await ensure_ticket_row(
+            ticket_id, event,
+            holder_name=name, holder_person_id=m["id"],
+            holder_email=m.get("email") or "", holder_phone=m.get("phone") or "",
+            booking_id=booking_id, price=0,
+            tier_name=tier.get("name") if tier else None, source="auto_issue",
+        )
         created.append({"booking_id": booking_id, "ticket_id": ticket_id, "member_id": m["id"], "name": name})
     # Bump event registered count
     if created:

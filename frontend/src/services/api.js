@@ -463,6 +463,7 @@ export const notificationsApi = {
   create: (data) => api.post('/notifications', data),
   markRead: (id) => api.put(`/notifications/${id}/read`),
   markAllRead: () => api.put('/notifications/read-all'),
+  clearAll: () => api.delete('/notifications/clear-all'),
   delete: (id) => api.delete(`/notifications/${id}`),
   // Push notification features
   vapidKey: () => api.get('/notifications/vapid-key'),
@@ -787,9 +788,14 @@ export const portalApi = {
   documents: () => api.get('/portal/documents'),
   sales: () => api.get('/portal/sales'),
   family: () => api.get('/portal/family'),
+  createFamily: (data) => api.post('/portal/family', data || {}),
   updateFamily: (data) => api.put('/portal/family', data),
   addChild: (data) => api.post('/portal/family/children', data),
   addGuardian: (data) => api.post('/portal/family/guardians', data),
+  updateGuardian: (id, data) => api.put(`/portal/family/guardians/${id}`, data),
+  removeGuardian: (id) => api.delete(`/portal/family/guardians/${id}`),
+  statement: (month) => api.get('/portal/statement', { params: month ? { month } : {} }),
+  tickets: () => api.get('/portal/tickets'),
   publicEvents: () => api.get('/public/events'),
 };
 

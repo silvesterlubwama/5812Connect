@@ -37,12 +37,10 @@ async def get_dashboard_stats(campus_id: Optional[str] = None, current_user: dic
     if campus:
         _stats_and.append(campus)
     _board_ids_a = await db.boards.distinct("id", {"$and": _stats_and})
-    tasks_overdue = 0 if not _board_ids_a else await db.tasks.count_documents({
-        "status": {"$nin": ["done"]},
-        "is_archived": {"$ne": True},
-        "board_id": {"$in": _board_ids_a},
-        "due_date": {"$lt": now_str, "$ne": ""},
-    })
+    from routers.tasks import overdue_task_filter
+    tasks_overdue = 0 if not _board_ids_a else await db.tasks.count_documents(
+        await overdue_task_filter(_board_ids_a)
+    )
     new_members_this_month = await db.members.count_documents({"join_date": {"$regex": f"^{month_start_str}"}, **campus})
     sales_result = await db.sales.aggregate([{"$match": {"created_at": {"$regex": f"^{month_start_str}"}, **campus}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
     monthly_sales = sales_result[0]["total"] if sales_result else 0
@@ -97,16 +95,10 @@ async def get_action_items(campus_id: Optional[str] = None, current_user: dict =
     board_ids = await db.boards.distinct("id", {"$and": _and})
     if not board_ids:
         return {"overdue_tasks": 0, "pending_approvals": await db.users.count_documents({"status": "pending", **campus}), "expiring_passes": 0, "unassigned_tasks": 0}
-    task_scope = {
-        "status": {"$nin": ["done"]},
-        "is_archived": {"$ne": True},
-        "board_id": {"$in": board_ids},
-    }
+    from routers.tasks import overdue_task_filter
+    task_scope = await overdue_task_filter(board_ids)
 
-    overdue_tasks = await db.tasks.count_documents({
-        **task_scope,
-        "due_date": {"$lt": now_str, "$ne": "", "$exists": True},
-    })
+    overdue_tasks = await db.tasks.count_documents(task_scope)
 
     pending_approvals = await db.users.count_documents({"status": "pending", **campus})
 
@@ -126,7 +118,9 @@ async def get_action_items(campus_id: Optional[str] = None, current_user: dict =
         pass
 
     unassigned_tasks = await db.tasks.count_documents({
-        **task_scope,
+        "is_archived": {"$ne": True},
+        "status": {"$nin": ["done", "Done", "completed", "Completed"]},
+        "board_id": {"$in": board_ids},
         "$or": [
             {"assignees": {"$size": 0}},
             {"assignees": {"$exists": False}},

@@ -369,63 +369,148 @@ async def remove_guardian(family_id: str, guardian_id: str, current_user: dict =
 
 # ========== PORTAL: PARENT FAMILY MANAGEMENT ==========
 
+def _esc(v: str) -> str:
+    import re as _re
+    return _re.escape(v or "")
+
+
 async def _resolve_my_family_id(current_user: dict) -> Optional[str]:
-    """Find the logged-in parent's family_id via guests table or family record."""
-    email = current_user.get("email", "")
-    name = current_user.get("name", "")
-    parent_guest = await db.guests.find_one(
-        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
-        {"_id": 0}
-    )
-    if parent_guest and parent_guest.get("family_id"):
-        return parent_guest["family_id"]
-    family = await db.families.find_one(
-        {"$or": [{"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}}, {"parent_ids": current_user["id"]}]},
-        {"_id": 0}
-    )
-    if family:
-        return family["id"]
+    """Find the caller's own family.
+
+    iter345 — this used to only look at `guests` rows flagged `is_parent`,
+    so staff and plain members were told "no family found" even when one
+    existed. Now every identity surface is checked: the user record itself,
+    the guests row (parent flag optional), the members row, and the family
+    document (primary contact / parent_ids / guardian email).
+    """
+    uid = current_user.get("id") or ""
+    email = (current_user.get("email") or "").strip()
+    name = (current_user.get("name") or "").strip()
+
+    if current_user.get("family_id"):
+        return current_user["family_id"]
+
+    ident: list = [{"id": uid}] if uid else []
+    if email:
+        ident.append({"email": {"$regex": f"^{_esc(email)}$", "$options": "i"}})
+    if name:
+        ident.append({"name": {"$regex": f"^{_esc(name)}$", "$options": "i"}})
+
+    # the live user doc may carry family_id even if the JWT payload doesn't
+    if uid:
+        u = await db.users.find_one({"id": uid}, {"_id": 0, "family_id": 1})
+        if u and u.get("family_id"):
+            return u["family_id"]
+
+    if ident:
+        for coll in (db.guests, db.members):
+            row = await coll.find_one({"$or": ident, "family_id": {"$nin": [None, ""]}}, {"_id": 0, "family_id": 1})
+            if row and row.get("family_id"):
+                return row["family_id"]
+
+    fam_or: list = [{"parent_ids": uid}] if uid else []
+    if email:
+        fam_or += [
+            {"primary_contact_email": {"$regex": f"^{_esc(email)}$", "$options": "i"}},
+            {"guardians.email": {"$regex": f"^{_esc(email)}$", "$options": "i"}},
+        ]
+    if fam_or:
+        family = await db.families.find_one({"$or": fam_or}, {"_id": 0, "id": 1})
+        if family:
+            return family["id"]
     return None
 
 
 @router.get("/portal/family")
 async def get_my_family(current_user: dict = Depends(get_current_user)):
-    """Get the logged-in parent's family. Searches by user email in guests/parents."""
-    email = current_user.get("email", "")
-    name = current_user.get("name", "")
-    # Find parent guest record linked to a family
-    parent_guest = await db.guests.find_one(
-        {"$or": [{"email": email}, {"name": {"$regex": f"^{name}$", "$options": "i"}}], "is_parent": True},
-        {"_id": 0}
-    )
-    family = None
-    if parent_guest and parent_guest.get("family_id"):
-        family = await db.families.find_one({"id": parent_guest["family_id"]}, {"_id": 0})
+    """The caller's own household — works for staff, members and parents."""
+    family_id = await _resolve_my_family_id(current_user)
+    family = await db.families.find_one({"id": family_id}, {"_id": 0}) if family_id else None
     if not family:
-        # Also check if user has a family directly
-        family = await db.families.find_one(
-            {"$or": [
-                {"primary_contact_email": {"$regex": f"^{email}$", "$options": "i"}},
-                {"parent_ids": current_user["id"]},
-            ]},
-            {"_id": 0}
-        )
-    if not family:
-        return {"family": None, "children": [], "parents": [], "message": "No family found. Contact admin to link your account."}
+        return {
+            "family": None, "children": [], "parents": [],
+            "can_create": (current_user.get("status") or "").lower() != "pending",
+            "message": "No household on file yet — create yours to add your spouse, children and guardians.",
+        }
     children = await db.children.find({"family_id": family["id"]}, {"_id": 0}).to_list(50)
     parents = await db.guests.find({"family_id": family["id"], "is_parent": True}, {"_id": 0}).to_list(20)
-    # Also include staff users marked as parents linked to this family
-    staff_parents = await db.users.find(
-        {"is_parent": True, "$or": [
-            {"family_id": family["id"]},
-            {"email": {"$in": [p.get("email") for p in parents if p.get("email")]}},
-        ]},
-        {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "role": 1, "location_id": 1}
+    # Staff/member accounts attached to the same household
+    linked_users = await db.users.find(
+        {"$or": [{"family_id": family["id"]}, {"id": {"$in": family.get("parent_ids") or []}}]},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "role": 1, "location_id": 1},
     ).to_list(20)
-    for sp in staff_parents:
-        if not any(p.get("email") == sp.get("email") for p in parents):
+    for sp in linked_users:
+        if not any((p.get("email") or "").lower() == (sp.get("email") or "").lower() for p in parents):
             parents.append({**sp, "is_parent": True, "is_staff": True})
-    return {"family": family, "children": children, "parents": parents}
+    return {"family": family, "children": children, "parents": parents, "can_create": False}
+
+
+@router.post("/portal/family")
+async def create_my_family(data: dict, current_user: dict = Depends(get_current_user)):
+    """Self-service household creation. A staff member or member who has no
+    family on file can start one; they become the primary contact and are
+    linked back onto their own user record so every surface resolves it."""
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — household setup unlocks once an admin approves you.")
+    existing = await _resolve_my_family_id(current_user)
+    if existing:
+        return await db.families.find_one({"id": existing}, {"_id": 0})
+    name = (current_user.get("name") or "").strip()
+    default_name = f"{name.split(' ')[-1]} Family" if name else "My Family"
+    family = {
+        "id": f"fam_{str(uuid.uuid4())[:8]}",
+        "family_name": (data.get("family_name") or default_name).strip()[:120],
+        "primary_contact_name": name,
+        "primary_contact_email": current_user.get("email", ""),
+        "primary_contact_phone": (data.get("primary_contact_phone") or current_user.get("phone") or ""),
+        "address": (data.get("address") or "").strip()[:300],
+        "notes": "",
+        "guardians": [],
+        "parent_ids": [current_user["id"]],
+        "location_id": current_user.get("location_id") or current_user.get("active_campus_id") or "",
+        "created_by": current_user["id"],
+        "created_by_self": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.families.insert_one(family)
+    family.pop("_id", None)
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"family_id": family["id"]}})
+    await _log_family_event(family["id"], "family_created_self", current_user, {"family_name": family["family_name"]})
+    return family
+
+
+@router.put("/portal/family/guardians/{guardian_id}")
+async def portal_update_guardian(guardian_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Edit a household member on your OWN family only."""
+    family_id = await _resolve_my_family_id(current_user)
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No household found")
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
+    update = {
+        f"guardians.$.{k}": (str(v or "").strip()[:160])
+        for k, v in data.items() if k in {"name", "phone", "email", "relationship"}
+    }
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    res = await db.families.update_one({"id": family_id, "guardians.id": guardian_id}, {"$set": update})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Household member not found")
+    await _log_family_event(family_id, "guardian_updated", current_user, {"guardian_id": guardian_id})
+    return await db.families.find_one({"id": family_id}, {"_id": 0})
+
+
+@router.delete("/portal/family/guardians/{guardian_id}")
+async def portal_remove_guardian(guardian_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove a household member from your OWN family only."""
+    family_id = await _resolve_my_family_id(current_user)
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No household found")
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
+    await db.families.update_one({"id": family_id}, {"$pull": {"guardians": {"id": guardian_id}}})
+    await _log_family_event(family_id, "guardian_removed", current_user, {"guardian_id": guardian_id})
+    return {"message": "Removed"}
 
 
 @router.put("/portal/family")

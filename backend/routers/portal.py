@@ -362,19 +362,65 @@ async def portal_events(current_user: dict = Depends(get_current_user)):
 
 @router.post("/events/{event_id}/rsvp")
 async def portal_event_rsvp(event_id: str, current_user: dict = Depends(get_current_user)):
-    """RSVP to an event"""
+    """RSVP to an event — and issue a real, scannable pass.
+
+    iter345: an RSVP used to only push the user id onto `events.attendees`,
+    so nothing ever showed up in the ticket wallet or at the door. Now every
+    RSVP creates a free `public_bookings` row plus its canonical
+    `event_tickets` row, exactly like an auto-issued ticket.
+    """
+    import uuid as _uuid
+    from routers.event_tickets import ensure_ticket_row
+
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    attendees = event.get("attendees", [])
-    if current_user["id"] in attendees:
-        return {"message": "Already registered", "event": event}
+    email = (current_user.get("email") or "").strip().lower()
+
+    existing = await db.public_bookings.find_one(
+        {"event_id": event_id, "auto_member_id": current_user["id"], "status": {"$ne": "cancelled"}},
+        {"_id": 0},
+    )
+    if existing:
+        return {"message": "Already registered", "event": event,
+                "ticket_ids": existing.get("ticket_ids") or []}
+
+    capacity = int(event.get("capacity") or 0)
+    if capacity and int(event.get("registered") or 0) >= capacity:
+        raise HTTPException(status_code=409, detail="This event is full")
+
+    ticket_id = f"TKT-{_uuid.uuid4().hex[:4].upper()}"
+    booking = {
+        "id": f"book_{_uuid.uuid4().hex[:12]}",
+        "event_id": event_id,
+        "event_title": event.get("title", ""),
+        "name": current_user.get("name", ""),
+        "email": email,
+        "phone": current_user.get("phone", ""),
+        "num_tickets": 1,
+        "is_free": True, "price": 0, "total": 0,
+        "payment_status": "paid", "status": "confirmed",
+        "ticket_ids": [ticket_id],
+        "auto_issued": True,
+        "auto_member_id": current_user["id"],
+        "source": "portal_rsvp",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.public_bookings.insert_one(booking)
+    await ensure_ticket_row(
+        ticket_id, event,
+        holder_name=current_user.get("name", ""),
+        holder_person_id=current_user["id"], holder_email=email,
+        holder_phone=current_user.get("phone", ""),
+        booking_id=booking["id"], source="portal_rsvp",
+    )
     await db.events.update_one(
         {"id": event_id},
-        {"$push": {"attendees": current_user["id"]}, "$inc": {"registered": 1}}
+        {"$addToSet": {"attendees": current_user["id"]}, "$inc": {"registered": 1}},
     )
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
-    return {"message": "RSVP confirmed", "event": event}
+    return {"message": "RSVP confirmed — your pass is in My Tickets",
+            "event": event, "ticket_ids": [ticket_id]}
 
 
 @router.get("/checkins")
@@ -433,6 +479,101 @@ async def portal_sales(current_user: dict = Depends(get_current_user)):
     return sales
 
 
+@router.get("/statement")
+async def portal_statement(month: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Live monthly account statement for the caller — everything they bought
+    from us (shop / POS) plus every event ticket, in one running list.
+
+    `month` is `YYYY-MM`; defaults to the current month. Designed to be
+    printed straight from the portal.
+    """
+    now = datetime.now(timezone.utc)
+    month = (month or now.strftime("%Y-%m")).strip()[:7]
+    try:
+        year, mon = int(month[:4]), int(month[5:7])
+        if not 1 <= mon <= 12:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="month must look like YYYY-MM")
+    start = f"{year:04d}-{mon:02d}-01"
+    end = f"{year + (mon == 12):04d}-{(mon % 12) + 1:02d}-01"
+
+    uid = current_user["id"]
+    email = (current_user.get("email") or "").strip().lower()
+    name = (current_user.get("name") or "").strip()
+
+    sale_or = [{"created_by": uid}, {"customer_id": uid}]
+    if email:
+        sale_or.append({"customer_email": email})
+    if name:
+        sale_or.append({"customer_name": name})
+    sales = await db.sales.find(
+        {"$or": sale_or, "created_at": {"$gte": start, "$lt": end}}, {"_id": 0},
+    ).sort("created_at", 1).to_list(500)
+
+    lines = []
+    charged = 0.0
+    paid = 0.0
+    # Sale line items only store product_id in some flows — resolve names once.
+    prod_ids = list({i.get("product_id") for s in sales for i in (s.get("items") or []) if i.get("product_id")})
+    prod_names: dict = {}
+    if prod_ids:
+        async for p in db.products.find({"id": {"$in": prod_ids}}, {"_id": 0, "id": 1, "name": 1}):
+            prod_names[p["id"]] = p.get("name") or ""
+    for s in sales:
+        amount = float(s.get("total") or 0)
+        is_paid = (s.get("payment_status") or "paid").lower() == "paid"
+        charged += amount
+        if is_paid:
+            paid += amount
+        lines.append({
+            "date": (s.get("created_at") or "")[:10],
+            "kind": "purchase",
+            "reference": s.get("receipt_number") or s.get("id"),
+            "description": ", ".join(
+                f"{i.get('name') or prod_names.get(i.get('product_id')) or 'Item'}"
+                f" × {i.get('qty') or i.get('quantity') or 1}"
+                for i in (s.get("items") or [])
+            ) or "Purchase",
+            "channel": s.get("channel") or s.get("payment_method") or "",
+            "amount": amount,
+            "status": "Paid" if is_paid else (s.get("payment_status") or "pending").title(),
+            "currency": s.get("currency") or "UGX",
+        })
+
+    from routers.event_tickets import ticket_flags_for
+    for t in await ticket_flags_for([uid], email):
+        row = await db.event_tickets.find_one({"id": t["ticket_id"]}, {"_id": 0, "created_at": 1, "price": 1, "booking_id": 1})
+        issued = (row or {}).get("created_at") or ""
+        if not (start <= issued[:10] < end):
+            continue
+        amount = float((row or {}).get("price") or 0)
+        charged += amount
+        paid += amount
+        lines.append({
+            "date": issued[:10],
+            "kind": "ticket",
+            "reference": t["ticket_id"],
+            "description": f"Event ticket — {t['event_title']}" + (f" ({t['tier_name']})" if t.get("tier_name") else ""),
+            "channel": "event",
+            "amount": amount,
+            "status": "Used" if t.get("used_at") else "Valid",
+            "currency": "UGX",
+        })
+
+    lines.sort(key=lambda r: r["date"])
+    return {
+        "month": month,
+        "period": {"start": start, "end": end},
+        "holder": {"name": current_user.get("name"), "email": current_user.get("email")},
+        "lines": lines,
+        "totals": {"charged": round(charged, 2), "paid": round(paid, 2),
+                   "outstanding": round(charged - paid, 2), "count": len(lines)},
+        "currency": (lines[0]["currency"] if lines else "UGX"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/tickets")
 async def portal_tickets(current_user: dict = Depends(get_current_user)):
     """Ticket wallet — every event ticket bought or auto-issued to the
@@ -468,10 +609,12 @@ async def portal_tickets(current_user: dict = Depends(get_current_user)):
         ):
             used_map[t["id"]] = {"status": t.get("status"), "used_at": t.get("used_at")}
     passes = []
+    seen = set()
     for b in bookings:
         ev = events.get(b.get("event_id"), {}) or {}
         for tid in (b.get("ticket_ids") or [b.get("id")]):
             u = used_map.get(tid, {})
+            seen.add(tid)
             passes.append({
                 "ticket_id": tid,
                 "booking_id": b.get("id"),
@@ -490,5 +633,19 @@ async def portal_tickets(current_user: dict = Depends(get_current_user)):
                 "status": u.get("status") or ("used" if u.get("used_at") else "valid"),
                 "used_at": u.get("used_at"),
             })
+    # Tickets issued straight into `event_tickets` (POS / marketplace sales)
+    # never had a public_bookings row — pull them in too (iter345).
+    from routers.event_tickets import ticket_flags_for
+    for t in await ticket_flags_for([current_user["id"]], email):
+        if t["ticket_id"] in seen:
+            continue
+        seen.add(t["ticket_id"])
+        passes.append({
+            **t,
+            "booking_id": None,
+            "price": 0, "currency": "UGX", "is_free": True,
+            "auto_issued": True, "purchased_at": None,
+            "status": "used" if t.get("used_at") else (t.get("status") or "valid"),
+        })
     return passes
 

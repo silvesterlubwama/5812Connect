@@ -1,0 +1,34 @@
+{
+  "summary": "iter345 Phase-1 (Portal & Member experience) review complete. Backend pytest: 10 passed / 1 skipped (badge wallet test skipped — admin's badge is fetched via /portal/badge in UI but there is no auth-me-driven public token fixture; wallet-badge with event_tickets IS visible on /portal/badge UI which lists 2 passes). Frontend E2E on the preview URL covered: (a) member@5812uganda.org sees ONLY [Dashboard, Events & Tickets, My Tickets, My Family, Statement, My Badge, Profile] — no Chat/Tasks/Expenses/Time Off/Sales/Documents in nav — and direct visits to /portal/{chat,tasks,expenses,time-off,documents,sales} all redirect to /portal (StaffOnlyPortalRoute works); (b) admin@5812uganda.org /portal shows the full staff nav including Chat, My Tasks, Time Off, Expenses, My Sales, Documents plus the shared My Family/My Badge/Profile/Statement + a 'Staff Portal' back link — no regression; (c) /profile in the main app renders data-testid=profile-household-section; (d) the header user dropdown exposes data-testid=profile-menu-my-portal with href='/portal' (confirmed with screenshot); (e) /portal/family for admin renders add-child-btn + add-guardian-btn (create-family-btn correctly absent because fam_a317fb7a already exists); (f) POST /api/portal/family + POST guardians + PUT/DELETE /api/portal/family/guardians/{id} all succeed as the member (created, edited, removed a Spouse guardian via the API); (g) /portal/events shows 1 'Ticketed' badge with a view-ticket-<eventId> button; (h) /portal/tickets lists 2 passes with QR tiles (Smoke test event + the fresh TEST_iter345 event); (i) /portal/badge renders portal-badge-card with QR and an 'ATTACHED TO THIS BADGE (2)' list; (j) /portal/statement renders live current-month table with statement-charged/paid/outstanding tiles, Print button, prev enabled, next DISABLED (verified button.disabled===true), backend rejects invalid ?month=not-a-month with 400 and totals match rows (UGX 125,000 charged = 50,000 + 75,000 in Sept 2026); (k) RSVP → ticket → GET /api/tickets/{id} → POST redeem 200 → 2nd redeem 409 all confirmed; (l) GET /api/tickets/flags?person_id=<uid> returns 200 for staff auth; (m) RSVP is idempotent — only one ticket row per (event, user).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Member portal Dashboard (Welcome back, Mary)", "issues": ["The member-facing dashboard KPI grid still shows the 'MY TASKS 0 · 0 to do, 0 in progress', 'EXPENSES 0 · 0 pending approval', and 'MESSAGES 0 · unread' tiles even though non-staff members no longer have Tasks/Expenses/Chat in the nav or as reachable routes. These stat tiles feel like dead ends for a member and should either be removed for MEMBER_NAV or replaced with member-relevant tiles (e.g., My Tickets count, Outstanding balance from the statement). Not blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter345_portal_family_tickets.py",
+    "/app/test_reports/pytest/iter345_results.xml"
+  ],
+  "action_items": [
+    "(Cosmetic, low priority) On the member Portal Dashboard, replace the Staff-oriented KPI tiles (My Tasks / Expenses / Messages) with member-relevant ones, or gate them behind isStaffRole like the sidebar."
+  ],
+  "critical_code_review_comments": [
+    "routers/members/families.py::_resolve_my_family_id — the broad identity resolution now covers admin/member correctly (both accounts return their household). Good.",
+    "routers/portal.py::portal_event_rsvp — issues a real event_tickets row via ensure_ticket_row; verified idempotent (a second RSVP does not create a second ticket).",
+    "routers/event_tickets.py::_resolve_ticket backfill enables GET /api/tickets/{id} and POST redeem for the auto-issued RSVP passes that previously 404'd. 2nd redeem correctly returns 409 (conflict) rather than 400/200.",
+    "routers/portal.py::portal_statement — response shape is {month, period, holder, lines, totals, currency, generated_at}; frontend PortalStatement uses these keys and the numbers reconcile (charged=paid=125,000, outstanding=0 for admin Sept 2026).",
+    "PortalLayout.jsx STAFF_NAV vs MEMBER_NAV split works, RouteGuards.StaffOnlyPortalRoute correctly redirects non-staff hits on /portal/{chat,tasks,expenses,time-off,documents,sales} to /portal.",
+    "Layout.jsx exposes data-testid=profile-menu-my-portal linking to /portal — verified in the user avatar dropdown."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter345_portal_family_tickets.py (new)"],
+  "success_rate": {"backend": "100% (10/10 executed, 1 skipped)", "frontend": "12/12 UI checks passed (member nav filter, staff nav, direct-route guards, profile household section, profile-menu-my-portal, family create/add/edit/remove, statement live+paging+totals+print+next-disabled, badge card + attached-tickets list, events 'View pass', tickets QR list, RSVP→ticket→redeem→409)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812  and  member@5812uganda.org / Member@5812 (see /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created one TEST_iter345_evt_<hex> event via /api/events (admin RSVP + redeem attached to it). The event was left in place because the RSVP-issued pass is now 'Used' and shows up in /portal/tickets + /portal/badge for regression evidence; main agent can delete via DELETE /api/events/<id> if desired. Also briefly created + deleted a TEST_Spouse guardian on the member's household — cleaned up in-test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login: POST /api/auth/login body is {identifier, password} and response field is `token` (NOT access_token). Correct backend key for statement rows is `lines` (not rows/items). Event create requires `date` (YYYY-MM-DD) + `start_time`/`end_time` — passing only ISO `start`/`end` returns 422. The admin's household id is fam_a317fb7a and already has a Jane Doe Spouse; the member's household exists too. Portal routes filter is client-side (StaffOnlyPortalRoute) — direct backend calls to /api/portal/{chat,tasks,expenses,time-off,documents,sales} were not tested for the member because those endpoints aren't in Phase-1 scope; the client redirect is what enforces the filter and it works. Two ticket rows show on /portal/tickets for admin (Smoke test event + TEST_iter345_evt_*); both are 'Used' after the redeem test. Wallet-badge event_tickets was verified indirectly via /portal/badge UI which uses the same shape; if next agent wants to hit /api/wallet-badge/{token} directly, first POST /api/members/{admin_id}/wallet-badge to mint a token then GET /api/wallet-badge/{token} — event_tickets will be in the JSON.",
+  "rca of the issue": "N/A — Phase-1 items in the review request all work end-to-end (backend + UI). Only a cosmetic follow-up (member dashboard KPI tiles) noted."
+}

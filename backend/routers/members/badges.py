@@ -136,6 +136,16 @@ async def get_wallet_badge(token: str):
         raise HTTPException(status_code=404, detail="Badge not found")
     if badge.get("status") == "invalidated":
         raise HTTPException(status_code=403, detail="This badge has been invalidated")
+    # iter345 — carry the holder's live event passes on the badge payload so a
+    # kiosk/checkpoint scanning the badge alone can see they're ticketed.
+    try:
+        from routers.event_tickets import ticket_flags_for
+        badge["event_tickets"] = await ticket_flags_for(
+            [badge.get("member_id"), badge.get("subject_id"), badge.get("id")],
+            badge.get("email") or "",
+        )
+    except Exception:
+        badge["event_tickets"] = []
     return badge
 
 

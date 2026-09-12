@@ -11,6 +11,7 @@ import { portalApi, holidaysApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import api from '../services/api';
+import PortalFamily from './PortalFamily';
 
 export default function PortalProfile() {
   const { user } = useAuth();
@@ -642,6 +643,15 @@ export default function PortalProfile() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* My household — same view/edit surface members get in the portal, so
+          staff can manage their own family without leaving their profile.
+          Hidden inside /portal, where it already has its own nav item. */}
+      {!window.location.pathname.startsWith('/portal') && (
+        <div className="pt-2 border-t border-border" data-testid="profile-household-section">
+          <PortalFamily />
+        </div>
+      )}
 
     </div>
   );

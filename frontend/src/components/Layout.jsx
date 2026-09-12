@@ -341,7 +341,9 @@ export default function Layout() {
   useEffect(() => { fetchUnreadCount(); const interval = setInterval(fetchUnreadCount, 30000); return () => clearInterval(interval); }, [fetchUnreadCount]);
   const handleNotifOpen = () => { setNotifOpen(true); fetchNotifs(); };
   const markAllRead = async () => { try { await notificationsApi.markAllRead(); setNotifs([]); setUnreadCount(0); } catch (e) { console.warn(e.message || e); } };
-  const markRead = async (id) => { try { await notificationsApi.markRead(id); setNotifs(prev => prev.filter(n => n.id !== id)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { console.warn(e.message || e); } };
+  // Erase for good — cleared notifications must never come back (iter345).
+  const clearAllNotifs = async () => { try { await notificationsApi.clearAll(); setNotifs([]); setUnreadCount(0); } catch (e) { console.warn(e.message || e); } };
+  const markRead = async (id) => { try { await notificationsApi.delete(id); setNotifs(prev => prev.filter(n => n.id !== id)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { console.warn(e.message || e); } };
 
   useEffect(() => {
     const handler = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); } if (e.key === 'Escape') setSearchOpen(false); };
@@ -675,7 +677,10 @@ export default function Layout() {
             <DropdownMenuContent align="end" className="w-80 p-0" data-testid="notification-dropdown">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                 <p className="font-semibold text-sm">Notifications</p>
-                {unreadCount > 0 && <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={markAllRead}><CheckCheck size={12} /> Mark all read</Button>}
+                <div className="flex items-center gap-1">
+                  {unreadCount > 0 && <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={markAllRead} data-testid="notif-mark-all-read"><CheckCheck size={12} /> Mark read</Button>}
+                  {notifs.length > 0 && <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-destructive" onClick={clearAllNotifs} data-testid="notif-clear-all">Clear all</Button>}
+                </div>
               </div>
               <div className="max-h-80 overflow-y-auto">
                 {notifs.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No notifications</p> : notifs.map(n => (
@@ -705,6 +710,7 @@ export default function Layout() {
               <div className="px-2 py-1.5"><p className="text-sm font-medium">{user?.name}</p><p className="text-xs text-muted-foreground capitalize">{user?.role}</p></div>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild><NavLink to="/profile" className="flex items-center gap-2 cursor-pointer" data-testid="profile-menu-my-profile"><Settings size={14} /> My Profile &amp; Family</NavLink></DropdownMenuItem>
+              <DropdownMenuItem asChild><NavLink to="/portal" className="flex items-center gap-2 cursor-pointer" data-testid="profile-menu-my-portal"><UserCheck size={14} /> My Member Portal</NavLink></DropdownMenuItem>
               <DropdownMenuItem asChild><a href="/kiosk" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 cursor-pointer"><ExternalLink size={14} /> Open Kiosk</a></DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive cursor-pointer"><LogOut size={14} className="mr-2" /> Sign Out</DropdownMenuItem>

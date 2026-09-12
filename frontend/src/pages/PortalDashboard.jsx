@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ListTodo, MessageSquare, Receipt, Calendar, Clock, ArrowRight, Download, QrCode, User } from 'lucide-react';
+import { ListTodo, MessageSquare, Receipt, Calendar, Clock, ArrowRight, Download, QrCode, User, Ticket, Wallet } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -9,6 +9,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import { UnifiedBadge } from '../components/UnifiedBadge';
+import { isStaffRole } from '../components/PortalLayout';
 
 const StatCard = ({ title, value, sub, icon: Icon, color, onClick }) => (
   <Card className="shadow-soft rounded-xl cursor-pointer hover:shadow-md transition-shadow" onClick={onClick} data-testid={`portal-stat-${title.toLowerCase().replace(/\s/g, '-')}`}>
@@ -31,7 +32,10 @@ export default function PortalDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
+  const [tickets, setTickets] = useState([]);
+  const [statement, setStatement] = useState(null);
   const [loading, setLoading] = useState(true);
+  const isStaff = isStaffRole(user?.role);
 
   useEffect(() => {
     portalApi.dashboard()
@@ -40,11 +44,18 @@ export default function PortalDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (isStaff) return;
+    portalApi.tickets().then(r => setTickets(r.data || [])).catch(() => {});
+    portalApi.statement().then(r => setStatement(r.data)).catch(() => {});
+  }, [isStaff]);
+
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
   const d = data || {};
   const tasks = d.tasks || {};
   const expenses = d.expenses || {};
+  const validTickets = tickets.filter(t => t.status !== 'used' && t.status !== 'void' && !t.used_at).length;
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="portal-dashboard">
@@ -73,24 +84,33 @@ export default function PortalDashboard() {
         </Card>
       </div>
 
-      {/* Stats Grid */}
+      {/* Stats Grid — staff see work tiles; members see their own money/passes */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="My Tasks" value={tasks.total || 0} sub={`${tasks.todo || 0} to do, ${tasks.in_progress || 0} in progress`} icon={ListTodo} color="bg-blue-500" onClick={() => navigate('/portal/tasks')} />
-        <StatCard title="Expenses" value={expenses.count || 0} sub={`${expenses.pending || 0} pending approval`} icon={Receipt} color="bg-amber-500" onClick={() => navigate('/portal/expenses')} />
-        <StatCard title="Events" value={(d.upcoming_events || []).length} sub="upcoming" icon={Calendar} color="bg-green-500" onClick={() => navigate('/portal/events')} />
-        <StatCard title="Messages" value={d.unread_messages || 0} sub="unread" icon={MessageSquare} color="bg-purple-500" onClick={() => navigate('/portal/chat')} />
+        {isStaff ? (
+          <>
+            <StatCard title="My Tasks" value={tasks.total || 0} sub={`${tasks.todo || 0} to do, ${tasks.in_progress || 0} in progress`} icon={ListTodo} color="bg-blue-500" onClick={() => navigate('/portal/tasks')} />
+            <StatCard title="Expenses" value={expenses.count || 0} sub={`${expenses.pending || 0} pending approval`} icon={Receipt} color="bg-amber-500" onClick={() => navigate('/portal/expenses')} />
+            <StatCard title="Events" value={(d.upcoming_events || []).length} sub="upcoming" icon={Calendar} color="bg-green-500" onClick={() => navigate('/portal/events')} />
+            <StatCard title="Messages" value={d.unread_messages || 0} sub="unread" icon={MessageSquare} color="bg-purple-500" onClick={() => navigate('/portal/chat')} />
+          </>
+        ) : (
+          <>
+            <StatCard title="My Tickets" value={validTickets} sub={`${tickets.length} total issued`} icon={Ticket} color="bg-blue-500" onClick={() => navigate('/portal/tickets')} />
+            <StatCard title="Events" value={(d.upcoming_events || []).length} sub="upcoming" icon={Calendar} color="bg-green-500" onClick={() => navigate('/portal/events')} />
+            <StatCard title="This Month" value={`${statement?.currency || 'UGX'} ${Number(statement?.totals?.charged || 0).toLocaleString()}`} sub="charged to my account" icon={Receipt} color="bg-amber-500" onClick={() => navigate('/portal/statement')} />
+            <StatCard title="Outstanding" value={`${statement?.currency || 'UGX'} ${Number(statement?.totals?.outstanding || 0).toLocaleString()}`} sub="still to pay" icon={Wallet} color="bg-rose-500" onClick={() => navigate('/portal/statement')} />
+          </>
+        )}
       </div>
 
-      {/* Quick action: download my account statement */}
+      {/* Quick action: my monthly statement */}
       <Card className="shadow-soft rounded-xl" data-testid="portal-statement-quick-action">
         <CardContent className="p-4 flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <p className="text-sm font-semibold">📄 My Account Statement</p>
-            <p className="text-xs text-muted-foreground">Download a PDF of your purchases & outstanding balance</p>
+            <p className="text-sm font-semibold">My account statement</p>
+            <p className="text-xs text-muted-foreground">Live month-by-month list of your purchases and tickets — printable</p>
           </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => navigate('/portal/profile')} data-testid="portal-go-statement">Open</Button>
-          </div>
+          <Button size="sm" variant="outline" onClick={() => navigate('/portal/statement')} data-testid="portal-go-statement">Open</Button>
         </CardContent>
       </Card>
 

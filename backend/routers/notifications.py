@@ -74,29 +74,91 @@ async def unsubscribe(current_user: dict = Depends(get_current_user)):
 
 @router.get("/notifications")
 async def list_notifications(include_read: bool = False, current_user: dict = Depends(get_current_user)):
-    """Return notifications for this user. By default only unread ones are
-    returned so cleared/read notifications don't come back after re-login
-    or redeploy. Pass `?include_read=true` for the full history.
+    """Return notifications for this user.
 
-    Role-scoped (`target_role`) with the user-specific `read` flag computed
-    from `read_by`.
+    iter345 — three bugs fixed here:
+      1. The query never filtered on `user_id`, so a notification addressed to
+         ONE person showed up in everybody's bell. That's why "cleared"
+         notifications appeared to come back: they were somebody else's.
+      2. Cleared/deleted notifications are now excluded via `deleted_by`
+         (role-broadcast rows) or hard-deleted (personal rows).
+      3. Rows deep-linking to a task/event that no longer exists (or is done /
+         archived) are pruned on read, so no more stale links.
     """
     role = current_user.get("role", "volunteer")
     user_id = current_user["id"]
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    conds = [
+        {"$or": [{"target_role": None}, {"target_role": role}]},
+        {"$or": [{"user_id": {"$exists": False}}, {"user_id": None}, {"user_id": user_id}]},
+        {"deleted_by": {"$ne": user_id}},
+    ]
     if not include_read:
-        query["read_by"] = {"$ne": user_id}
-    notifs = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
+        conds.append({"read_by": {"$ne": user_id}})
+    notifs = await db.notifications.find({"$and": conds}, {"_id": 0}).sort("created_at", -1).limit(80).to_list(80)
+    notifs = await _prune_stale(notifs)
     for n in notifs:
         n["read"] = user_id in n.get("read_by", [])
-    return notifs
+    return notifs[:50]
+
+
+async def _prune_stale(notifs: list) -> list:
+    """Drop (and permanently delete) notifications whose deep-link target is
+    gone or closed — e.g. a task that was completed, archived or deleted."""
+    import re as _re
+
+    task_ids, event_ids = set(), set()
+    for n in notifs:
+        link = n.get("link") or ""
+        m = _re.search(r"[?&]task=([\w-]+)", link)
+        if m:
+            task_ids.add(m.group(1))
+        m = _re.search(r"[?&]event=([\w-]+)", link)
+        if m:
+            event_ids.add(m.group(1))
+    live_tasks, live_events = set(), set()
+    if task_ids:
+        live_tasks = {
+            t["id"] async for t in db.tasks.find(
+                {"id": {"$in": list(task_ids)}, "is_archived": {"$ne": True}, "status": {"$ne": "done"}},
+                {"_id": 0, "id": 1},
+            )
+        }
+    if event_ids:
+        live_events = {
+            e["id"] async for e in db.events.find(
+                {"id": {"$in": list(event_ids)}, "status": {"$ne": "cancelled"}}, {"_id": 0, "id": 1},
+            )
+        }
+    keep, drop = [], []
+    for n in notifs:
+        link = n.get("link") or ""
+        m = _re.search(r"[?&]task=([\w-]+)", link)
+        if m and m.group(1) not in live_tasks:
+            drop.append(n["id"])
+            continue
+        m = _re.search(r"[?&]event=([\w-]+)", link)
+        if m and m.group(1) not in live_events:
+            drop.append(n["id"])
+            continue
+        keep.append(n)
+    if drop:
+        try:
+            await db.notifications.delete_many({"id": {"$in": drop}})
+        except Exception:
+            pass
+    return keep
 
 
 @router.get("/notifications/unread-count")
 async def unread_notification_count(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}], "read_by": {"$ne": user_id}}
+    query = {"$and": [
+        {"$or": [{"target_role": None}, {"target_role": role}]},
+        {"$or": [{"user_id": {"$exists": False}}, {"user_id": None}, {"user_id": user_id}]},
+        {"deleted_by": {"$ne": user_id}},
+        {"read_by": {"$ne": user_id}},
+    ]}
     return {"count": await db.notifications.count_documents(query)}
 
 
@@ -104,9 +166,30 @@ async def unread_notification_count(current_user: dict = Depends(get_current_use
 async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     role = current_user.get("role", "volunteer")
-    query = {"$or": [{"target_role": None}, {"target_role": role}]}
+    query = {"$and": [
+        {"$or": [{"target_role": None}, {"target_role": role}]},
+        {"$or": [{"user_id": {"$exists": False}}, {"user_id": None}, {"user_id": user_id}]},
+    ]}
     await db.notifications.update_many(query, {"$addToSet": {"read_by": user_id}})
     return {"message": "All marked as read"}
+
+
+@router.delete("/notifications/clear-all")
+async def clear_all_notifications(current_user: dict = Depends(get_current_user)):
+    """Erase the caller's notifications for good. Personal rows are deleted;
+    role-broadcast rows (shared documents) are tombstoned per user so they
+    never reappear for this account either."""
+    user_id = current_user["id"]
+    role = current_user.get("role", "volunteer")
+    personal = await db.notifications.delete_many({"user_id": user_id})
+    shared = await db.notifications.update_many(
+        {"$and": [
+            {"$or": [{"target_role": None}, {"target_role": role}]},
+            {"$or": [{"user_id": {"$exists": False}}, {"user_id": None}]},
+        ]},
+        {"$addToSet": {"deleted_by": user_id}},
+    )
+    return {"deleted": personal.deleted_count, "hidden": shared.modified_count}
 
 
 @router.put("/notifications/{notif_id}/read")
@@ -127,7 +210,14 @@ async def create_notification_endpoint(data: NotificationCreate, current_user: d
 
 @router.delete("/notifications/{notif_id}")
 async def delete_notification(notif_id: str, current_user: dict = Depends(get_current_user)):
-    await db.notifications.delete_one({"id": notif_id})
+    """Erase one notification. A personal row is deleted outright; a shared
+    role-broadcast row is tombstoned for this user only (deleting it would
+    yank it out of everyone else's bell)."""
+    doc = await db.notifications.find_one({"id": notif_id}, {"_id": 0, "user_id": 1})
+    if doc and doc.get("user_id"):
+        await db.notifications.delete_one({"id": notif_id})
+    else:
+        await db.notifications.update_one({"id": notif_id}, {"$addToSet": {"deleted_by": current_user["id"]}})
     return {"message": "Notification deleted"}
 
 

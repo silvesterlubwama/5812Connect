@@ -1466,6 +1466,18 @@ async def kiosk_unlock(data: dict):
     raise HTTPException(status_code=400, detail="Provide either {pin} or {identifier, password}")
 
 
+async def _ticket_flags_safe(member: dict, child_ids: Optional[list] = None) -> list:
+    """Event passes held by the person (and their children) scanning in, so a
+    kiosk/checkpoint can flag them as ticketed from the badge alone."""
+    try:
+        from routers.event_tickets import ticket_flags_for
+        ids = [member.get("id"), member.get("user_id")] + list(child_ids or [])
+        return await ticket_flags_for(ids, member.get("email") or "")
+    except Exception as e:
+        logger.warning(f"ticket flag lookup failed for {member.get('id')}: {e}")
+        return []
+
+
 @router.post("/kiosk/checkin")
 async def kiosk_checkin(data: CheckInCreate):
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
@@ -1564,6 +1576,7 @@ async def kiosk_pin_checkin(data: dict):
             "role": member.get("role", ""),
             "type": member.get("role", "member"),
             "children": children,
+            "event_tickets": await _ticket_flags_safe(member, [c["id"] for c in children]),
         }
     if action == "checkout":
         last_ci = await db.checkins.find_one(
@@ -1622,6 +1635,7 @@ async def kiosk_pin_checkin(data: dict):
         "member_name": member.get("name"),
         "checkin": checkin,
         "child_checkins": child_checkins,
+        "event_tickets": await _ticket_flags_safe(member, [c["id"] for c in children]),
     }
 
 

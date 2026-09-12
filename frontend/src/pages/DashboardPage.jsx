@@ -236,7 +236,7 @@ export default function DashboardPage() {
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-2.5 rounded-lg bg-green-500"><DollarSign size={18} className="text-white" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Monthly Donations</p>
+              <p className="text-xs text-muted-foreground">Income this month</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
                 <p className="text-lg font-bold">UGX {(financial?.total_income || 0).toLocaleString()}</p>
               )}
@@ -247,7 +247,7 @@ export default function DashboardPage() {
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-2.5 rounded-lg bg-red-500"><TrendingDown size={18} className="text-white" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Monthly Expenses</p>
+              <p className="text-xs text-muted-foreground">Expenses this month</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
                 <p className="text-lg font-bold">UGX {(financial?.total_expenses || 0).toLocaleString()}</p>
               )}
@@ -258,7 +258,7 @@ export default function DashboardPage() {
           <CardContent className="p-5 flex items-center gap-4">
             <div className={`p-2.5 rounded-lg ${(financial?.net || 0) >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}><TrendingUp size={18} className="text-white" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Net Balance</p>
+              <p className="text-xs text-muted-foreground">Net this month</p>
               {loadingStats ? <div className="h-5 w-24 bg-muted animate-pulse rounded mt-1" /> : (
                 <p className="text-lg font-bold">UGX {(financial?.net || 0).toLocaleString()}</p>
               )}

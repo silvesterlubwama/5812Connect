@@ -8,6 +8,58 @@ kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
 
+## iter345 — Portal/member experience + notification & dashboard truth (2026-06)
+Phased execution of the user's 21-item mega-list (full list: `/app/memory/BACKLOG_iter345.md`).
+Agreed order: 1 Portal/member → 2 Notifications+Dashboard → 3 Finance → 4 Badges →
+5 Uploads → 6 Tasks/Boards → 7 Flutterwave online payments.
+
+### Phase 1 — DONE (tested, `/app/test_reports/iteration_104.json`)
+- **Family/household for everyone**: `_resolve_my_family_id` now resolves via the user
+  doc, guests, members, `parent_ids`, primary-contact email and guardian email — staff and
+  plain members no longer get "No family found". New self-service
+  `POST /api/portal/family` creates a household (user becomes primary contact +
+  `users.family_id`), and `PUT/DELETE /api/portal/family/guardians/{id}` let people edit
+  their own household only. Relationship list now includes **Spouse**.
+- **Staff profile household**: `/profile` in the main app renders the same family UI
+  (`profile-household-section`), and the avatar menu gained **My Member Portal**
+  (`profile-menu-my-portal`).
+- **Non-staff portal filter**: `PortalLayout` splits STAFF_NAV vs MEMBER_NAV (members see
+  Dashboard, Events & Tickets, My Tickets, My Family, Statement, My Badge, Profile only).
+  New `StaffOnlyPortalRoute` guard blocks members from /portal/{chat,tasks,expenses,
+  time-off,documents,sales} by URL. Member dashboard tiles are now member-relevant
+  (tickets / month charged / outstanding).
+- **Tickets actually exist**: every path now writes the canonical `event_tickets` row via
+  new `ensure_ticket_row` (portal RSVP, admin auto-issue, POS sale). `portal_tickets`
+  unions bookings + ticket rows; `_resolve_ticket` backfills legacy booking-only tickets so
+  door scan/redeem no longer 404s.
+- **Badge carries tickets**: `ticket_flags_for()` + `GET /api/tickets/flags`. Ticket flags are
+  returned by `GET /api/wallet-badge/{token}`, kiosk pin-checkin (lookup + check-in) and
+  `POST /api/access/scan` — a badge scan alone shows "ticketed". New `/portal/badge` page.
+- **Monthly statement**: `GET /api/portal/statement?month=YYYY-MM` (purchases + tickets,
+  live, with totals) and printable `/portal/statement` page with month paging.
+
+### Phase 2 — DONE (self-tested via curl + screenshots)
+- **Cleared notifications never come back**: `list_notifications` never filtered on
+  `user_id`, so everyone saw everyone's personal notifications. Now scoped per user, plus
+  `deleted_by` tombstones, a new `DELETE /api/notifications/clear-all` (hard-delete own
+  rows) and per-row delete instead of mark-read. Verified: admin clear-all → 0 rows, member
+  untouched.
+- **Stale links purged**: `_prune_stale` deletes notifications deep-linking to a task/event
+  that is gone, done, archived or cancelled (verified: ghost task notif vanished, live one kept).
+- **One overdue truth**: new `overdue_task_filter()` in `routers/tasks.py` (excludes done in
+  any casing, archived, snoozed, dateless AND orphaned tasks whose board was deleted) is now
+  used by dashboard stats, action-items, the assignee overdue emails and the director digest —
+  so the email and the dashboard can't disagree. Fixed `unassigned_tasks` silently clobbering
+  the snooze `$or`.
+- **Dashboard money is ledger-truth**: `/api/reports/summary` (what the dashboard actually
+  calls) and `/api/financial/summary` now read `finance_journal_entries` via
+  `_balances_by_account`, honour date_from/date_to and break down per account. Verified equal
+  to `/api/finance/reports/pnl` (Sept 2026: income 160,000 / expenses 278,288 / net -118,288).
+  Dashboard labels renamed to Income/Expenses/Net this month.
+
+### Phase 3-7 — NOT STARTED (see BACKLOG_iter345.md)
+
+
 ### iter 344e — Routing/filtering hardening (2026-09-09)
 - **Transfer missing location**: `TransferDialog` had no campus/sub-location picker so every transfer POST failed silently. Added the required control (prefilled from active campus).
 - **Missing transactions post-deploy**: `JournalPanel` + `OverviewPanel` were stale after posts from `QuickPostDialog` (split), `TransferDialog`, JE edit/reversal/delete. Wired `dataEvents.emit('finance-changed', …)` on every mutation and subscribed both panels.

@@ -12,32 +12,48 @@ router = APIRouter(prefix="/api")
 
 @router.get("/reports/summary")
 async def reports_summary(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    """Generate a quick summary report for the dashboard/reports page."""
+    """Quick summary for the dashboard / reports page.
+
+    iter345 — income and expenses now come from the LEDGER
+    (`finance_journal_entries`), not the legacy `donations` / `expenses`
+    mirror collections. Receipts, payroll, sales and transfers only ever
+    produced journal entries, so the old numbers were always short and never
+    matched the Finance module. Breakdowns are per ledger account.
+    """
     campus = await get_campus_filter(current_user)
     query = campus or {}
     if location_id:
         query["location_id"] = location_id
-    date_q = {}
-    if date_from: date_q["$gte"] = date_from
-    if date_to: date_q["$lte"] = date_to
+    loc_for_ledger = location_id or (query.get("location_id") if isinstance(query.get("location_id"), str) else None)
 
-    don_q = {**query}; exp_q = {**query}
-    if date_q:
-        don_q["date"] = date_q; exp_q["date"] = date_q
+    from routers.finance.reports import _balances_by_account
+    bal = await _balances_by_account(date_from, date_to, loc_for_ledger)
+    donations, expenses = [], []
+    for v in bal.values():
+        a = v["account"]
+        if v["balance"] == 0:
+            continue
+        row = {"_id": f"{a.get('code', '')} {a.get('name', '')}".strip(), "total": v["balance"], "count": 1}
+        if a["type"] == "revenue":
+            donations.append(row)
+        elif a["type"] == "expense":
+            expenses.append(row)
+    donations.sort(key=lambda r: -r["total"])
+    expenses.sort(key=lambda r: -r["total"])
 
-    donations = await db.donations.aggregate([{"$match": don_q}, {"$group": {"_id": "$type", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(20)
-    expenses = await db.expenses.aggregate([{"$match": exp_q}, {"$group": {"_id": "$category", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(20)
     members_count = await db.members.count_documents(query if query else {})
     events_count = await db.events.count_documents(query if query else {})
     children_count = await db.children.count_documents(query if query else {})
 
-    total_income = sum(d["total"] for d in donations)
-    total_expenses = sum(e["total"] for e in expenses)
+    total_income = round(sum(d["total"] for d in donations), 2)
+    total_expenses = round(sum(e["total"] for e in expenses), 2)
 
     return {
-        "total_income": total_income, "total_expenses": total_expenses, "net": total_income - total_expenses,
+        "total_income": total_income, "total_expenses": total_expenses,
+        "net": round(total_income - total_expenses, 2),
         "income_breakdown": donations, "expense_breakdown": expenses,
         "members_count": members_count, "events_count": events_count, "children_count": children_count,
+        "date_from": date_from or "", "date_to": date_to or "", "source": "ledger",
     }
 
 

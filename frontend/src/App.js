@@ -65,6 +65,8 @@ import PortalSales from './pages/PortalSales';
 import PortalFamily from './pages/PortalFamily';
 import PortalTimeOff from './pages/PortalTimeOff';
 import PortalTickets from './pages/PortalTickets';
+import PortalStatement from './pages/PortalStatement';
+import PortalBadge from './pages/PortalBadge';
 // New Feature Pages
 import AnalyticsPage from './pages/AnalyticsPage';
 import ReportBuilderPage from './pages/ReportBuilderPage';
@@ -89,7 +91,7 @@ import HRPage from './pages/HRPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { StaffRoute, PortalRoute } from './components/RouteGuards';
+import { StaffRoute, PortalRoute, StaffOnlyPortalRoute } from './components/RouteGuards';
 import usePwaOfflinePrefetch from './hooks/usePwaOfflinePrefetch';
 
 const KIOSK_ONLY_ROLES = new Set(['Security Contractor', 'security_contractor']);
@@ -208,15 +210,17 @@ function AppRoutes() {
       {/* Staff/Member Self-Service Portal */}
       <Route path="/portal" element={<ProtectedRoute><PortalRoute><PortalLayout /></PortalRoute></ProtectedRoute>}>
         <Route index element={<PortalDashboard />} />
-        <Route path="tasks" element={<PortalTasks />} />
-        <Route path="chat" element={<CommsPage />} />
-        <Route path="expenses" element={<PortalExpenses />} />
+        <Route path="tasks" element={<StaffOnlyPortalRoute><PortalTasks /></StaffOnlyPortalRoute>} />
+        <Route path="chat" element={<StaffOnlyPortalRoute><CommsPage /></StaffOnlyPortalRoute>} />
+        <Route path="expenses" element={<StaffOnlyPortalRoute><PortalExpenses /></StaffOnlyPortalRoute>} />
         <Route path="events" element={<PortalEvents />} />
-        <Route path="sales" element={<PortalSales />} />
-        <Route path="documents" element={<PortalDocuments />} />
+        <Route path="sales" element={<StaffOnlyPortalRoute><PortalSales /></StaffOnlyPortalRoute>} />
+        <Route path="documents" element={<StaffOnlyPortalRoute><PortalDocuments /></StaffOnlyPortalRoute>} />
         <Route path="family" element={<PortalFamily />} />
+        <Route path="statement" element={<PortalStatement />} />
+        <Route path="badge" element={<PortalBadge />} />
         <Route path="tickets" element={<PortalTickets />} />
-        <Route path="time-off" element={<PortalTimeOff />} />
+        <Route path="time-off" element={<StaffOnlyPortalRoute><PortalTimeOff /></StaffOnlyPortalRoute>} />
         <Route path="profile" element={<PortalProfile />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />

@@ -52,6 +52,18 @@ export function AdminRoute({ children }) {
  * through to the same pending-approval screen so unapproved users never
  * see family/tasks/expenses etc.
  */
+/**
+ * Route guard for staff-only pages INSIDE the member portal (chat, tasks,
+ * expenses, time-off, documents). iter345 — members/parents were able to
+ * reach these by URL even though the nav hid them.
+ */
+export function StaffOnlyPortalRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (!STAFF_ROLES.has(user.role)) return <Navigate to="/portal" replace />;
+  return children;
+}
+
 export function PortalRoute({ children }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;

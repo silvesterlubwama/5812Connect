@@ -443,6 +443,14 @@ async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)
     }
     await db.access_scans.insert_one(scan)
     scan.pop("_id", None)
+    # iter345 — flag event passes held by this person so door staff see
+    # "ticketed for X" from the badge scan alone.
+    try:
+        from routers.event_tickets import ticket_flags_for
+        today = datetime.now(timezone.utc).date().isoformat()
+        scan["event_tickets"] = await ticket_flags_for([member_id], "", today)
+    except Exception:
+        scan["event_tickets"] = []
     return scan
 
 

@@ -1,14 +1,14 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink, CalendarOff, Ticket } from 'lucide-react';
+import { LayoutDashboard, ListTodo, MessageSquare, Receipt, Calendar, User, FileText, ShoppingBag, LogOut, ArrowLeft, Heart, ExternalLink, CalendarOff, Ticket, IdCard, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 
 // Full nav for staff members (they land in /portal when they visit their
-// own self-service). Non-staff guests get a sharply reduced set — no tasks,
+// own self-service). Members/parents get a sharply reduced set — no tasks,
 // no chat, no expenses, no time-off/timesheet-adjacent modules. They can
-// see their own family (view + edit contact + submit pending changes),
-// their own event RSVPs/tickets, their own purchase history, and profile.
+// see their own household, their event passes, their monthly statement,
+// their badge and their profile.
 const STAFF_NAV = [
   { to: '/portal', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/portal/tasks', icon: ListTodo, label: 'My Tasks' },
@@ -18,17 +18,20 @@ const STAFF_NAV = [
   { to: '/portal/time-off', icon: CalendarOff, label: 'Time Off' },
   { to: '/portal/expenses', icon: Receipt, label: 'Expenses' },
   { to: '/portal/sales', icon: ShoppingBag, label: 'My Sales' },
+  { to: '/portal/statement', icon: FileSpreadsheet, label: 'Statement' },
   { to: '/portal/documents', icon: FileText, label: 'Documents' },
   { to: '/portal/family', icon: Heart, label: 'My Family' },
+  { to: '/portal/badge', icon: IdCard, label: 'My Badge' },
   { to: '/portal/profile', icon: User, label: 'Profile' },
 ];
 
-const GUEST_NAV = [
+const MEMBER_NAV = [
   { to: '/portal', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/portal/events', icon: Calendar, label: 'Events & Tickets' },
   { to: '/portal/tickets', icon: Ticket, label: 'My Tickets' },
-  { to: '/portal/sales', icon: ShoppingBag, label: 'My Purchases' },
   { to: '/portal/family', icon: Heart, label: 'My Family' },
+  { to: '/portal/statement', icon: FileSpreadsheet, label: 'Statement' },
+  { to: '/portal/badge', icon: IdCard, label: 'My Badge' },
   { to: '/portal/profile', icon: User, label: 'Profile' },
 ];
 
@@ -38,12 +41,21 @@ const STAFF_ROLES = new Set([
   'Volunteer', 'volunteer',
 ]);
 
+// Explicit non-staff roles. Anything not in STAFF_ROLES is treated as a
+// member too, so a new/unknown role can never leak chat or timesheets.
+const MEMBER_ROLES = new Set([
+  'Member', 'member', 'Parent', 'parent', 'Customer', 'customer',
+  'Guest', 'guest', 'Visitor', 'visitor',
+]);
+
+export const isStaffRole = (role) => STAFF_ROLES.has(role || '') && !MEMBER_ROLES.has(role || '');
+
 export default function PortalLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const isAdmin = user?.role === 'admin' || user?.role === 'system_admin';
-  const isStaff = STAFF_ROLES.has(user?.role || '');
-  const NAV = isStaff ? STAFF_NAV : GUEST_NAV;
+  const isStaff = isStaffRole(user?.role);
+  const NAV = isStaff ? STAFF_NAV : MEMBER_NAV;
 
   return (
     <div className="flex h-screen bg-background" data-testid="portal-layout">
@@ -78,7 +90,7 @@ export default function PortalLayout() {
             </Button>
           )}
           {['admin','system_admin','Executive Director','Adviser','Director','Manager','Coordinator','Staff','HR','Volunteer'].includes(user?.role) && (
-            <NavLink to="/dashboard" className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-primary hover:bg-primary/10 transition-colors w-full">
+            <NavLink to="/dashboard" className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-primary hover:bg-primary/10 transition-colors w-full" data-testid="portal-staff-app-link">
               <ExternalLink size={14} /> Staff Portal
             </NavLink>
           )}

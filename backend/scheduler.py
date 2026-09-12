@@ -223,15 +223,14 @@ async def _fire_overdue_task_emails():
     updates via the Integrations UI take effect without redeploying."""
     try:
         from email_helpers import send_notification_email
+        from routers.tasks import overdue_task_filter
         today_iso = date.today().isoformat()
         cutoff_3d = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
         # Open tasks past due (respects per-task snoozes)
-        overdue = await db.tasks.find({
-            "due_date": {"$lt": today_iso, "$ne": ""},
-            "is_archived": {"$ne": True},
-            "status": {"$ne": "done"},
-            "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
-        }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1, "board_id": 1, "description": 1}).to_list(500)
+        overdue = await db.tasks.find(
+            await overdue_task_filter(),
+            {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1, "board_id": 1, "description": 1},
+        ).to_list(500)
         if not overdue:
             return
         sent_count = 0
@@ -328,14 +327,13 @@ async def _fire_overdue_task_director_digest():
     """
     try:
         from email_helpers import send_notification_email
+        from routers.tasks import overdue_task_filter
         today_iso = date.today().isoformat()
-        overdue = await db.tasks.find({
-            "due_date": {"$lt": today_iso, "$ne": ""},
-            "is_archived": {"$ne": True},
-            "status": {"$ne": "done"},
-            "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
-        }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
-             "location_id": 1, "board_id": 1}).to_list(2000)
+        overdue = await db.tasks.find(
+            await overdue_task_filter(),
+            {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
+             "location_id": 1, "board_id": 1},
+        ).to_list(2000)
         if not overdue:
             return
 

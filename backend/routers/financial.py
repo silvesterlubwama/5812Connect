@@ -213,10 +213,26 @@ class ExpenseCreate(BaseModel):
 
 
 @router.get("/financial/summary")
-async def financial_summary(location_id: Optional[str] = None, current_user: dict = Depends(require_manager)):
+async def financial_summary(
+    location_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    """Money summary for the dashboard — read from the LEDGER (iter345).
+
+    Previously this only summed the legacy `donations` / `expenses` mirror
+    collections and silently ignored the date window the caller asked for, so
+    the dashboard showed numbers that matched nothing in Finance (receipts,
+    payroll, sales and transfers all post journal entries, not mirror rows).
+    Now revenue/expense come from `finance_journal_entries` — the same source
+    as the P&L — so the dashboard and Finance always agree.
+    """
     now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1).isoformat()[:7]
-    # Build location filter from campus context
+    month_start = now.replace(day=1).isoformat()[:10]
+    d_from = (date_from or month_start)[:10]
+    d_to = (date_to or now.isoformat()[:10])[:10]
+
     campus = await get_campus_filter(current_user)
     if location_id:
         loc_match = {"location_id": location_id}
@@ -224,24 +240,46 @@ async def financial_summary(location_id: Optional[str] = None, current_user: dic
         loc_match = campus
     else:
         loc_match = {}
-    donations_result = await db.donations.aggregate([{"$match": {**loc_match, "date": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    # Only count approved expenses (exclude pending/rejected requests)
-    exp_match = {**loc_match, "date": {"$regex": f"^{month_start}"}, "status": {"$in": ["approved", None]}}
-    expenses_result = await db.expenses.aggregate([{"$match": exp_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    sales_result = await db.sales.aggregate([{"$match": {**loc_match, "created_at": {"$regex": f"^{month_start}"}}}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
-    monthly_donations = donations_result[0]["total"] if donations_result else 0
-    monthly_expenses = expenses_result[0]["total"] if expenses_result else 0
-    monthly_sales = sales_result[0]["total"] if sales_result else 0
-    all_donations = await db.donations.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    all_expenses = await db.expenses.aggregate([{"$match": {**loc_match, "status": {"$in": ["approved", None]}}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}}}]).to_list(1)
-    all_sales = await db.sales.aggregate([{"$match": loc_match}, {"$group": {"_id": None, "total": {"$sum": "$total"}}}]).to_list(1)
-    total_in = (all_donations[0]["total"] if all_donations else 0) + (all_sales[0]["total"] if all_sales else 0)
-    total_out = all_expenses[0]["total"] if all_expenses else 0
-    # Pending (awaiting approval) — surfaced separately for UI
-    pending_exp = await db.expenses.aggregate([{"$match": {**loc_match, "status": "pending"}}, {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}]).to_list(1)
+    loc_for_ledger = location_id or (loc_match.get("location_id") if isinstance(loc_match.get("location_id"), str) else None)
+
+    from routers.finance.reports import _balances_by_account
+    period = await _balances_by_account(d_from, d_to, loc_for_ledger)
+    total_income = round(sum(v["balance"] for v in period.values() if v["account"]["type"] == "revenue"), 2)
+    total_expenses = round(sum(v["balance"] for v in period.values() if v["account"]["type"] == "expense"), 2)
+
+    to_date = await _balances_by_account(None, d_to, loc_for_ledger)
+    cashflow_in = round(sum(v["balance"] for v in to_date.values() if v["account"]["type"] == "revenue"), 2)
+    cashflow_out = round(sum(v["balance"] for v in to_date.values() if v["account"]["type"] == "expense"), 2)
+
+    sales_result = await db.sales.aggregate([
+        {"$match": {**loc_match, "created_at": {"$gte": d_from, "$lte": d_to + "T23:59:59"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$total"}}},
+    ]).to_list(1)
+    monthly_sales = round(sales_result[0]["total"], 2) if sales_result else 0
+
+    pending_exp = await db.expenses.aggregate([
+        {"$match": {**loc_match, "status": "pending"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+    ]).to_list(1)
     pending_expenses_total = pending_exp[0]["total"] if pending_exp else 0
     pending_expenses_count = pending_exp[0]["count"] if pending_exp else 0
-    return {"monthly_donations": monthly_donations, "monthly_expenses": monthly_expenses, "monthly_sales": monthly_sales, "cashflow_in": total_in, "cashflow_out": total_out, "net_balance": total_in - total_out, "pending_expenses_total": pending_expenses_total, "pending_expenses_count": pending_expenses_count}
+
+    return {
+        # canonical (ledger) keys
+        "total_income": total_income,
+        "total_expenses": total_expenses,
+        "net": round(total_income - total_expenses, 2),
+        "date_from": d_from, "date_to": d_to,
+        # kept for older callers
+        "monthly_donations": total_income,
+        "monthly_expenses": total_expenses,
+        "monthly_sales": monthly_sales,
+        "cashflow_in": cashflow_in,
+        "cashflow_out": cashflow_out,
+        "net_balance": round(cashflow_in - cashflow_out, 2),
+        "pending_expenses_total": pending_expenses_total,
+        "pending_expenses_count": pending_expenses_count,
+    }
 
 
 @router.post("/financial/distribute-funds")

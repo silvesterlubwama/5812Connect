@@ -70,6 +70,29 @@ async def resolve_allowed_board_ids(user: dict, restrict_to_locations: set = Non
     return allowed
 
 
+async def overdue_task_filter(board_ids=None) -> dict:
+    """Canonical "genuinely overdue" task filter — iter345.
+
+    Every surface that counts or reports overdue tasks (dashboard cards,
+    action items, the assignee emails and the director digest) must use this,
+    otherwise the numbers disagree and the morning email lists tasks nobody
+    can find in the UI. Excludes done, archived, snoozed, dateless AND
+    orphaned tasks (rows whose board was deleted — they render nowhere).
+    """
+    from datetime import date as _date
+    today_iso = _date.today().isoformat()
+    if board_ids is None:
+        board_ids = [b["id"] async for b in db.boards.find({}, {"_id": 0, "id": 1})]
+    return {
+        "due_date": {"$lt": today_iso, "$gt": ""},
+        "is_archived": {"$ne": True},
+        "status": {"$nin": ["done", "Done", "completed", "Completed"]},
+        "board_id": {"$in": list(board_ids)},
+        "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": None},
+                {"snooze_until": {"$lte": today_iso}}],
+    }
+
+
 async def _broadcast_board(board_id: str, action: str, payload: dict, exclude_user: str = None):
     """Broadcast a board event to all WS viewers of a board."""
     if not board_id:
@@ -111,12 +134,9 @@ async def director_digest_preview(current_user: dict = Depends(get_current_user)
         return {"eligible": False, "task_count": 0, "tasks": []}
 
     today_iso = date.today().isoformat()
-    overdue = await db.tasks.find({
-        "due_date": {"$lt": today_iso, "$ne": ""},
-        "is_archived": {"$ne": True},
-        "status": {"$ne": "done"},
-        "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_iso}}],
-    }, {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
+    overdue = await db.tasks.find(
+        await overdue_task_filter(),
+        {"_id": 0, "id": 1, "title": 1, "due_date": 1, "assignees": 1, "assignee": 1,
          "location_id": 1, "board_id": 1, "priority": 1}).to_list(2000)
 
     # Assignee-name lookup + board→location fallback in one preload
