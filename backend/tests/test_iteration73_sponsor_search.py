@@ -11,6 +11,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuth:
@@ -20,8 +22,8 @@ class TestAuth:
     def auth_token(self):
         """Get authentication token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -36,8 +38,8 @@ class TestAuth:
     def test_login_success(self):
         """Test login with valid credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()
@@ -53,8 +55,8 @@ class TestChildrenAPI:
     def auth_headers(self):
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -170,8 +172,8 @@ class TestGuestsAPI:
     def auth_headers(self):
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -207,8 +209,8 @@ class TestLocationsAPI:
     def auth_headers(self):
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}
@@ -233,8 +235,8 @@ class TestCleanup:
     def auth_headers(self):
         """Get auth headers"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         return {"Authorization": f"Bearer {response.json()['token']}"}

@@ -11,6 +11,8 @@ import os
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_frontend_env():
     p = "/app/frontend/.env"
     if os.path.exists(p):
@@ -21,8 +23,8 @@ def _load_frontend_env():
 
 
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _load_frontend_env()).rstrip("/")
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 
 # ========== Fixtures ==========

@@ -256,7 +256,7 @@ async def post_opening_balance(account_id: str, data: dict, current_user: dict =
     ob = await db.finance_chart_of_accounts.find_one({"code": "3000"}, {"_id": 0})
     if not ob:
         ob = {
-            "id": f"acc_{__import__('uuid').uuid4().hex[:10]}",
+            "id": f"acc_{uuid.uuid4().hex[:10]}",
             "code": "3000", "name": "Opening Balance Equity",
             "type": "equity", "category": "equity",
             "currency": acct.get("currency") or "UGX",

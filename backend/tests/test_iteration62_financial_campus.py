@@ -17,11 +17,13 @@ import os
 import uuid
 from datetime import datetime
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 # Test credentials
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 class TestAuthLogin:

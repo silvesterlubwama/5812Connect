@@ -10,6 +10,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestUserDirectory:
@@ -19,8 +21,8 @@ class TestUserDirectory:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -67,8 +69,8 @@ class TestLocationVenues:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -148,8 +150,8 @@ class TestOutreachProgrammes:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -204,8 +206,8 @@ class TestRecurrenceTypes:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -327,8 +329,8 @@ class TestGuestDelete:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -374,8 +376,8 @@ class TestPortalPage:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -398,8 +400,8 @@ class TestMajorPagesLoad:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]

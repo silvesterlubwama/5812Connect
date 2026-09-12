@@ -8,6 +8,61 @@ kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
 
+## iter348 — Code-review remediation (2026-06)
+
+### DONE (verified — `pytest tests/test_iter347_p2p3_backlog.py tests/test_iter346_api_integration.py tests/test_iter296_indexes.py tests/test_iter345_* tests/test_iter292_regression_smoke.py` = 106 passed)
+- **No credentials in the repo.** New `tests/creds.py` resolves every test login
+  from the environment (`TEST_ADMIN_EMAIL/PASSWORD`, `TEST_NEW_USER_PASSWORD`,
+  `TEST_CUSTOM_PASSWORD`, `TEST_RESET_PASSWORD` — kept distinct because some
+  tests assert a custom password blocks the default one). 130+ test files and
+  `conftest.py` swept, including docstrings that quoted the password. Values
+  live in `backend/.env`; identical pass/fail counts before and after the sweep.
+- **`_audit(..., data=...)` → `details=`** — the helper's kwarg never matched, so
+  department create/update/reassign/delete, sub-location budget saves and bulk
+  department tagging all 500'd the first time a real user hit them. Six call
+  sites fixed; every one re-exercised (200s).
+- **Rate limit keyed on the real visitor.** `request.client.host` is the ingress
+  hop, so "5 requests per IP" was effectively 5 per 10 min for the ENTIRE
+  internet, and the Rejected tab showed cluster IPs. Now keyed on the leftmost
+  `X-Forwarded-For` (falling back to `X-Real-IP`, then the socket), with a
+  60-per-window per-proxy safety net so header spoofing can't buy unlimited
+  attempts. Both IPs are stored on accepted and rejected rows.
+- **`submit_guest_access_request` split** (was complexity 37 / 139 lines /
+  nesting 5): now a straight line of `_enforce_request_rate_limit` →
+  `_enforce_link_validity` → `_validated_request_fields` → `_consume_link_use`
+  → `_upsert_request_guest` → `_issue_guest_badge`. Behaviour re-verified
+  end-to-end: bad token 404, short name / bad email / bad phone / bad date 400,
+  valid auto-approve returns a `badge_token`, repeat guest reuses the same
+  `guest_id`, `max_uses` 400, rate limit 429.
+- **`_ensure_indexes()` split by domain** (was 303 lines): people, scheduling,
+  tasks, comms, access, finance, HR, operations, audit — each in its own
+  try/except, so a single `IndexOptionsConflict` no longer silently skips every
+  index after it (exactly what the legacy non-TTL `audit_log.timestamp` index
+  was doing). Added the missing indexes for `missed_calls`,
+  `access_request_rejections`, `sales.tx_ref` and `payment_webhook_events`.
+- **MD5 in `ucm_client.py` documented, not replaced** — Grandstream's UCM HTTP
+  API *defines* the login token as `md5(challenge + password)` and the PBX
+  rejects anything else. Marked `usedforsecurity=False` and documented that no
+  app credential is ever hashed this way (auth uses bcrypt).
+- **Dynamic imports removed** where they were just inline `__import__('uuid')` /
+  `__import__('datetime')` calls (`finance/chart_of_accounts.py`,
+  `email_helpers.py`). No user input was ever involved.
+- **`skipFonts: true`** on all badge PNG exports — cross-origin Google Fonts CSS
+  was throwing a SecurityError into the console on every badge render.
+
+### Deliberately NOT done (risk outweighs the metric)
+- `deps.py` `get_campus_filter` / `has_module_access` / `expand_descendants`:
+  this is the RBAC + multi-tenant scoping core. Splitting it for a complexity
+  score, with no characterisation tests around it, is how silent data-leak bugs
+  get introduced. Wants a test harness per role/campus combination FIRST.
+- `access.py` `scan_in_out`, `list_residents`, `assign_resident`,
+  `approve_guest_request`, `validate_guest_pass` and
+  `email_helpers.send_notification_email`: same reasoning, lower stakes —
+  worth doing behind tests, not as a blind refactor.
+- "41 possibly undefined variables": not reproducible. `pyflakes` over the whole
+  backend reports ZERO undefined names (F821); only unused locals and two
+  f-strings without placeholders. Treated as static-analysis noise.
+
 ## iter347 — P2/P3 backlog cleared (2026-06)
 
 ### DONE (tested — `/app/test_reports/iteration_231.json`, `backend/tests/test_iter347_p2p3_backlog.py`)

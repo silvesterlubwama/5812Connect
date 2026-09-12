@@ -4,8 +4,10 @@ import requests
 import pytest
 from datetime import datetime, timezone
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://multi-tenant-scope.preview.emergentagent.com").rstrip("/")
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
 
 
 @pytest.fixture(scope="module")

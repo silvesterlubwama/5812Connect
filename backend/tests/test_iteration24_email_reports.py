@@ -12,6 +12,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestEmailIntegration:
@@ -21,8 +23,8 @@ class TestEmailIntegration:
     def setup(self):
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -133,8 +135,8 @@ class TestCampusReports:
     def setup(self):
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -235,8 +237,8 @@ class TestDashboardSwitcher:
     def setup(self):
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")
@@ -323,8 +325,8 @@ class TestReportsPdfExport:
     def setup(self):
         """Login as admin to get auth token"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json().get("token")

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+import re
 import uuid
 import logging
 from deps import db, get_current_user, require_admin, require_staff, _audit
@@ -677,7 +678,7 @@ async def delete_guest_access_link(link_id: str, current_user: dict = Depends(re
 
 async def _reject_access_request(*, token: str, client_ip: str, reason: str,
                                  detail: str, status_code: int, data: dict,
-                                 link: Optional[dict] = None):
+                                 link: Optional[dict] = None, proxy_ip: str = ""):
     """Record a blocked public access-request hit, then raise.
 
     iter347 — these used to vanish into a 4xx with nothing for admins to see,
@@ -694,6 +695,7 @@ async def _reject_access_request(*, token: str, client_ip: str, reason: str,
             "reason": reason,                       # rate_limited | invalid_link | expired | max_uses | validation
             "detail": detail,
             "client_ip": client_ip,
+            "proxy_ip": proxy_ip,
             "status_code": status_code,
             "attempted_name": str(data.get("name") or "")[:120],
             "attempted_email": str(data.get("email") or "")[:254],
@@ -748,143 +750,218 @@ async def clear_rejected_access_requests(current_user: dict = Depends(require_ad
 async def submit_guest_access_request(token: str, data: dict, request: Request):
     """Public endpoint — guest submits an access request against a shared link.
 
-    Iter 341 security hardening:
-      - Rate-limited to 5 requests / IP / 10 minutes so bad actors can't
-        spam thousands of fake guest profiles or brute-force tokens.
-      - Name / email / phone / purpose / visit_date validated with length
-        caps and shape checks before touching the DB.
-      - `uses` counter uses an atomic `$inc` with a `uses < max_uses`
-        filter so parallel submits can never overshoot the limit.
-      - Idempotent guest lookup (by email or phone) — never creates a
-        duplicate profile if the same person submits twice.
+    Hardening (iter341, extended iter347/348): rate limited per IP (counting
+    blocked attempts too), payload validated before anything touches the DB,
+    an atomic `uses` guard so parallel submits can't overshoot `max_uses`, and
+    an idempotent guest lookup so nobody gets duplicated in the directory.
+    Every rejection is logged for the Access → Rejected tab.
+
+    Split into helpers in iter348 — this used to be one 139-line function with
+    five levels of nesting, which made the security checks hard to follow (and
+    hard to be sure of).
     """
-    import re as _re
-    client_ip = (request.client.host if request and request.client else "unknown")
+    client_ip = _client_ip(request)
+    proxy_ip = (request.client.host if request and request.client else "")
     link = await db.guest_access_links.find_one({"token": token}, {"_id": 0})
     if not link:
         await _reject_access_request(token=token, client_ip=client_ip, reason="invalid_link",
-                                     detail="Invalid or expired link", status_code=404, data=data)
+                                     detail="Invalid or expired link", status_code=404,
+                                     data=data, proxy_ip=proxy_ip)
 
-    # Rate limit — max 5 submissions per IP per rolling 10-minute window.
-    # Counts BOTH accepted requests and blocked attempts, otherwise someone
-    # could brute-force tokens forever by always sending invalid payloads.
-    ten_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    recent = await db.guest_access_requests.count_documents({
-        "client_ip": client_ip,
-        "created_at": {"$gte": ten_min_ago},
-    })
-    recent += await db.access_request_rejections.count_documents({
-        "client_ip": client_ip,
-        "reason": {"$ne": "rate_limited"},
-        "created_at": {"$gte": ten_min_ago},
-    })
-    if recent >= 5:
-        await _reject_access_request(
-            token=token, client_ip=client_ip, reason="rate_limited", link=link, data=data,
-            detail="Too many requests from this IP. Please wait a few minutes and try again.",
-            status_code=429,
-        )
+    await _enforce_request_rate_limit(token, client_ip, link, data, proxy_ip)
+    await _enforce_link_validity(token, client_ip, link, data)
+    fields = await _validated_request_fields(token, client_ip, link, data)
+    await _consume_link_use(token, client_ip, link, data)
 
-    # Expiry check first — cheaper than the atomic uses guard below.
-    if link.get("expires_at"):
-        expired = False
-        try:
-            exp = datetime.fromisoformat(link["expires_at"])
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            expired = exp < datetime.now(timezone.utc)
-        except Exception:
-            expired = False
-        if expired:
-            await _reject_access_request(token=token, client_ip=client_ip, reason="expired", link=link,
-                                         data=data, detail="This link has expired", status_code=400)
-
-    # Input validation — reject junk before it lands in the directory.
-    name = (data.get("name") or "").strip()
-    email = (data.get("email") or "").strip().lower()
-    phone = (data.get("phone") or "").strip()
-    purpose = (data.get("purpose") or "").strip()
-    visit_date = (data.get("visit_date") or "").strip()
-    bad = None
-    if not name or len(name) < 2 or len(name) > 120:
-        bad = "Name must be 2-120 characters"
-    elif email and (len(email) > 254 or not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
-        bad = "Email address is invalid"
-    elif phone and (len(phone) > 32 or not _re.match(r"^[+\-\d\s()]+$", phone)):
-        bad = "Phone number contains invalid characters"
-    elif len(purpose) > 500:
-        bad = "Purpose must be under 500 characters"
-    elif visit_date and not _re.match(r"^\d{4}-\d{2}-\d{2}$", visit_date):
-        bad = "visit_date must be YYYY-MM-DD"
-    if bad:
-        await _reject_access_request(token=token, client_ip=client_ip, reason="validation", link=link,
-                                     data=data, detail=bad, status_code=400)
-
-    # Atomic uses guard — the filter prevents overshooting when multiple
-    # submits race. Without this, `count then increment` had a TOCTOU
-    # window where 10 parallel requests could all pass a `uses == 9`
-    # check and increment to `uses == 19` on a `max_uses = 10` link.
-    if link.get("max_uses"):
-        upd = await db.guest_access_links.update_one(
-            {"id": link["id"], "$or": [{"uses": {"$lt": link["max_uses"]}}, {"uses": None}]},
-            {"$inc": {"uses": 1}},
-        )
-        if upd.modified_count == 0:
-            await _reject_access_request(token=token, client_ip=client_ip, reason="max_uses", link=link,
-                                         data=data, detail="This link has reached its maximum uses",
-                                         status_code=400)
-    else:
-        await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
-
-    # Idempotent guest — match by email → phone → don't create a duplicate.
-    guest = None
-    if email:
-        guest = await db.guests.find_one({"email": email}, {"_id": 0})
-    if not guest and phone:
-        guest = await db.guests.find_one({"phone": phone}, {"_id": 0})
-    if not guest:
-        guest = {
-            "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email or None,
-            "phone": phone or None, "location_id": link.get("location_id", ""),
-            "source": "guest_access_request",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.guests.insert_one(guest)
-        guest.pop("_id", None)
-
+    guest = await _upsert_request_guest(link, fields)
     request_doc = {
         "id": f"areq_{uuid.uuid4().hex[:8]}",
         "link_id": link["id"],
         "guest_id": guest["id"],
-        "guest_name": name,
-        "guest_email": email,
-        "guest_phone": phone,
-        "purpose": purpose,
-        "visit_date": visit_date,
+        "guest_name": fields["name"],
+        "guest_email": fields["email"],
+        "guest_phone": fields["phone"],
+        "purpose": fields["purpose"],
+        "visit_date": fields["visit_date"],
         "location_id": link.get("location_id"),
         "space_name": link.get("space_name"),
         "status": "pending" if link.get("requires_approval") else "approved",
         "client_ip": client_ip,
+        "proxy_ip": proxy_ip,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.guest_access_requests.insert_one(request_doc)
     request_doc.pop("_id", None)
 
     if request_doc["status"] == "approved":
-        badge_token = uuid.uuid4().hex[:16]
-        from datetime import timedelta as _td
-        await db.guest_access_badges.insert_one({
-            "id": f"gbadge_{uuid.uuid4().hex[:8]}",
-            "token": badge_token,
-            "guest_id": guest["id"],
-            "request_id": request_doc["id"],
-            "location_id": link.get("location_id"),
-            "expires_at": (datetime.now(timezone.utc) + _td(hours=24)).isoformat(),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        request_doc["badge_token"] = badge_token
-
+        request_doc["badge_token"] = await _issue_guest_badge(link, guest, request_doc)
     return request_doc
+
+
+# ── submit_guest_access_request helpers ──────────────────────────
+# Each raises (via _reject_access_request) on failure so the handler above
+# reads as a straight line of checks.
+
+_RATE_LIMIT_HITS = 5
+_RATE_LIMIT_MINUTES = 10
+# Safety net: every visitor arrives via the same ingress, so the per-visitor
+# limit alone can be side-stepped by rotating X-Forwarded-For. This caps total
+# traffic through one proxy hop in the same window.
+_PROXY_RATE_LIMIT_HITS = 60
+
+
+def _client_ip(request: Request) -> str:
+    """The visitor's IP, not the ingress'.
+
+    `request.client.host` is the Kubernetes/Cloudflare hop, so the original
+    per-IP limit was effectively a GLOBAL 5-per-10-minutes for the whole
+    internet — one enthusiastic guest locked everyone out, and the Rejected
+    tab showed cluster IPs instead of the actual source. Prefer the leftmost
+    X-Forwarded-For entry (the client), falling back to X-Real-IP then the
+    socket peer.
+    """
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first[:64]
+    real = (request.headers.get("x-real-ip") or "").strip()
+    if real:
+        return real[:64]
+    return (request.client.host if request and request.client else "unknown")
+
+
+async def _enforce_request_rate_limit(token: str, client_ip: str, link: dict, data: dict,
+                                      proxy_ip: str = ""):
+    """Max 5 submissions per visitor IP per rolling 10 minutes.
+
+    Counts accepted requests AND blocked attempts — counting only successes
+    let an attacker brute-force tokens forever with invalid payloads.
+    """
+    window_start = (datetime.now(timezone.utc) - timedelta(minutes=_RATE_LIMIT_MINUTES)).isoformat()
+
+    async def _hits(field: str, value: str) -> int:
+        n = await db.guest_access_requests.count_documents({
+            field: value, "created_at": {"$gte": window_start},
+        })
+        n += await db.access_request_rejections.count_documents({
+            field: value, "reason": {"$ne": "rate_limited"},
+            "created_at": {"$gte": window_start},
+        })
+        return n
+
+    over = await _hits("client_ip", client_ip) >= _RATE_LIMIT_HITS
+    if not over and proxy_ip:
+        over = await _hits("proxy_ip", proxy_ip) >= _PROXY_RATE_LIMIT_HITS
+    if over:
+        await _reject_access_request(
+            token=token, client_ip=client_ip, reason="rate_limited", link=link, data=data,
+            detail="Too many requests from this IP. Please wait a few minutes and try again.",
+            status_code=429, proxy_ip=proxy_ip,
+        )
+
+
+async def _enforce_link_validity(token: str, client_ip: str, link: dict, data: dict):
+    """Reject an expired link. A malformed `expires_at` is treated as open."""
+    if not link.get("expires_at"):
+        return
+    try:
+        exp = datetime.fromisoformat(link["expires_at"])
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+    except Exception:
+        return
+    if exp < datetime.now(timezone.utc):
+        await _reject_access_request(token=token, client_ip=client_ip, reason="expired", link=link,
+                                     data=data, detail="This link has expired", status_code=400)
+
+
+def _first_validation_error(name: str, email: str, phone: str, purpose: str, visit_date: str):
+    """Shape + length checks. Returns the first problem, or None."""
+    if not name or len(name) < 2 or len(name) > 120:
+        return "Name must be 2-120 characters"
+    if email and (len(email) > 254 or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email)):
+        return "Email address is invalid"
+    if phone and (len(phone) > 32 or not re.match(r"^[+\-\d\s()]+$", phone)):
+        return "Phone number contains invalid characters"
+    if len(purpose) > 500:
+        return "Purpose must be under 500 characters"
+    if visit_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", visit_date):
+        return "visit_date must be YYYY-MM-DD"
+    return None
+
+
+async def _validated_request_fields(token: str, client_ip: str, link: dict, data: dict) -> dict:
+    """Normalise the payload, or reject it before it reaches the directory."""
+    fields = {
+        "name": (data.get("name") or "").strip(),
+        "email": (data.get("email") or "").strip().lower(),
+        "phone": (data.get("phone") or "").strip(),
+        "purpose": (data.get("purpose") or "").strip(),
+        "visit_date": (data.get("visit_date") or "").strip(),
+    }
+    bad = _first_validation_error(**fields)
+    if bad:
+        await _reject_access_request(token=token, client_ip=client_ip, reason="validation", link=link,
+                                     data=data, detail=bad, status_code=400)
+    return fields
+
+
+async def _consume_link_use(token: str, client_ip: str, link: dict, data: dict):
+    """Atomically claim one use of the link.
+
+    The `uses < max_uses` filter lives in the update itself: a `count then
+    increment` had a TOCTOU window where 10 parallel submits could all pass a
+    `uses == 9` check and push a `max_uses = 10` link to 19.
+    """
+    if not link.get("max_uses"):
+        await db.guest_access_links.update_one({"id": link["id"]}, {"$inc": {"uses": 1}})
+        return
+    upd = await db.guest_access_links.update_one(
+        {"id": link["id"], "$or": [{"uses": {"$lt": link["max_uses"]}}, {"uses": None}]},
+        {"$inc": {"uses": 1}},
+    )
+    if upd.modified_count == 0:
+        await _reject_access_request(token=token, client_ip=client_ip, reason="max_uses", link=link,
+                                     data=data, detail="This link has reached its maximum uses",
+                                     status_code=400)
+
+
+async def _upsert_request_guest(link: dict, fields: dict) -> dict:
+    """Find the guest by email then phone, creating one only if new."""
+    guest = None
+    if fields["email"]:
+        guest = await db.guests.find_one({"email": fields["email"]}, {"_id": 0})
+    if not guest and fields["phone"]:
+        guest = await db.guests.find_one({"phone": fields["phone"]}, {"_id": 0})
+    if guest:
+        return guest
+    guest = {
+        "id": f"gst_{uuid.uuid4().hex[:8]}", "name": fields["name"],
+        "email": fields["email"] or None, "phone": fields["phone"] or None,
+        "location_id": link.get("location_id", ""),
+        "source": "guest_access_request",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guests.insert_one(guest)
+    guest.pop("_id", None)
+    return guest
+
+
+async def _issue_guest_badge(link: dict, guest: dict, request_doc: dict) -> str:
+    """Mint a 24-hour badge token for an auto-approved request."""
+    badge_token = uuid.uuid4().hex[:16]
+    now = datetime.now(timezone.utc)
+    await db.guest_access_badges.insert_one({
+        "id": f"gbadge_{uuid.uuid4().hex[:8]}",
+        "token": badge_token,
+        "guest_id": guest["id"],
+        "request_id": request_doc["id"],
+        "location_id": link.get("location_id"),
+        "expires_at": (now + timedelta(hours=24)).isoformat(),
+        "created_at": now.isoformat(),
+    })
+    return badge_token
 
 
 # LEGACY: v2 endpoint (formerly duplicate-registered below) has been merged

@@ -11,6 +11,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuthLogin:
@@ -19,14 +21,14 @@ class TestAuthLogin:
     def test_login_success(self):
         """Test login with valid admin credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data, "No token in response"
         assert "user" in data, "No user in response"
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print(f"✓ Login successful for {data['user']['name']}")
         return data["token"]
     
@@ -47,8 +49,8 @@ class TestStaffGuestLinking:
     def auth_token(self):
         """Get authentication token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json().get("token")
@@ -111,8 +113,8 @@ class TestGuestDelete:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json().get("token")
@@ -157,8 +159,8 @@ class TestLocationCountryCode:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json().get("token")
@@ -239,8 +241,8 @@ class TestPortalEndpoint:
         """Test portal API endpoints with authentication"""
         # Login first
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if login_response.status_code != 200:
             pytest.skip("Login failed")
@@ -262,8 +264,8 @@ class TestUserEditDialogFields:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json().get("token")

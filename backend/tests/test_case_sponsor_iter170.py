@@ -20,6 +20,8 @@ import asyncio
 import requests
 import pytest
 
+import creds  # env-backed logins, see tests/creds.py
+
 # ─── env / setup ────────────────────────────────────────────────────────────
 
 def _load_backend_url():
@@ -36,8 +38,8 @@ def _load_backend_url():
 
 
 BASE = _load_backend_url()
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 # Track all entities so we can clean up at session teardown
 _created_children: list[str] = []

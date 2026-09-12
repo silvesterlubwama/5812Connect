@@ -10,6 +10,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://multi-tenant-scope.preview.emergentagent.com').rstrip('/')
 
 class TestDashboardActionItems:
@@ -19,8 +21,8 @@ class TestDashboardActionItems:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         self.token = response.json()["token"]
@@ -88,8 +90,8 @@ class TestTaskAssignmentEmailNotification:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         self.token = response.json()["token"]
@@ -155,8 +157,8 @@ class TestParentCheckinEmailNotification:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         self.token = response.json()["token"]
@@ -228,8 +230,8 @@ class TestDashboardStatsIntegration:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         self.token = response.json()["token"]

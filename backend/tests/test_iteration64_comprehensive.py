@@ -21,6 +21,8 @@ import requests
 import os
 from datetime import datetime, timedelta
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuth:
@@ -29,21 +31,21 @@ class TestAuth:
     def test_admin_login(self):
         """Test admin login with correct credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data, "No token in response"
         assert "user" in data, "No user in response"
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print(f"PASS: Admin login successful, role={data['user'].get('role')}")
         return data["token"]
 
     def test_login_invalid_credentials(self):
         """Test login with wrong password"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
+            "identifier": creds.ADMIN_EMAIL,
             "password": "WrongPassword"
         })
         assert response.status_code in [401, 400], f"Expected 401/400, got {response.status_code}"
@@ -56,8 +58,8 @@ class TestDashboard:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -83,8 +85,8 @@ class TestPeople:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -163,8 +165,8 @@ class TestEvents:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -211,8 +213,8 @@ class TestTasksBoards:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -242,8 +244,8 @@ class TestFinancial:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -358,8 +360,8 @@ class TestProductsSales:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -434,8 +436,8 @@ class TestOutreach:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -459,8 +461,8 @@ class TestAccessControl:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -486,8 +488,8 @@ class TestCheckins:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -511,8 +513,8 @@ class TestCommunications:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -536,8 +538,8 @@ class TestLocations:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -567,8 +569,8 @@ class TestAdmin:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -584,7 +586,7 @@ class TestAdmin:
         user_data = {
             "name": "TEST_User_64",
             "email": f"testuser64_{datetime.now().timestamp()}@test.com",
-            "password": "TestPass123!",
+            "password": creds.CUSTOM_PASSWORD,
             "role": "staff"
         }
         create_resp = requests.post(f"{BASE_URL}/api/admin/users", json=user_data, headers=self.headers)
@@ -611,8 +613,8 @@ class TestKiosk:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -630,8 +632,8 @@ class TestPortal:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -655,8 +657,8 @@ class TestWalletBadge:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.user = login_resp.json().get("user", {})
@@ -687,8 +689,8 @@ class TestBulkOperations:
     @pytest.fixture(autouse=True)
     def setup(self):
         login_resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = login_resp.json().get("token")
         self.headers = {"Authorization": f"Bearer {self.token}"}

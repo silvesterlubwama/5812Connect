@@ -15,6 +15,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_base():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if v:
@@ -31,7 +33,7 @@ def _load_base():
 
 
 BASE = _load_base()
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
 
 
 def _login(cred):
@@ -214,12 +216,12 @@ class TestHolidayPolicies:
         # create a non-admin user
         email = f"TEST_iter316_user_{uuid.uuid4().hex[:6]}@ex.com"
         payload = {"name": "Iter316 Nonadmin", "email": email, "role": "member",
-                   "location_id": "loc_001", "password": "Test@5812!"}
+                   "location_id": "loc_001", "password": creds.NEW_USER_PASSWORD}
         cr = requests.post(f"{BASE}/api/admin/users", json=payload, headers=admin_hdr, timeout=15)
         if cr.status_code not in (200, 201):
             pytest.skip(f"could not create non-admin user: {cr.status_code} {cr.text[:200]}")
         uid = cr.json().get("id")
-        tok = _login({"identifier": email, "password": "Test@5812!"})
+        tok = _login({"identifier": email, "password": creds.NEW_USER_PASSWORD})
         hdr = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
         r_put = requests.put(f"{BASE}/api/holidays/policies", json={"name": "X", "country": "US", "kind": "paid"}, headers=hdr, timeout=15)
         assert r_put.status_code == 403, f"expected 403, got {r_put.status_code}: {r_put.text[:200]}"
@@ -481,12 +483,12 @@ class TestTasksBoardScoping:
         email = f"TEST_iter316_scope_{uuid.uuid4().hex[:6]}@ex.com"
         cr = requests.post(f"{BASE}/api/admin/users",
                            json={"name": "Iter316 Scope", "email": email, "role": "member",
-                                 "location_id": "loc_002", "password": "Test@5812!"},
+                                 "location_id": "loc_002", "password": creds.NEW_USER_PASSWORD},
                            headers=admin_hdr, timeout=15)
         if cr.status_code not in (200, 201):
             pytest.skip(f"could not create non-admin user: {cr.status_code}")
         uid = cr.json().get("id")
-        tok = _login({"identifier": email, "password": "Test@5812!"})
+        tok = _login({"identifier": email, "password": creds.NEW_USER_PASSWORD})
         hdr = {"Authorization": f"Bearer {tok}"}
         r = requests.get(f"{BASE}/api/tasks", headers=hdr, timeout=15)
         assert r.status_code == 200

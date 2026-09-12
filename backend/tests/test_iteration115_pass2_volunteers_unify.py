@@ -14,9 +14,11 @@ from datetime import date, timedelta
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = (os.environ.get("TEST_API_URL") or os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")).rstrip("/")
-ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@5812uganda.org")
-ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 
 
 def _hdr(token):

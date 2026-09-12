@@ -11,11 +11,13 @@ import os
 import time
 from datetime import datetime, timedelta
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://multi-tenant-scope.preview.emergentagent.com')
 
 # Test credentials
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 class TestAuth:

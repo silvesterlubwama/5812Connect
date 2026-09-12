@@ -11,13 +11,15 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 # Test credentials
 ADMIN_EMAIL = "admin@5812global.org"
 ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
-ADMIN2_EMAIL = "admin@5812uganda.org"
-ADMIN2_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+ADMIN2_EMAIL = creds.ADMIN_EMAIL
+ADMIN2_PASSWORD = creds.ADMIN_PASSWORD
 
 
 class TestHealthAndBasics:
@@ -49,7 +51,7 @@ class TestAuthRouter:
         print(f"PASS: Admin login successful - {ADMIN_EMAIL}")
     
     def test_login_admin_secondary(self):
-        """POST /api/auth/login with admin@5812uganda.org / Admin@5812"""
+        """POST /api/auth/login with the seeded admin account (tests/creds.py)"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": ADMIN2_EMAIL,
             "password": ADMIN2_PASSWORD

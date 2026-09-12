@@ -15,14 +15,16 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Get admin auth token"""
     resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     if resp.status_code != 200:
         pytest.skip(f"Auth failed: {resp.status_code} - {resp.text[:200]}")
@@ -45,8 +47,8 @@ class TestAuth:
 
     def test_login_success(self):
         resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert resp.status_code == 200, f"Login failed: {resp.text[:300]}"
         data = resp.json()

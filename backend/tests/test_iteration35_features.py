@@ -15,6 +15,8 @@ import requests
 import os
 from datetime import datetime, timedelta
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuth:
@@ -23,14 +25,14 @@ class TestAuth:
     def test_login_admin(self):
         """Test admin login with correct credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         return data["token"]
 
 
@@ -123,8 +125,8 @@ class TestPublicBookings:
     def auth_token(self):
         """Get admin auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -241,8 +243,8 @@ class TestCashCutoffRules:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -293,8 +295,8 @@ class TestMarkAsPaid:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -373,8 +375,8 @@ class TestPendingPayments:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -405,7 +407,7 @@ class TestNewUserSignup:
         response = requests.post(f"{BASE_URL}/api/auth/register", json={
             "name": "TEST_New Member",
             "email": unique_email,
-            "password": "TestPass123"
+            "password": creds.CUSTOM_PASSWORD
         })
         assert response.status_code == 200, f"Registration failed: {response.text}"
         
@@ -425,8 +427,8 @@ class TestReportGeneration:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -466,8 +468,8 @@ class TestKioskCheckout:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -499,8 +501,8 @@ class TestCleanup:
     @pytest.fixture
     def auth_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]

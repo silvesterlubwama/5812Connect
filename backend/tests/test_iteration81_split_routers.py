@@ -7,6 +7,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 assert BASE_URL, "REACT_APP_BACKEND_URL must be set"
 
@@ -17,7 +19,7 @@ def session():
     s.headers.update({"Content-Type": "application/json"})
     resp = s.post(
         f"{BASE_URL}/api/auth/login",
-        json={"identifier": "admin@5812uganda.org", "password": "Admin@5812"},
+        json={"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD},
         timeout=30,
     )
     assert resp.status_code == 200, f"Admin login failed: {resp.text}"

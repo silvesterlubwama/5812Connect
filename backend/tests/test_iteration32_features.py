@@ -13,6 +13,8 @@ import os
 import uuid
 from datetime import datetime, timedelta
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuth:
@@ -21,14 +23,14 @@ class TestAuth:
     def test_login_admin(self):
         """Test admin login with correct credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print(f"✓ Admin login successful, role: {data['user'].get('role')}")
         return data["token"]
 
@@ -40,8 +42,8 @@ class TestSettingsRouter:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -154,8 +156,8 @@ class TestChatThreadSupport:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -265,8 +267,8 @@ class TestConferenceScheduling:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -369,8 +371,8 @@ class TestPresenceAPI:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -418,8 +420,8 @@ class TestAdminUserManagement:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]
@@ -529,8 +531,8 @@ class TestCleanup:
     def setup(self):
         """Get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             self.token = response.json()["token"]

@@ -14,6 +14,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     with open("/app/frontend/.env") as f:
@@ -21,8 +23,8 @@ if not BASE_URL:
             if line.startswith("REACT_APP_BACKEND_URL="):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
 
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

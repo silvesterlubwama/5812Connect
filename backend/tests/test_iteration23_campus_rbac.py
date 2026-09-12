@@ -15,11 +15,13 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 # Test credentials
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 ADMIN2_EMAIL = "admin@5812global.org"
 ADMIN2_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@1234")
 
@@ -410,7 +412,7 @@ class TestCampusRBAC:
         loc_name = loc["name"]
         
         test_email = f"test_staff_{uuid.uuid4().hex[:8]}@test.com"
-        test_password = os.environ.get("TEST_STAFF_PASSWORD", "TestPass123")
+        test_password = creds.CUSTOM_PASSWORD
         
         # Create staff user with location
         resp = self.session.post(f"{BASE_URL}/api/admin/users", json={

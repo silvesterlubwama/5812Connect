@@ -10,6 +10,8 @@ Covers the review request bullets:
 """
 import httpx, pytest, os
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _api():
     with open("/app/frontend/.env") as f:
         for line in f:
@@ -21,7 +23,7 @@ API = _api()
 @pytest.fixture(scope="module")
 def h():
     r = httpx.post(f"{API}/api/auth/login",
-                   json={"identifier": "admin@5812uganda.org", "password": "Admin@5812"},
+                   json={"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD},
                    timeout=15)
     r.raise_for_status()
     return {"Authorization": f"Bearer {r.json()['token']}"}

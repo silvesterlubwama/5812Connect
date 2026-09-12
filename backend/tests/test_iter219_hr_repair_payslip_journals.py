@@ -23,6 +23,8 @@ import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
+import creds  # env-backed logins, see tests/creds.py
+
 load_dotenv("/app/backend/.env")
 
 
@@ -39,8 +41,8 @@ def _base():
 
 
 BASE = _base()
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
-DEFAULT_PW = "Test@5812!"
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
+DEFAULT_PW = creds.NEW_USER_PASSWORD
 REPAIR_URL = f"{BASE}/api/hr/repair-payslip-journals"
 
 

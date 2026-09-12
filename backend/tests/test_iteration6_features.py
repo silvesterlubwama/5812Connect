@@ -10,6 +10,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestHealthAndAuth:
@@ -24,14 +26,14 @@ class TestHealthAndAuth:
     def test_login_admin(self):
         """Test admin login with provided credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print(f"✓ Admin login successful - role: {data['user'].get('role')}")
         return data["token"]
     
@@ -51,7 +53,7 @@ class TestPasswordReset:
     def test_forgot_password_valid_email(self):
         """Test forgot password with valid email"""
         response = requests.post(f"{BASE_URL}/api/auth/forgot-password", json={
-            "email": "admin@5812uganda.org"
+            "email": creds.ADMIN_EMAIL
         })
         assert response.status_code == 200
         data = response.json()
@@ -101,8 +103,8 @@ class TestAccessControl:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -143,8 +145,8 @@ class TestReportsAPI:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -196,8 +198,8 @@ class TestNotifications:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -225,8 +227,8 @@ class TestCommunications:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -253,8 +255,8 @@ class TestLocations:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -277,8 +279,8 @@ class TestDashboard:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -301,8 +303,8 @@ class TestMembers:
     def setup(self):
         """Get auth token for tests"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         self.token = response.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}

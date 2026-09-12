@@ -5,6 +5,8 @@ import requests
 import pytest
 from datetime import datetime, timezone
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_base_url():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if not v:
@@ -22,9 +24,9 @@ def _load_base_url():
 
 
 BASE_URL = _load_base_url()
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
-DEFAULT_NEW_PASS = "Test@5812!"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
+DEFAULT_NEW_PASS = creds.NEW_USER_PASSWORD
 
 
 def _login(identifier, password):

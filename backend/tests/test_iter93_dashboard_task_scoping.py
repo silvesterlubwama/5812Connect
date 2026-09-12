@@ -14,12 +14,14 @@ import requests
 from dotenv import dotenv_values
 from pymongo import MongoClient
 
+import creds  # env-backed logins, see tests/creds.py
+
 frontend_env = dotenv_values("/app/frontend/.env")
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or frontend_env.get("REACT_APP_BACKEND_URL")).rstrip("/")
 
 backend_env = dotenv_values("/app/backend/.env")
-ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@5812uganda.org")
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 # ---------- fixtures ----------

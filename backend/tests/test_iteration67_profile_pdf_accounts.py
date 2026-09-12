@@ -8,14 +8,16 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Get authentication token for admin user"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": "Admin@5812"
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     if response.status_code == 200:
         return response.json().get("token")

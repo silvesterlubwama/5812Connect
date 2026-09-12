@@ -10,14 +10,16 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Get admin authentication token"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": "Admin@5812"
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     assert response.status_code == 200, f"Login failed: {response.text}"
     return response.json()["token"]
@@ -261,7 +263,7 @@ class TestMemberManagement:
         reset_response = requests.post(
             f"{BASE_URL}/api/admin/users/{user_id}/reset-password",
             headers=auth_headers,
-            json={"new_password": "NewTest@5812!"}
+            json={"new_password": creds.RESET_PASSWORD}
         )
         # Accept 200, 404 (endpoint may not exist), or 400 (validation)
         assert reset_response.status_code in [200, 400, 404, 422], f"Unexpected: {reset_response.status_code}"

@@ -1,7 +1,7 @@
 """
 Test suite for 58:12 Global Connect CRM - Iteration 5
 Features tested:
-- Login with admin@5812uganda.org / Admin@5812
+- Login with the seeded admin account (tests/creds.py)
 - Members API with gender Male/Female restriction
 - Department based on location
 - Access Control (residents, staff passes, guest requests, scan in/out)
@@ -14,6 +14,8 @@ import requests
 import os
 import io
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://multi-tenant-scope.preview.emergentagent.com')
 
 
@@ -21,16 +23,16 @@ class TestAuth:
     """Authentication tests"""
     
     def test_login_admin_5812uganda(self):
-        """Test login with admin@5812uganda.org / Admin@5812"""
+        """Test login with the seeded admin account (tests/creds.py)"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         assert data["user"]["role"] == "admin"
 
 
@@ -38,8 +40,8 @@ class TestAuth:
 def auth_token():
     """Get authentication token for tests"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     if response.status_code == 200:
         return response.json()["token"]

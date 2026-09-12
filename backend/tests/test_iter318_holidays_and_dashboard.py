@@ -8,6 +8,8 @@ import os
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _read_frontend_env():
     try:
         for line in open("/app/frontend/.env"):
@@ -20,8 +22,8 @@ def _read_frontend_env():
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _read_frontend_env() or "").rstrip("/")
 assert BASE_URL, "REACT_APP_BACKEND_URL not configured"
 
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +46,7 @@ def non_admin_h(admin_h):
     """Create a temporary staff user and return their auth header, or skip."""
     # Try to create a staff user via /api/admin/users; else skip 403 tests
     email = "test_iter318_staff@example.com"
-    password = "Test@5812!"
+    password = creds.NEW_USER_PASSWORD
     # attempt create
     r = requests.post(f"{BASE_URL}/api/admin/users", headers=admin_h,
                       json={"name": "TEST iter318 staff", "email": email,

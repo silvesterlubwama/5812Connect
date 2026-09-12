@@ -5,6 +5,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_backend_url():
     url = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
     if not url:
@@ -20,7 +22,7 @@ def _load_backend_url():
     return url
 
 BASE_URL = _load_backend_url()
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
 
 
 @pytest.fixture(scope="module")
@@ -34,11 +36,22 @@ def admin_session():
     return s
 
 
+def _visitor_headers(ip: str = "") -> dict:
+    """A unique X-Forwarded-For per test = a unique rate-limit bucket.
+
+    The public endpoint keys its limiter on the real visitor IP (leftmost
+    X-Forwarded-For), so tests that deliberately trip the limiter no longer
+    poison the ones that follow.
+    """
+    return {"X-Forwarded-For": ip or f"203.0.113.{uuid.uuid4().int % 250 + 1}"}
+
+
 # ─── Rejected access-requests ──────────────────────────────
 class TestRejectedAccessRequests:
     def test_rejection_flow_and_admin_endpoints(self, admin_session):
         # Clear existing so counts are predictable
         admin_session.delete(f"{BASE_URL}/api/access/rejected-requests")
+        visitor = _visitor_headers()
 
         # Create a guest link with max_uses=1
         link_res = admin_session.post(f"{BASE_URL}/api/access/guest-links",
@@ -49,27 +62,25 @@ class TestRejectedAccessRequests:
 
         # (a) bogus token → 404 invalid_link
         r = requests.post(f"{BASE_URL}/api/public/access-request/does_not_exist_xyz",
-                          json={"name": "Someone", "email": "a@b.co"})
+                          json={"name": "Someone", "email": "a@b.co"}, headers=visitor)
         assert r.status_code == 404
 
-        # (b) name too short → validation 400
+        # iter348: blocked attempts now count toward the 5-per-IP/10-min
+        # window, so the link-lifecycle cases run BEFORE the validation ones —
+        # otherwise the 5th call trips the limiter and masks what we're testing.
+        # (b) valid submission → 200, not logged as a rejection
         r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
-                          json={"name": "X"})
-        assert r.status_code == 400
-
-        # (c) bad email
-        r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
-                          json={"name": "Valid Name", "email": "not-an-email"})
-        assert r.status_code == 400
-
-        # (d) valid submission → 200, not logged as rejection
-        r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
-                          json={"name": "Valid Guest", "email": f"g{uuid.uuid4().hex[:6]}@t.co"})
+                          headers=visitor, json={"name": "Valid Guest", "email": f"g{uuid.uuid4().hex[:6]}@t.co"})
         assert r.status_code == 200, r.text
 
-        # (e) second submit on max_uses=1 link → 400 max_uses
+        # (c) second submit on max_uses=1 link → 400 max_uses
         r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
-                          json={"name": "Second Guest", "email": f"g{uuid.uuid4().hex[:6]}@t.co"})
+                          headers=visitor, json={"name": "Second Guest", "email": f"g{uuid.uuid4().hex[:6]}@t.co"})
+        assert r.status_code == 400
+
+        # (d) name too short → validation 400
+        r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
+                          headers=visitor, json={"name": "X"})
         assert r.status_code == 400
 
         # Check the admin GET /rejected-requests
@@ -92,17 +103,31 @@ class TestRejectedAccessRequests:
                                       json={"space_name": "TEST_iter347_rl", "max_uses": 0})
         token = link_res.json()["token"]
 
+        visitor = _visitor_headers()
         codes = []
         for i in range(7):
-            # NOTE: rate-limit is based on successful guest_access_requests
-            # counter — validation-rejected hits do NOT count.  So we must
-            # send otherwise-valid submissions to trip the limiter.
             r = requests.post(f"{BASE_URL}/api/public/access-request/{token}",
+                              headers=visitor,
                               json={"name": f"Rate Test {i}",
                                     "email": f"rl{uuid.uuid4().hex[:6]}@t.co"})
             codes.append(r.status_code)
-        # Should see a 429 after 5 successful hits
+        # Should see a 429 after 5 hits in the window
         assert 429 in codes, f"expected 429 in {codes}"
+
+        # iter348: junk payloads count too — previously only successful
+        # submissions did, so an attacker could brute-force tokens forever by
+        # always sending invalid input.
+        admin_session.delete(f"{BASE_URL}/api/access/rejected-requests")
+        link2 = admin_session.post(f"{BASE_URL}/api/access/guest-links",
+                                   json={"space_name": "TEST_iter348_rl_invalid", "max_uses": 0})
+        token2 = link2.json()["token"]
+        junk_visitor = _visitor_headers()
+        junk_codes = [
+            requests.post(f"{BASE_URL}/api/public/access-request/{token2}",
+                          headers=junk_visitor, json={"name": "X"}).status_code
+            for _ in range(8)
+        ]
+        assert 429 in junk_codes, f"invalid payloads must count toward the limit: {junk_codes}"
 
         rej = admin_session.get(f"{BASE_URL}/api/access/rejected-requests?reason=rate_limited")
         assert rej.status_code == 200

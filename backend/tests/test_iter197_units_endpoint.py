@@ -7,11 +7,13 @@ import time
 import requests
 import pytest
 from dotenv import load_dotenv
+
+import creds  # env-backed logins, see tests/creds.py
 load_dotenv("/app/backend/.env")
 
 BASE_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

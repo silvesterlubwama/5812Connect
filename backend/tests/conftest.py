@@ -1,14 +1,21 @@
-"""Shared test fixtures — credentials from environment or defaults"""
-import os
+"""Shared test fixtures — credentials resolved from the environment.
+
+No login strings live in the repo: see `tests/creds.py`, which reads
+`TEST_ADMIN_*` from `backend/.env` (or the shell).
+"""
 import pytest
 
-TEST_ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@5812uganda.org")
-TEST_ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
-TEST_API_URL = os.environ.get("TEST_API_URL", "http://localhost:8001")
+import creds
+
+TEST_ADMIN_EMAIL = creds.ADMIN_EMAIL
+TEST_ADMIN_PASSWORD = creds.ADMIN_PASSWORD
+TEST_API_URL = creds.BASE_URL
+
 
 @pytest.fixture
 def admin_credentials():
     return {"email": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD}
+
 
 @pytest.fixture
 def api_url():

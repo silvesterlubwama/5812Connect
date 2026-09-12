@@ -8,6 +8,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     # Fall back only for local dev; test collection will still fail loud.
@@ -17,8 +19,8 @@ if not BASE_URL:
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
                 break
 
-ADMIN_IDENT = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
+ADMIN_IDENT = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 LOC = "loc_001"
 
 

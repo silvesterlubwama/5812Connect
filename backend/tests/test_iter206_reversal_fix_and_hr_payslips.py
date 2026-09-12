@@ -11,6 +11,8 @@ import pytest
 import requests
 from datetime import datetime, timezone
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     with open("/app/frontend/.env") as fh:
@@ -19,8 +21,8 @@ if not BASE_URL:
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
                 break
 
-ADMIN_IDENT = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
+ADMIN_IDENT = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 LOC = "loc_001"
 
 
@@ -53,7 +55,7 @@ def staff_user(admin):
     payload = {
         "name": "TEST Iter206 Staff",
         "email": email,
-        "password": "Test@5812!",
+        "password": creds.NEW_USER_PASSWORD,
         "role": "staff",
         "location_id": LOC,
         "also_create_member": False,
@@ -71,7 +73,7 @@ def staff_user(admin):
 
 @pytest.fixture(scope="session")
 def staff_session(staff_user):
-    tok, _ = _login(staff_user["email"], "Test@5812!")
+    tok, _ = _login(staff_user["email"], creds.NEW_USER_PASSWORD)
     s = requests.Session()
     s.headers.update({"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
     return s
@@ -490,10 +492,10 @@ class TestSelfServicePayslips:
         assert r.status_code == 200
         # Cross-user: create a second staff and try to access first's payslip
         email = f"test_iter206_other_{uuid.uuid4().hex[:5]}@example.com"
-        cu = admin.post(f"{BASE_URL}/api/admin/users", json={"name": "Other Staff", "email": email, "password": "Test@5812!", "role": "staff", "location_id": LOC, "also_create_member": False}, timeout=15)
+        cu = admin.post(f"{BASE_URL}/api/admin/users", json={"name": "Other Staff", "email": email, "password": creds.NEW_USER_PASSWORD, "role": "staff", "location_id": LOC, "also_create_member": False}, timeout=15)
         assert cu.status_code == 200
         other_id = cu.json()["id"]
-        tok, _ = _login(email, "Test@5812!")
+        tok, _ = _login(email, creds.NEW_USER_PASSWORD)
         s = requests.Session()
         s.headers.update({"Authorization": f"Bearer {tok}"})
         r2 = s.get(f"{BASE_URL}/api/hr/payslips/{pid}/mine", timeout=15)

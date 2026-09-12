@@ -9,10 +9,12 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://multi-tenant-scope.preview.emergentagent.com").rstrip("/")
-ADMIN_IDENT = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
-DEFAULT_USER_PASS = "Test@5812!"
+ADMIN_IDENT = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
+DEFAULT_USER_PASS = creds.NEW_USER_PASSWORD
 
 STAFF_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director",
                "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"}

@@ -5,10 +5,12 @@ import pytest
 import requests
 
 from dotenv import load_dotenv
+
+import creds  # env-backed logins, see tests/creds.py
 load_dotenv("/app/frontend/.env")
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 # Known tenant fixtures (per review request)
 GALA_PRODUCT_ID = "prod_1543e921"  # 25,000 UGX, stock 97, sell_online false

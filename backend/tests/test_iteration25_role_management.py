@@ -16,6 +16,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://multi-tenant-scope.preview.emergentagent.com').rstrip('/')
 
 
@@ -26,8 +28,8 @@ class TestRoleManagement:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -181,8 +183,8 @@ class TestRoleLevelsAndPermissions:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -199,7 +201,7 @@ class TestRoleLevelsAndPermissions:
             "name": f"Test Adviser Access {unique_id}",
             "email": test_email,
             "role": "Adviser",
-            "password": "TestPass123!"
+            "password": creds.CUSTOM_PASSWORD
         })
         assert create_response.status_code in [200, 201], f"Failed to create adviser: {create_response.text}"
         adviser = create_response.json()
@@ -207,7 +209,7 @@ class TestRoleLevelsAndPermissions:
         # Login as adviser
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
             "identifier": test_email,
-            "password": "TestPass123!"
+            "password": creds.CUSTOM_PASSWORD
         })
         
         if login_response.status_code == 200:
@@ -265,8 +267,8 @@ class TestMemberLocationDropdown:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -339,8 +341,8 @@ class TestChildLocationDropdown:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
@@ -407,8 +409,8 @@ class TestCleanup:
     def setup(self):
         """Login and get auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()

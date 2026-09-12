@@ -13,6 +13,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestIteration54Features:
@@ -31,8 +33,8 @@ class TestIteration54Features:
         if self.token:
             return self.token
         response = self.session.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             data = response.json()
@@ -47,14 +49,14 @@ class TestIteration54Features:
     def test_login_endpoint_works(self):
         """Test that login endpoint works with valid credentials"""
         response = self.session.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data, "No token in response"
         assert "user" in data, "No user in response"
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print("✓ Login endpoint works")
     
     # ========== STAFF AUTO-GUEST TESTS ==========
@@ -340,8 +342,8 @@ class TestPhotoUploadWithFile:
         if self.token:
             return self.token
         response = self.session.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             data = response.json()

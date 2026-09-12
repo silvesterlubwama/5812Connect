@@ -6,6 +6,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuthLogin:
@@ -14,14 +16,14 @@ class TestAuthLogin:
     def test_login_success(self):
         """Test successful login with admin credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         assert data["user"]["role"] == "admin"
         print(f"✓ Login successful, user: {data['user']['name']}")
     
@@ -37,7 +39,7 @@ class TestAuthLogin:
     def test_login_missing_password(self):
         """Test login with missing password"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org"
+            "identifier": creds.ADMIN_EMAIL
         })
         assert response.status_code in [400, 422]
         print("✓ Missing password rejected correctly")
@@ -50,8 +52,8 @@ class TestProtectedEndpoints:
     def auth_token(self):
         """Get authentication token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json().get("token")

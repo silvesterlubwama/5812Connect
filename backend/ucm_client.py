@@ -87,7 +87,17 @@ class UCMClient:
     # ── low-level ───────────────────────────────────────────────
 
     async def _login(self) -> None:
-        """Two-step login: challenge → MD5(challenge + password) → login."""
+        """Two-step login: challenge → MD5(challenge + password) → login.
+
+        MD5 is NOT a choice here: Grandstream's UCM6xxx HTTP API defines the
+        challenge/response token as `md5(challenge + password)` and the PBX
+        rejects anything else, so this is protocol compliance, not password
+        storage. Nothing in this app hashes user credentials with MD5 — see
+        `auth` for the bcrypt path. The password itself never crosses the wire
+        in clear text, and the token is single-use per challenge. If/when
+        Grandstream ships a SHA-2 handshake (their v2 API is the migration
+        path — see `ucm_client_v2.py`) this should move with it.
+        """
         try:
             r = await self._client.post(self.base_url, json={
                 "request": {"action": "challenge", "user": self.username, "version": "1.0.20.24"}
@@ -101,7 +111,11 @@ class UCMClient:
         if body.get("status") != 0:
             raise UCMError(f"challenge failed: {_UCM_STATUS_MSG.get(body.get('status'), body)}")
         challenge = (body.get("response") or {}).get("challenge") or ""
-        token = hashlib.md5((challenge + self._password).encode("utf-8")).hexdigest()
+        # usedforsecurity=False documents (and tells FIPS builds) that this
+        # MD5 is a vendor wire-protocol token, not a security primitive.
+        token = hashlib.md5(
+            (challenge + self._password).encode("utf-8"), usedforsecurity=False
+        ).hexdigest()
         r = await self._client.post(self.base_url, json={
             "request": {"action": "login", "token": token, "url": "", "user": self.username}
         })

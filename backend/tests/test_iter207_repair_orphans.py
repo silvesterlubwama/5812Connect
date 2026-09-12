@@ -13,9 +13,11 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")
@@ -38,13 +40,13 @@ def staff_token(admin_headers):
     r = requests.post(f"{BASE_URL}/api/admin/users", headers=admin_headers, json={
         "name": "TEST Iter207 Staff",
         "email": email,
-        "password": "Test@5812!",
+        "password": creds.NEW_USER_PASSWORD,
         "role": "staff",
     }, timeout=20)
     assert r.status_code in (200, 201), f"staff create failed: {r.status_code} {r.text}"
     # login as this user
     lr = requests.post(f"{BASE_URL}/api/auth/login",
-                       json={"identifier": email, "password": "Test@5812!"}, timeout=20)
+                       json={"identifier": email, "password": creds.NEW_USER_PASSWORD}, timeout=20)
     assert lr.status_code == 200, f"staff login failed: {lr.status_code} {lr.text}"
     return {"token": lr.json().get("access_token") or lr.json().get("token"),
             "user_id": r.json().get("id")}

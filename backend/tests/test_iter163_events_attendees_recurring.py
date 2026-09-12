@@ -7,6 +7,8 @@ import uuid
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_backend_url():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if not v:
@@ -23,8 +25,8 @@ def _load_backend_url():
 
 
 BASE_URL = _load_backend_url()
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

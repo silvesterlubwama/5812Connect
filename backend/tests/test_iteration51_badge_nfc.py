@@ -10,6 +10,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestAuthEndpoints:
@@ -18,14 +20,14 @@ class TestAuthEndpoints:
     def test_login_success(self):
         """Test admin login works"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data, "No token in response"
         assert "user" in data, "No user in response"
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print(f"✓ Login successful for admin user")
 
 
@@ -37,8 +39,8 @@ class TestNfcTagCrud:
         """Get auth token and find a test member"""
         # Login
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json()["token"]
@@ -160,8 +162,8 @@ class TestNfcTagDuplicateCheck:
         """Get auth token and find two different members"""
         # Login
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200
         self.token = login_res.json()["token"]
@@ -216,8 +218,8 @@ class TestLocationsHaveCountry:
         """Test that locations have country field"""
         # Login
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200
         token = login_res.json()["token"]

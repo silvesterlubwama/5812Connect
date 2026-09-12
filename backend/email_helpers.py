@@ -2,6 +2,7 @@
 import asyncio
 import os
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,6 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
 ORG = "58:12 Global Connect"
 
 def _base_html(body: str) -> str:
-    from datetime import datetime
     return f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff">
   <div style="background:#1a1a2e;padding:18px 24px;text-align:center">
     <span style="color:#fbbf24;font-size:18px;font-weight:700;letter-spacing:1px">{ORG}</span>
@@ -116,7 +116,7 @@ async def notify_checkin(parent_email: str, parent_name: str, child_name: str, e
     <p>Hi {parent_name},</p>
     <p><strong>{child_name}</strong> has been checked in{'  to ' + event_name if event_name else ''}{' at ' + location if location else ''}.</p>
     <div style="background:#f0fdf4;border-left:4px solid #22c55e;padding:12px 16px;margin:16px 0;border-radius:4px">
-      <p style="font-size:14px;font-weight:600;color:#166534;margin:0">Checked in at {__import__('datetime').datetime.now().strftime('%I:%M %p')}</p>
+      <p style="font-size:14px;font-weight:600;color:#166534;margin:0">Checked in at {datetime.now().strftime('%I:%M %p')}</p>
     </div>
     <p style="font-size:13px;color:#666">This is an automated notification from {ORG}.</p>
     """

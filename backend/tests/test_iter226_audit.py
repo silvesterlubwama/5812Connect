@@ -13,6 +13,8 @@ import pytest
 import requests
 from dotenv import dotenv_values
 
+import creds  # env-backed logins, see tests/creds.py
+
 fe = dotenv_values("/app/frontend/.env")
 BASE = (os.environ.get("REACT_APP_BACKEND_URL") or fe.get("REACT_APP_BACKEND_URL", "")).rstrip("/")
 assert BASE, "REACT_APP_BACKEND_URL missing"
@@ -21,8 +23,8 @@ be = dotenv_values("/app/backend/.env")
 MONGO_URL = be.get("MONGO_URL")
 DB_NAME = be.get("DB_NAME")
 
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
-DEFAULT_PW = "Test@5812!"
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
+DEFAULT_PW = creds.NEW_USER_PASSWORD
 CHILD_ID = "chd_a3b4e279"
 
 # Shared cross-test state

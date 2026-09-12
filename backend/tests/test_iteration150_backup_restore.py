@@ -15,6 +15,8 @@ import uuid
 import requests
 import pytest
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_backend_url():
     u = os.environ.get("REACT_APP_BACKEND_URL")
     if not u:
@@ -31,9 +33,9 @@ def _load_backend_url():
     return u.rstrip("/")
 
 BASE_URL = _load_backend_url()
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
-NEW_USER_PASS = "Test@5812!"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
+NEW_USER_PASS = creds.NEW_USER_PASSWORD
 
 
 def _login(identifier, password):

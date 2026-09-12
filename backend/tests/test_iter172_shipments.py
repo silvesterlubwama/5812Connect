@@ -5,9 +5,11 @@ import os
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PWD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PWD = creds.ADMIN_PASSWORD
 
 
 # ─── Shared fixtures ─────────────────────────────────────────────

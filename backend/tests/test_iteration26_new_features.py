@@ -13,14 +13,16 @@ import os
 import json
 from datetime import datetime
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Login as admin and get token"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     assert response.status_code == 200, f"Login failed: {response.text}"
     data = response.json()
@@ -47,8 +49,8 @@ class TestLoginAndDashboard:
     def test_login_success(self):
         """Login with admin credentials"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()

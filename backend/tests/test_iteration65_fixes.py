@@ -1,6 +1,6 @@
 """
 Iteration 65 - Testing fixes for:
-1. Default password changed to Test@5812!
+1. Default password changed to the default new-user password from tests/creds.py
 2. Password reset sends email notification
 3. System Admin toggle in UserEditDialog
 4. Guest profile editing for admins
@@ -10,14 +10,16 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 if not BASE_URL:
     BASE_URL = "https://multi-tenant-scope.preview.emergentagent.com"
 
 # Test credentials
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
-DEFAULT_PASSWORD = "Test@5812!"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
+DEFAULT_PASSWORD = creds.NEW_USER_PASSWORD
 
 
 class TestAuth:
@@ -42,7 +44,7 @@ class TestAuth:
 
 
 class TestUserCreationDefaultPassword:
-    """Test user creation with default password Test@5812!"""
+    """Test user creation with default password the default new-user password from tests/creds.py"""
     
     @pytest.fixture(scope="class")
     def admin_token(self):
@@ -59,7 +61,7 @@ class TestUserCreationDefaultPassword:
         return {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
     
     def test_create_user_with_default_password(self, headers):
-        """Test POST /api/admin/users creates user with default password Test@5812!"""
+        """Test POST /api/admin/users creates user with default password the default new-user password from tests/creds.py"""
         unique_id = str(uuid.uuid4())[:8]
         test_email = f"TEST_defaultpw_{unique_id}@test.com"
         
@@ -98,7 +100,7 @@ class TestUserCreationDefaultPassword:
         """Test user creation with custom password still works"""
         unique_id = str(uuid.uuid4())[:8]
         test_email = f"TEST_custompw_{unique_id}@test.com"
-        custom_password = "CustomPass123!"
+        custom_password = creds.CUSTOM_PASSWORD
         
         response = requests.post(f"{BASE_URL}/api/admin/users", json={
             "name": f"Test Custom PW {unique_id}",
@@ -159,7 +161,7 @@ class TestPasswordReset:
     def test_password_reset_stores_new_hash(self, headers, test_user):
         """Test POST /api/admin/users/{id}/reset-password stores new password hash correctly"""
         user_id = test_user["id"]
-        new_password = "NewResetPass123!"
+        new_password = creds.RESET_PASSWORD
         
         # Reset password
         response = requests.post(f"{BASE_URL}/api/admin/users/{user_id}/reset-password", json={

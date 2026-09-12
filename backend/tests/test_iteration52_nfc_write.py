@@ -12,6 +12,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 
@@ -23,8 +25,8 @@ class TestNfcWriteEndpoint:
         """Get auth token (admin = director+) and find a test member"""
         # Login as admin (role level 10, which is director+)
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200, f"Login failed: {login_res.text}"
         self.token = login_res.json()["token"]
@@ -155,8 +157,8 @@ class TestNfcWriteDuplicateCheck:
     def setup(self):
         """Get auth token and find two different members"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200
         self.token = login_res.json()["token"]
@@ -212,8 +214,8 @@ class TestNfcWriteRoleRestriction:
         """Test that non-director users get 403 on NFC write"""
         # First login as admin to create a staff-level user for testing
         admin_login = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert admin_login.status_code == 200
         admin_token = admin_login.json()["token"]
@@ -241,7 +243,7 @@ class TestNfcWriteRoleRestriction:
         
         # Create a test staff user
         test_email = f"test_staff_{uuid.uuid4().hex[:6]}@test.com"
-        test_password = "TestPass123!"
+        test_password = creds.CUSTOM_PASSWORD
         
         create_res = requests.post(
             f"{BASE_URL}/api/admin/users",
@@ -303,8 +305,8 @@ class TestNfcWriteLog:
     def setup(self):
         """Get auth token and find a test member"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200
         self.token = login_res.json()["token"]
@@ -354,8 +356,8 @@ class TestDirectorRolesCanWrite:
     def test_admin_can_write_nfc(self):
         """Test admin role (level 10) can write NFC"""
         login_res = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_res.status_code == 200
         token = login_res.json()["token"]

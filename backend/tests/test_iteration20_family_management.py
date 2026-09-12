@@ -15,14 +15,16 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Get authentication token for admin user"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     assert response.status_code == 200, f"Login failed: {response.text}"
     data = response.json()
@@ -267,7 +269,7 @@ class TestPortalFamilyWithLinkedFamily:
         family_data = {
             "family_name": f"TEST_AdminFamily_{unique_id}",
             "primary_contact_name": "Admin User",
-            "primary_contact_email": "admin@5812uganda.org",  # Admin's email
+            "primary_contact_email": creds.ADMIN_EMAIL,  # Admin's email
             "primary_contact_phone": "+256700000010",
             "address": "Admin Test Address"
         }

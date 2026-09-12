@@ -9,10 +9,12 @@ import time
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://multi-tenant-scope.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
-DEFAULT_NEW_PASSWORD = "Test@5812!"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
+DEFAULT_NEW_PASSWORD = creds.NEW_USER_PASSWORD
 
 EXPECTED_MODULES = {"finance", "hr", "sales", "banking", "accounting", "social_work", "restricted"}
 

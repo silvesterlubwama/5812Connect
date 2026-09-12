@@ -17,6 +17,8 @@ import zipfile
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_base():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if not v:
@@ -33,8 +35,8 @@ def _load_base():
 
 
 BASE = _load_base()
-ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
-DEFAULT_PW = "Test@5812!"
+ADMIN = {"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}
+DEFAULT_PW = creds.NEW_USER_PASSWORD
 
 
 # ============ Fixtures ============

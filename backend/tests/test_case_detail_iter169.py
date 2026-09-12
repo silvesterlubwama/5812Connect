@@ -13,6 +13,8 @@ import uuid
 import requests
 import pytest
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_backend_url():
     val = os.environ.get("REACT_APP_BACKEND_URL")
     if val:
@@ -26,8 +28,8 @@ def _load_backend_url():
     raise RuntimeError("REACT_APP_BACKEND_URL not set")
 
 BASE = _load_backend_url()
-ADMIN_ID = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
+ADMIN_ID = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
 
 VALID_CATEGORIES = {"sponsored", "restricted_location", "welfare_support", "multiple"}
 VALID_RISK = {"low", "medium", "high"}

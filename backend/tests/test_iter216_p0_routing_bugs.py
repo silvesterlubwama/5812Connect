@@ -14,6 +14,8 @@ import pytest
 import requests
 from pathlib import Path
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_base_url():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if v:
@@ -26,9 +28,9 @@ def _load_base_url():
     raise RuntimeError("REACT_APP_BACKEND_URL not set")
 
 BASE_URL = _load_base_url()
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PW = "Admin@5812"
-DEFAULT_PW = "Test@5812!"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PW = creds.ADMIN_PASSWORD
+DEFAULT_PW = creds.NEW_USER_PASSWORD
 
 STAFF_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director",
                "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer"}

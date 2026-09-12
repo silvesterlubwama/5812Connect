@@ -14,11 +14,13 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 # Test credentials from test_credentials.md
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 class TestLoginPhoneNormalization:
@@ -266,7 +268,7 @@ class TestKioskPinCheckinUsersAndGuests:
         # Create a test user with phone
         test_phone_suffix = uuid.uuid4().hex[:4]
         test_phone = f"+256700888{test_phone_suffix}"
-        test_password = "Test@5812!"
+        test_password = creds.NEW_USER_PASSWORD
         
         user_data = {
             "name": f"TEST_UserPhone_{uuid.uuid4().hex[:6]}",

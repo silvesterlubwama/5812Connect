@@ -8,9 +8,11 @@ import requests
 import pytest
 from pathlib import Path
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://multi-tenant-scope.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 
 TEMPLATES_DIR = Path("/app/backend/templates/social_reviews")
 

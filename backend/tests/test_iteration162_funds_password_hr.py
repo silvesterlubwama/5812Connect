@@ -10,6 +10,8 @@ import time
 import pytest
 import requests
 
+import creds  # env-backed logins, see tests/creds.py
+
 def _load_backend_url():
     val = os.environ.get("REACT_APP_BACKEND_URL")
     if val:
@@ -24,8 +26,8 @@ def _load_backend_url():
 
 
 BASE = _load_backend_url()
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 def _login(identifier, password):

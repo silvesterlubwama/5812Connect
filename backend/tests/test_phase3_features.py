@@ -6,6 +6,8 @@ import pytest
 import requests
 import os
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://multi-tenant-scope.preview.emergentagent.com')
 
 
@@ -13,16 +15,16 @@ class TestAuth:
     """Authentication tests with new admin credentials"""
     
     def test_login_admin_5812uganda(self):
-        """Test login with admin@5812uganda.org / Admin@5812"""
+        """Test login with the seeded admin account (tests/creds.py)"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200, f"Login failed: {response.text}"
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         assert data["user"]["role"] == "admin"
         print(f"✓ Login successful for admin@5812uganda.org")
     
@@ -45,8 +47,8 @@ class TestLocationsCompassSystem:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -150,8 +152,8 @@ class TestExchangeRate:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -189,8 +191,8 @@ class TestMembersNewRoles:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -242,8 +244,8 @@ class TestCSVImports:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -304,8 +306,8 @@ class TestFinancialFundDistribution:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -344,8 +346,8 @@ class TestResourceTypes:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -403,8 +405,8 @@ class TestChatAndAI:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -471,8 +473,8 @@ class TestAnnouncements:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}
@@ -506,8 +508,8 @@ class TestAppSettings:
     @pytest.fixture(scope="class")
     def auth_headers(self):
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         token = response.json()["token"]
         return {"Authorization": f"Bearer {token}"}

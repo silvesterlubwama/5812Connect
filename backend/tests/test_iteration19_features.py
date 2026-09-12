@@ -6,14 +6,16 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
     """Get admin auth token"""
     response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "identifier": "admin@5812uganda.org",
-        "password": os.environ.get("TEST_ADMIN_PASSWORD", "Admin@5812")
+        "identifier": creds.ADMIN_EMAIL,
+        "password": creds.ADMIN_PASSWORD
     })
     if response.status_code == 200:
         return response.json().get("token")
@@ -482,7 +484,7 @@ class TestUserSoftDelete:
             "name": "TEST_DeleteUser",
             "email": unique_email,
             "role": "Staff",
-            "password": "TestPass123"
+            "password": creds.CUSTOM_PASSWORD
         })
         assert create_resp.status_code == 200, f"Failed to create user: {create_resp.text}"
         user_id = create_resp.json()["id"]

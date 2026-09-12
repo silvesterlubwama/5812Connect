@@ -3,12 +3,14 @@ import os
 import requests
 import pytest
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://multi-tenant-scope.preview.emergentagent.com"
 
 
 @pytest.fixture(scope="module")
 def token():
-    r = requests.post(f"{BASE}/api/auth/login", json={"identifier": "admin@5812uganda.org", "password": "Admin@5812"}, timeout=30)
+    r = requests.post(f"{BASE}/api/auth/login", json={"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, r.text
     return r.json()["token"]
 

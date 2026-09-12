@@ -13,6 +13,8 @@ import os
 import pytest
 import httpx
 
+import creds  # env-backed logins, see tests/creds.py
+
 API_URL = None
 TOKEN = None
 
@@ -31,7 +33,7 @@ def _api_url():
 @pytest.fixture(scope="module")
 def token():
     r = httpx.post(f"{_api_url()}/api/auth/login",
-                   json={"identifier": "admin@5812uganda.org", "password": "Admin@5812"},
+                   json={"identifier": creds.ADMIN_EMAIL, "password": creds.ADMIN_PASSWORD},
                    timeout=15)
     r.raise_for_status()
     return r.json()["token"]

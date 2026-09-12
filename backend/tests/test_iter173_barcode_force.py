@@ -10,9 +10,11 @@ import pytest
 import requests
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://multi-tenant-scope.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASSWORD = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASSWORD = creds.ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")
@@ -167,7 +169,7 @@ class TestBarcodeRBAC:
         user_payload = {
             "email": f"TEST_iter173_{suffix}@example.com",
             "name": f"TEST iter173 {suffix}",
-            "password": "Test@5812!",
+            "password": creds.NEW_USER_PASSWORD,
             "role": "Staff",
         }
         cr = requests.post(f"{BASE_URL}/api/admin/users", headers=admin_headers, json=user_payload, timeout=20)

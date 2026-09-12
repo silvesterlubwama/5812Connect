@@ -11,11 +11,13 @@ import pytest
 from datetime import date
 from dotenv import load_dotenv
 
+import creds  # env-backed logins, see tests/creds.py
+
 load_dotenv("/app/frontend/.env")
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 
-ADMIN_EMAIL = "admin@5812uganda.org"
-ADMIN_PASS = "Admin@5812"
+ADMIN_EMAIL = creds.ADMIN_EMAIL
+ADMIN_PASS = creds.ADMIN_PASSWORD
 LOCATION_ID = "loc_001"
 
 

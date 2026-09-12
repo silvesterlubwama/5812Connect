@@ -11,6 +11,8 @@ import requests
 import os
 import uuid
 
+import creds  # env-backed logins, see tests/creds.py
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 class TestGoogleAuthSecurity:
@@ -40,14 +42,14 @@ class TestLoginSecurity:
     def test_login_with_valid_admin_credentials(self):
         """POST /api/auth/login with valid admin credentials should succeed"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert response.status_code == 200
         data = response.json()
         assert "token" in data
         assert "user" in data
-        assert data["user"]["email"] == "admin@5812uganda.org"
+        assert data["user"]["email"] == creds.ADMIN_EMAIL
         print("✓ Admin login successful")
     
     def test_login_with_invalid_credentials(self):
@@ -68,14 +70,14 @@ class TestLoginSecurity:
         reg_response = requests.post(f"{BASE_URL}/api/auth/register", json={
             "name": "Test Pending User",
             "email": unique_email,
-            "password": "TestPass123!"
+            "password": creds.CUSTOM_PASSWORD
         })
         
         if reg_response.status_code == 200:
             # Now try to login - should get 403 because user is pending
             login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
                 "identifier": unique_email,
-                "password": "TestPass123!"
+                "password": creds.CUSTOM_PASSWORD
             })
             assert login_response.status_code == 403
             data = login_response.json()
@@ -136,8 +138,8 @@ class TestAuthEndpoints:
         """GET /api/auth/me with valid token returns user data"""
         # Login first
         login_response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         assert login_response.status_code == 200
         token = login_response.json()["token"]
@@ -148,7 +150,7 @@ class TestAuthEndpoints:
         })
         assert response.status_code == 200
         data = response.json()
-        assert data["email"] == "admin@5812uganda.org"
+        assert data["email"] == creds.ADMIN_EMAIL
         print("✓ /api/auth/me returns user data with valid token")
     
     def test_logout_endpoint(self):
@@ -166,8 +168,8 @@ class TestProductsEndpoint:
     def auth_token(self):
         """Get admin auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -206,8 +208,8 @@ class TestSalesEndpoint:
     def auth_token(self):
         """Get admin auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
@@ -244,8 +246,8 @@ class TestPortalEndpoints:
     def auth_token(self):
         """Get admin auth token"""
         response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "identifier": "admin@5812uganda.org",
-            "password": "Admin@5812"
+            "identifier": creds.ADMIN_EMAIL,
+            "password": creds.ADMIN_PASSWORD
         })
         if response.status_code == 200:
             return response.json()["token"]
