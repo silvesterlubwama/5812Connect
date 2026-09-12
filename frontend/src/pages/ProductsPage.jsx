@@ -1090,15 +1090,24 @@ export default function ProductsPage() {
                           <td className="py-3"><Badge variant="outline" className="text-xs capitalize">{sale.payment_method}</Badge></td>
                           <td className="py-3">
                             {isPending ? (
-                              <Button size="sm" variant="outline" className="h-7 text-xs gap-1 border-amber-300 text-amber-700 hover:bg-amber-50" data-testid={`mark-paid-${sale.id}`} onClick={async (e) => {
-                                e.stopPropagation();
-                                const ref = window.prompt('Payment reference (transaction ID, optional):') || '';
-                                try {
-                                  await salesApi.setPaymentStatus(sale.id, 'paid', ref);
-                                  setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_status: 'paid', payment_reference: ref || s.payment_reference } : s));
-                                  toast.success('Marked as paid');
-                                } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-                              }}>Mark as Paid</Button>
+                              <div className="flex flex-col gap-1 items-start">
+                                {sale.online_payment_status === 'paid' && (
+                                  <Badge className="bg-violet-100 text-violet-700 hover:bg-violet-200 text-[10px]" data-testid={`paid-online-${sale.id}`}>
+                                    Paid online — awaiting confirmation
+                                  </Badge>
+                                )}
+                                <Button size="sm" variant="outline" className="h-7 text-xs gap-1 border-amber-300 text-amber-700 hover:bg-amber-50" data-testid={`mark-paid-${sale.id}`} onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const ref = sale.online_payment_status === 'paid'
+                                    ? (sale.payment_reference || '')
+                                    : (window.prompt('Payment reference (transaction ID, optional):') || '');
+                                  try {
+                                    await salesApi.setPaymentStatus(sale.id, 'paid', ref);
+                                    setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_status: 'paid', payment_reference: ref || s.payment_reference } : s));
+                                    toast.success('Marked as paid');
+                                  } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                                }}>{sale.online_payment_status === 'paid' ? 'Confirm' : 'Mark as Paid'}</Button>
+                              </div>
                             ) : (
                               <Badge className="bg-green-100 text-green-700 hover:bg-green-200 text-xs">Paid</Badge>
                             )}

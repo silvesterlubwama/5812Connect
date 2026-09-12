@@ -3,7 +3,7 @@ import { Ticket, Calendar, MapPin, CheckCircle2, XCircle, Clock, RefreshCw } fro
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { QRCode } from 'react-qrcode-logo';
+import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -63,13 +63,13 @@ export default function PortalTickets() {
           </div>
         </div>
         <div className="border-t sm:border-t-0 sm:border-l border-dashed border-border p-4 flex flex-col items-center justify-center bg-muted/30" data-testid={`ticket-qr-${t.ticket_id}`}>
-          <QRCode
+          <QRCodeSVG
             value={t.ticket_id}
             size={128}
-            qrStyle="dots"
-            eyeRadius={4}
+            bgColor="#ffffff"
             fgColor={t.status === 'used' || isPast(t) ? '#94a3b8' : '#0f172a'}
-            ecLevel="M"
+            level="M"
+            includeMargin={false}
           />
           <p className="text-[10px] text-muted-foreground mt-2">Show this at the door</p>
         </div>

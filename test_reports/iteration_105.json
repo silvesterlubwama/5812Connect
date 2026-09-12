@@ -1,0 +1,46 @@
+{
+  "summary": "iter345 Phase-2 (Finance robustness / Badge unification / Universal upload) tested end-to-end. Backend pytest 15/16 (1 skipped — receipt AI OCR returns ingress 502 on a 200-byte fake JPG; a real image works per prior curl proof). Frontend: (a) /financial Reports tab — switched dropdown between all 4 kinds in mixed orders (PnL→BS→TB→CF→PnL→BS) with NO crash, Export CSV present. (b) /financial Chart of Accounts: 21 drill-down buttons; dialog opens, opening/debits/credits/closing tiles + rows + prev/next paging visible, next-month is disabled on current month, prev-month refetches. Backend GET /api/finance/chart-of-accounts/{bogus}/ledger returns 404 ✓ and real endpoint returns opening_balance/total_debit/total_credit/closing_balance/rows keys. (c) /purchase-orders: clicked draft PO row (po-row-*), po-edit-btn AND po-print-btn visible; opened po-edit-dialog, po-edit-add-line worked (line count grew), po-edit-vendor-name fill + po-edit-save persisted the new vendor name (verified in detail view). GET /api/purchase-orders/{id}/pdf returns %PDF header ✓. PUT recompute total (subtotal + tax) verified via API test. (d) /portal/badge: portal-badge-card renders, QR is INLINE SVG (4 svgs, 0 canvas), footer contains '5812' and scrollHeight==clientHeight (no clipping). Save Image click produced a real 66,302-byte PNG download (previously blank). (e) /dashboard universal-upload-dialog: file 'receipt-jan.jpg' → 'Receipt / expense slip', 'term2-report-card.pdf' → 'School report card' with universal-upload-person picker, 'timesheet-sept.xlsx' → 'Timesheet workbook' with universal-upload-period field. universal-upload-kind override + universal-upload-confirm both present. (f) /portal/profile has BOTH portal-scan-receipt-input (capture) AND portal-upload-receipt-input (file). Backend endpoints /api/finance/reports/{pnl,balance-sheet,trial-balance,cashflow} all 200, /api/reports/summary 200, POST/generate/export xlsx for all 5 report_types 200 (attendance XLSX is a valid zip). /api/hr/timesheets/upload without ?period= correctly returns 400.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/finance/receipts/scan", "issue": "Ingress-level 502 when the AI OCR takes longer than the ~30s ingress timeout for tiny synthetic images. Real images succeed. Consider making the OCR call async or streaming an immediate 202 with a job id."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BankPage Accounts tab", "issue": "No bank-account-ledger-* Transactions buttons rendered on /bank Accounts tab even though GET /api/bank/accounts returns 2 seeded accounts (bnk_4af83f768f, bnk_ff6ae1a7c5). Expected the 'Transactions' button per review request. Needs verification whether it is filtered out by linked_account_id or a rendering issue.", "selector": "[data-testid^=\"bank-account-ledger-\"]", "priority": "MEDIUM"},
+      {"component": "UniversalUploadDialog", "issue": "React hydration warning: <Badge> renders a <div> inside a <p> at line 143-145 of UniversalUploadDialog.jsx (nested-<div>-in-<p>). Should wrap description in a <div> or make Badge inline.", "selector": "[data-testid=\"universal-upload-detected\"] p", "priority": "LOW"},
+      {"component": "UniversalUploadDialog", "issue": "When 'Timesheet workbook' is detected and Confirm is clicked with an empty universal-upload-period field, no visible inline error / toast is shown to the user (upload just silently fails). Review request requires an explicit validation message.", "selector": "[data-testid=\"universal-upload-confirm\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/portal/badge card", "issues": ["The badge card scrollHeight equals clientHeight (no CSS clipping) but at the actual 340x216 render the footer text ('ID / www.5812-Global.org / 58:12 GLOBAL — 2026') sits very close to the bottom edge; some low-DPI screens may still see visual crowding. Non-blocking; the review's key ask ('footer not clipped') passes."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter345_finance_po_badge_upload.py",
+    "/app/test_reports/pytest/iter345_finance.xml"
+  ],
+  "action_items": [
+    "Investigate why /bank Accounts tab does NOT render any bank-account-ledger-* Transactions buttons despite 2 bank accounts existing in DB — likely a client filter or the tab needs the linked_account_id join to hydrate first render.",
+    "Fix Timesheet-without-period silent failure in UniversalUploadDialog: block confirm and surface a visible error/toast when kind==timesheet && !period.",
+    "Fix DOM nesting: Badge (renders <div>) must not be a descendant of <p> in UniversalUploadDialog line 143-145 — swap the outer <p> for a <div>.",
+    "(Optional) Make /api/finance/receipts/scan return 202+job-id (background OCR) so ingress no longer 502's on slow images."
+  ],
+  "critical_code_review_comments": [
+    "Finance reports payload-tagging (__kind) works — no cross-report render crashes across all 4 kinds and repeated switches.",
+    "AccountLedgerDialog opening/closing math and paging plumbing look correct; next-month is properly gated to the current month.",
+    "PurchaseOrdersPage guarding of po-edit-btn to draft/submitted only is enforced client-side; backend PUT also rejects approved/received (per prior curl evidence). Good defense in depth.",
+    "UnifiedBadge switch from <canvas> to QRCodeSVG is confirmed in the DOM (4 svg, 0 canvas) — resolves the wallet/download blank-QR bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter345_finance_po_badge_upload.py (new)"
+  ],
+  "success_rate": {"backend": "94% (15/16 pytest; 1 skipped receipt-scan 502)", "frontend": "9/11 UI checks passed (bank ledger buttons missing; timesheet-no-period validation silent)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (see /app/memory/test_credentials.md)",
+  "seed_data_creation": "PO po_b98f585c33 vendor_name was edited to 'TEST_iter345 Vendor Edited' and one extra line was appended during the UI edit test; totals recomputed correctly. Main agent may revert if desired.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login MUST use data-testid=login-submit-button; page.get_by_role('button', name='Sign In') can hit stale button and cause silent redirect back to /login. Reports dropdown data-testid is 'reports-kind' and it IS a native <select> (select_option works). Coa drilldown accepts any account id, not just 1010 — the ledger response keys are opening_balance/total_debit/total_credit/closing_balance/rows (NOT opening/debits/credits/closing as the review request wording suggests). PO row selector is [data-testid^=po-row-] (Card, not tr). The bank ledger investigation likely needs to check whether the Accounts tab table hydrates from `accounts` state — API returns 2 rows so a UI render bug is the most likely cause.",
+  "rca of the issue": "Bank ledger buttons missing: candidate causes — (1) `accounts` state stays empty because /bank/accounts response is being wrapped or lost; (2) accounts tab body is only rendered when a selectedBankId is set but the map is over `accounts` (see BankPage.jsx line 340 area); (3) a permission gate hides the tab body. Recommended check: console.log accounts.length inside CoaPanel/Accounts tab render, or run `document.querySelectorAll('[data-testid^=bank-account-]')` in devtools while on /bank."
+}

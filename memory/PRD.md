@@ -8,6 +8,52 @@ kiosk check-ins, NFC badge issuance + PWA Wallet passes, guest passes,
 social work, sales/POS/shipments, and self-service user portal.
 
 
+## iter346 — Sub-location boards · Consumable sheet printing · Flutterwave online payments (2026-06)
+
+### DONE (tested — `/app/test_reports/iteration_106.json`, `backend/tests/test_iter346_flutterwave.py`)
+- **Leftover Phase-3 UI verified**: Banking account cards each render the
+  **Transactions** ledger drill-down (8/8 accounts, all with `linked_account_id`);
+  Universal Upload shows `universal-upload-error` for missing person / missing pay period.
+- **Sub-location boards were invisible**: sub-locations live in BOTH `db.locations`
+  (`parent_id`) and `db.sublocations` (`location_id`), but `deps.expand_descendants`
+  only walked the first — so any board/task/event bound to a finance-native
+  sub-location (e.g. "Test Kitchen") fell outside every campus scope. The walk now
+  unions both collections, and `boards._can_access_board` got the same fallback.
+  Verified: a board at a `db.sublocations`-only sub-location is now listed and
+  openable by an admin who did not create it.
+- **Consumables tracking sheet never printed**: `ResourcesPage` dynamically imported
+  `secureStorage` as a *default* export (the module only has a named export), so
+  `ss.getToken()` threw and the fetch never ran; even when it did, the
+  post-fetch `window.open` was outside the click gesture and got popup-blocked.
+  New `utils/printHtml.js` (`fetchAndPrint` → hidden iframe → `print()`), wired
+  into the Print Sheet button. Verified: HTML fetched, iframe spawned, no console errors.
+- **Flutterwave online payments (public shop)** — keys entered IN the app:
+  * `system_settings.payments` block (provider, enabled, mode, public/secret key,
+    webhook secret hash, currency, allow_card / allow_mobile_money /
+    allow_pay_on_collection). Masked on read exactly like the Resend key; the
+    non-secret subset is exposed on `GET /api/admin/system-settings/public` so the
+    public shop knows which buttons to show. Admin UI: System Console → Integrations
+    → **Online payments · Flutterwave** (shows the webhook URL to paste at Flutterwave).
+  * `routers/payments_flutterwave.py` — hosted Standard checkout (`POST /v3/payments`)
+    for card/bank and the Uganda MoMo charge (`POST /v3/charges?type=mobile_money_uganda`,
+    network MTN|AIRTEL). Callback params are never trusted: every settlement re-verifies
+    via `/v3/transactions/{id}/verify` and matches status + tx_ref + currency + amount.
+    Signed webhook (`flutterwave-signature` HMAC-SHA256 base64, legacy `verif-hash`
+    fallback) with per-event dedupe in `db.payment_webhook_events`.
+  * `POST /api/public/orders` takes `payment_option: online|collection`,
+    `online_method: card|mobile_money`, `network`. Online orders return a
+    `payment_url`; a failed provider handshake rolls the reservation back
+    (`_release_order` restores stock) so nothing is held hostage.
+  * A settled sale stays `payment_status: pending` on purpose and is flagged
+    `online_payment_status: paid` → Sales shows **"Paid online — awaiting staff
+    confirmation"** with a Confirm button; confirming is still what posts to the ledger.
+    Buyer gets a paid receipt, staff get an email + in-app notification.
+  * Shop cart UI: Pay now (card / mobile money + MTN/Airtel picker) vs Pay on
+    collection, inline error text, and a paid/failed banner after the redirect back.
+- **Still needed from the user**: paste real Flutterwave keys (test first) in
+  Integrations and set the webhook URL + secret hash in the Flutterwave dashboard.
+  Resend domain `5812-global.org` is still unverified, so order emails bounce.
+
 ## iter345 — Portal/member experience + notification & dashboard truth (2026-06)
 Phased execution of the user's 21-item mega-list (full list: `/app/memory/BACKLOG_iter345.md`).
 Agreed order: 1 Portal/member → 2 Notifications+Dashboard → 3 Finance → 4 Badges →

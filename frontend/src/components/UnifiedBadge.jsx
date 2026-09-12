@@ -3,7 +3,7 @@ import { Download, Printer, Smartphone, Wifi } from 'lucide-react';
 import { Button } from './ui/button';
 import DOMPurify from 'dompurify';
 import { toast } from 'sonner';
-import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
+import { QRCodeSVG } from 'qrcode.react';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 import { getCountryOutline } from './countryOutlines';
@@ -306,8 +306,12 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
     <div className="space-y-3">
       <div ref={badgeRef}>
         <div style={{
-          width: isSmall ? '240px' : '340px', height: isSmall ? '152px' : '216px',
-          borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+          width: isSmall ? '240px' : '340px',
+          // iter345 — was a hard height with overflow:hidden, which cropped the
+          // footer (ID / site / year) on the larger badge. minHeight keeps the
+          // card size while letting it grow rather than hide information.
+          minHeight: isSmall ? '152px' : '216px',
+          borderRadius: '12px', display: 'flex', flexDirection: 'column',
           background: bgColor, color: textColor, fontFamily: 'Arial, sans-serif',
           boxShadow: kioskMode ? '0 1px 4px rgba(0,0,0,0.12)' : '0 4px 12px rgba(0,0,0,0.3)',
           margin: '0 auto', position: 'relative',
@@ -443,14 +447,18 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
                 // bottom edge rather than the column's absolute bottom.
                 marginBottom: isSmall ? '4px' : '6px',
               }}>
-                <QRCodeLogo
-                  value={qrData}
-                  size={isSmall ? 168 : 220}
-                  style={{ width: isSmall ? '68px' : '92px', height: isSmall ? '68px' : '92px', imageRendering: 'pixelated' }}
+                {/* iter345 — SVG (not canvas) QR. A <canvas> QR is silently
+                    dropped when the badge is cloned for print / PNG export /
+                    wallet, which is why saved badges came out with no code.
+                    SVG survives every export path. */}
+                <QRCodeSVG
+                  value={qrData || 'N/A'}
+                  size={isSmall ? 68 : 92}
                   bgColor="#ffffff"
                   fgColor="#000000"
-                  ecLevel="M"
-                  qrStyle="squares"
+                  level="M"
+                  includeMargin={false}
+                  style={{ display: 'block', width: isSmall ? '68px' : '92px', height: isSmall ? '68px' : '92px' }}
                 />
               </div>
               {/* Photo — right-most, larger, `contain` so faces are
@@ -488,6 +496,8 @@ export function UnifiedBadge({ person, size = 'normal', showActions = true, kios
             background: footerBg, padding: isSmall ? '3px 10px' : '4px 14px',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             fontSize: isSmall ? '7px' : '8px', color: footerColor,
+            marginTop: 'auto', flexShrink: 0, gap: '6px',
+            borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px',
           }}>
             <span>ID: {badgeId}</span>
             <span style={{ fontWeight: 600 }}>www.5812-Global.org</span>

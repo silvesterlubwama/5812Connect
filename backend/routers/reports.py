@@ -277,7 +277,24 @@ async def export_report_xlsx(report_id: str, current_user: dict = Depends(get_cu
             ws.append(headers)
             for row in data[key]:
                 ws.append([str(row.get(h, "")) for h in headers])
-    if "Sheet" in wb.sheetnames:
+    # A report with no rows (e.g. attendance for a quiet week) used to leave a
+    # sheet-less workbook, which openpyxl refuses to save → HTTP 500. Always
+    # ship at least a summary sheet.
+    if len(wb.sheetnames) == 1 and "Sheet" in wb.sheetnames:
+        ws = wb["Sheet"]
+        ws.title = "Summary"
+        ws.append([report.get("title") or "Report", report.get("type") or ""])
+        ws.append(["Generated", str(report.get("generated_at") or "")])
+        ws.append([])
+        ws.append(["Section", "Rows"])
+        for key, val in data.items():
+            if isinstance(val, list):
+                ws.append([key, len(val)])
+            elif not isinstance(val, dict):
+                ws.append([key, str(val)])
+        ws.append([])
+        ws.append(["No detail rows matched this report's filters."])
+    elif "Sheet" in wb.sheetnames:
         del wb["Sheet"]
     buf = BytesIO()
     wb.save(buf); buf.seek(0)

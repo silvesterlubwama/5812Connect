@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
+import { QRCodeSVG } from 'qrcode.react';
 import { Button } from './ui/button';
 import { Printer } from 'lucide-react';
 import DOMPurify from 'dompurify';
@@ -104,14 +104,14 @@ export function StaffBadge({ user, kioskMode = false }) {
                   survive badge-printer rasterisation. Higher-density
                   canvas (192px) that we render at 84px CSS keeps the
                   code crisp at 300dpi print. */}
-              <QRCodeLogo
+              <QRCodeSVG
                 value={user.id || 'N/A'}
-                size={192}
-                style={{ width: '84px', height: '84px', imageRendering: 'pixelated' }}
+                size={84}
                 bgColor="#ffffff"
                 fgColor="#000000"
-                ecLevel="M"
-                qrStyle="squares"
+                level="M"
+                includeMargin={false}
+                style={{ display: 'block' }}
               />
               {/* Photo — separate, 2mm smaller than before (84 → 76 wide,
                   108 → 100 tall). Never overlaps the QR. */}
@@ -161,7 +161,7 @@ export function ParentBadge({ parent, children: childList, kioskMode = false }) 
           </div>
           <div style={{ flex: 1, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
             <div style={{ flexShrink: 0, borderRadius: '8px', overflow: 'hidden', background: '#ffffff', padding: '2px' }}>
-              <QRCodeLogo value={parent.id || parent.phone || 'N/A'} size={144} style={{ width: '68px', height: '68px', imageRendering: 'pixelated' }} bgColor="#ffffff" fgColor="#000000" ecLevel="M" qrStyle="squares" />
+              <QRCodeSVG value={parent.id || parent.phone || 'N/A'} size={68} bgColor="#ffffff" fgColor="#000000" level="M" includeMargin={false} style={{ display: 'block' }} />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: textColor }}>{parent.name}</div>
@@ -229,14 +229,14 @@ export function ChildTag({ child, parentPhone, eventName, locationName, kioskMod
               {/* iter 341 — split QR/photo. QR is always readable
                   (white bg, black fg, `squares`, higher-density canvas
                   scaled down) and NEVER embeds the photo. */}
-              <QRCodeLogo
+              <QRCodeSVG
                 value={child.id || 'N/A'}
-                size={168}
-                style={{ width: '72px', height: '72px', imageRendering: 'pixelated' }}
+                size={72}
                 bgColor="#ffffff"
                 fgColor="#000000"
-                ecLevel="M"
-                qrStyle="squares"
+                level="M"
+                includeMargin={false}
+                style={{ display: 'block' }}
               />
               <div style={{ width: '62px', height: '80px', borderRadius: '6px', overflow: 'hidden', background: kioskMode ? '#f0f0f5' : 'rgba(255,255,255,0.08)', border: `2px solid ${kioskMode ? '#1a1a2e' : '#a78bfa'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 <img

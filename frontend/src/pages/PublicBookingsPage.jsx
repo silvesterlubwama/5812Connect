@@ -59,6 +59,33 @@ export default function PublicBookingsPage() {
   const [shopCart, setShopCart] = useState([]);
   const [shopImageIdx, setShopImageIdx] = useState({});
   const [shopOrder, setShopOrder] = useState({ name: '', email: '', phone: '', payment_method: 'card' });
+  const [payCfg, setPayCfg] = useState(null);
+  const [payOption, setPayOption] = useState('collection');
+  const [onlineMethod, setOnlineMethod] = useState('card');
+  const [momoNetwork, setMomoNetwork] = useState('MTN');
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [shopError, setShopError] = useState('');
+  const [payResult, setPayResult] = useState(null);
+
+  // Which checkout buttons to show + the outcome banner after a redirect back.
+  useEffect(() => {
+    fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/system-settings/public`)
+      .then(r => r.json())
+      .then(d => {
+        const p = d?.payments || {};
+        setPayCfg(p);
+        if (p.online_enabled) setPayOption('online');
+        if (p.online_enabled && !p.allow_card && p.allow_mobile_money) setOnlineMethod('mobile_money');
+      })
+      .catch(() => setPayCfg({ online_enabled: false, allow_pay_on_collection: true }));
+
+    const q = new URLSearchParams(window.location.search);
+    const status = q.get('payment');
+    if (status) {
+      setPayResult({ status, order: q.get('order') || '' });
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   // Auto-detect country
   useEffect(() => {
@@ -305,7 +332,7 @@ export default function PublicBookingsPage() {
           </div>
         </div>
 
-        <Tabs defaultValue="events" className="space-y-6">
+        <Tabs defaultValue={new URLSearchParams(window.location.search).get('tab') === 'shop' || new URLSearchParams(window.location.search).get('payment') ? 'shop' : 'events'} className="space-y-6">
           <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 h-auto gap-1">
             <TabsTrigger value="events" className="gap-1.5 text-xs sm:text-sm"><Ticket size={15} />Events</TabsTrigger>
             <TabsTrigger value="shop" className="gap-1.5 text-xs sm:text-sm"><ShoppingCart size={15} />Shop</TabsTrigger>
@@ -369,6 +396,23 @@ export default function PublicBookingsPage() {
 
           {/* SHOP TAB */}
           <TabsContent value="shop">
+            {payResult && (
+              <Card className={`rounded-xl mb-5 border-2 ${payResult.status === 'paid' ? 'border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/20' : 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/20'}`} data-testid="shop-payment-result">
+                <CardContent className="p-4 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-semibold text-sm">
+                      {payResult.status === 'paid' ? 'Payment received — thank you!' : "We couldn't confirm that payment"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {payResult.status === 'paid'
+                        ? `Order ${payResult.order} is reserved and a receipt is on its way to your email. Our team will confirm collection.`
+                        : `Nothing was charged${payResult.order ? ` for order ${payResult.order}` : ''}. You can try again, or choose "Pay on collection".`}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setPayResult(null)} data-testid="shop-payment-result-dismiss">Dismiss</Button>
+                </CardContent>
+              </Card>
+            )}
             {loading ? (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">{[1,2,3].map(i => <div key={i} className="h-48 bg-card border rounded-xl animate-pulse" />)}</div>
             ) : shopProducts.length === 0 ? (
@@ -435,13 +479,86 @@ export default function PublicBookingsPage() {
                   ))}
                   <div className="flex justify-between font-bold mt-2 pt-2 border-t"><span>Total</span><span>{shopCart.reduce((s, c) => s + c.price * c.quantity, 0).toLocaleString()}</span></div>
                   <div className="space-y-2 mt-3">
-                    <Input placeholder="Your name" value={shopOrder.name} onChange={e => setShopOrder({...shopOrder, name: e.target.value})} />
-                    <Input placeholder="Email" value={shopOrder.email} onChange={e => setShopOrder({...shopOrder, email: e.target.value})} />
-                    <Button className="w-full" onClick={async () => {
-                      if (!shopOrder.name || !shopOrder.email) { toast.error('Name and email required'); return; }
-                      try { const r = await publicApi.createOrder({ ...shopOrder, items: shopCart }); toast.success(`Order placed! ID: ${r.data.id}`); setShopCart([]); }
-                      catch { toast.error('Order failed'); }
-                    }}>Place Order</Button>
+                    <Input placeholder="Your name" value={shopOrder.name} onChange={e => setShopOrder({...shopOrder, name: e.target.value})} data-testid="shop-name-input" />
+                    <Input placeholder="Email" value={shopOrder.email} onChange={e => setShopOrder({...shopOrder, email: e.target.value})} data-testid="shop-email-input" />
+                    <Input placeholder="Phone (needed for mobile money)" value={shopOrder.phone} onChange={e => setShopOrder({...shopOrder, phone: e.target.value})} data-testid="shop-phone-input" />
+
+                    {/* How do you want to pay? */}
+                    <div className="rounded-lg border p-2.5 space-y-2" data-testid="shop-payment-options">
+                      {payCfg?.online_enabled && (
+                        <label className="flex items-start gap-2 text-sm cursor-pointer">
+                          <input type="radio" className="mt-1" checked={payOption === 'online'} onChange={() => setPayOption('online')} data-testid="shop-pay-online-radio" />
+                          <span>
+                            <span className="font-medium">Pay now</span>
+                            <span className="block text-[11px] text-muted-foreground">Secure checkout — card or mobile money</span>
+                          </span>
+                        </label>
+                      )}
+                      {payCfg?.allow_pay_on_collection !== false && (
+                        <label className="flex items-start gap-2 text-sm cursor-pointer">
+                          <input type="radio" className="mt-1" checked={payOption === 'collection'} onChange={() => setPayOption('collection')} data-testid="shop-pay-collection-radio" />
+                          <span>
+                            <span className="font-medium">Pay on collection</span>
+                            <span className="block text-[11px] text-muted-foreground">We reserve your items and email you to arrange payment</span>
+                          </span>
+                        </label>
+                      )}
+                      {payOption === 'online' && (
+                        <div className="pl-5 space-y-2 pt-1 border-t">
+                          {payCfg?.allow_card !== false && (
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input type="radio" checked={onlineMethod === 'card'} onChange={() => setOnlineMethod('card')} data-testid="shop-method-card-radio" />
+                              Card / bank
+                            </label>
+                          )}
+                          {payCfg?.allow_mobile_money !== false && (
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input type="radio" checked={onlineMethod === 'mobile_money'} onChange={() => setOnlineMethod('mobile_money')} data-testid="shop-method-momo-radio" />
+                              Mobile money
+                            </label>
+                          )}
+                          {onlineMethod === 'mobile_money' && (
+                            <div className="flex gap-2 pt-1">
+                              {['MTN', 'AIRTEL'].map(n => (
+                                <Button key={n} type="button" size="sm" variant={momoNetwork === n ? 'default' : 'outline'} className="h-7 text-xs flex-1" onClick={() => setMomoNetwork(n)} data-testid={`shop-network-${n.toLowerCase()}`}>{n === 'MTN' ? 'MTN MoMo' : 'Airtel Money'}</Button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <Button className="w-full" disabled={placingOrder} onClick={async () => {
+                      if (!shopOrder.name || !shopOrder.email) { setShopError('Name and email are required'); toast.error('Name and email required'); return; }
+                      if (payOption === 'online' && onlineMethod === 'mobile_money' && !shopOrder.phone) { setShopError('Mobile money needs your phone number'); toast.error('Mobile money needs your phone number'); return; }
+                      setPlacingOrder(true);
+                      setShopError('');
+                      try {
+                        const r = await publicApi.createOrder({
+                          ...shopOrder, items: shopCart,
+                          payment_option: payOption,
+                          online_method: payOption === 'online' ? onlineMethod : undefined,
+                          network: payOption === 'online' && onlineMethod === 'mobile_money' ? momoNetwork : undefined,
+                        });
+                        if (r.data.payment_url) {
+                          toast.success('Taking you to the payment page…');
+                          window.location.assign(r.data.payment_url);
+                          return;
+                        }
+                        toast.success(`Order placed! Ref: ${r.data.receipt_number || r.data.id}`);
+                        setShopCart([]);
+                      } catch (e) {
+                        const msg = e.response?.data?.detail
+                          || (payOption === 'online'
+                            ? "We couldn't reach the payment provider. Nothing was charged — try again, or choose \"Pay on collection\"."
+                            : 'Order failed — please try again.');
+                        setShopError(typeof msg === 'string' ? msg : 'Order failed');
+                        toast.error(typeof msg === 'string' ? msg : 'Order failed', { duration: 9000 });
+                      } finally { setPlacingOrder(false); }
+                    }} data-testid="shop-place-order-btn">
+                      {placingOrder ? 'Working…' : payOption === 'online' ? 'Pay now' : 'Place order'}
+                    </Button>
+                    {shopError && <p className="text-sm text-destructive" data-testid="shop-order-error">{shopError}</p>}
                   </div>
                 </CardContent>
               </Card>

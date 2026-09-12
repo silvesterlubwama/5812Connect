@@ -8,7 +8,7 @@
  * "Send test email" verifies the config end-to-end before saving.
  */
 import React, { useEffect, useState } from 'react';
-import { Settings2, Mail, Bug, Globe, Eye, EyeOff, Send, CheckCircle2 } from 'lucide-react';
+import { Settings2, Mail, Bug, Globe, Eye, EyeOff, Send, CheckCircle2, CreditCard } from 'lucide-react';
 import api from '../services/api';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from 'sonner';
 
 export default function IntegrationsManager() {
+  const webhookUrl = `${process.env.REACT_APP_BACKEND_URL || ''}/api/payments/flutterwave/webhook`;
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -29,6 +30,7 @@ export default function IntegrationsManager() {
   const [emailDraft, setEmailDraft] = useState({});
   const [sentryDraft, setSentryDraft] = useState({});
   const [orgDraft, setOrgDraft] = useState({});
+  const [payDraft, setPayDraft] = useState({});
 
   const load = async () => {
     setLoading(true);
@@ -56,6 +58,18 @@ export default function IntegrationsManager() {
       setOrgDraft({
         primary_country: r.data?.org?.primary_country || 'Uganda',
         primary_currency: r.data?.org?.primary_currency || 'UGX',
+      });
+      setPayDraft({
+        enabled: r.data?.payments?.enabled || false,
+        mode: r.data?.payments?.mode || 'test',
+        currency: r.data?.payments?.currency || 'UGX',
+        allow_card: r.data?.payments?.allow_card !== false,
+        allow_mobile_money: r.data?.payments?.allow_mobile_money !== false,
+        allow_pay_on_collection: r.data?.payments?.allow_pay_on_collection !== false,
+        checkout_title: r.data?.payments?.checkout_title || '58:12 Global Shop',
+        public_key: '',
+        secret_key: '',
+        webhook_hash: '',
       });
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to load settings');
@@ -96,6 +110,19 @@ export default function IntegrationsManager() {
     try {
       await api.put('/admin/system-settings', { org: { ...orgDraft } });
       toast.success('Organisation settings saved');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Save failed');
+    } finally { setSaving(false); }
+  };
+
+  const savePayments = async () => {
+    setSaving(true);
+    try {
+      const payload = { payments: { ...payDraft } };
+      ['public_key', 'secret_key', 'webhook_hash'].forEach(k => { if (!payDraft[k]) delete payload.payments[k]; });
+      await api.put('/admin/system-settings', payload);
+      toast.success('Payment settings saved');
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Save failed');
@@ -234,6 +261,70 @@ export default function IntegrationsManager() {
                 </div>
                 <Button onClick={saveSentry} disabled={saving} data-testid="sentry-save-btn">{saving ? 'Saving…' : 'Save'}</Button>
                 <p className="text-[10px] text-muted-foreground italic">Sentry reads its config on backend boot — restart the backend (or wait for the next deploy) for changes to take effect.</p>
+              </section>
+
+              {/* ONLINE PAYMENTS (Flutterwave) */}
+              <section className="space-y-3 p-3 rounded-lg border" data-testid="integrations-payments-section">
+                <h3 className="text-sm font-semibold flex items-center gap-2"><CreditCard size={14} className="text-violet-600" /> Online payments · Flutterwave
+                  {settings.payments?.secret_key_set
+                    ? <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Configured</Badge>
+                    : <Badge variant="outline" className="text-[10px]">Not configured</Badge>}
+                  {settings.payments?.enabled && settings.payments?.secret_key_set && (
+                    <Badge className="bg-violet-100 text-violet-700 text-[10px]">{payDraft.mode === 'live' ? 'LIVE' : 'Test mode'}</Badge>
+                  )}
+                </h3>
+                <p className="text-[11px] text-muted-foreground">
+                  Lets shoppers pay by card or MTN / Airtel mobile money on the public Shop. Paid orders arrive in
+                  Sales flagged <strong>Paid online — awaiting staff confirmation</strong>; confirming there is still what posts to the ledger.
+                </p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={payDraft.enabled} onChange={e => setPayDraft({ ...payDraft, enabled: e.target.checked })} data-testid="payments-enabled-toggle" />
+                  Accept payments online
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Mode</Label>
+                    <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={payDraft.mode} onChange={e => setPayDraft({ ...payDraft, mode: e.target.value })} data-testid="payments-mode-select">
+                      <option value="test">Test keys (FLWSECK_TEST…)</option>
+                      <option value="live">Live keys</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Currency</Label>
+                    <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={payDraft.currency} onChange={e => setPayDraft({ ...payDraft, currency: e.target.value })} data-testid="payments-currency-select">
+                      {['UGX', 'KES', 'TZS', 'RWF', 'NGN', 'GHS', 'ZAR', 'USD'].map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs flex items-center gap-2">Public key
+                    {settings.payments?.public_key_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.public_key_masked}</span>}
+                  </Label>
+                  <Input value={payDraft.public_key} onChange={e => setPayDraft({ ...payDraft, public_key: e.target.value })} placeholder={settings.payments?.public_key_set ? 'Leave blank to keep current' : 'FLWPUBK_TEST-...'} data-testid="payments-public-key-input" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs flex items-center gap-2">Secret key
+                    {settings.payments?.secret_key_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.secret_key_masked}</span>}
+                  </Label>
+                  <Input type="password" value={payDraft.secret_key} onChange={e => setPayDraft({ ...payDraft, secret_key: e.target.value })} placeholder={settings.payments?.secret_key_set ? 'Leave blank to keep current' : 'FLWSECK_TEST-...'} data-testid="payments-secret-key-input" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs flex items-center gap-2">Webhook secret hash
+                    {settings.payments?.webhook_hash_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.webhook_hash_masked}</span>}
+                  </Label>
+                  <Input type="password" value={payDraft.webhook_hash} onChange={e => setPayDraft({ ...payDraft, webhook_hash: e.target.value })} placeholder={settings.payments?.webhook_hash_set ? 'Leave blank to keep current' : 'Any long random string'} data-testid="payments-webhook-hash-input" />
+                  <p className="text-[10px] text-muted-foreground">
+                    Paste the same value into Flutterwave → Settings → Webhooks, with URL{' '}
+                    <code className="break-all">{webhookUrl}</code>
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-1.5">
+                  <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_card} onChange={e => setPayDraft({ ...payDraft, allow_card: e.target.checked })} data-testid="payments-allow-card-toggle" /> Offer card / bank checkout</label>
+                  <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_mobile_money} onChange={e => setPayDraft({ ...payDraft, allow_mobile_money: e.target.checked })} data-testid="payments-allow-momo-toggle" /> Offer MTN / Airtel mobile money</label>
+                  <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_pay_on_collection} onChange={e => setPayDraft({ ...payDraft, allow_pay_on_collection: e.target.checked })} data-testid="payments-allow-collection-toggle" /> Allow "pay on collection" orders</label>
+                </div>
+                <Button onClick={savePayments} disabled={saving} data-testid="payments-save-btn">{saving ? 'Saving…' : 'Save payment settings'}</Button>
+                <p className="text-[10px] text-muted-foreground">Keys live at <a href="https://dashboard.flutterwave.com/settings/apis" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">dashboard.flutterwave.com → Settings → API Keys</a>. Start with test keys.</p>
               </section>
 
               {/* ORG */}

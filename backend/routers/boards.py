@@ -50,6 +50,10 @@ async def _can_access_board(board: dict, user: dict) -> bool:
     loc = await db.locations.find_one({"id": board_loc}, {"_id": 0, "parent_id": 1})
     if loc and loc.get("parent_id") in user_locs:
         return True
+    # Sub-locations that only exist in db.sublocations (finance-native)
+    sub = await db.sublocations.find_one({"id": board_loc}, {"_id": 0, "location_id": 1})
+    if sub and sub.get("location_id") in user_locs:
+        return True
     return False
 
 

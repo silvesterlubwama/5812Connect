@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2, ShieldCheck, ShieldX, MapPin } from 'lucide-react';
+import { Users, Calendar, CheckSquare, UserCheck, TrendingUp, TrendingDown, ArrowRight, AlertCircle, RefreshCw, DollarSign, ShoppingCart, Banknote, Baby, Heart, Zap, Building2, ShieldCheck, ShieldX, MapPin, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -10,6 +10,7 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import UniversalUploadDialog from '../components/UniversalUploadDialog';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import DirectorDigestWidget from '../components/DirectorDigestWidget';
 
@@ -46,6 +47,7 @@ export default function DashboardPage() {
   const [loadingStats, setLoadingStats] = useState(true);
   const [deptData, setDeptData] = useState([]);
   const [actionItems, setActionItems] = useState(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
   // Scope label — the numbers follow the sidebar campus switcher
   // (`active_campus_id`, honoured server-side by get_campus_filter).
   const [scopeLabel, setScopeLabel] = useState('All my campuses');
@@ -217,6 +219,7 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button size="sm" className="gap-1.5" onClick={() => setUploadOpen(true)} data-testid="dashboard-upload-btn"><Upload size={14} /> Upload</Button>
           <Button variant="outline" size="sm" onClick={fetchAll} data-testid="dashboard-refresh"><RefreshCw size={14} /></Button>
         </div>
       </div>
@@ -432,6 +435,7 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+      <UniversalUploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </div>
   );
 }

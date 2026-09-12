@@ -54,6 +54,9 @@ export default function ReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  // A report of one shape must never render under another type's table.
+  useEffect(() => { setReport(null); }, [reportType]);
+
   const fetchReport = async () => {
     setLoading(true);
     setReport(null);

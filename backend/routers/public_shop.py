@@ -13,7 +13,7 @@ untrusted input.
 Online orders land as `payment_status: pending` for staff to confirm, so no
 money hits the ledger until someone actually collects it.
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -77,12 +77,23 @@ async def public_products(country: Optional[str] = Query(None)):
 
 
 @router.post("/orders")
-async def public_create_order(data: dict):
-    """Place an online order. Totals are recomputed server-side."""
+async def public_create_order(data: dict, request: Request):
+    """Place an online order. Totals are recomputed server-side.
+
+    `payment_option`:
+      • `collection` (default) — order lands pending, staff arrange payment.
+      • `online` — same sale, then a Flutterwave checkout URL is returned for
+        the buyer to pay immediately (`online_method`: card | mobile_money).
+    """
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip()
     phone = (data.get("phone") or "").strip()
     items = data.get("items") or []
+    payment_option = (data.get("payment_option") or "collection").strip().lower()
+    online_method = (data.get("online_method") or "card").strip().lower()
+    network = (data.get("network") or "").strip().upper()
+    if payment_option not in ("collection", "online"):
+        raise HTTPException(status_code=400, detail="Choose pay now or pay on collection")
     if not name or not email:
         raise HTTPException(status_code=400, detail="Name and email are required")
     if "@" not in email or len(email) > 200:
@@ -126,10 +137,29 @@ async def public_create_order(data: dict):
             "qty": qty, "units_per_pack": int(prod.get("units_per_pack") or 1),
         })
 
+    # Fail BEFORE we reserve stock if the buyer picked a method we can't take.
+    if payment_option == "collection":
+        from routers.payments_flutterwave import _cfg as _pay_cfg
+        if not (await _pay_cfg(require_keys=False)).get("allow_pay_on_collection", True):
+            raise HTTPException(status_code=400, detail="Orders must be paid online")
+    if payment_option == "online":
+        if online_method not in ("card", "mobile_money"):
+            raise HTTPException(status_code=400, detail="Choose card or mobile money")
+        from routers.payments_flutterwave import _cfg as _pay_cfg
+        pay_cfg = await _pay_cfg()
+        if online_method == "card" and not pay_cfg.get("allow_card", True):
+            raise HTTPException(status_code=400, detail="Card payment is switched off")
+        if online_method == "mobile_money":
+            if not pay_cfg.get("allow_mobile_money", True):
+                raise HTTPException(status_code=400, detail="Mobile money is switched off")
+            if not phone or network not in ("MTN", "AIRTEL"):
+                raise HTTPException(status_code=400, detail="Enter your mobile money number and pick MTN or Airtel")
+
     # Reuse the POS path so an online order is a first-class sale.
     from routers.sales import SaleCreate, create_sale
     payload = SaleCreate(
-        items=sale_items, total=round(total, 2), payment_method="online",
+        items=sale_items, total=round(total, 2),
+        payment_method="mobile_money" if (payment_option == "online" and online_method == "mobile_money") else "online",
         customer_name=name, customer_phone=phone, location_id=location_id,
         notes=f"Online order · {email}" + (f" · {data.get('notes')}" if data.get("notes") else ""),
     )
@@ -142,10 +172,35 @@ async def public_create_order(data: dict):
         await db.sales.update_one(
             {"id": sale["id"]},
             {"$set": {"channel": "online", "customer_email": email,
-                      "online_order_at": datetime.now(timezone.utc).isoformat()}},
+                      "online_order_at": datetime.now(timezone.utc).isoformat(),
+                      "payment_option": payment_option}},
         )
     except Exception as ex:
         logger.warning(f"online order {sale.get('id')} tagging skipped: {ex}")
+
+    if payment_option == "online":
+        from routers.payments_flutterwave import init_payment
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if not origin:
+            ref_hdr = request.headers.get("referer") or ""
+            origin = "/".join(ref_hdr.split("/")[:3]) if ref_hdr.startswith("http") else ""
+        try:
+            init = await init_payment(
+                sale, email=email, name=name, phone=phone,
+                method=online_method, network=network, origin=origin,
+            )
+        except HTTPException:
+            # The provider never gave us a checkout link — drop the reservation
+            # so stock isn't held hostage by a failed handshake.
+            await _release_order(sale)
+            raise
+        return {
+            "id": sale["id"], "receipt_number": sale.get("receipt_number"),
+            "total": sale.get("total"), "currency": init["currency"],
+            "payment_status": sale.get("payment_status"),
+            "payment_url": init["payment_url"], "tx_ref": init["tx_ref"],
+            "message": "Redirecting you to a secure payment page…",
+        }
 
     await _notify_order(sale, name, email, phone, sale_items, currency or "UGX")
 
@@ -157,8 +212,28 @@ async def public_create_order(data: dict):
     }
 
 
-def _money(currency: str, amount) -> str:
-    return f"{currency} {float(amount or 0):,.0f}"
+async def _release_order(sale: dict):
+    """Undo a reservation: delete the sale row and hand the stock back."""
+    try:
+        await db.sales.delete_one({"id": sale["id"]})
+        for item in (sale.get("items") or []):
+            pid = item.get("product_id")
+            if not pid:
+                continue
+            qty = int(item.get("qty") or 1)
+            base_units = qty * max(1, int(item.get("units_per_pack") or 1))
+            if item.get("variant_id"):
+                await db.products.update_one(
+                    {"id": pid, "variants.id": item["variant_id"]},
+                    {"$inc": {"variants.$.stock": qty, "stock": base_units}},
+                )
+            else:
+                await db.products.update_one({"id": pid}, {"$inc": {"stock": base_units}})
+    except Exception as ex:
+        logger.warning(f"failed to release order {sale.get('id')}: {ex}")
+
+
+def _money(currency: str, amount) -> str:    return f"{currency} {float(amount or 0):,.0f}"
 
 
 async def _notify_order(sale: dict, name: str, email: str, phone: str, items: list, currency: str):

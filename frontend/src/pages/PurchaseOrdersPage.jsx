@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, FileText, Check, X, Send, Package, DollarSign } from 'lucide-react';
+import { Plus, Trash2, FileText, Check, X, Send, Package, DollarSign, Pencil, Printer } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -30,6 +30,8 @@ export default function PurchaseOrdersPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [openPo, setOpenPo] = useState(null);
+  const [editPo, setEditPo] = useState(null);   // draft/submitted POs are fully editable
+  const [savingEdit, setSavingEdit] = useState(false);
   const [vendors, setVendors] = useState([]);
   const [locations, setLocations] = useState([]);
   const [form, setForm] = useState({
@@ -101,6 +103,51 @@ export default function PurchaseOrdersPage() {
       toast.success('Deleted');
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  // Drafts (and submitted POs) are fully editable — vendor, dates, notes,
+  // tax and every line item. The backend recomputes subtotal/total.
+  const startEdit = (po) => setEditPo({
+    ...po,
+    lines: (po.lines || []).map(l => ({ ...l })),
+  });
+
+  const saveEdit = async () => {
+    if (!editPo) return;
+    const lines = (editPo.lines || []).filter(l => (l.description || '').trim());
+    if (!lines.length) { toast.error('Add at least one line item'); return; }
+    setSavingEdit(true);
+    try {
+      const res = await purchaseOrdersApi.update(editPo.id, {
+        vendor_id: editPo.vendor_id || null,
+        vendor_name: editPo.vendor_name || '',
+        delivery_date: editPo.delivery_date || '',
+        notes: editPo.notes || '',
+        currency: editPo.currency || 'UGX',
+        tax: Number(editPo.tax) || 0,
+        lines: lines.map(l => ({
+          description: l.description, qty: Number(l.qty) || 0,
+          unit: l.unit || 'ea', unit_price: Number(l.unit_price) || 0,
+          account_id: l.account_id || '', received_qty: l.received_qty || 0,
+        })),
+      });
+      toast.success('Purchase order updated');
+      setEditPo(null);
+      setOpenPo(res.data);
+      fetchAll();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not save the purchase order'); }
+    finally { setSavingEdit(false); }
+  };
+
+  // Printable PO on the org letterhead (logo + org + campus name).
+  const printPo = async (po) => {
+    try {
+      const res = await api.get(`/purchase-orders/${po.id}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const w = window.open(url, '_blank');
+      if (!w) { const a = document.createElement('a'); a.href = url; a.download = `${po.po_number}.pdf`; a.click(); }
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { toast.error('Could not generate the PDF'); }
   };
 
   const nextActions = (status) => {
@@ -232,9 +279,82 @@ export default function PurchaseOrdersPage() {
                 const Icon = a.icon;
                 return <Button key={a.to} variant={a.variant || 'default'} size="sm" onClick={() => transition(openPo.id, a.to)} className="gap-1" data-testid={`po-${a.to}-btn`}><Icon size={13} />{a.label}</Button>;
               })}
+              {(openPo.status === 'draft' || openPo.status === 'submitted') && <Button variant="outline" size="sm" className="gap-1" onClick={() => startEdit(openPo)} data-testid="po-edit-btn"><Pencil size={13} />Edit</Button>}
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => printPo(openPo)} data-testid="po-print-btn"><Printer size={13} />Print / PDF</Button>
               {(openPo.status === 'draft' || openPo.status === 'cancelled') && <Button variant="ghost" size="sm" className="text-destructive gap-1" onClick={() => { deletePo(openPo.id); setOpenPo(null); }}><Trash2 size={13} />Delete</Button>}
               <div className="flex-1" />
               <Button variant="outline" size="sm" onClick={() => setOpenPo(null)}>Close</Button>
+            </div>
+          </>}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit PO (draft / submitted) */}
+      <Dialog open={!!editPo} onOpenChange={o => { if (!o) setEditPo(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="po-edit-dialog">
+          {editPo && <>
+            <DialogHeader>
+              <DialogTitle>Edit {editPo.po_number}</DialogTitle>
+              <DialogDescription>Change anything while the order is a draft or awaiting approval.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Vendor</Label>
+                  <Select value={editPo.vendor_id || '__manual__'} onValueChange={v => {
+                    if (v === '__manual__') { setEditPo({ ...editPo, vendor_id: '' }); return; }
+                    const ven = vendors.find(x => x.id === v);
+                    setEditPo({ ...editPo, vendor_id: v, vendor_name: ven?.name || editPo.vendor_name });
+                  }}>
+                    <SelectTrigger data-testid="po-edit-vendor"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__manual__">Type a name</SelectItem>
+                      {vendors.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Input value={editPo.vendor_name || ''} onChange={e => setEditPo({ ...editPo, vendor_name: e.target.value })} placeholder="Vendor name" data-testid="po-edit-vendor-name" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Delivery by</Label>
+                  <Input type="date" value={editPo.delivery_date || ''} onChange={e => setEditPo({ ...editPo, delivery_date: e.target.value })} data-testid="po-edit-delivery" />
+                  <Label className="pt-1 block">Tax</Label>
+                  <Input type="number" step="any" value={editPo.tax ?? 0} onChange={e => setEditPo({ ...editPo, tax: e.target.value })} data-testid="po-edit-tax" />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Line items</Label>
+                {(editPo.lines || []).map((l, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-2 items-center" data-testid={`po-edit-line-${i}`}>
+                    <Input className="col-span-5" value={l.description || ''} placeholder="Description" onChange={e => {
+                      const lines = [...editPo.lines]; lines[i] = { ...l, description: e.target.value }; setEditPo({ ...editPo, lines });
+                    }} data-testid={`po-edit-line-desc-${i}`} />
+                    <Input className="col-span-2" type="number" step="any" value={l.qty ?? 1} placeholder="Qty" onChange={e => {
+                      const lines = [...editPo.lines]; lines[i] = { ...l, qty: e.target.value }; setEditPo({ ...editPo, lines });
+                    }} data-testid={`po-edit-line-qty-${i}`} />
+                    <Input className="col-span-2" value={l.unit || 'ea'} placeholder="Unit" onChange={e => {
+                      const lines = [...editPo.lines]; lines[i] = { ...l, unit: e.target.value }; setEditPo({ ...editPo, lines });
+                    }} />
+                    <Input className="col-span-2" type="number" step="any" value={l.unit_price ?? 0} placeholder="Unit price" onChange={e => {
+                      const lines = [...editPo.lines]; lines[i] = { ...l, unit_price: e.target.value }; setEditPo({ ...editPo, lines });
+                    }} data-testid={`po-edit-line-price-${i}`} />
+                    <Button variant="ghost" size="sm" className="col-span-1 text-destructive px-0" onClick={() => {
+                      setEditPo({ ...editPo, lines: editPo.lines.filter((_, x) => x !== i) });
+                    }} data-testid={`po-edit-line-remove-${i}`}><Trash2 size={13} /></Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" className="gap-1" onClick={() => setEditPo({ ...editPo, lines: [...(editPo.lines || []), emptyLine()] })} data-testid="po-edit-add-line"><Plus size={13} />Add line</Button>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Notes</Label>
+                <Textarea rows={2} value={editPo.notes || ''} onChange={e => setEditPo({ ...editPo, notes: e.target.value })} data-testid="po-edit-notes" />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setEditPo(null)}>Cancel</Button>
+                <Button className="flex-1" onClick={saveEdit} disabled={savingEdit} data-testid="po-edit-save">{savingEdit ? 'Saving…' : 'Save changes'}</Button>
+              </div>
             </div>
           </>}
         </DialogContent>

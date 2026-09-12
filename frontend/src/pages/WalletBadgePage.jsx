@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import html2canvas from 'html2canvas';
 import { Download, Printer } from 'lucide-react';
 import api from '../services/api';
 import { UnifiedBadge } from '../components/UnifiedBadge';
@@ -39,20 +38,17 @@ export default function WalletBadgePage() {
     if (!badgeRef.current) return;
     setBusy(true);
     try {
-      const canvas = await html2canvas(badgeRef.current, {
-        backgroundColor: null,
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        logging: false,
+      // iter345 — html-to-image (same path as <UnifiedBadge/>'s own export)
+      // so the photo AND the SVG QR are baked into the PNG. html2canvas was
+      // dropping both.
+      const { toPng } = await import('html-to-image');
+      const url = await toPng(badgeRef.current, {
+        pixelRatio: 3, cacheBust: true, fetchRequestInit: { mode: 'cors' },
       });
-      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const safe = (badge?.name || 'badge').replace(/[^a-z0-9-]+/gi, '_').toLowerCase();
       a.href = url; a.download = `5812-badge-${safe}.png`;
       document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (e) {
       alert('Could not save badge image. Try again or use Print.');
     }

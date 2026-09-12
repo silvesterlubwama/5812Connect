@@ -43,6 +43,21 @@ _DEFAULTS = {
         "primary_country": "Uganda",
         "primary_currency": "UGX",
     },
+    "payments": {
+        # Online checkout for the public shop. Keys are entered in the app
+        # (System Console → Integrations) so no redeploy is needed.
+        "provider": "flutterwave",
+        "enabled": False,
+        "mode": "test",                # test | live
+        "public_key": "",              # FLWPUBK... (safe-ish, still masked)
+        "secret_key": "",              # FLWSECK... — backend only
+        "webhook_hash": "",            # Flutterwave dashboard "Secret hash"
+        "currency": "UGX",
+        "allow_card": True,            # hosted checkout (card / bank / MoMo)
+        "allow_mobile_money": True,    # explicit MTN / Airtel Uganda charge
+        "allow_pay_on_collection": True,
+        "checkout_title": "58:12 Global Shop",
+    },
     "branding": {
         # App-wide white-labelling. `nav_overrides` is a flat map from route path
         # → {label, hidden, order} so admins can rename / hide / reorder sidebar
@@ -113,6 +128,23 @@ def _mask_for_read(doc: dict) -> dict:
     }
     out["org"] = doc.get("org") or {}
     out["branding"] = doc.get("branding") or {}
+    p = doc.get("payments", {}) or {}
+    out["payments"] = {
+        "provider": p.get("provider", "flutterwave"),
+        "enabled": p.get("enabled", False),
+        "mode": p.get("mode", "test"),
+        "public_key_masked": _mask(p.get("public_key", "")),
+        "public_key_set": bool(p.get("public_key")),
+        "secret_key_masked": _mask(p.get("secret_key", "")),
+        "secret_key_set": bool(p.get("secret_key")),
+        "webhook_hash_masked": _mask(p.get("webhook_hash", "")),
+        "webhook_hash_set": bool(p.get("webhook_hash")),
+        "currency": p.get("currency", "UGX"),
+        "allow_card": p.get("allow_card", True),
+        "allow_mobile_money": p.get("allow_mobile_money", True),
+        "allow_pay_on_collection": p.get("allow_pay_on_collection", True),
+        "checkout_title": p.get("checkout_title", "58:12 Global Shop"),
+    }
     return out
 
 
@@ -126,6 +158,7 @@ async def public_system_settings(response: Response):
     raw = await _load_raw()
     org = raw.get("org") or {}
     branding = raw.get("branding") or {}
+    pay = raw.get("payments") or {}
     return {
         "org": {
             "primary_country": org.get("primary_country") or "Uganda",
@@ -140,6 +173,14 @@ async def public_system_settings(response: Response):
             "section_overrides": branding.get("section_overrides") or {},
         },
         "email_provider": (raw.get("email") or {}).get("provider", "resend"),
+        "payments": {
+            # Non-secret: tells the public shop which checkout buttons to show.
+            "online_enabled": bool(pay.get("enabled") and pay.get("secret_key")),
+            "allow_card": pay.get("allow_card", True),
+            "allow_mobile_money": pay.get("allow_mobile_money", True),
+            "allow_pay_on_collection": pay.get("allow_pay_on_collection", True),
+            "currency": pay.get("currency") or org.get("primary_currency") or "UGX",
+        },
     }
 
 
@@ -163,7 +204,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     """
     raw = await _load_raw()
     # Top-level keys we accept
-    for top in ("email", "sentry", "org", "branding"):
+    for top in ("email", "sentry", "org", "branding", "payments"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
             for k, v in data[top].items():
@@ -179,7 +220,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     await db.system_settings.update_one({"id": SETTINGS_ID}, {"$set": raw}, upsert=True)
     await _audit(
         current_user["id"], "update", "system_settings", SETTINGS_ID,
-        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding"})},
+        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments"})},
     )
     return _mask_for_read(raw)
 

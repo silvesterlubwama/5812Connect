@@ -33,6 +33,84 @@ async def list_accounts(
     return await db.finance_chart_of_accounts.find(q, {"_id": 0}).sort("code", 1).to_list(500)
 
 
+@router.get("/{account_id}/ledger")
+async def account_ledger(
+    account_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    location_id: Optional[str] = None,
+    current_user: dict = Depends(require_staff),
+):
+    """Every transaction for or against one account in a window — iter345.
+
+    Account holders can now audit themselves: pick an account in Banking or
+    the Chart of Accounts, see the movements for the month, and page back
+    through previous months. Returns the opening balance (everything before
+    `date_from`) plus a running balance per row so the closing figure always
+    reconciles with the trial balance.
+    """
+    from ._common import DEBIT_TYPES
+
+    acct = await db.finance_chart_of_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found")
+    debit_side = acct.get("type") in DEBIT_TYPES
+
+    base: dict = {"reversed": {"$ne": True}, "lines.account_id": account_id}
+    if location_id and location_id != "all":
+        base["location_id"] = location_id
+
+    async def _movement(match: dict) -> list:
+        rows = []
+        async for je in db.finance_journal_entries.find(match, {"_id": 0}).sort("date", 1):
+            for ln in je.get("lines") or []:
+                if ln.get("account_id") != account_id:
+                    continue
+                debit = float(ln.get("debit") or 0)
+                credit = float(ln.get("credit") or 0)
+                rows.append({
+                    "je_id": je["id"], "date": je.get("date", ""),
+                    "description": ln.get("memo") or je.get("description") or "",
+                    "reference": je.get("reference") or "",
+                    "source": je.get("source") or "",
+                    "debit": debit, "credit": credit,
+                    "change": round(debit - credit, 2) if debit_side else round(credit - debit, 2),
+                    "counterparts": [
+                        {"code": o.get("account_code"), "name": o.get("account_name")}
+                        for o in (je.get("lines") or []) if o.get("account_id") != account_id
+                    ],
+                })
+        return rows
+
+    opening = 0.0
+    if date_from:
+        before = {**base, "date": {"$lt": date_from[:10]}}
+        opening = round(sum(r["change"] for r in await _movement(before)), 2)
+
+    window = dict(base)
+    if date_from or date_to:
+        window["date"] = {}
+        if date_from:
+            window["date"]["$gte"] = date_from[:10]
+        if date_to:
+            window["date"]["$lte"] = date_to[:10]
+    rows = await _movement(window)
+    running = opening
+    for r in rows:
+        running = round(running + r["change"], 2)
+        r["balance"] = running
+    return {
+        "account": acct,
+        "date_from": date_from or "", "date_to": date_to or "",
+        "opening_balance": opening,
+        "closing_balance": running,
+        "total_debit": round(sum(r["debit"] for r in rows), 2),
+        "total_credit": round(sum(r["credit"] for r in rows), 2),
+        "rows": rows,
+        "count": len(rows),
+    }
+
+
 @router.post("")
 async def create_account(data: dict, current_user: dict = Depends(require_director)):
     code = (data.get("code") or "").strip()

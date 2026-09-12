@@ -507,6 +507,8 @@ try:
     from routers.store_settings import router as store_settings_router
     # iter319: public online shop (products flagged `sell_online` + orders).
     from routers.public_shop import router as public_shop_router
+    # iter346: Flutterwave online checkout for the public shop (card + Uganda MoMo).
+    from routers.payments_flutterwave import router as payments_flutterwave_router
     # iter319: customer directory (extracted from the offline financial.py) and
     # customer statements / payment reminders — both had live UI hitting 404s.
     from routers.customers import router as customers_router
@@ -541,6 +543,7 @@ try:
     app.include_router(sheet_import_router)
     app.include_router(store_settings_router)
     app.include_router(public_shop_router)
+    app.include_router(payments_flutterwave_router)
     app.include_router(customers_router)
     app.include_router(statements_router)
     app.include_router(invoices_router)

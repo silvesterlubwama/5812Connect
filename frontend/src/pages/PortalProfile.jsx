@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Phone, Mail, MapPin, AlertTriangle, Save, Receipt, Clock, Send, Download, Camera } from 'lucide-react';
+import { User, Phone, Mail, MapPin, AlertTriangle, Save, Receipt, Clock, Send, Download, Camera, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -234,12 +234,13 @@ export default function PortalProfile() {
             <p className="text-sm font-semibold">Scan a receipt</p>
             <p className="text-xs text-muted-foreground">Snap a photo — finance reviews it before posting.</p>
           </div>
+          <div className="flex gap-2">
           <label className="inline-flex items-center gap-1.5 h-9 rounded-md bg-primary text-primary-foreground px-3 text-sm font-medium cursor-pointer">
             <Camera size={14} />
-            <span>Scan</span>
+            <span>Take photo</span>
             <input
               type="file"
-              accept="image/*,application/pdf"
+              accept="image/*"
               capture="environment"
               className="hidden"
               data-testid="portal-scan-receipt-input"
@@ -258,6 +259,32 @@ export default function PortalProfile() {
               }}
             />
           </label>
+          {/* iter345 — camera-only capture blocked people who already had the
+              receipt as a file or PDF on their device. Plain upload added. */}
+          <label className="inline-flex items-center gap-1.5 h-9 rounded-md border border-input px-3 text-sm font-medium cursor-pointer hover:bg-accent">
+            <Upload size={14} />
+            <span>Upload file</span>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              className="hidden"
+              data-testid="portal-upload-receipt-input"
+              onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                  const r = await api.post('/finance/receipts/scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                  toast.success(`Receipt sent to finance · ${r.data?.vendor || 'draft'}`);
+                } catch (err) {
+                  toast.error(err?.response?.data?.detail || 'Upload failed');
+                }
+                e.target.value = '';
+              }}
+            />
+          </label>
+          </div>
         </CardContent>
       </Card>
 

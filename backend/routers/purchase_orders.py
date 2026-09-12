@@ -198,6 +198,106 @@ async def transition(po_id: str, data: dict, current_user: dict = Depends(requir
     return await db.purchase_orders.find_one({"id": po_id}, {"_id": 0})
 
 
+@router.get("/{po_id}/pdf")
+async def po_pdf(po_id: str, current_user: dict = Depends(get_current_user)):
+    """Printable PO on the organisation's letterhead — logo + org name + the
+    campus/sub-location the order belongs to (e.g. "Zimba Farm")."""
+    from fastapi.responses import Response
+
+    po = await db.purchase_orders.find_one({"id": po_id}, {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    settings = await db.global_settings.find_one({"_key": "global"}, {"_id": 0}) or {}
+    sys_branding = (await db.system_settings.find_one({"_key": "branding"}, {"_id": 0}) or {})
+    org_name = settings.get("org_name") or sys_branding.get("app_name") or "58:12 Global"
+    logo_url = settings.get("logo_url") or sys_branding.get("logo_url") or ""
+    contact = " · ".join([x for x in [settings.get("contact_address"), settings.get("contact_phone"), settings.get("contact_email")] if x])
+
+    loc_name = ""
+    if po.get("location_id"):
+        loc = await db.locations.find_one({"id": po["location_id"]}, {"_id": 0, "name": 1})
+        if not loc:
+            loc = await db.sublocations.find_one({"id": po["location_id"]}, {"_id": 0, "name": 1})
+        loc_name = (loc or {}).get("name") or ""
+
+    cur = po.get("currency") or "UGX"
+
+    def esc(v) -> str:
+        return str(v or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    rows = "".join(
+        f"<tr><td>{esc(ln.get('description'))}</td>"
+        f"<td class='r'>{float(ln.get('qty') or 0):,.2f} {esc(ln.get('unit'))}</td>"
+        f"<td class='r'>{float(ln.get('unit_price') or 0):,.2f}</td>"
+        f"<td class='r'>{float(ln.get('line_total') or 0):,.2f}</td></tr>"
+        for ln in (po.get("lines") or [])
+    ) or "<tr><td colspan='4' class='c muted'>No line items.</td></tr>"
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{esc(po.get('po_number'))}</title>
+<style>
+  @page {{ size: A4; margin: 18mm; }}
+  body {{ font-family: 'Helvetica','Arial',sans-serif; color:#0f172a; font-size:10.5pt; }}
+  .head {{ display:flex; justify-content:space-between; align-items:flex-start;
+           border-bottom:2px solid #0f172a; padding-bottom:10px; margin-bottom:18px; }}
+  .org {{ font-size:16pt; font-weight:700; margin:0; }}
+  .site {{ font-size:11pt; color:#334155; margin:2px 0 0; }}
+  .contact {{ font-size:8pt; color:#64748b; margin-top:4px; }}
+  .logo {{ height:58px; }}
+  h1 {{ font-size:14pt; margin:0 0 2px; }}
+  .meta td {{ font-size:9pt; padding:1px 0; color:#475569; }}
+  table.items {{ width:100%; border-collapse:collapse; margin-top:16px; }}
+  table.items th {{ background:#f1f5f9; font-size:8.5pt; text-transform:uppercase;
+                    letter-spacing:.03em; text-align:left; padding:6px; }}
+  table.items td {{ padding:6px; border-bottom:1px solid #e2e8f0; }}
+  .r {{ text-align:right; }} .c {{ text-align:center; }} .muted {{ color:#94a3b8; }}
+  .totals {{ width:45%; margin-left:55%; margin-top:10px; border-collapse:collapse; }}
+  .totals td {{ padding:4px 6px; }}
+  .totals tr.grand td {{ border-top:2px solid #0f172a; font-weight:700; font-size:11.5pt; }}
+  .notes {{ margin-top:18px; font-size:9pt; color:#475569; border-top:1px solid #e2e8f0; padding-top:8px; }}
+  .sign {{ margin-top:34px; display:flex; gap:40px; }}
+  .sign div {{ flex:1; border-top:1px solid #94a3b8; padding-top:4px; font-size:8.5pt; color:#64748b; }}
+</style></head><body>
+  <div class="head">
+    <div>
+      <p class="org">{esc(org_name)}</p>
+      {f'<p class="site">{esc(loc_name)}</p>' if loc_name else ''}
+      <p class="contact">{esc(contact)}</p>
+    </div>
+    {f'<img class="logo" src="{esc(logo_url)}" />' if logo_url else ''}
+  </div>
+  <h1>Purchase Order {esc(po.get('po_number'))}</h1>
+  <table class="meta">
+    <tr><td><strong>Vendor:</strong> {esc(po.get('vendor_name'))}</td>
+        <td><strong>Status:</strong> {esc((po.get('status') or '').title())}</td></tr>
+    <tr><td><strong>Requested:</strong> {esc(po.get('requested_date'))} by {esc(po.get('requested_by_name'))}</td>
+        <td><strong>Delivery by:</strong> {esc(po.get('delivery_date') or '—')}</td></tr>
+  </table>
+  <table class="items">
+    <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Line total</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="r">{cur} {float(po.get('subtotal') or 0):,.2f}</td></tr>
+    <tr><td>Tax</td><td class="r">{cur} {float(po.get('tax') or 0):,.2f}</td></tr>
+    <tr class="grand"><td>Total</td><td class="r">{cur} {float(po.get('total') or 0):,.2f}</td></tr>
+  </table>
+  {f'<div class="notes"><strong>Notes:</strong> {esc(po.get("notes"))}</div>' if po.get('notes') else ''}
+  <div class="sign"><div>Approved by</div><div>Received by</div><div>Date</div></div>
+</body></html>"""
+
+    try:
+        from weasyprint import HTML
+        pdf = HTML(string=html).write_pdf()
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename={po.get('po_number', 'purchase-order')}.pdf"},
+        )
+    except Exception:
+        # WeasyPrint unavailable → hand back printable HTML rather than failing.
+        return Response(content=html, media_type="text/html")
+
+
 @router.delete("/{po_id}")
 async def delete_po(po_id: str, current_user: dict = Depends(require_director)):
     po = await db.purchase_orders.find_one({"id": po_id}, {"_id": 0, "status": 1})

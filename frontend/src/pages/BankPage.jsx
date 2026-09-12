@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Landmark, Plus, RefreshCw, Upload, FileText, Users, Repeat, Filter, CheckCircle2, X, Trash2, Receipt } from 'lucide-react';
 import api from '../services/api';
+import { AccountLedgerDialog } from '../components/AccountLedgerDialog';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 import EmptyState from '../components/EmptyState';
@@ -31,6 +32,7 @@ const STATUS_COLORS = {
 export default function BankPage() {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
+  const [ledgerAcctId, setLedgerAcctId] = useState(null);
   const [coaAccounts, setCoaAccounts] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [bills, setBills] = useState([]);
@@ -335,6 +337,7 @@ export default function BankPage() {
                         <p className="text-lg font-bold">{fmt(a.current_balance, a.currency)}</p>
                       </div>
                       <div className="flex flex-col gap-1">
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={!a.linked_account_id} title={a.linked_account_id ? 'See every transaction on this account' : 'Link a ledger account to audit it'} onClick={() => setLedgerAcctId(a.linked_account_id)} data-testid={`bank-account-ledger-${a.id}`}>Transactions</Button>
                         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEditAccount(a)} data-testid={`bank-account-edit-${a.id}`}>Edit</Button>
                         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => toggleAccountActive(a)} data-testid={`bank-account-close-${a.id}`}>{a.active === false ? 'Reopen' : 'Close'}</Button>
                         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={() => deleteAccount(a)} data-testid={`bank-account-del-${a.id}`}><Trash2 size={12} /></Button>
@@ -821,6 +824,13 @@ export default function BankPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Per-account ledger drill-down (iter345) */}
+      <AccountLedgerDialog
+        accountId={ledgerAcctId}
+        open={!!ledgerAcctId}
+        onOpenChange={(o) => { if (!o) setLedgerAcctId(null); }}
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
+import { AccountLedgerDialog } from '../components/AccountLedgerDialog';
 import { sublocationsApi, departmentsApi, locationsApi } from '../services/api';
 import { dataEvents } from '../services/dataEvents';
 import Papa from 'papaparse';
@@ -1311,6 +1312,7 @@ const BANK_SUBTYPES = [
 ];
 
 function CoaPanel() {
+  const [ledgerAcct, setLedgerAcct] = useState(null);
   const [rows, setRows] = useState([]);
   const [balances, setBalances] = useState({});   // { account_id: balance }
   const [addOpen, setAddOpen] = useState(false);
@@ -1406,7 +1408,12 @@ function CoaPanel() {
               return (
               <TableRow key={a.id} data-testid={`coa-row-${a.code}`} className={!a.active ? 'opacity-50' : ''}>
                 <TableCell className="font-mono">{a.code}</TableCell>
-                <TableCell>{a.name}{a.is_system && <span className="ml-1 text-[10px] text-muted-foreground">🔒 system</span>}</TableCell>
+                <TableCell>
+                  <button className="text-left hover:underline text-primary" onClick={() => setLedgerAcct(a)} data-testid={`coa-drilldown-${a.code}`}>
+                    {a.name}
+                  </button>
+                  {a.is_system && <span className="ml-1 text-[10px] text-muted-foreground">🔒 system</span>}
+                </TableCell>
                 <TableCell><Badge variant="outline" className="text-[10px]">{a.type}</Badge></TableCell>
                 <TableCell>{a.bank_subtype ? <Badge className="text-[10px] bg-sky-100 text-sky-700">{bankLabel(a)}</Badge> : (a.is_cash ? <Badge className="text-[10px] bg-sky-100 text-sky-700">Cash</Badge> : <span className="text-[10px] text-muted-foreground">—</span>)}</TableCell>
                 <TableCell className={`text-right font-mono text-xs ${bal < 0 ? 'text-rose-600' : bal > 0 ? 'text-emerald-700' : 'text-muted-foreground'}`} data-testid={`coa-balance-${a.code}`}>
@@ -1517,6 +1524,13 @@ function CoaPanel() {
       </Dialog>
       {/* Bulk import (CSV / XLSX) */}
       <CoaImportDialog open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); reload(); }} />
+      {/* Per-account drill-down (iter345) */}
+      <AccountLedgerDialog
+        accountId={ledgerAcct?.id}
+        accountLabel={ledgerAcct ? `${ledgerAcct.code} · ${ledgerAcct.name}` : ''}
+        open={!!ledgerAcct}
+        onOpenChange={(o) => { if (!o) setLedgerAcct(null); }}
+      />
     </Card>
   );
 }
@@ -1681,12 +1695,16 @@ function ReportsPanel() {
       else { params.set('date_from', dateFrom); params.set('date_to', dateTo); }
       if (locationId && locationId !== 'all') params.set('location_id', locationId);
       const r = await api.get(`/finance/reports/${path}?${params}`);
-      setData(r.data);
+      // Tag the payload with the report it belongs to. Switching report type
+      // used to re-render the new view against the PREVIOUS report's shape
+      // (e.g. Trial Balance reading `d.rows` off a P&L payload) which threw
+      // and blanked the tab. Now a mismatched shape simply isn't rendered.
+      setData({ ...r.data, __kind: kind });
     } catch (e) { toast.error(e?.response?.data?.detail || 'Report failed'); }
     setBusy(false);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { run(); }, [kind, locationId]);
+  useEffect(() => { setData(null); run(); }, [kind, locationId]);
 
   // Flatten whichever report is on screen into CSV rows. Each report has its
   // own row shape so the export matches what the user sees.
@@ -1695,20 +1713,20 @@ function ReportsPanel() {
     const stamp = `${todayIso()}`;
     if (kind === 'pnl') {
       const rows = [
-        ...data.revenue.map(r => ({ section: 'Revenue', code: r.code, name: r.name, amount: r.amount })),
+        ...(data.revenue || []).map(r => ({ section: 'Revenue', code: r.code, name: r.name, amount: r.amount })),
         { section: 'Revenue', code: '', name: 'Total Revenue', amount: data.total_revenue },
-        ...data.expenses.map(r => ({ section: 'Expense', code: r.code, name: r.name, amount: r.amount })),
+        ...(data.expenses || []).map(r => ({ section: 'Expense', code: r.code, name: r.name, amount: r.amount })),
         { section: 'Expense', code: '', name: 'Total Expenses', amount: data.total_expenses },
         { section: 'Summary', code: '', name: 'Net Income', amount: data.net_income },
       ];
       downloadCsv(`pnl-${stamp}.csv`, rows);
     } else if (kind === 'bs') {
       const rows = [
-        ...data.assets.map(r => ({ section: 'Asset', code: r.code, name: r.name, amount: r.amount })),
+        ...(data.assets || []).map(r => ({ section: 'Asset', code: r.code, name: r.name, amount: r.amount })),
         { section: 'Asset', code: '', name: 'Total Assets', amount: data.total_assets },
-        ...data.liabilities.map(r => ({ section: 'Liability', code: r.code, name: r.name, amount: r.amount })),
+        ...(data.liabilities || []).map(r => ({ section: 'Liability', code: r.code, name: r.name, amount: r.amount })),
         { section: 'Liability', code: '', name: 'Total Liabilities', amount: data.total_liabilities },
-        ...data.equity.map(r => ({ section: 'Equity', code: r.code, name: r.name, amount: r.amount })),
+        ...(data.equity || []).map(r => ({ section: 'Equity', code: r.code, name: r.name, amount: r.amount })),
         { section: 'Equity', code: '', name: 'Total Equity', amount: data.total_equity },
       ];
       downloadCsv(`balance-sheet-${stamp}.csv`, rows);
@@ -1756,7 +1774,7 @@ function ReportsPanel() {
           <Button onClick={run} disabled={busy} data-testid="reports-run"><RefreshCw size={14} className="mr-1" />Run</Button>
         </div>
       </CardHeader>
-      <CardContent>{data && <ReportView kind={kind} data={data} />}</CardContent>
+      <CardContent>{busy && !data && <div className="h-24 animate-pulse bg-muted rounded-lg" />}{data && data.__kind === kind && <ReportView kind={kind} data={data} />}</CardContent>
     </Card>
   );
 }
@@ -1769,7 +1787,7 @@ function ReportView({ kind, data }) {
   return null;
 }
 
-function Section({ title, rows, total }) {
+function Section({ title, rows = [], total }) {
   return (
     <div>
       <div className="font-semibold text-sm mt-3 mb-1">{title}</div>
@@ -1791,8 +1809,8 @@ function Section({ title, rows, total }) {
 function PnlView({ d }) {
   return (
     <div className="space-y-4" data-testid="report-pnl">
-      <Section title="Revenue" rows={d.revenue} total={d.total_revenue} />
-      <Section title="Expenses" rows={d.expenses} total={d.total_expenses} />
+      <Section title="Revenue" rows={d.revenue || []} total={d.total_revenue} />
+      <Section title="Expenses" rows={d.expenses || []} total={d.total_expenses} />
       <div className={`flex justify-between py-2 border-t-4 font-bold text-lg ${d.net_income < 0 ? 'text-red-700' : 'text-emerald-700'}`}>
         <span>Net income</span><span className="font-mono">{money(d.net_income)}</span>
       </div>
@@ -1802,9 +1820,9 @@ function PnlView({ d }) {
 function BsView({ d }) {
   return (
     <div className="space-y-4" data-testid="report-bs">
-      <Section title="Assets" rows={d.assets} total={d.total_assets} />
-      <Section title="Liabilities" rows={d.liabilities} total={d.total_liabilities} />
-      <Section title="Equity" rows={d.equity} total={d.total_equity} />
+      <Section title="Assets" rows={d.assets || []} total={d.total_assets} />
+      <Section title="Liabilities" rows={d.liabilities || []} total={d.total_liabilities} />
+      <Section title="Equity" rows={d.equity || []} total={d.total_equity} />
       <div className={`flex justify-between py-2 border-t-4 font-bold text-lg ${d.balanced ? 'text-emerald-700' : 'text-red-700'}`}>
         <span>{d.balanced ? '✓ Balanced' : '⚠ NOT BALANCED'}</span>
         <span className="font-mono">Assets {money(d.total_assets)} = L+E {money(d.total_liab_equity)}</span>
@@ -1818,7 +1836,7 @@ function TbView({ d }) {
       <Table>
         <TableHeader><TableRow><TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead className="text-right">Debit</TableHead><TableHead className="text-right">Credit</TableHead></TableRow></TableHeader>
         <TableBody>
-          {d.rows.map(r => (
+          {(d.rows || []).map(r => (
             <TableRow key={r.account_id}>
               <TableCell className="font-mono text-xs">{r.code}</TableCell>
               <TableCell>{r.name}</TableCell>
@@ -1844,7 +1862,7 @@ function CfView({ d }) {
         <Table>
           <TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Source</TableHead><TableHead className="text-right">Inflow</TableHead><TableHead className="text-right">Outflow</TableHead><TableHead className="text-right">Net</TableHead></TableRow></TableHeader>
           <TableBody>
-            {d.lines.map((r, i) => (
+            {(d.lines || []).map((r, i) => (
               <TableRow key={i}>
                 <TableCell className="font-mono text-xs">{r.code} — {r.name}</TableCell>
                 <TableCell><Badge variant="outline" className="text-[10px]">{r.source}</Badge></TableCell>

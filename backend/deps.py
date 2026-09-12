@@ -400,6 +400,14 @@ async def expand_descendants(root_ids: list, include_restricted_from: set = None
             {"parent_id": {"$in": frontier}},
             {"_id": 0, "id": 1, "is_restricted": 1}
         ).to_list(1000)
+        # Sub-locations registered only in the finance-native `sublocations`
+        # collection (parent stored as `location_id`) are descendants too —
+        # without this, boards/tasks/events created at a non-campus
+        # sub-location were invisible to everyone.
+        docs += await db.sublocations.find(
+            {"location_id": {"$in": frontier}},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(1000)
         next_frontier: list = []
         for d in docs:
             lid = d.get("id")

@@ -361,20 +361,22 @@ export default function ResourcesPage() {
                 )}
                 {r.is_consumable && (
                   <div className="flex items-center gap-1 mb-2">
-                    <Button size="sm" variant="outline" className="h-7 text-[10px] flex-1 gap-1" onClick={() => {
+                    <Button size="sm" variant="outline" className="h-7 text-[10px] flex-1 gap-1" onClick={async () => {
                       const month = window.prompt('Month for tracking sheet (YYYY-MM):', new Date().toISOString().slice(0,7));
                       if (!month) return;
                       const url = resourcesApi.trackingSheetUrl(r.id, month);
-                      // Auth is via bearer token in localStorage — use fetch to
-                      // stream the HTML and open it in a new tab. Works even
-                      // when the API is on a different subdomain from the app.
-                      import('../services/secureStorage').then(({ default: ss }) => {
-                        const tk = ss.getToken();
-                        fetch(url, { headers: { Authorization: `Bearer ${tk}` } })
-                          .then(res => res.ok ? res.text() : Promise.reject(res.statusText))
-                          .then(html => { const w = window.open('', '_blank'); w.document.open(); w.document.write(html); w.document.close(); })
-                          .catch(err => toast.error('Failed: ' + err));
-                      });
+                      // Auth is via bearer token — fetch the HTML then render it
+                      // into a hidden iframe and print. A post-fetch
+                      // window.open() is outside the click gesture and gets
+                      // silently blocked, which is why printing never happened.
+                      try {
+                        const { secureStorage } = await import('../services/secureStorage');
+                        const { fetchAndPrint } = await import('../utils/printHtml');
+                        toast.info('Preparing sheet…');
+                        await fetchAndPrint(url, secureStorage.getToken());
+                      } catch (err) {
+                        toast.error('Failed: ' + (err?.message || err));
+                      }
                     }} data-testid={`tracking-sheet-btn-${r.id}`}>
                       <Printer size={10} /> Print Sheet
                     </Button>

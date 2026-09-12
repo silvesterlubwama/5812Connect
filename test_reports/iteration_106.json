@@ -1,0 +1,43 @@
+{
+  "summary": "iter346 (Flutterwave online payments + sub-location boards + consumable tracking sheet + regressions) tested end-to-end. Backend: main agent's unit test test_iter346_flutterwave.py PASSES (config masking, hosted checkout, momo=AIRTEL, momo validation, verify+settle, underpayment refused, webhook signature accept/reject). New /app/backend/tests/test_iter346_api_integration.py — 9/9 PASS via preview URL: (1) admin PUT payments block + GET /api/admin/system-settings/public exposes only online_enabled/allow_*/currency and NOT secret_key; secret_key_masked ends with last 4 (••••1234) and no cleartext ever leaves the admin GET either; (2) with online disabled, POST /api/public/orders payment_option=collection succeeds and returns reference; (3) online payment_option=online is refused when integration disabled; (4) mobile_money without phone => 400 and stock not decremented; (5) card with bad keys => 4xx and stock unchanged (rollback works); (6) boards under sub-location 34b3c253... (parent only in db.sublocations, not campuses) is now visible via GET /api/boards and GET /api/boards/{id} is 200 after seeding; (7) GET /api/resources/{consumable_id}/tracking-sheet?month=2026-01 returns 200 HTML; (8) GET /api/bank/accounts returns 8 accounts, every one has linked_account_id populated => ledger drill-down should render. Frontend E2E on preview URL: (a) /marketplace?tab=shop with online DISABLED — cart shows ONLY Pay on collection radio, button label = 'Place order'; collection order succeeds (INV-20260912-0006 shown as ref). (b) With online ENABLED (dummy keys) — Pay now + Pay on collection radios both visible, Card/bank + Mobile money method radios visible, MTN MoMo + Airtel Money network buttons visible, button label switches to 'Pay now'; submitting momo without phone triggers toast 'Mobile money needs your phone number' and NO shop-payment-result element renders (order not created). (c) /admin -> Integrations tab -> integrations-card opens integrations-dialog; integrations-payments-section shows 'Online payments · Flutterwave' with 'Configured' + 'Test mode' badges; public key masked as 'Current: ••••ummy' (last 4 of FLWPUBK_TEST-dummy); secret & webhook inputs use placeholder 'Leave blank to keep current' and their value attribute is empty — no cleartext leaks. All expected testids present: payments-enabled-toggle, payments-mode-select, payments-currency-select, payments-public-key-input, payments-secret-key-input, payments-webhook-hash-input, payments-allow-{card,momo,collection}-toggle, payments-save-btn. (d) /resources shows a tracking-sheet-btn-{id} for the Posho (Maize Flour) consumable; clicking with a mocked prompt returning '2026-01' spawns a hidden iframe (Preparing sheet… toast, no console errors). (e) /marketplace shop-payment-result element wired up correctly (rendered on successful collection order). Payments reset to enabled=false with blank keys at test end (as requested).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "email delivery", "issue": "online_payment_receipt / online_payment_alert Resend calls fail because 5812-global.org domain is unverified — main agent already noted this is expected until DNS verification."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Card payment result UX", "issue": "When clicking 'Pay now' with the card method on the shop cart while dummy/invalid Flutterwave keys are configured, the shop-payment-result banner does not appear and no visible error toast surfaced within 5s. Backend returns 4xx (handshake fails, stock is correctly rolled back per API test), but the cart is left silent — buyer sees no feedback. Consider surfacing the error text from the API in a toast or in the shop-payment-result card with status='error'.", "selector": "[data-testid=\"shop-place-order-btn\"]", "priority": "MEDIUM"},
+      {"component": "UniversalUploadDialog", "issue": "Because the Confirm button (data-testid universal-upload-confirm) is only rendered AFTER a file is chosen, the 'submit without a file' branch is technically unreachable from the UI — the setError('Choose a file first') code path in submit() is dead. The review request's 'universal-upload-error when submitting without a file' is protected by button non-rendering rather than an inline error. Person-scoped + timesheet-period validation code paths DO render universal-upload-error correctly.", "selector": "[data-testid=\"universal-upload-confirm\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter346_api_integration.py",
+    "/app/backend/tests/test_iter346_flutterwave.py",
+    "/app/test_reports/pytest/iter346_api.xml"
+  ],
+  "action_items": [
+    "Surface a user-visible error (toast or shop-payment-result with status='error') when POST /api/public/orders returns 4xx for the card path — right now the shop is silent when Flutterwave handshake fails.",
+    "(Optional) In UniversalUploadDialog, either always render the Confirm button (disabled) so the 'choose a file first' inline error is reachable, or drop that dead branch."
+  ],
+  "critical_code_review_comments": [
+    "system_settings.py masks payments secrets on both admin GET and public GET — verified in wire (no FLWSECK_TEST- string ever appears in responses). Good.",
+    "public_shop.py: correctly re-prices from DB and refuses online orders when integration disabled (503) and momo without phone (400); stock rollback path verified by side-effect (stock unchanged before/after failed handshake).",
+    "IntegrationsManager.jsx payments section uses type=password + placeholder-based reveal-of-set-state — clean UX; no secret ever leaves the browser DOM after save.",
+    "boards.py + deps.expand_descendants correctly walk db.sublocations so a board bound to a sub-location (not a campus) is visible; verified with a seeded board under 34b3c253-140e-4ccc-984d-4c311445d9f0.",
+    "consumable_sheets.download_tracking_sheet returns pure HTML with @media print styles — matches the printHtml.js iframe consumer."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter346_api_integration.py (new)"
+  ],
+  "success_rate": {"backend": "100% (9/9 API integration + 100% unit test)", "frontend": "6/7 UI checks (silent card-payment failure on dummy keys is the only miss)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Inserted db.boards row id='TEST_iter346_board_sub' under sub-location 34b3c253-140e-4ccc-984d-4c311445d9f0 (created_by='someone-else') to prove non-creator admin access. Main agent can drop with db.boards.delete_one({id:'TEST_iter346_board_sub'}). Also placed 2 collection orders (INV-2026-09-12-0005 + 0006) from Gala Ticket during shop UI test; stock down by 2. Payments settings reset to enabled=false / blank keys at end as requested.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Public settings key for the shop is `online_enabled` (not `enabled`) inside payments — that is what the shop reads to decide whether to render the Pay now radio. Public-shop payload fields are `name/email/phone` (NOT customer_*). Resource consumable filter is `is_consumable === true` (the `type` field is descriptive text like 'supplies'). Bank ledger endpoint is NOT `/api/bank/accounts/{id}/ledger` — the UI opens the AccountLedgerDialog which hits `/api/finance/chart-of-accounts/{linked_account_id}/ledger` (a is a bank_accounts row; a.linked_account_id is the CoA id). If UI ledger buttons appear absent, verify `accounts` state populated at render time — API returns 8 accounts, all with linked_account_id.",
+  "rca of the issue": "Silent card-path failure: the shop cart currently only shows shop-payment-result on API success. On 4xx from POST /api/public/orders (Flutterwave init failed), the fetch throws but no user-visible feedback is attached to the catch — a toast.error(err.message) call or setting payResult with status='error' would fix it. Backend behaviour is correct (503/400/4xx + stock rollback verified)."
+}
