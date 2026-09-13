@@ -1,6 +1,7 @@
 """Seed endpoints — dev/setup data population. Extracted from server.py."""
 from fastapi import APIRouter
 from datetime import datetime, timezone
+from pin_security import apply_pin_fields
 from deps import db, hash_password
 import uuid
 
@@ -32,6 +33,9 @@ async def seed_data():
             {"id": "mem_009", "name": "Irene Nabatanzi", "email": "irene@example.com", "phone": "+256 784 901234", "national_id": "CM990009000XXXX", "role": "Member", "status": "active", "join_date": "2025-01-10", "group": "Women", "gender": "female", "created_at": datetime.now(timezone.utc).isoformat()},
             {"id": "mem_010", "name": "Joseph Muwanguzi", "email": "joseph@example.com", "phone": "+256 715 012345", "national_id": "CM870010000XXXX", "role": "Volunteer", "status": "inactive", "join_date": "2022-04-22", "group": "Volunteers", "gender": "male", "created_at": datetime.now(timezone.utc).isoformat()},
         ]
+        # iter353 — seed PINs go in hashed, exactly like real ones.
+        for m in members:
+            m.update(apply_pin_fields({"pin": m.pop("pin", None)}))
         await db.members.insert_many(members)
 
     event_count = await db.events.count_documents({})

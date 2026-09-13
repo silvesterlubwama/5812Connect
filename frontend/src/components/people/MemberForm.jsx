@@ -137,7 +137,21 @@ export default function MemberForm({ data, onChange, locations, showDepartment }
       )}
       <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={data.date_of_birth || ''} onChange={e => onChange({ ...data, date_of_birth: e.target.value })} /></div>
       <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5"><Label className="text-xs">PIN Code</Label><Input placeholder="4-digit PIN" maxLength={10} value={data.pin || ''} onChange={e => onChange({ ...data, pin: e.target.value })} /></div>
+        <div className="space-y-1.5">
+          <Label className="text-xs flex items-center gap-1.5">
+            Check-in PIN
+            {data.pin_set && <span className="text-[10px] font-normal px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" data-testid="member-pin-set-badge">Set</span>}
+          </Label>
+          <Input
+            placeholder={data.pin_set ? 'Leave blank to keep current PIN' : '4-digit PIN'}
+            maxLength={10}
+            value={data.pin || ''}
+            onChange={e => onChange({ ...data, pin: e.target.value })}
+            data-testid="member-pin-input"
+          />
+          {/* PINs are stored hashed, so they can never be read back (iter353). */}
+          <p className="text-[10px] text-muted-foreground">Stored encrypted — it can't be read back, only replaced.</p>
+        </div>
         <div className="space-y-1.5 flex flex-col justify-end gap-2">
           <div className="flex items-center gap-2"><Switch checked={data.is_parent || false} onCheckedChange={v => onChange({ ...data, is_parent: v })} /><Label className="text-xs">Parent</Label></div>
           <div className="flex items-center gap-2"><Switch checked={data.is_donor || false} onCheckedChange={v => onChange({ ...data, is_donor: v })} /><Label className="text-xs">Donor</Label></div>

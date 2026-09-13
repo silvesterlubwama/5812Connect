@@ -1,5 +1,53 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter353 — PIN hashing + admin-managed domain allowlist (2026-06)
+
+Tested: `/app/test_reports/iteration_237.json` and 133 backend tests green
+(`tests/test_iter353_pin_hashing_and_cors.py` + iter350/351/352/346/347/292).
+**Production needs a redeploy to receive this.**
+
+### Kiosk PINs are no longer stored in plain text
+`users.pin`, `members.pin` and `users.guest_pin` used to sit in Mongo in clear
+text, so a database copy was enough to unlock a terminal, check anyone in, or
+sign in as a visitor (a visitor's PIN is also their password).
+
+- New `backend/pin_security.py`. A PIN is stored only as
+  `pin_lookup = HMAC-SHA256(PIN_PEPPER, normalised_pin)`:
+  - the pepper lives in `backend/.env` (`PIN_PEPPER`), never in Mongo, so a
+    stolen dump is useless on its own;
+  - being deterministic it stays indexable (`pin_lookup` sparse index), so the
+    kiosk still resolves a person in one query — a per-row bcrypt hash would
+    have forced a full scan of every user on every keypad entry;
+  - final comparison is `secrets.compare_digest`.
+- `migrate_plaintext_pins()` runs on every startup and is idempotent: it digests
+  any remaining plaintext PIN and `$unset`s the cleartext.
+- All PIN paths now look up by digest: `/api/checkins/pin`,
+  `/api/checkins/qr-scan`, `/api/kiosk/unlock`, `/api/kiosk/pin-checkin`, the
+  checkpoint supervisor override, and `/api/auth/visitor-register` (which shows
+  the PIN once in its response and never persists it).
+- PINs are **write-only** now. `pin_lookup` never leaves the backend; member and
+  user reads return `pin_set: true/false` instead. The admin UI shows an empty
+  box with a "Set" badge, "leave blank to keep current PIN", and `clear_pin: true`
+  is the explicit way to remove one.
+
+### Allowed web domains are editable in-app
+- `system_settings.security.cors_origins` + `DynamicCORSMiddleware` (overrides
+  only `is_allowed_origin`) + a 60s refresh loop: adding a domain takes effect
+  without a redeploy or restart.
+- New **System Console → Security → Allowed Web Domains** card
+  (`components/AllowedDomainsManager.jsx`) — add/remove chips, with validation
+  (scheme+host only, no paths, no wildcards, max 50, duplicates collapsed).
+- Seeded with the customer's domains: `5812uganda.org`, `www.5812uganda.org`,
+  `app.5812uganda.org`, `lubwamas.org`, `www.lubwamas.org`,
+  `5812.lubwamas.org`, `app.lubwamas.org`. Emergent preview/`*.emergent.host`
+  origins remain allowed by the built-in regex.
+
+### Known
+- `PUT /api/admin/users/{id}` with ONLY `{"pin": ""}` returns 400 ("no valid
+  fields") — a blank PIN alone is a no-op by design; the UI always sends other
+  fields with it.
+
+
 ## iter351–352 — Security audit remediation (2026-06)
 
 Two rounds of read-only audit on the production deployment. Round 1 verdict was

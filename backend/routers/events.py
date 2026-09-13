@@ -8,6 +8,7 @@ import uuid
 import copy
 import re
 import secrets
+from pin_security import pin_query, pin_matches
 
 router = APIRouter(prefix="/api", tags=["events"])
 
@@ -976,7 +977,7 @@ async def pin_checkin(data: dict, current_user: dict = Depends(get_current_user)
     action = data.get("action", "checkin")
     if not pin:
         raise HTTPException(status_code=400, detail="PIN required")
-    member = await db.members.find_one({"pin": pin}, {"_id": 0})
+    member = await db.members.find_one(pin_query(pin), {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Invalid PIN")
     if action == "checkout":
@@ -1163,7 +1164,8 @@ async def qr_code_checkin(data: dict, current_user: dict = Depends(get_current_u
         {"passport_number": qr_data}, {"passport_number": qr_data.upper()},
         {"passport": qr_data}, {"passport": qr_data.upper()},
         {"email": qr_data}, {"email": qr_data.lower()},
-        {"pin": qr_data}, {"phone": qr_data},
+        {"phone": qr_data},
+        pin_query(qr_data),
     ]
     if len(digits) >= 7:
         or_q.append({"phone": {"$regex": f"{re.escape(digits[-9:])}$"}})
@@ -1455,16 +1457,16 @@ async def kiosk_unlock(data: dict, request: Request):
     if pin:
         # Check users collection first (admin/manager PINs)
         u = await db.users.find_one(
-            {"pin": pin, "status": {"$ne": "inactive"}},
+            {**pin_query(pin), "status": {"$ne": "inactive"}},
             {"_id": 0, "password_hash": 0, "pin_hash": 0},
         )
         # Fall back to members collection (PIN might be stored there for some installs)
         if not u:
-            u = await db.members.find_one({"pin": pin}, {"_id": 0})
+            u = await db.members.find_one(pin_query(pin), {"_id": 0})
         if not u:
             raise invalid
-        # Constant-time confirmation so a partial match can't be timed out.
-        if not secrets.compare_digest(str(u.get("pin") or ""), pin):
+        # Constant-time confirmation against the stored digest.
+        if not pin_matches(pin, u):
             raise invalid
         role = u.get("role") or ""
         if role not in PRIVILEGED_ROLES:
@@ -1596,7 +1598,7 @@ async def kiosk_pin_checkin(data: dict, request: Request):
         raise HTTPException(status_code=400, detail="PIN or phone digits required")
     await enforce_public_rate_limit(request, "kiosk_pin_checkin", limit=20, window_minutes=10)
     # Try PIN match first, then phone-last-4
-    member = await db.members.find_one({"pin": pin}, {"_id": 0})
+    member = await db.members.find_one(pin_query(pin), {"_id": 0})
     if not member and len(pin) >= 4:
         # Try matching last 4 digits of phone
         phone_regex = f"{pin}$"

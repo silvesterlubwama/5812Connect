@@ -21,6 +21,9 @@ async def _ensure_people_indexes():
     await db.users.create_index([("role", 1), ("status", 1)])
     await db.users.create_index([("location_id", 1), ("status", 1)])
     await db.users.create_index("location_ids")
+    # iter353 — kiosk PIN lookups hit a keyed digest, never plaintext.
+    await db.users.create_index("pin_lookup", sparse=True)
+    await db.members.create_index("pin_lookup", sparse=True)
 
     await db.members.create_index("id", unique=True)
     await db.members.create_index("email")

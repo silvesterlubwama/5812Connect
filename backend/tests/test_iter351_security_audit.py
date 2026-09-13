@@ -13,6 +13,7 @@ import time
 import uuid
 import pytest
 import requests
+from pin_security import pin_digest
 from pymongo import MongoClient
 
 import creds
@@ -177,9 +178,10 @@ class TestKioskUnlockOracle:
         _clear_public_hits("kiosk_unlock")
         # Set a PIN on admin
         pin = "246813"
-        u = db.users.find_one({"email": ADMIN_EMAIL.lower()}, {"_id": 0, "id": 1, "pin": 1})
-        prev_pin = u.get("pin")
-        db.users.update_one({"id": u["id"]}, {"$set": {"pin": pin}})
+        # iter353 — PINs live as keyed digests only, so seed the digest.
+        u = db.users.find_one({"email": ADMIN_EMAIL.lower()}, {"_id": 0, "id": 1, "pin_lookup": 1})
+        prev_pin = u.get("pin_lookup")
+        db.users.update_one({"id": u["id"]}, {"$set": {"pin_lookup": pin_digest(pin)}})
         try:
             r = self._post({"pin": pin}, ip="10.20.20.2")
             assert r.status_code == 200, f"{r.status_code} {r.text}"
@@ -188,9 +190,9 @@ class TestKioskUnlockOracle:
             assert body.get("user_role", "").lower() in ("admin", "system_admin")
         finally:
             if prev_pin is None:
-                db.users.update_one({"id": u["id"]}, {"$unset": {"pin": ""}})
+                db.users.update_one({"id": u["id"]}, {"$unset": {"pin_lookup": ""}})
             else:
-                db.users.update_one({"id": u["id"]}, {"$set": {"pin": prev_pin}})
+                db.users.update_one({"id": u["id"]}, {"$set": {"pin_lookup": prev_pin}})
 
     def test_unlock_throttles_around_8(self):
         _clear_public_hits("kiosk_unlock")

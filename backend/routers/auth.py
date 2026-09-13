@@ -1,5 +1,6 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pin_security import pin_digest
 from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
@@ -119,7 +120,10 @@ async def visitor_register(data: dict) -> dict:
         "password_hash": hash_password(pin),
         "role": role,
         "status": "pending",
-        "guest_pin": pin,
+        # iter353 — only the keyed digest is stored; the PIN itself is shown
+        # once, here in the response, and never persisted in clear text.
+        "guest_pin_lookup": pin_digest(pin),
+        "pin_lookup": pin_digest(pin),
         "expires_at": expiry,
         "notes": data.get("notes", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),

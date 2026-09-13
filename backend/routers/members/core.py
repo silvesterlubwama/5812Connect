@@ -1,5 +1,6 @@
 """Members core CRUD + approve/reject + listing helpers."""
 from fastapi import APIRouter, Depends, HTTPException
+from pin_security import apply_pin_fields
 from deps import (
     db, get_current_user, _audit, require_coordinator,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter,
@@ -71,7 +72,7 @@ async def list_members(
     if conditions:
         query["$and"] = conditions
     total = await db.members.count_documents(query)
-    members = await db.members.find(query, {"_id": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
+    members = await db.members.find(query, {"_id": 0, "pin_lookup": 0, "pin": 0}).skip(skip).limit(limit).sort("name", 1).to_list(limit)
     # Enrich with location names AND welfare category if any active case exists
     loc_cache = {}
     member_ids = [m["id"] for m in members if m.get("id")]
@@ -115,6 +116,7 @@ async def create_member(data: MemberCreate, current_user: dict = Depends(get_cur
         if existing:
             raise HTTPException(status_code=409, detail=f"Duplicate: a member with this email/phone/ID already exists ({existing.get('name', '')})")
     member_id = f"mem_{str(uuid.uuid4())[:8]}"
+    payload = apply_pin_fields(dict(payload))
     member = {
         "id": member_id,
         **payload,
@@ -140,6 +142,9 @@ async def get_member(member_id: str, current_user: dict = Depends(get_current_us
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    # iter353 — never hand back the PIN (or its digest); just say if one is set.
+    member["pin_set"] = bool(member.pop("pin_lookup", None))
+    member.pop("pin", None)
     checkins = await db.checkins.find({"member_id": member_id}, {"_id": 0}).sort("check_in_time", -1).limit(20).to_list(20)
     member["checkin_history"] = checkins
     return member
@@ -161,6 +166,8 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
         if member_loc and member_loc not in user_locs:
             raise HTTPException(status_code=403, detail="Cannot edit members outside your campus")
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    # iter353 — PINs are stored as keyed digests only (see pin_security).
+    update_data = apply_pin_fields(update_data)
     if "gender" in update_data:
         update_data["gender"] = normalize_gender(update_data["gender"])
     if "department" in update_data or "location_id" in update_data:

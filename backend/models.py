@@ -82,6 +82,9 @@ class MemberUpdate(BaseModel):
     has_restricted_access: Optional[bool] = None
     resident_location_id: Optional[str] = None
     pin: Optional[str] = None
+    # iter353 — PINs are write-only. Blank `pin` keeps the current one; this
+    # flag is the explicit way to remove it.
+    clear_pin: Optional[bool] = None
 
 class FamilyCreate(BaseModel):
     family_name: str

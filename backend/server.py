@@ -604,21 +604,52 @@ from seed_data import _seed_initial_data
 
 app.include_router(api_router)
 
-# iter351 — CORS is an explicit allowlist instead of `*` with credentials.
-# Own origins (preview + Emergent deployments) are matched by regex; anything
-# extra (a custom domain, a partner site) goes in CORS_ORIGINS as a
-# comma-separated list. `CORS_ORIGINS=*` is honoured but logged as unsafe.
+# iter351/353 — CORS is an explicit allowlist instead of `*` with credentials.
+# Three sources, checked in order:
+#   1. the Emergent origin regex (preview + *.emergent.host deployments)
+#   2. CORS_ORIGINS in the backend env (comma-separated)
+#   3. the live list an admin manages in System Console → Security
+# (3) is cached in-process and refreshed every 60s, so adding a domain in the
+# UI takes effect without a redeploy.
 _cors_env = (os.environ.get("CORS_ORIGINS") or "").strip()
 CORS_ALLOWED_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*(emergent\.host|emergentagent\.com)$"
 if _cors_env == "*":
     logger.warning("CORS_ORIGINS='*' — falling back to the Emergent origin allowlist. "
-                   "Set an explicit comma-separated list to allow custom domains.")
+                   "Add custom domains in System Console → Security instead.")
     CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
 else:
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] or ["http://localhost:3000"]
 
+_dynamic_cors_origins: set = set()
+
+
+class DynamicCORSMiddleware(CORSMiddleware):
+    """Starlette's CORS logic, with an extra admin-managed origin set.
+
+    Only `is_allowed_origin` is overridden — preflight handling, credentials and
+    header echoing stay exactly as Starlette implements them.
+    """
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        if super().is_allowed_origin(origin):
+            return True
+        return origin in _dynamic_cors_origins
+
+
+async def _refresh_cors_origins_loop():
+    """Pull the admin-managed CORS allowlist every 60s."""
+    global _dynamic_cors_origins
+    from routers.system_settings import get_cors_origins
+    while True:
+        try:
+            _dynamic_cors_origins = set(await get_cors_origins())
+        except Exception as e:
+            logger.warning(f"CORS allowlist refresh failed (keeping previous): {e}")
+        await asyncio.sleep(60)
+
+
 app.add_middleware(
-    CORSMiddleware,
+    DynamicCORSMiddleware,
     allow_credentials=True,
     allow_origins=CORS_ALLOWED_ORIGINS,
     allow_origin_regex=CORS_ALLOWED_ORIGIN_REGEX,
@@ -662,6 +693,14 @@ async def startup():
         logger.warning(f"Sentry bootstrap skipped: {e}")
     # Start background task reminder scheduler
     asyncio.create_task(_run_due_date_reminder_scheduler())
+    # iter353 — keep the admin-managed CORS allowlist warm, and make sure no
+    # plaintext kiosk PIN survives anywhere in the database.
+    asyncio.create_task(_refresh_cors_origins_loop())
+    try:
+        from pin_security import migrate_plaintext_pins
+        asyncio.create_task(migrate_plaintext_pins())
+    except Exception as e:
+        logger.warning(f"PIN migration bootstrap skipped: {e}")
     # iter226 — every 15 min refresh flight status for departed/shipped shipments
     asyncio.create_task(_run_flight_status_refresh_loop())
     # Defer heavy seeding so the app becomes ready immediately

@@ -1,5 +1,6 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
+from pin_security import pin_digest, apply_pin_fields
 from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus, get_role_level
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
@@ -157,6 +158,8 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         # e.g. "5812-STAFF-0042". Admins can override with any string.
         "badge_id": (data.get("badge_id") or "").strip() or None,
         "password_hash": hash_password(password),
+        # iter353 — kiosk PIN stored as a keyed digest only (see pin_security).
+        "pin_lookup": pin_digest(data.get("pin") or "") or "",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
@@ -276,6 +279,9 @@ async def import_users(data: dict, current_user: dict = Depends(require_admin)) 
 async def get_user(user_id: str, current_user: dict = Depends(require_admin)) -> dict:
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(status_code=404, detail="User not found")
+    # iter353 — the PIN digest never leaves the backend; just report if one is set.
+    user["pin_set"] = bool(user.pop("pin_lookup", None))
+    user.pop("pin", None)
     return user
 
 
@@ -291,9 +297,14 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
     )
     if member:
         # member data takes precedence for profile fields; user for account fields
-        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status", "pin"}}}
+        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status"}}}
         merged["member_id"] = member.get("id")
+        merged.pop("pin", None)
+        merged.pop("pin_lookup", None)
+        merged["pin_set"] = bool(user.get("pin_lookup") or member.get("pin_lookup"))
         return merged
+    user["pin_set"] = bool(user.pop("pin_lookup", None))
+    user.pop("pin", None)
     return user
 
 
@@ -342,13 +353,18 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                       # and Social Work). `department_ids` is the array;
                       # `department` (singular) is preserved for legacy views.
                       "department_ids", "notes",
-                      "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin",
+                      "secondary_roles", "is_parent", "is_customer", "is_donor", "is_guest", "is_medical", "is_resident", "has_restricted_access", "resident_location_id", "pin_lookup",
                       "location_id", "location_ids", "title", "extension", "extension_pin", "forward_to",
                       "gender", "date_of_birth", "group", "program",
                       "security_company_id", "security_rank",
                       # Human-friendly badge number an admin can assign (unique within tenant).
                       "badge_id"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
+    # iter353 — an inbound `pin` becomes a digest; blank means "leave as is"
+    # (the UI can no longer read the PIN back) and `clear_pin` removes it.
+    update.pop("pin", None)
+    pin_update = apply_pin_fields({"pin": data.get("pin"), "clear_pin": bool(data.get("clear_pin"))})
+    update.update(pin_update)
     if not update: raise HTTPException(status_code=400, detail="No valid fields to update")
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 

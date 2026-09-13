@@ -20,6 +20,7 @@ import uuid
 import statistics
 import pytest
 import requests
+from pin_security import pin_digest
 from pymongo import MongoClient
 
 import creds
@@ -596,9 +597,10 @@ class TestR25KioskUnlockTiming:
     def test_valid_pin_unlock_still_works(self):
         _clear_public_hits("kiosk_unlock")
         pin = "351824"
-        u = db.users.find_one({"email": ADMIN_EMAIL.lower()}, {"_id": 0, "id": 1, "pin": 1})
-        prev = u.get("pin")
-        db.users.update_one({"id": u["id"]}, {"$set": {"pin": pin}})
+        # iter353 — PINs live as keyed digests only, so seed the digest.
+        u = db.users.find_one({"email": ADMIN_EMAIL.lower()}, {"_id": 0, "id": 1, "pin_lookup": 1})
+        prev = u.get("pin_lookup")
+        db.users.update_one({"id": u["id"]}, {"$set": {"pin_lookup": pin_digest(pin)}})
         try:
             r = requests.post(f"{BASE}/api/kiosk/unlock",
                               json={"pin": pin},
@@ -607,9 +609,9 @@ class TestR25KioskUnlockTiming:
             assert r.json().get("unlocked") is True
         finally:
             if prev is None:
-                db.users.update_one({"id": u["id"]}, {"$unset": {"pin": ""}})
+                db.users.update_one({"id": u["id"]}, {"$unset": {"pin_lookup": ""}})
             else:
-                db.users.update_one({"id": u["id"]}, {"$set": {"pin": prev}})
+                db.users.update_one({"id": u["id"]}, {"$set": {"pin_lookup": prev}})
 
 
 # ============================================================

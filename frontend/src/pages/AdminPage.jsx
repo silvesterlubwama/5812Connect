@@ -22,6 +22,7 @@ import KioskLinksManager from '../components/KioskLinksManager';
 import BackupRestoreManager from '../components/BackupRestoreManager';
 import { DepartmentsManager } from '../components/admin/DepartmentsManager';
 import IntegrationsManager from '../components/IntegrationsManager';
+import AllowedDomainsManager from '../components/AllowedDomainsManager';
 import BrandingEditor from '../components/BrandingEditor';
 import RemoteAccessManager from '../components/RemoteAccessManager';
 import DevicePairingDialog from '../components/DevicePairingDialog';
@@ -169,7 +170,7 @@ export default function AdminPage({ mode = 'system' }) {
         has_restricted_access: p.has_restricted_access || false,
         resident_location_id: p.resident_location_id || '',
         is_admin: p.role === 'admin' || p.role === 'system_admin', secondary_roles: p.secondary_roles || [],
-        pin: p.pin || '', gender: p.gender || '', date_of_birth: p.date_of_birth || '',
+        pin: '', pin_set: !!p.pin_set, gender: p.gender || '', date_of_birth: p.date_of_birth || '',
         national_id: p.national_id || '', address: p.address || '', emergency_contact: p.emergency_contact || '',
         group: p.group || '', location_id: p.location_id || '',
         location_ids: p.location_ids || (p.location_id ? [p.location_id] : []),
@@ -189,7 +190,7 @@ export default function AdminPage({ mode = 'system' }) {
         is_guest: user.is_guest || false, is_medical: user.is_medical || false, is_resident: user.is_resident || false,
         has_restricted_access: user.has_restricted_access || false,
         resident_location_id: user.resident_location_id || '',
-        is_admin: user.role === 'admin' || user.role === 'system_admin', pin: user.pin || '',
+        is_admin: user.role === 'admin' || user.role === 'system_admin', pin: '', pin_set: !!user.pin_set,
         gender: '', date_of_birth: '', national_id: '', address: '', emergency_contact: '',
         group: '', location_id: user.location_id || '', location_ids: user.location_ids || [], program: '', member_id: '',
         extension: user.extension || '', extension_pin: '', forward_to: user.forward_to || '',
@@ -476,6 +477,7 @@ export default function AdminPage({ mode = 'system' }) {
 
           {/* Security: checkpoints, vendor firms, kiosks, remote access, device pairing. */}
           <TabsContent value="security" className="mt-4 space-y-4">
+            <AllowedDomainsManager />
             <SecurityCheckpointsManager />
             <SecurityCompaniesManager />
             <KioskLinksManager />

@@ -257,7 +257,7 @@ export default function UnifiedPeoplePage() {
   const openEditMember = (m, e) => {
     if (e) e.stopPropagation();
     setEditMember(m);
-    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: m.pin || '', notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false, is_admin: m.role === 'admin' || m.role === 'system_admin' });
+    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: '', pin_set: !!m.pin_set, notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false, is_admin: m.role === 'admin' || m.role === 'system_admin' });
   };
   const saveEditMember = async () => {
     if (!editMember) return;
@@ -313,12 +313,12 @@ export default function UnifiedPeoplePage() {
     setSelectedMember(member);
     // Pre-initialize edit form when viewing
     setEditMember(member);
-    setEditMemberForm({ name: member.name || '', email: member.email || '', phone: member.phone || '', role: member.role || 'Member', group: member.group || '', gender: member.gender || '', date_of_birth: member.date_of_birth || '', national_id: member.national_id || '', address: member.address || '', department: member.department || '', program: member.program || '', pin: member.pin || '', notes: member.notes || '', status: member.status || 'active', location_id: member.location_id || '', is_parent: member.is_parent || false, is_donor: member.is_donor || false });
+    setEditMemberForm({ name: member.name || '', email: member.email || '', phone: member.phone || '', role: member.role || 'Member', group: member.group || '', gender: member.gender || '', date_of_birth: member.date_of_birth || '', national_id: member.national_id || '', address: member.address || '', department: member.department || '', program: member.program || '', pin: '', pin_set: !!member.pin_set, notes: member.notes || '', status: member.status || 'active', location_id: member.location_id || '', is_parent: member.is_parent || false, is_donor: member.is_donor || false });
     try {
       const [detRes, docRes] = await Promise.all([membersApi.get(member.id), api.get(`/members/${member.id}/documents`).catch(() => ({ data: [] }))]);
       setMemberDetail(detRes.data);
       const detailed = detRes.data;
-      setEditMemberForm({ name: detailed.name || '', email: detailed.email || '', phone: detailed.phone || '', role: detailed.role || 'Member', group: detailed.group || '', gender: detailed.gender || '', date_of_birth: detailed.date_of_birth || '', national_id: detailed.national_id || '', address: detailed.address || '', department: detailed.department || '', program: detailed.program || '', pin: detailed.pin || '', notes: detailed.notes || '', status: detailed.status || 'active', location_id: detailed.location_id || '', is_parent: detailed.is_parent || false, is_donor: detailed.is_donor || false });
+      setEditMemberForm({ name: detailed.name || '', email: detailed.email || '', phone: detailed.phone || '', role: detailed.role || 'Member', group: detailed.group || '', gender: detailed.gender || '', date_of_birth: detailed.date_of_birth || '', national_id: detailed.national_id || '', address: detailed.address || '', department: detailed.department || '', program: detailed.program || '', pin: '', pin_set: !!detailed.pin_set, notes: detailed.notes || '', status: detailed.status || 'active', location_id: detailed.location_id || '', is_parent: detailed.is_parent || false, is_donor: detailed.is_donor || false });
       setMemberDocuments(docRes.data || []);
     } catch { setMemberDetail(member); }
   };

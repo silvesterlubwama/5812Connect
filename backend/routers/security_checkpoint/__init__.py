@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 import uuid
 import secrets  # still used by pair_device for raw_token generation
+from pin_security import pin_query
 
 # Shared primitives — see _common.py for the bodies.
 from .ocr import _ocr_id_image  # noqa: F401 — exposed for the ocr_router below
@@ -705,7 +706,7 @@ async def receipt_override(
         raise HTTPException(status_code=400, detail="Event is not in a denied state")
     SUPERVISOR_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager"}
     supervisor = await db.users.find_one(
-        {"pin": supervisor_pin, "status": "active", "role": {"$in": list(SUPERVISOR_ROLES)}},
+        {**pin_query(supervisor_pin), "status": "active", "role": {"$in": list(SUPERVISOR_ROLES)}},
         {"_id": 0, "id": 1, "name": 1, "role": 1},
     )
     if not supervisor:

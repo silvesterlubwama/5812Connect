@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from deps import db, require_admin, _audit, logger
 from datetime import datetime, timezone
 from typing import Optional
+import re
 
 router = APIRouter(prefix="/api/admin/system-settings", tags=["system_settings"])
 
@@ -58,6 +59,12 @@ _DEFAULTS = {
         "allow_pay_on_collection": True,
         "checkout_title": "58:12 Global Shop",
     },
+    "security": {
+        # iter353 — extra browser origins allowed to call this API, on top of
+        # the deployment's own domains. Editable here so a new custom domain
+        # doesn't need a redeploy. Picked up by the backend within 60s.
+        "cors_origins": [],
+    },
     "branding": {
         # App-wide white-labelling. `nav_overrides` is a flat map from route path
         # → {label, hidden, order} so admins can rename / hide / reorder sidebar
@@ -79,6 +86,44 @@ def _mask(value: str) -> str:
     if len(value) <= 4:
         return "••••"
     return "••••" + value[-4:]
+
+
+_ORIGIN_RE = re.compile(r"^https?://[a-z0-9.-]+(:\d{2,5})?$")
+
+
+def _clean_origins(values) -> list:
+    """Validate an admin-supplied CORS allowlist.
+
+    A browser Origin is scheme + host + optional port — no path, no trailing
+    slash, no wildcard. Anything else is rejected loudly rather than silently
+    creating an allowlist entry that never matches.
+    """
+    if not isinstance(values, list):
+        raise HTTPException(status_code=400, detail="cors_origins must be a list")
+    cleaned = []
+    for v in values:
+        origin = str(v or "").strip().rstrip("/")
+        if not origin:
+            continue
+        if "://" not in origin:
+            origin = f"https://{origin}"
+        origin = origin.lower()
+        if not _ORIGIN_RE.match(origin):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{v}' is not a valid origin — use the form https://app.example.org (no path, no wildcard)",
+            )
+        if origin not in cleaned:
+            cleaned.append(origin)
+    if len(cleaned) > 50:
+        raise HTTPException(status_code=400, detail="Too many origins (max 50)")
+    return cleaned
+
+
+async def get_cors_origins() -> list:
+    """Admin-managed CORS allowlist, read by the backend's CORS middleware."""
+    doc = await db.system_settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "security": 1})
+    return ((doc or {}).get("security") or {}).get("cors_origins") or []
 
 
 async def _load_raw() -> dict:
@@ -127,6 +172,7 @@ def _mask_for_read(doc: dict) -> dict:
         "traces_sample_rate": s.get("traces_sample_rate", 0.1),
     }
     out["org"] = doc.get("org") or {}
+    out["security"] = {"cors_origins": ((doc.get("security") or {}).get("cors_origins") or [])}
     out["branding"] = doc.get("branding") or {}
     p = doc.get("payments", {}) or {}
     out["payments"] = {
@@ -204,7 +250,9 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     """
     raw = await _load_raw()
     # Top-level keys we accept
-    for top in ("email", "sentry", "org", "branding", "payments"):
+    if "security" in data and isinstance(data["security"], dict) and "cors_origins" in data["security"]:
+        data["security"]["cors_origins"] = _clean_origins(data["security"]["cors_origins"])
+    for top in ("email", "sentry", "org", "branding", "payments", "security"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
             for k, v in data[top].items():
@@ -220,7 +268,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     await db.system_settings.update_one({"id": SETTINGS_ID}, {"$set": raw}, upsert=True)
     await _audit(
         current_user["id"], "update", "system_settings", SETTINGS_ID,
-        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments"})},
+        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments", "security"})},
     )
     return _mask_for_read(raw)
 
