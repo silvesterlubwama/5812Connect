@@ -21,15 +21,20 @@ router = APIRouter(prefix="/api/social-work/reviews", tags=["social_work_reviews
 @router.get("/compliance/due")
 async def reviews_due(
     days: int = 90,
+    sponsored_days: int = 365,
     location_id: Optional[str] = None,
     current_user: dict = Depends(require_staff),
 ):
-    """Children whose last welfare visit is older than `days` days (or who have
-    never had one). Used by the social-work dashboard to nudge field staff
-    toward overdue cases.
+    """Children whose last welfare visit is overdue (or who have never had one).
+
+    iter350 — sponsored children are reviewed **yearly**: their threshold is
+    `sponsored_days` (365) while every other active case keeps the `days`
+    default (90). The dashboard nudges field staff toward genuinely overdue
+    cases instead of flagging every sponsored child four times a year.
 
     Returns: { total_active, due, never_visited, list: [{child_id, name,
-    last_review_at, days_since}, …] }. List is capped at 200 for UI rendering.
+    last_review_at, days_since, threshold_days, sponsored}, …] }. List is
+    capped at 200 for UI rendering.
     """
     from deps import is_system_admin, has_module_access, get_campus_filter
     # Restrict to active social-work cases on children
@@ -40,9 +45,10 @@ async def reviews_due(
             case_query.update(scope)
     if location_id and location_id != "all":
         case_query["location_id"] = location_id
-    cases = await db.social_cases.find(case_query, {"_id": 0, "subject_id": 1, "subject_name": 1, "location_id": 1}).to_list(2000)
+    cases = await db.social_cases.find(case_query, {"_id": 0, "subject_id": 1, "subject_name": 1, "location_id": 1, "category": 1, "sponsor_member_id": 1, "sponsor_manual": 1, "sponsor_guest_id": 1}).to_list(2000)
     if not cases:
-        return {"total_active": 0, "due": 0, "never_visited": 0, "list": []}
+        return {"total_active": 0, "due": 0, "never_visited": 0, "list": [],
+                "threshold_days": days, "sponsored_threshold_days": sponsored_days}
     child_ids = [c["subject_id"] for c in cases if c.get("subject_id")]
 
     # Latest welfare review per child (single aggregation)
@@ -60,19 +66,28 @@ async def reviews_due(
     never_count = 0
     for c in cases:
         cid = c.get("subject_id")
+        sponsored = bool(
+            c.get("category") == "sponsored"
+            or c.get("sponsor_member_id")
+            or c.get("sponsor_guest_id")
+            or (c.get("sponsor_manual") or {}).get("name")
+        )
+        threshold = sponsored_days if sponsored else days
         last = last_map.get(cid)
         if not last:
             never_count += 1
             due_list.append({"child_id": cid, "name": c.get("subject_name", ""),
                              "last_review_at": None, "days_since": None,
+                             "threshold_days": threshold, "sponsored": sponsored,
                              "location_id": c.get("location_id")})
             continue
         try:
             last_date = datetime.fromisoformat(last[:10]).date()
             delta = (today - last_date).days
-            if delta > days:
+            if delta > threshold:
                 due_list.append({"child_id": cid, "name": c.get("subject_name", ""),
                                  "last_review_at": last, "days_since": delta,
+                                 "threshold_days": threshold, "sponsored": sponsored,
                                  "location_id": c.get("location_id")})
         except Exception:
             continue
@@ -82,6 +97,7 @@ async def reviews_due(
         "due": len(due_list),
         "never_visited": never_count,
         "threshold_days": days,
+        "sponsored_threshold_days": sponsored_days,
         "list": due_list[:200],
     }
 

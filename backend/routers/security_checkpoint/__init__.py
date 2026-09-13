@@ -236,6 +236,12 @@ async def checkpoint_scan(
         raise HTTPException(status_code=400, detail="payload required")
     subject = await _resolve_subject(scan_type, payload)
     decision, reason = _decide(cp, subject)
+    # iter350 — badge-less entry: the person was identified from a typed
+    # identifier (national ID / passport / phone / in-app ID) instead of a
+    # badge. Allowed exactly like a badge scan, but flagged in the log.
+    badgeless = bool(subject.get("matched_by"))
+    if badgeless:
+        reason = f"{reason} · badge-less entry via {subject.get('matched_label') or subject['matched_by']}"
     # Classify the subject as `resident` of this checkpoint's location vs `visitor`.
     # Residents (and resident children) scan in/out of their own premises constantly —
     # they belong in the audit log but should NOT clutter the daily visitor count.
@@ -296,6 +302,8 @@ async def checkpoint_scan(
         "stray_home": stray_home,
         "scan_type": scan_type,
         "payload": payload,
+        "badgeless": badgeless,
+        "matched_by": subject.get("matched_by"),
         "subject": subject,
         "decision": decision,
         "reason": reason if not is_resident_here else f"{reason} (resident)",

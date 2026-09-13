@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from datetime import datetime, timezone
 from typing import Optional
 import hashlib
+import re
 import secrets
 import uuid  # re-exported for sub-modules
 
@@ -92,6 +93,71 @@ def _shape_subject(kind: str, doc: dict) -> dict:
     }
 
 
+# ====== BADGE-LESS IDENTIFIER LOOKUP (iter350) ======
+# A forgotten badge must never stop a legitimate person at the gate. Any of
+# these identifiers resolves the same person a badge scan would, and the event
+# is flagged `badgeless` with the field that matched so security can audit it.
+_BADGELESS_LABELS = {
+    "national_id": "national ID",
+    "passport": "passport number",
+    "phone": "phone number",
+    "badge_number": "badge number",
+    "email": "email",
+    "app_id": "in-app ID",
+}
+
+
+def _digits(raw: str) -> str:
+    return re.sub(r"\D", "", raw or "")
+
+
+def _matched_field(doc: dict, raw: str) -> str:
+    r = (raw or "").strip().lower()
+    for field, label in (("national_id", "national_id"), ("nin", "national_id"),
+                         ("passport_number", "passport"), ("passport", "passport"),
+                         ("badge_number", "badge_number")):
+        if str(doc.get(field) or "").strip().lower() == r:
+            return label
+    if (doc.get("email") or "").strip().lower() == r:
+        return "email"
+    d = _digits(raw)
+    if len(d) >= 7 and d[-9:] in _digits(doc.get("phone") or ""):
+        return "phone"
+    return "app_id"
+
+
+async def _resolve_by_identifier(payload: str) -> Optional[dict]:
+    """Resolve a person from a hand-typed identifier — national ID / barcode,
+    passport number, phone number, badge number or their in-app ID."""
+    raw = (payload or "").strip()
+    if len(raw) < 3:
+        return None
+    d = _digits(raw)
+    or_q = [
+        {"id": raw},
+        {"member_id": raw},
+        {"badge_number": raw},
+        {"national_id": raw}, {"national_id": raw.upper()},
+        {"nin": raw}, {"nin": raw.upper()},
+        {"passport_number": raw}, {"passport_number": raw.upper()},
+        {"passport": raw}, {"passport": raw.upper()},
+        {"email": raw.lower()},
+        {"phone": raw},
+    ]
+    if len(d) >= 7:
+        or_q.append({"phone": {"$regex": f"{re.escape(d[-9:])}$"}})
+    for kind, coll in (("user", db.users), ("member", db.members), ("child", db.children)):
+        proj = {"_id": 0, "password_hash": 0, "pin_hash": 0} if kind == "user" else {"_id": 0}
+        doc = await coll.find_one({"$or": or_q}, proj)
+        if doc:
+            subject = _shape_subject(kind, doc)
+            field = _matched_field(doc, raw)
+            subject["matched_by"] = field
+            subject["matched_label"] = _BADGELESS_LABELS.get(field, field)
+            return subject
+    return None
+
+
 async def _hydrate_subject(kind: str, sid: str) -> dict:
     if kind == "member":
         doc = await db.members.find_one({"id": sid}, {"_id": 0})
@@ -158,13 +224,11 @@ async def _resolve_subject(scan_type: str, payload: str) -> dict:
             doc = await coll.find_one({"id": payload}, proj)
             if doc:
                 return _shape_subject(kind, doc)
-    # Fallback by phone / email / national_id
-    m = await db.members.find_one(
-        {"$or": [{"national_id": payload}, {"phone": payload}, {"email": payload.lower()}]},
-        {"_id": 0},
-    )
-    if m:
-        return _shape_subject("member", m)
+    # Fallback — badge-less entry: national ID / barcode, passport, phone,
+    # badge number, email or the person's in-app ID (iter350).
+    by_id = await _resolve_by_identifier(payload)
+    if by_id:
+        return by_id
     return {"kind": "unknown", "payload": payload}
 
 

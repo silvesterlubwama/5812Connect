@@ -84,6 +84,7 @@ export default function PortalExpenses() {
   };
 
   const totalAmount = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const receiptCount = expenses.filter(e => e.source === 'receipt').length;
   const pendingCount = expenses.filter(e => e.status === 'pending').length;
 
   return (
@@ -111,6 +112,11 @@ export default function PortalExpenses() {
             <div>
               <p className="text-xs text-muted-foreground">Total Submitted</p>
               <p className="text-lg font-bold">{totalAmount.toLocaleString()} UGX</p>
+              {receiptCount > 0 && (
+                <p className="text-[11px] text-muted-foreground" data-testid="expenses-receipt-note">
+                  includes {receiptCount} uploaded receipt{receiptCount === 1 ? '' : 's'}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -151,6 +157,20 @@ export default function PortalExpenses() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-semibold">{(exp.amount || 0).toLocaleString()} {exp.currency || 'UGX'}</span>
+                    {exp.source === 'receipt' && (
+                      <span className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-[10px]" data-testid={`expense-receipt-badge-${exp.id}`}>Receipt</Badge>
+                        {exp.receipt_url && (
+                          <a href={exp.receipt_url} target="_blank" rel="noopener noreferrer"
+                             className="text-[11px] text-blue-600 underline" data-testid={`expense-receipt-view-${exp.id}`}>View</a>
+                        )}
+                      </span>
+                    )}
+                    {exp.rejected_reason_label && (
+                      <span className="text-[11px] text-destructive block" data-testid={`expense-rejected-${exp.id}`}>
+                        {exp.rejected_reason_label}{exp.rejected_note ? ` — ${exp.rejected_note}` : ''}
+                      </span>
+                    )}
                     <Badge className={`text-xs ${statusColors[exp.status] || statusColors.pending}`}>
                       {exp.status || 'pending'}
                     </Badge>

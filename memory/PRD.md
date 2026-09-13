@@ -1,5 +1,58 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter350 — Phases 3, 4 & 5 of the reported-bug backlog (2026-06)
+
+User choices this round: pay-cycle changes apply **going forward only** (existing
+timesheets/payslips keep their original window); all four badge-less identifiers
+work directly like a badge scan **and** the entry is flagged badge-less in the log.
+
+### DONE (tested — `/app/test_reports/iteration_233.json`, 17/17 backend + all frontend surfaces)
+**Phase 3 — security & HR**
+- **Pay periods are admin-configured, everywhere.** New `period_anchor_date` on
+  `hr_settings` (falls back to `next_pay_date`) plus one canonical derivation in
+  `routers/hr.py` (`_normalize_freq` / `_cycle_step_days` / `_cycle_anchor_iso` /
+  `_period_containing` / `_period_for_payday`). Previously `_period_label` treated
+  the PAYDAY as the period start while the kiosk's `_current_period_for_location`
+  computed a different window — payroll and kiosk timesheets could not match. New
+  `GET /api/hr/pay-periods` is the single source of truth and now drives the HR
+  Timesheets filter, Log-for-staff, the XLSX sheet dialog and the portal timesheet
+  (which was posting ISO weeks `YYYY-Www` that payroll never looked for).
+- **No pay rates on timesheets.** The XLSX template lost its Wage Type + Rate
+  columns (7 columns now: Staff Name | Badge | Days | Hours | PTO | Notes |
+  Signature). Upload still matches by header name, so completed old sheets import.
+- **Badge-less entry** at the checkpoint and the kiosk: national ID / barcode,
+  passport number, phone number (last-9-digit match), badge number, email or the
+  person's in-app ID all resolve the same person a badge would
+  (`_resolve_by_identifier`). Events carry `badgeless: true` + `matched_by`, and the
+  reason reads "… · badge-less entry via national ID". `GET /api/kiosk/lookup` and
+  `POST /api/checkins/qr-scan` got the same fallbacks.
+- **Unauthorised scans are unmissable**: three sharp 320 Hz beeps + a red strobe on
+  the checkpoint display, then auto-return to the scan screen after 4s instead of
+  parking someone else's DENIED result on screen for 15s. Approved gets one soft
+  chime. (Audio/strobe verified by code + lint only — pairing a physical checkpoint
+  device wasn't possible in preview.)
+
+**Phase 4 — social work**
+- **Sponsored children are reviewed yearly.** `/reviews/compliance/due` now applies
+  `sponsored_days` (365) to sponsored cases and keeps 90 days for everyone else;
+  each row returns its own `threshold_days` + `sponsored` flag.
+- **Support types are multi-select**: `support_needed[]` / `support_given[]` on the
+  case (14 validated values), rendered as chip pickers in the case Overview tab.
+  The single-valued `category` stays as the case TYPE.
+- **One-click sponsor story** (`routers/social_sponsor_story.py`, Claude Sonnet 4.6
+  via the Emergent universal key). Builds a fact sheet from the case, child record,
+  the last 4 reviews and hand-typed extras (favourite colour, dream, living
+  situation…), with safeguarding rules in the system prompt: first name only, no
+  surname, address, school name or diagnosis. Story is saved on the case and is
+  hand-editable (`PUT .../sponsor-story`).
+
+**Phase 5 — chat**
+- **Org chart hierarchy fixed.** `ORG_ROLES` had no entry for `admin`/`system_admin`,
+  so every admin fell through to the "Other" bucket at the BOTTOM of the chart, and
+  Adviser was drawn above the Executive Director. Replaced with `ORG_LEVELS`, ordered
+  by `deps.ROLE_LEVELS`, with an explicit System Admin group at the top.
+
+
 ## Original problem statement (source of truth)
 Multi-tenant CRM for 58:12 Global's Uganda operations, covering unified
 comms, campus-scoped tasks/calendar/events, double-entry finance with
@@ -57,7 +110,7 @@ User choices: sponsor stories → **Claude Sonnet 4.6**; pay periods →
   records written against the member id, and both portal surfaces display the
   location.
 
-### NEXT (Phase 2 — finance & data trust)
+### NEXT (Phase 2 — finance & data trust) — DONE in iter349b
 - Receipt review: preview the receipt image, edit misread sums/details, reject
   with a reason (not clear / not an approved purchase / other)
 - Manual transactions: type-ahead staff search for who received income or made
@@ -67,7 +120,7 @@ User choices: sponsor stories → **Claude Sonnet 4.6**; pay periods →
 - Donors: verify giving data is gathered from the right place
 - Audit trail must show a user's name, not an id
 
-### THEN
+### THEN — all DONE in iter350 (see top of this file)
 - Phase 3: checkpoint unauthorised beep + red flash then auto-return to scan;
   badge-less entry via national ID/passport/phone/in-app ID; timesheets must
   never show pay rates or types; admin-configurable pay-period cycle + anchor

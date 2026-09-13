@@ -296,10 +296,40 @@ async def update_portal_task_status(task_id: str, data: dict, current_user: dict
 
 @router.get("/expenses")
 async def portal_expenses(current_user: dict = Depends(get_current_user)):
-    """Get expenses submitted by the current user"""
+    """My expense claims — including receipts I uploaded.
+
+    A scanned receipt posts straight to the ledger as a journal entry, so it
+    never appeared in My Expenses and the total under-reported what the person
+    had actually spent (iter350). Those now show up as rows with the same
+    shape, flagged `source: 'receipt'`.
+    """
+    uid = current_user["id"]
     expenses = await db.expenses.find(
-        {"created_by": current_user["id"]}, {"_id": 0}
+        {"created_by": uid}, {"_id": 0}
     ).sort("created_at", -1).to_list(200)
+
+    receipts = await db.finance_journal_entries.find(
+        {"source": "receipt_scan", "reversed": {"$ne": True},
+         "$or": [{"uploaded_by": uid}, {"created_by": uid}]},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(200)
+    for je in receipts:
+        expenses.append({
+            "id": je["id"],
+            "title": je.get("receipt_vendor") or je.get("description") or "Receipt",
+            "amount": float(je.get("total") or 0),
+            "currency": je.get("currency", "UGX"),
+            "category": "receipt",
+            "date": je.get("date"),
+            "notes": je.get("description", ""),
+            "status": "rejected" if je.get("rejected") else ("pending" if je.get("needs_review") else "approved"),
+            "rejected_reason_label": je.get("rejected_reason_label"),
+            "rejected_note": je.get("rejected_note"),
+            "receipt_url": je.get("receipt_url"),
+            "source": "receipt",
+            "created_at": je.get("created_at"),
+        })
+    expenses.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     return expenses
 
 

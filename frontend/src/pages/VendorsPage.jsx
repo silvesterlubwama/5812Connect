@@ -26,6 +26,8 @@ const CONTACT_METHODS = [
 
 export default function VendorsPage() {
   const [vendors, setVendors] = useState([]);
+  const [staleCount, setStaleCount] = useState(0);
+  const [cleaning, setCleaning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
@@ -37,6 +39,7 @@ export default function VendorsPage() {
     try {
       const r = await api.get('/vendors', { params: { search: search || undefined, limit: 200 } });
       setVendors(r.data || []);
+      setStaleCount((r.data || []).filter(v => v.is_stale).length);
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to load vendors'); }
     finally { setLoading(false); }
   }, [search]);
@@ -50,6 +53,18 @@ export default function VendorsPage() {
       const r = await api.get(`/vendors/${v.id}/transactions`);
       setTxns(r.data || { expenses: [], bills: [] });
     } catch { setTxns({ expenses: [], bills: [] }); }
+  };
+
+  const cleanupStale = async () => {
+    const stale = vendors.filter(v => v.is_stale);
+    if (!window.confirm(`Archive ${stale.length} vendor(s) with no expenses or bills? They can be restored later.`)) return;
+    setCleaning(true);
+    try {
+      const r = await api.post('/vendors/cleanup-stale', { ids: stale.map(v => v.id) });
+      toast.success(r.data?.message || 'Archived');
+      await fetchVendors();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Cleanup failed'); }
+    setCleaning(false);
   };
 
   const saveVendor = async () => {
@@ -75,7 +90,19 @@ export default function VendorsPage() {
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2"><Truck size={22} /><h1 className="text-2xl font-bold">Vendors</h1><Badge variant="secondary">{vendors.length}</Badge></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Truck size={22} /><h1 className="text-2xl font-bold">Vendors</h1><Badge variant="secondary">{vendors.length}</Badge>
+          {staleCount > 0 && (
+            <>
+              <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700" data-testid="vendors-stale-count">
+                {staleCount} with no activity
+              </Badge>
+              <Button size="sm" variant="outline" onClick={cleanupStale} disabled={cleaning} data-testid="vendors-cleanup-btn">
+                {cleaning ? 'Archiving…' : 'Archive unused'}
+              </Button>
+            </>
+          )}
+        </div>
         <div className="relative"><Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" /><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name..." className="pl-8 h-9 w-56" data-testid="vendor-search-input" /></div>
       </div>
 
@@ -88,7 +115,13 @@ export default function VendorsPage() {
               {!loading && vendors.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">No vendors yet. Add an expense on Finance to auto-create one.</td></tr>}
               {vendors.map(v => (
                 <tr key={v.id} className="border-b last:border-0 hover:bg-accent/30 cursor-pointer" onClick={() => openDrilldown(v)} data-testid={`vendor-row-${v.id}`}>
-                  <td className="p-3 font-medium">{v.name}{v.auto_created && <Badge variant="secondary" className="ml-2 text-[9px]">auto</Badge>}</td>
+                  <td className="p-3 font-medium">
+                    {v.name}
+                    {v.auto_created && <Badge variant="secondary" className="ml-2 text-[9px]">auto</Badge>}
+                    {/* Leftovers from imports and the old finance UI — now
+                        visible instead of silently padding the list. */}
+                    {v.is_stale && <Badge variant="outline" className="ml-2 text-[9px] border-amber-400 text-amber-700" data-testid={`vendor-stale-${v.id}`}>no activity</Badge>}
+                  </td>
                   <td className="p-3"><Badge variant="outline" className="text-[10px]">{v.category || 'supplier'}</Badge></td>
                   <td className="p-3 text-xs text-muted-foreground">{v.email || v.phone || <span className="italic">—</span>}</td>
                   <td className="p-3 text-right font-mono text-rose-600">{fmt(v.total_expenses)}</td>

@@ -165,7 +165,12 @@ export default function AuditPage() {
                             <td className="py-2.5 pr-4"><span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${actionColors[log.action] || 'bg-slate-100 text-slate-700'}`}>{log.action}</span></td>
                             <td className="py-2.5 pr-4 font-medium capitalize">{log.resource}</td>
                             <td className="py-2.5 pr-4 text-muted-foreground font-mono text-xs">{log.resource_id?.slice(0, 8) || '—'}</td>
-                            <td className="py-2.5 text-muted-foreground text-xs font-mono">{log.user_id?.slice(0, 8) || '—'}</td>
+                            {/* The backend already resolves user_name — the UI
+                                was printing a truncated uuid, which read like a
+                                random number to anyone auditing. */}
+                            <td className="py-2.5 text-xs" title={log.user_id || ''}>
+                              {log.user_name || (log.user_id ? `Deleted user (${log.user_id.slice(0, 8)})` : '—')}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

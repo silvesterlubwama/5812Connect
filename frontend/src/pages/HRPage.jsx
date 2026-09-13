@@ -1387,6 +1387,20 @@ export default function HRPage() {
                 )}
               </div>
             </div>
+            {/* iter350 — the pay-period anchor defines the BOUNDARIES of every
+                timesheet / payslip window. Distinct from the payday (when money
+                moves). Optional: falls back to Next Pay Date. */}
+            <div className="grid grid-cols-2 gap-3 -mt-1">
+              <div className="space-y-1.5">
+                <Label>Pay period start anchor</Label>
+                <Input type="date" value={settingsForm.period_anchor_date || ''} onChange={e => setSettingsForm({...settingsForm, period_anchor_date: e.target.value})} data-testid="period-anchor-date" />
+                <p className="text-[10px] text-muted-foreground">
+                  The first day of any one pay period. Every timesheet, payslip and
+                  payroll window is tiled from here every {(settingsForm.pay_frequency || 'monthly').toLowerCase() === 'weekly' ? '7 days' : (settingsForm.pay_frequency || 'monthly').toLowerCase() === 'monthly' ? 'calendar month' : '14 days'}.
+                  Leave blank to use <strong>Next Pay Date</strong>. Changing it only affects new periods — existing timesheets and payslips keep their original window.
+                </p>
+              </div>
+            </div>
             {/* iter309 — weekly/bi-weekly payday-on-weekday.
                 Hidden for monthly cadence because monthly still uses
                 `pay_day` (day-of-month). For weekly/biweekly the admin
@@ -2285,9 +2299,12 @@ function TimesheetsPanel() {
   const [punchTs, setPunchTs] = React.useState(null);
   const [showLogFor, setShowLogFor] = React.useState(false);
   const [staffOptions, setStaffOptions] = React.useState([]);
+  // iter350 — every period picker here uses the campus pay cycle configured in
+  // HR Settings (cycle + anchor date), never a free-form month.
+  const [payPeriods, setPayPeriods] = React.useState([]);
   const [logForm, setLogForm] = React.useState({
     staff_id: '',
-    period: new Date().toISOString().slice(0, 7),
+    period: '',
     days_worked: '',
     hours_worked: '',
     pto_days: '',
@@ -2298,11 +2315,23 @@ function TimesheetsPanel() {
   // uploads land as `status='submitted'` awaiting director approval.
   const [showXlsx, setShowXlsx] = React.useState(false);
   const [xlsxForm, setXlsxForm] = React.useState({
-    period: new Date().toISOString().slice(0, 7),
+    period: '',
     file: null,
   });
   const [xlsxBusy, setXlsxBusy] = React.useState(false);
   const [xlsxResult, setXlsxResult] = React.useState(null);
+
+  React.useEffect(() => {
+    api.get('/hr/pay-periods', { params: { past: 12, future: 1 } })
+      .then(r => {
+        const list = (r.data?.periods || []).slice().reverse();
+        setPayPeriods(list);
+        const cur = (list.find(p => p.is_current) || list[0] || {}).period || '';
+        setLogForm(f => ({ ...f, period: f.period || cur }));
+        setXlsxForm(f => ({ ...f, period: f.period || cur }));
+      })
+      .catch(() => setPayPeriods([]));
+  }, []);
 
   React.useEffect(() => {
     api.get('/admin/users/directory', { params: { limit: 500 } })
@@ -2410,7 +2439,13 @@ function TimesheetsPanel() {
               <SelectItem value="rejected">Rejected</SelectItem>
             </SelectContent>
           </Select>
-          <Input type="month" value={periodFilter} onChange={e => setPeriodFilter(e.target.value)} className="h-8 w-36 text-xs" data-testid="ts-period-filter" />
+          <Select value={periodFilter || '__all__'} onValueChange={v => setPeriodFilter(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="h-8 w-56 text-xs" data-testid="ts-period-filter"><SelectValue placeholder="All periods" /></SelectTrigger>
+            <SelectContent className="max-h-64">
+              <SelectItem value="__all__">All periods</SelectItem>
+              {payPeriods.map(p => (<SelectItem key={p.period} value={p.period}>{p.label}{p.is_current ? ' · current' : ''}</SelectItem>))}
+            </SelectContent>
+          </Select>
         </div>
         {loading ? <p className="text-xs text-muted-foreground text-center py-6">Loading…</p> : timesheets.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6">No timesheets found.</p>
@@ -2487,7 +2522,13 @@ function TimesheetsPanel() {
               </Select>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Pay Period</Label>
-              <Input type="month" value={logForm.period} onChange={e => setLogForm({...logForm, period: e.target.value})} data-testid="log-for-period" />
+              <Select value={logForm.period} onValueChange={v => setLogForm({...logForm, period: v})}>
+                <SelectTrigger data-testid="log-for-period"><SelectValue placeholder="Pick a pay period" /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {payPeriods.map(p => (<SelectItem key={p.period} value={p.period}>{p.label}{p.is_current ? ' · current' : ''}</SelectItem>))}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">Periods come from this campus&apos;s pay cycle in HR Settings.</p>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5"><Label className="text-xs">Days worked</Label>
@@ -2517,12 +2558,17 @@ function TimesheetsPanel() {
           <DialogHeader><DialogTitle>Downloadable / Uploadable Timesheet</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Download an XLSX pre-filled with every active staff (name + badge + wage type + rate). Print it, or email it. Staff fill Days / Hours / PTO and sign. Re-upload the completed file and each row lands as a submitted timesheet awaiting your approval.
+              Download an XLSX pre-filled with every active staff (name + badge). Print it, or email it. Staff fill Days / Hours / PTO and sign. Re-upload the completed file and each row lands as a submitted timesheet awaiting your approval. Pay rates and wage types are never printed on timesheets.
             </p>
             <div className="space-y-1.5">
               <Label className="text-xs">Pay Period *</Label>
-              <Input type="month" value={xlsxForm.period} onChange={e => setXlsxForm({...xlsxForm, period: e.target.value})} data-testid="xlsx-period" />
-              <p className="text-[10px] text-muted-foreground">For biweekly windows enter the canonical label (e.g. <code>2026-09-16_2026-09-29</code>).</p>
+              <Select value={xlsxForm.period} onValueChange={v => setXlsxForm({...xlsxForm, period: v})}>
+                <SelectTrigger data-testid="xlsx-period"><SelectValue placeholder="Pick a pay period" /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {payPeriods.map(p => (<SelectItem key={p.period} value={p.period}>{p.label}{p.is_current ? ' · current' : ''}</SelectItem>))}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">Derived from the campus pay cycle + anchor date set in HR Settings.</p>
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" className="flex-1 gap-1" onClick={downloadTemplate} data-testid="xlsx-download-btn"><FileDown size={13} /> Download blank sheet</Button>

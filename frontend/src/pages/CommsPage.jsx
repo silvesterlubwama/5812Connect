@@ -31,7 +31,24 @@ const AI_ROOM = { id: '__ai__', name: 'AI Assistant', type: 'ai_assistant', icon
 const ANNOUNCE_ROOM = { id: '__announcements__', name: 'Announcements', type: 'announcements', icon: 'megaphone', is_no_reply: true };
 const VOICEMAIL_ROOM = { id: '__voicemail__', name: 'Voicemail', type: 'voicemail', icon: 'voicemail', is_no_reply: true };
 const PHONE_ROOM = { id: '__phone__', name: 'Phone', type: 'phone', icon: 'phone', is_no_reply: true };
-const ORG_ROLES = ['Adviser', 'Executive Director', 'Director', 'Manager', 'Leader', 'Coordinator', 'Staff', 'Volunteer'];
+// iter350 — the org chart is ordered by the RBAC role levels in
+// backend/deps.py::ROLE_LEVELS. Admins/system admins used to fall through to
+// the "Other" bucket at the BOTTOM of the chart (they aren't a plain role
+// string), and Adviser was drawn above the Executive Director. Both fixed here.
+const ORG_LEVELS = [
+  { label: 'System Admin', plural: 'System Admins', roles: ['admin', 'system_admin', 'system admin'] },
+  { label: 'Executive Director', plural: 'Executive Directors', roles: ['executive director'] },
+  { label: 'Adviser', plural: 'Advisers', roles: ['adviser', 'advisor'] },
+  { label: 'Director', plural: 'Directors', roles: ['director'] },
+  { label: 'Manager', plural: 'Managers', roles: ['manager'] },
+  { label: 'Leader', plural: 'Leaders', roles: ['leader'] },
+  { label: 'Coordinator', plural: 'Coordinators', roles: ['coordinator'] },
+  { label: 'Staff', plural: 'Staff', roles: ['staff'] },
+  { label: 'Security Contractor', plural: 'Security Contractors', roles: ['security contractor'] },
+  { label: 'Volunteer', plural: 'Volunteers', roles: ['volunteer'] },
+  { label: 'Member', plural: 'Members', roles: ['member', 'parent'] },
+];
+const ORG_LEVEL_ROLES = new Set(ORG_LEVELS.flatMap(l => l.roles));
 
 const PRESENCE_DOTS = {
   online: 'bg-green-500', idle: 'bg-yellow-500', pbx_only: 'bg-blue-500',
@@ -685,12 +702,12 @@ export default function CommsPage() {
             {showOrgChart && (
               <div className="px-2 pb-2 space-y-0.5">
                 {allStaff.length === 0 && <p className="text-[10px] text-muted-foreground text-center py-3">No staff in your campus yet</p>}
-                {ORG_ROLES.map(role => {
-                  const roleStaff = allStaff.filter(s => (s.role || '').toLowerCase() === role.toLowerCase());
+                {ORG_LEVELS.map(level => {
+                  const roleStaff = allStaff.filter(s => level.roles.includes((s.role || '').trim().toLowerCase()));
                   if (roleStaff.length === 0) return null;
                   return (
-                    <div key={role}>
-                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1.5 font-semibold">{role}{roleStaff.length > 1 ? 's' : ''} <span className="opacity-70">· {roleStaff.length}</span></p>
+                    <div key={level.label} data-testid={`org-level-${level.label.toLowerCase().replace(/ /g, '-')}`}>
+                      <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1.5 font-semibold">{roleStaff.length > 1 ? level.plural : level.label} <span className="opacity-70">· {roleStaff.length}</span></p>
                       {roleStaff.map(s => {
                         const pres = getUserPresence(s.id);
                         return (
@@ -726,7 +743,7 @@ export default function CommsPage() {
                 })}
                 {/* Other roles not in standard org tree */}
                 {(() => {
-                  const uncategorized = allStaff.filter(s => !ORG_ROLES.some(r => r.toLowerCase() === (s.role || '').toLowerCase()));
+                  const uncategorized = allStaff.filter(s => !ORG_LEVEL_ROLES.has((s.role || '').trim().toLowerCase()));
                   if (uncategorized.length === 0) return null;
                   return (
                     <div>

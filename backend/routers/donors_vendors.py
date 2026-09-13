@@ -292,7 +292,69 @@ async def list_vendors(
     if include_stats:
         for v in docs:
             v.update(await _vendor_stats(v["id"], v["name"]))
+            # Surface the dead weight: auto-created rows with no money against
+            # them are leftovers from imports/test data and were cluttering
+            # the list with no way to tell them apart (iter350).
+            v["has_activity"] = bool(
+                v.get("expense_count") or v.get("bill_count") or v.get("total_expenses")
+            )
+            v["is_stale"] = not v["has_activity"]
     return docs
+
+
+@router.get("/vendors/stale")
+async def list_stale_vendors(current_user: dict = Depends(require_manager)):
+    """Vendors with no expenses and no bills against them.
+
+    Deliberately NOT limited to `auto_created` rows: the clutter people
+    actually complain about is left over from imports and the old finance UI,
+    and those rows carry no flag at all. Each row reports whether it was
+    auto-created so the admin can decide.
+    """
+    campus_filter = await get_campus_filter(current_user)
+    q: dict = {"active": {"$ne": False}}
+    q.update(campus_filter)
+    rows = await db.vendors.find(q, {"_id": 0}).sort("created_at", 1).to_list(500)
+    stale = []
+    for v in rows:
+        stats = await _vendor_stats(v["id"], v["name"])
+        if not (stats.get("expense_count") or stats.get("bill_count") or stats.get("total_expenses")):
+            stale.append({**v, **stats})
+    return {"stale": stale, "count": len(stale)}
+
+
+@router.post("/vendors/cleanup-stale")
+async def cleanup_stale_vendors(data: dict = None, current_user: dict = Depends(require_admin)):
+    """Archive vendors that have no activity.
+
+    Archive, not delete: if a historical expense is later re-linked the row is
+    still there. {"ids": [...]} archives an explicit selection;
+    {"all_no_activity": true} archives every zero-activity vendor; with neither,
+    only auto-created zero-activity rows are touched.
+    """
+    data = data or {}
+    ids = data.get("ids") or []
+    stale = (await list_stale_vendors(current_user))["stale"]
+    if ids:
+        targets = [v for v in stale if v["id"] in ids]
+    elif data.get("all_no_activity"):
+        targets = stale
+    else:
+        # Default to the safe subset — never bulk-archive rows a human typed in
+        # unless they were explicitly selected.
+        targets = [v for v in stale if v.get("auto_created")]
+    if not targets:
+        return {"archived": 0, "message": "Nothing to clean up — every vendor has activity."}
+    await db.vendors.update_many(
+        {"id": {"$in": [v["id"] for v in targets]}},
+        {"$set": {"active": False, "archived_reason": "no activity (auto-created)",
+                  "archived_at": datetime.now(timezone.utc).isoformat(),
+                  "archived_by": current_user["id"]}},
+    )
+    await _audit(current_user["id"], "cleanup", "vendors", None,
+                 {"archived": [v["name"] for v in targets][:50]})
+    return {"archived": len(targets), "names": [v["name"] for v in targets][:50],
+            "message": f"Archived {len(targets)} unused vendor(s)."}
 
 
 @router.get("/vendors/suggest")

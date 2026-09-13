@@ -153,6 +153,11 @@ class DonationCreate(BaseModel):
     date: Optional[str] = None; notes: str = ""; member_id: Optional[str] = None
     location_id: Optional[str] = None; sublocation_id: Optional[str] = None
     deposit_to_account_id: Optional[str] = None  # FK → chart_accounts.id (which cash/bank account received this)
+    # Who physically received the cash. `entered_by` is whoever keyed it in,
+    # which is NOT the same person — finance asked to be able to answer
+    # "who took this money?" months later (iter350).
+    received_by_id: Optional[str] = None
+    received_by_name: Optional[str] = None
 
     @field_validator("amount", mode="before")
     @classmethod
@@ -172,6 +177,9 @@ class ExpenseCreate(BaseModel):
     vendor: Optional[str] = None  # Who was paid (e.g. "Bulunzi bugagga farm supply")
     purpose: Optional[str] = None  # Purpose/Beneficiary/Notes — free text
     receipt_number: Optional[str] = None  # Reff./Receipt# for reconciliation
+    # Which staff member actually spent the money (vs. who keyed the entry).
+    paid_by_id: Optional[str] = None
+    paid_by_name: Optional[str] = None
     account: Optional[str] = None  # Payment source label (legacy free-text/enum)
     paid_from_account_id: Optional[str] = None  # FK → financial_accounts.id (which cash/bank account funded this expense)
     department: Optional[str] = None  # LEGACY free-text label (FARM / HR / etc.). Kept for backwards-compat with the sheet importer.
@@ -952,6 +960,15 @@ async def import_financial_data(data: dict, current_user: dict = Depends(require
             "created_by": current_user["id"],
         }
         await db.donations.insert_one(doc)
+        # Imported giving must build donor profiles too — without this the
+        # Donors page stayed empty for every campus that came in by import.
+        try:
+            from routers.donors_vendors import upsert_donor_from_donation
+            donor_id = await upsert_donor_from_donation(doc, current_user)
+            if donor_id:
+                await db.donations.update_one({"id": doc["id"]}, {"$set": {"donor_id": donor_id}})
+        except Exception as e:
+            logger.warning(f"Donor auto-upsert skipped on import: {e}")
         don_imported += 1
     exp_imported = 0
     for e in exp_data:

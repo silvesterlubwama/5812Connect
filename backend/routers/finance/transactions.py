@@ -67,7 +67,37 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )
+    who = await _resolve_staff(data.get("paid_by_id"), data.get("paid_by_name"))
+    if who["staff_id"] or who["staff_name"]:
+        await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": {
+            "paid_by_id": who["staff_id"], "paid_by_name": who["staff_name"]}})
+        je.update({"paid_by_id": who["staff_id"], "paid_by_name": who["staff_name"]})
     return je
+
+
+async def _resolve_staff(staff_id: str = "", staff_name: str = "") -> dict:
+    """Who physically handled the cash — not the person keying the entry.
+
+    Accepts an id (from the type-ahead) or a typed name; a typed name that
+    matches a staff member is linked, and one that doesn't is kept as free text
+    rather than thrown away.
+    """
+    staff_id = (staff_id or "").strip()
+    staff_name = (staff_name or "").strip()
+    if staff_id:
+        u = await db.users.find_one({"id": staff_id}, {"_id": 0, "id": 1, "name": 1})
+        if u:
+            return {"staff_id": u["id"], "staff_name": u.get("name", "")}
+    if staff_name:
+        import re as _re
+        u = await db.users.find_one(
+            {"name": {"$regex": f"^{_re.escape(staff_name)}$", "$options": "i"}},
+            {"_id": 0, "id": 1, "name": 1},
+        )
+        if u:
+            return {"staff_id": u["id"], "staff_name": u.get("name", "")}
+        return {"staff_id": None, "staff_name": staff_name[:120]}
+    return {"staff_id": None, "staff_name": ""}
 
 
 @router.post("/income")
@@ -109,7 +139,30 @@ async def record_income(data: dict, current_user: dict = Depends(require_staff))
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )
+    who = await _resolve_staff(data.get("received_by_id"), data.get("received_by_name"))
+    if who["staff_id"] or who["staff_name"]:
+        await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": {
+            "received_by_id": who["staff_id"], "received_by_name": who["staff_name"]}})
+        je.update({"received_by_id": who["staff_id"], "received_by_name": who["staff_name"]})
     return je
+
+
+@router.get("/staff-search")
+async def staff_search(q: str = Query(..., min_length=2), current_user: dict = Depends(require_staff)):
+    """Type-ahead for "who spent / received this".
+
+    Deliberately NOT `/admin/users`: that endpoint is admin-only (a finance
+    manager got a 403) and campus-filters people who have no campus set, so
+    half the staff were unfindable. Cash can be handled by anyone on the team,
+    so this searches all active staff by name or email.
+    """
+    import re as _re
+    rx = {"$regex": _re.escape(q.strip()), "$options": "i"}
+    rows = await db.users.find(
+        {"status": {"$ne": "inactive"}, "$or": [{"name": rx}, {"email": rx}]},
+        {"_id": 0, "id": 1, "name": 1, "role": 1, "email": 1},
+    ).sort("name", 1).to_list(10)
+    return rows
 
 
 @router.get("/recent")
@@ -143,5 +196,10 @@ async def recent_transactions(
             "total": r.get("total"),
             "location_id": r.get("location_id"),
             "created_by_name": r.get("created_by_name"),
+            # Who handled the cash (manual entries) and the origin/reference
+            # for automatic ones — the widget shows both.
+            "paid_by_name": r.get("paid_by_name"),
+            "received_by_name": r.get("received_by_name"),
+            "reference": r.get("reference"),
         })
     return out

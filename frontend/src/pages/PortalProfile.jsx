@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { portalApi, holidaysApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -32,21 +33,36 @@ export default function PortalProfile() {
   const [myBadge, setMyBadge] = useState(null);   // { token } once issued
   const [badgeLoading, setBadgeLoading] = useState(false);
 
-  // ISO week helpers — timesheet period is Mon–Sun weeks (server accepts YYYY-Www).
-  const isoWeekOf = (d = new Date()) => {
-    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    const day = t.getUTCDay() || 7;
-    t.setUTCDate(t.getUTCDate() + 4 - day);
-    const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-    const week = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
-    return { period: `${t.getUTCFullYear()}-W${String(week).padStart(2, '0')}`, monday: (() => { const m = new Date(d); const dow = (m.getDay() + 6) % 7; m.setDate(m.getDate() - dow); return m.toISOString().slice(0, 10); })() };
-  };
-  const _initWeek = isoWeekOf();
-  const [tsWeek, setTsWeek] = useState({ period: _initWeek.period, monday: _initWeek.monday, days: [false, false, false, false, false, false, false], pto: 0, notes: '' });
-  // Paid / optional-paid public holidays land in this week's grid so staff can
+  // iter350 — timesheet periods come from the campus pay cycle configured by
+  // an admin (weekly / fortnightly / monthly + anchor date), never from a
+  // hard-coded ISO week. `/hr/pay-periods` is the single source of truth.
+  const [tsPeriods, setTsPeriods] = useState([]);
+  const [tsPeriodId, setTsPeriodId] = useState('');
+  const [tsDays, setTsDays] = useState([]);   // ISO dates ticked as worked
+  const [tsExtra, setTsExtra] = useState({ pto: 0, notes: '' });
+  useEffect(() => {
+    api.get('/hr/pay-periods', { params: { past: 3, future: 0 } })
+      .then(r => {
+        const list = (r.data?.periods || []).slice().reverse();
+        setTsPeriods(list);
+        setTsPeriodId((list.find(p => p.is_current) || list[0] || {}).period || '');
+      })
+      .catch(() => setTsPeriods([]));
+  }, []);
+  const tsPeriod = tsPeriods.find(p => p.period === tsPeriodId) || null;
+  const tsDates = React.useMemo(() => {
+    if (!tsPeriod) return [];
+    const out = [];
+    const end = new Date(`${tsPeriod.end}T00:00:00`);
+    for (let d = new Date(`${tsPeriod.start}T00:00:00`); d <= end; d.setDate(d.getDate() + 1)) {
+      out.push(new Date(d));
+    }
+    return out;
+  }, [tsPeriod]);
+  // Paid / optional-paid public holidays land in the grid so staff can
   // see what payroll credits them automatically (iter 316).
   const [payHolidays, setPayHolidays] = useState({});
-  const tsYear = new Date(tsWeek.monday).getFullYear();
+  const tsYear = tsPeriod ? new Date(`${tsPeriod.start}T00:00:00`).getFullYear() : new Date().getFullYear();
   useEffect(() => {
     holidaysApi.list({ year: tsYear, country: 'all' })
       .then(r => {
@@ -138,29 +154,25 @@ export default function PortalProfile() {
   }, []);
 
   const submitTimesheet = async () => {
-    // iter298 — weekly Mon–Sun grid. `entries[]` carries the exact dates worked
-    // so payroll can spot short weeks and daily-wage staff get accurate gross.
-    const daysWorked = tsWeek.days.filter(Boolean).length;
-    if (daysWorked === 0 && !tsWeek.pto) return toast.error('Check at least one day worked or PTO');
-    const monday = new Date(tsWeek.monday);
-    const entries = tsWeek.days
-      .map((worked, i) => {
-        const d = new Date(monday); d.setDate(monday.getDate() + i);
-        return worked ? { date: d.toISOString().slice(0, 10), day_worked: true } : null;
-      })
-      .filter(Boolean);
+    // iter350 — entries[] carry the exact dates worked inside the campus pay
+    // period so payroll can spot short periods and daily-wage staff get an
+    // accurate gross.
+    if (!tsPeriod) return toast.error('No pay period available — ask HR to set the pay cycle');
+    const daysWorked = tsDays.length;
+    if (daysWorked === 0 && !tsExtra.pto) return toast.error('Check at least one day worked or PTO');
+    const entries = tsDays.slice().sort().map(date => ({ date, day_worked: true }));
     try {
       await api.post('/hr/timesheets', {
-        period: tsWeek.period,
+        period: tsPeriod.period,
         days_worked: daysWorked,
-        pto_days: parseFloat(tsWeek.pto) || 0,
+        pto_days: parseFloat(tsExtra.pto) || 0,
         entries,
-        notes: tsWeek.notes,
+        notes: tsExtra.notes,
       });
-      toast.success(`Timesheet for ${tsWeek.period} submitted (${daysWorked} day${daysWorked === 1 ? '' : 's'})`);
+      toast.success(`Timesheet for ${tsPeriod.label} submitted (${daysWorked} day${daysWorked === 1 ? '' : 's'})`);
       setShowTimesheet(false);
-      const nxt = isoWeekOf();
-      setTsWeek({ period: nxt.period, monday: nxt.monday, days: [false, false, false, false, false, false, false], pto: 0, notes: '' });
+      setTsDays([]);
+      setTsExtra({ pto: 0, notes: '' });
       loadHR();
     } catch (e) { toast.error(e.response?.data?.detail || 'Submission failed'); }
   };
@@ -575,46 +587,47 @@ export default function PortalProfile() {
         </DialogContent>
       </Dialog>
 
-      {/* SUBMIT TIMESHEET DIALOG — weekly Mon–Sun grid (iter298) */}
+      {/* SUBMIT TIMESHEET DIALOG — campus pay period grid (iter350) */}
       <Dialog open={showTimesheet} onOpenChange={setShowTimesheet}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Log this week</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Log your time</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex-1 space-y-1.5">
-                <Label className="text-xs">Week starting (Mon)</Label>
-                <Input type="date" value={tsWeek.monday} onChange={e => {
-                  const d = new Date(e.target.value); const w = isoWeekOf(d);
-                  setTsWeek({ ...tsWeek, monday: w.monday, period: w.period });
-                }} data-testid="ts-week-monday" />
-              </div>
-              <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 font-mono" data-testid="ts-week-period">{tsWeek.period}</div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Pay period</Label>
+              <Select value={tsPeriodId} onValueChange={(v) => { setTsPeriodId(v); setTsDays([]); }}>
+                <SelectTrigger data-testid="ts-period-select"><SelectValue placeholder="No pay period configured" /></SelectTrigger>
+                <SelectContent>
+                  {tsPeriods.map(p => (
+                    <SelectItem key={p.period} value={p.period}>{p.label}{p.is_current ? ' · current' : ''}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground" data-testid="ts-period-hint">
+                {tsPeriod ? `Covers ${tsPeriod.start} to ${tsPeriod.end}` : 'Ask HR to set the campus pay cycle in HR Settings.'}
+              </p>
             </div>
             <div>
               <Label className="text-xs">Days worked</Label>
-              <div className="grid grid-cols-7 gap-1 mt-1.5" data-testid="ts-week-days">
-                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((ltr, i) => {
-                  const d = new Date(tsWeek.monday); d.setDate(d.getDate() + i);
-                  const label = d.toLocaleDateString(undefined, { day: 'numeric' });
-                  const on = tsWeek.days[i];
-                  const hol = payHolidays[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`];
+              <div className="grid grid-cols-7 gap-1 mt-1.5" data-testid="ts-period-days">
+                {tsDates.map((d) => {
+                  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  const on = tsDays.includes(iso);
+                  const hol = payHolidays[iso];
                   return (
-                    <button key={i} type="button" onClick={() => { const nd = [...tsWeek.days]; nd[i] = !nd[i]; setTsWeek({ ...tsWeek, days: nd }); }}
-                      data-testid={`ts-day-${i}`} title={hol ? `${hol.name} — ${hol.policy === 'paid' ? 'paid holiday' : 'optional paid day off'}` : undefined}
+                    <button key={iso} type="button"
+                      onClick={() => setTsDays(on ? tsDays.filter(x => x !== iso) : [...tsDays, iso])}
+                      data-testid={`ts-day-${iso}`}
+                      title={hol ? `${hol.name} — ${hol.policy === 'paid' ? 'paid holiday' : 'optional paid day off'}` : undefined}
                       className={`relative flex flex-col items-center justify-center h-14 rounded-md border text-xs transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : hol ? 'bg-amber-50 border-amber-300 hover:bg-amber-100' : 'bg-background hover:bg-muted/40'}`}>
-                      <span className="font-semibold">{ltr}</span>
-                      <span className="text-[10px] opacity-70">{label}</span>
-                      {hol && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" data-testid={`ts-day-holiday-${i}`} />}
+                      <span className="font-semibold">{'MTWTFSS'[(d.getDay() + 6) % 7]}</span>
+                      <span className="text-[10px] opacity-70">{d.getDate()}</span>
+                      {hol && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" data-testid={`ts-day-holiday-${iso}`} />}
                     </button>
                   );
                 })}
               </div>
-              <p className="text-[11px] text-muted-foreground mt-1">Total: <b>{tsWeek.days.filter(Boolean).length}</b> day(s) worked</p>
-              {Object.entries(payHolidays).filter(([date]) => {
-                const m = new Date(tsWeek.monday); const s2 = m.toISOString().slice(0, 10);
-                const e2 = new Date(m.getTime() + 6 * 86400000).toISOString().slice(0, 10);
-                return date >= s2 && date <= e2;
-              }).map(([date, h]) => (
+              <p className="text-[11px] text-muted-foreground mt-1">Total: <b>{tsDays.length}</b> day(s) worked</p>
+              {Object.entries(payHolidays).filter(([date]) => tsPeriod && date >= tsPeriod.start && date <= tsPeriod.end).map(([date, h]) => (
                 <p key={date} className="text-[11px] text-amber-700 mt-1" data-testid="ts-holiday-note">
                   {h.name} ({date.slice(5)}) — {h.policy === 'paid'
                     ? 'paid holiday, credited automatically. Check it too if you actually worked.'
@@ -623,10 +636,10 @@ export default function PortalProfile() {
               ))}
             </div>
             <div className="space-y-1.5"><Label className="text-xs">PTO days (optional)</Label>
-              <Input type="number" step="0.5" min="0" value={tsWeek.pto} onChange={e => setTsWeek({ ...tsWeek, pto: e.target.value })} data-testid="ts-pto" />
+              <Input type="number" step="0.5" min="0" value={tsExtra.pto} onChange={e => setTsExtra({ ...tsExtra, pto: e.target.value })} data-testid="ts-pto" />
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Notes</Label>
-              <Textarea rows={2} value={tsWeek.notes} onChange={e => setTsWeek({ ...tsWeek, notes: e.target.value })} placeholder="Optional summary" data-testid="ts-notes" />
+              <Textarea rows={2} value={tsExtra.notes} onChange={e => setTsExtra({ ...tsExtra, notes: e.target.value })} placeholder="Optional summary" data-testid="ts-notes" />
             </div>
             <div className="flex gap-2 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowTimesheet(false)}>Cancel</Button>

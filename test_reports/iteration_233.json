@@ -1,0 +1,37 @@
+{
+  "summary": "iter350 Phase 3/4/5 backlog fully tested. Backend: 17/17 passing (pytest test_iter350_phase345.py) covering pay-periods anchor/frequency math, XLSX template with no wage/rate columns + upload roundtrip, canonical-period timesheet submit+approve, badge-less checkpoint scan by phone / in-app id / junk, kiosk lookup + qr-scan, social compliance yearly (365-day) sponsored threshold, social multi-select support types with validation, and Claude Sonnet 4.6 sponsor-story generate + hand-edit save. Frontend: HR Timesheets tab shows dropdown period filter (combobox, NOT month input) for ts-period-filter, log-for-period, xlsx-period; XLSX dialog blurb explicitly states 'Pay rates and wage types are never printed on timesheets'; HR settings 'Pay period start anchor' (period-anchor-date, type=date) present with copy about existing timesheets/payslips; Portal timesheet dialog uses ts-period-select combobox + ts-period-days grid + 14 ts-day-* buttons (biweekly); Social work case dialog Overview tab shows cd-support-needed and cd-support-given chip pickers (School fees + Food, Medical toggle states matched the backend PUT); cd-sponsor-story-panel with toggle/generate/save/text data-testids all present and the story panel shows Claude Sonnet 4.6 generated content + persisted hand-edit; Chat org chart is expanded-by-default and renders `SYSTEM ADMINS · 2` (Admin User + Silvester Lubwama) at the TOP under data-testid org-level-system-admin, then Director, then Manager — no Other bucket, no admins in Other. No Executive Director / Adviser users exist in the seeded data, so the ED-above-Adviser sub-ordering could not be exercised, but the ORG_LEVELS array in CommsPage.jsx has them in the correct order (System Admin → ED → Adviser → Director → …).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/social-work/reviews/compliance/due", "issue": "When there are zero active child cases the response omitted `threshold_days` and `sponsored_threshold_days`. Fixed inline (compliance.py early-return now includes both fields)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter350_phase345.py",
+    "/app/test_reports/pytest/iter350_pytest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/routers/hr.py is 3975 lines — exceeds the 700-line guideline; consider splitting timesheets/payslips/settings into sub-routers.",
+    "backend/routers/social_work.py is 1732 lines — same guideline concern; the SUPPORT_TYPES/_clean_support_list block would sit better in a small support_types module.",
+    "backend/routers/social_review_forms/compliance.py — the empty-case early return was silently dropping the summary threshold fields; a return-shape unit test would prevent regressions.",
+    "backend/routers/security_checkpoint/_common.py — `_resolve_by_identifier` builds a large $or with both raw + upper-case variants for every column; a case-insensitive collation index would be cleaner and faster.",
+    "backend/routers/events.py::qr_code_checkin requires `get_current_user` — the review request expected it to work like a badge scan without an operator, but it currently 401s unauthenticated. Not a bug per spec (kiosks always run as an authenticated operator today) but worth noting."
+  ],
+  "updated_files": [
+    "/app/backend/routers/social_review_forms/compliance.py (added threshold_days + sponsored_threshold_days to the zero-cases early return)",
+    "/app/backend/tests/test_iter350_phase345.py (new pytest suite)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% of the tested surfaces"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (default from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Set admin user's phone to +256772123456 so the badge-less phone-scan test could pass. hr_settings were briefly flipped to weekly + anchor 2026-01-05 for the anchor-tiling test and restored to biweekly + next_pay_date 2026-02-25 in the fixture teardown. No permanent seed changes to social cases (used existing sc_140b496b).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter350_phase345.py is a reusable regression suite; runs in ~15s. It self-heals by creating an hr_salary if none exists and skips gracefully when sc_140b496b is missing. The compliance zero-cases fix was applied; verify it stays. The chat org chart is expanded by default (`showOrgChart=true`) — do NOT click org-chart-toggle first if you want to inspect content; click only to collapse.",
+  "rca of the issue": "Only one minor RCA needed: /api/social-work/reviews/compliance/due dropped threshold_days & sponsored_threshold_days when no active child cases matched (early-return dict was incomplete). Repro: seed with no active child cases, GET the endpoint — response is {total_active:0, due:0, never_visited:0, list:[]}. Fix: include threshold_days/sponsored_threshold_days on that early return. Applied at compliance.py line 50."
+}

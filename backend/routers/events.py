@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 import copy
+import re
 
 router = APIRouter(prefix="/api", tags=["events"])
 
@@ -1147,21 +1148,28 @@ async def qr_code_checkin(data: dict, current_user: dict = Depends(get_current_u
     event_name = data.get("event_name", "")
     if not qr_data:
         raise HTTPException(status_code=400, detail="QR data required")
-    # Try to find member by ID, national_id, or email
-    member = await db.members.find_one(
-        {"$or": [{"id": qr_data}, {"national_id": qr_data}, {"email": qr_data}, {"pin": qr_data}]},
-        {"_id": 0}
-    )
+    # iter350 — badge-less fallbacks: a forgotten badge must not block entry.
+    # Any of these identifiers resolves the same person a badge QR would.
+    digits = re.sub(r"\D", "", qr_data)
+    or_q = [
+        {"id": qr_data}, {"member_id": qr_data}, {"badge_number": qr_data},
+        {"national_id": qr_data}, {"national_id": qr_data.upper()},
+        {"nin": qr_data}, {"nin": qr_data.upper()},
+        {"passport_number": qr_data}, {"passport_number": qr_data.upper()},
+        {"passport": qr_data}, {"passport": qr_data.upper()},
+        {"email": qr_data}, {"email": qr_data.lower()},
+        {"pin": qr_data}, {"phone": qr_data},
+    ]
+    if len(digits) >= 7:
+        or_q.append({"phone": {"$regex": f"{re.escape(digits[-9:])}$"}})
+    member = await db.members.find_one({"$or": or_q}, {"_id": 0})
     if not member:
         # Try users table
-        user = await db.users.find_one(
-            {"$or": [{"id": qr_data}, {"national_id": qr_data}, {"email": qr_data}]},
-            {"_id": 0, "password_hash": 0}
-        )
+        user = await db.users.find_one({"$or": or_q}, {"_id": 0, "password_hash": 0, "pin_hash": 0})
         if user:
             member = {"id": user["id"], "name": user.get("name", ""), "role": user.get("role", "member")}
     if not member:
-        raise HTTPException(status_code=404, detail="No member found for this QR code")
+        raise HTTPException(status_code=404, detail="No member found for this ID — try their national ID, passport, phone number or in-app ID")
     # Create check-in
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
     checkin = {
@@ -1500,12 +1508,33 @@ async def kiosk_checkin(data: CheckInCreate):
 
 @router.get("/kiosk/lookup")
 async def kiosk_lookup(identifier: str):
-    member = await db.members.find_one(
-        {"$or": [{"national_id": identifier}, {"phone": identifier}, {"email": identifier.lower()}]},
-        {"_id": 0, "password_hash": 0}
-    )
+    """iter350 — badge-less lookup: national ID / barcode, passport number,
+    phone number, badge number, email, or the person's in-app ID."""
+    raw = (identifier or "").strip()
+    if len(raw) < 3:
+        raise HTTPException(status_code=400, detail="Enter at least 3 characters")
+    digits = re.sub(r"\D", "", raw)
+    or_q = [
+        {"id": raw}, {"member_id": raw}, {"badge_number": raw},
+        {"national_id": raw}, {"national_id": raw.upper()},
+        {"nin": raw}, {"nin": raw.upper()},
+        {"passport_number": raw}, {"passport_number": raw.upper()},
+        {"passport": raw}, {"passport": raw.upper()},
+        {"phone": raw}, {"email": raw.lower()},
+    ]
+    if len(digits) >= 7:
+        or_q.append({"phone": {"$regex": f"{re.escape(digits[-9:])}$"}})
+    member = await db.members.find_one({"$or": or_q}, {"_id": 0, "password_hash": 0})
     if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+        user = await db.users.find_one({"$or": or_q}, {"_id": 0, "password_hash": 0, "pin_hash": 0})
+        if user:
+            member = await db.members.find_one({"user_id": user["id"]}, {"_id": 0}) or {
+                "id": user["id"], "name": user.get("name", ""), "role": user.get("role", "member"),
+                "phone": user.get("phone", ""), "email": user.get("email", ""),
+                "location_id": user.get("location_id"),
+            }
+    if not member:
+        raise HTTPException(status_code=404, detail="No match — try their national ID, passport, phone number or in-app ID")
     return member
 
 

@@ -8,8 +8,8 @@ Two endpoints:
     typed up from a paper printout). We match rows by badge_number → staff
     and create timesheet drafts with status='submitted' + source='xlsx'.
 
-The template supports every wage_type in one file:
-  - Header row: Staff Name | Badge | Wage Type | Rate | Days Worked
+One file covers every wage type — and never shows pay rates (iter350):
+  - Header row: Staff Name | Badge | Days Worked
     | Hours Worked | PTO Days | Notes | Signature
   - Data rows: pre-filled with active salaries for the picked period.
 
@@ -49,25 +49,25 @@ async def timesheet_template(
     ws.title = "Timesheet"
 
     # Header + branding
-    ws.merge_cells("A1:I1")
+    ws.merge_cells("A1:G1")
     c = ws.cell(row=1, column=1, value="58:12 Global — Employee Timesheet")
     c.font = Font(size=16, bold=True, color="0F172A")
     c.alignment = Alignment(horizontal="center")
     ws.row_dimensions[1].height = 24
 
-    ws.merge_cells("A2:I2")
+    ws.merge_cells("A2:G2")
     c = ws.cell(row=2, column=1, value=f"Pay Period: {period}  ·  Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     c.font = Font(size=10, italic=True, color="475569")
     c.alignment = Alignment(horizontal="center")
 
     period_days = _period_span_days(period)
-    ws.merge_cells("A3:I3")
+    ws.merge_cells("A3:G3")
     c = ws.cell(row=3, column=1, value=f"Instructions: staff fill Days Worked / Hours Worked / PTO / Sign — HR digitises and re-uploads. Period spans {period_days} calendar days.")
     c.font = Font(size=9, italic=True, color="64748B")
     c.alignment = Alignment(horizontal="center")
 
     # Column headers
-    headers = ["Staff Name", "Badge Number", "Wage Type", "Rate", "Days Worked", "Hours Worked", "PTO Days", "Notes", "Signature"]
+    headers = ["Staff Name", "Badge Number", "Days Worked", "Hours Worked", "PTO Days", "Notes", "Signature"]
     header_fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=10)
     thin = Side(border_style="thin", color="94A3B8")
@@ -97,13 +97,11 @@ async def timesheet_template(
     for sal in salaries:
         u = users.get(sal["staff_id"], {})
         badge = u.get("badge_number") or u.get("member_id") or ""
-        wage_type = (sal.get("wage_type") or "salary").title()
-        rate = sal.get("hourly_rate") or sal.get("daily_rate") or sal.get("weekly_rate") or sal.get("biweekly_rate") or sal.get("base_salary") or 0
+        # iter350 — pay rates and wage types are deliberately NOT printed on
+        # timesheets. Staff record time only; pay is computed in payroll.
         row_data = [
             sal.get("staff_name", ""),
             str(badge),
-            wage_type,
-            f"{sal.get('currency','UGX')} {rate:,.0f}",
             "",  # Days Worked (staff fills in)
             "",  # Hours Worked
             "",  # PTO Days
@@ -114,27 +112,25 @@ async def timesheet_template(
             c = ws.cell(row=row_idx, column=col, value=v)
             c.border = border
             c.alignment = Alignment(vertical="center", wrap_text=True)
-            if col == 4:
-                c.alignment = Alignment(horizontal="right", vertical="center")
         ws.row_dimensions[row_idx].height = 22
         row_idx += 1
 
     # Add ~5 blank rows for casual workers not in the salary table
     for _ in range(5):
-        for col in range(1, 10):
+        for col in range(1, 8):
             c = ws.cell(row=row_idx, column=col, value="")
             c.border = border
         ws.row_dimensions[row_idx].height = 22
         row_idx += 1
 
     # Column widths
-    widths = [24, 16, 14, 18, 14, 14, 12, 30, 22]
+    widths = [24, 16, 14, 14, 12, 30, 22]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     # Footer / signature block
     footer_row = row_idx + 2
-    ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=9)
+    ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=7)
     c = ws.cell(row=footer_row, column=1, value="HR Approval: ______________________________     Date: __________")
     c.font = Font(size=10, italic=True, color="475569")
 
@@ -239,9 +235,10 @@ async def timesheet_template(
         "1. Staff (or their supervisor) fill in Days Worked, Hours Worked, and PTO for each row.",
         "2. Hourly staff should record TOTAL hours worked in the period (not per day).",
         "3. Daily staff record TOTAL days worked. Rows can be left blank for staff who didn't work.",
-        "4. Salaried staff can skip Days/Hours — payroll uses the monthly base salary.",
-        "5. Staff sign the Signature column with a pen (paper) or type their name (digital).",
-        "6. HR uploads the completed file at: HR → Timesheets → Upload sheet.",
+        "4. Salaried staff can skip Days/Hours — payroll uses their contract terms.",
+        "5. Pay rates are never printed on timesheets — record time only.",
+        "6. Staff sign the Signature column with a pen (paper) or type their name (digital).",
+        "7. HR uploads the completed file at: HR → Timesheets → Upload sheet.",
         "",
         "The upload matches by BADGE NUMBER. If a staff row has no badge number,",
         "the system falls back to name matching (case-insensitive).",

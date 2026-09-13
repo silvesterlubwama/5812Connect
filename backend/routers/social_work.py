@@ -34,6 +34,30 @@ NOTE_KINDS = {"visit", "counseling", "safeguarding", "milestone", "school", "med
 PAYMENT_KINDS = {"tuition", "resource", "medical", "child_support"}
 RISK_LEVELS = {"low", "medium", "high", "critical"}
 
+# iter350 — a child usually needs (and receives) SEVERAL kinds of support at
+# once, so `support_needed` / `support_given` are multi-select arrays. The case
+# `category` stays single-valued: it's the type of case, not the help given.
+SUPPORT_TYPES = {
+    "school_fees", "school_materials", "uniform", "food", "medical",
+    "housing", "clothing", "counselling", "transport", "hygiene",
+    "vocational_training", "legal", "spiritual", "other",
+}
+
+
+def _clean_support_list(values, field: str) -> List[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise HTTPException(status_code=400, detail=f"{field} must be a list")
+    out = []
+    for v in values:
+        key = str(v or "").strip().lower()
+        if key not in SUPPORT_TYPES:
+            raise HTTPException(status_code=400, detail=f"Unknown {field} value '{v}'")
+        if key not in out:
+            out.append(key)
+    return out
+
 
 # ============================================================
 # COUNTRY COMPLIANCE FIELDS
@@ -469,6 +493,8 @@ async def create_case(data: dict, current_user: dict = Depends(require_staff)):
         },
         "goals": data.get("goals") or [],  # [{ goal, target_date, progress_pct, notes }]
         "risk_level": (data.get("risk_level") if data.get("risk_level") in RISK_LEVELS else "low"),
+        "support_needed": _clean_support_list(data.get("support_needed"), "support_needed"),
+        "support_given": _clean_support_list(data.get("support_given"), "support_given"),
         "sponsor_member_id": data.get("sponsor_member_id"),
         "sponsor_manual": None,    # set below if data includes it (with full validation + guest upsert)
         "sponsor_guest_id": None,
@@ -828,6 +854,7 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
                "risk_level", "sponsor_member_id", "sponsor_manual", "sponsor_guest_id", "compliance",
+               "support_needed", "support_given",
                # Subject re-linking — legacy cases created before subject_id was
                # populated can be repaired from the UI without a mongo shell.
                "subject_id", "subject_kind", "subject_name", "subject_dob", "subject_photo_url"}
@@ -851,6 +878,9 @@ async def update_case(case_id: str, data: dict, current_user: dict = Depends(req
         raise HTTPException(status_code=403, detail="Only social-work manager+ can discharge a case")
     if "risk_level" in data and data["risk_level"] not in RISK_LEVELS:
         raise HTTPException(status_code=400, detail=f"risk_level must be one of {sorted(RISK_LEVELS)}")
+    for field in ("support_needed", "support_given"):
+        if field in data:
+            data[field] = _clean_support_list(data[field], field)
     # Validate sponsor_manual shape — must be either null/missing OR an object with a non-empty name.
     # Anything else gets rejected here rather than landing as garbage that the report PDF then trips on.
     if "sponsor_manual" in data and data["sponsor_manual"] is not None:
@@ -1367,6 +1397,16 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
                 "payer_type": payer_type,
             }
             await db.donations.insert_one(mirror)
+            # Sponsor payments ARE donations — they were never fed into the
+            # donor directory, which is why Donors looked empty/wrong while
+            # sponsorship money was clearly coming in (iter350).
+            try:
+                from routers.donors_vendors import upsert_donor_from_donation
+                donor_id = await upsert_donor_from_donation(mirror, current_user)
+                if donor_id:
+                    await db.donations.update_one({"id": mirror["id"]}, {"$set": {"donor_id": donor_id}})
+            except Exception as e:
+                logger.warning(f"Donor auto-upsert skipped for sponsor payment: {e}")
             payment["mirror_id"] = mirror["id"]
             payment["mirror_collection"] = "donations"
         else:

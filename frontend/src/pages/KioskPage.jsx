@@ -528,7 +528,7 @@ export default function KioskPage() {
       }
       const res = await kioskApi.lookup(lookupId);
       setFoundMember(res.data);
-    } catch { toast.error('No match found. Try your PIN, last 4 of phone, or full email.'); }
+    } catch { toast.error('No match found. Try their PIN, phone number, national ID, passport number, in-app ID or email.'); }
     finally { setLookupLoading(false); }
   };
 
@@ -1055,11 +1055,11 @@ export default function KioskPage() {
           <CardHeader className="text-center space-y-3">
             <div className="mx-auto w-20 h-20 rounded-full bg-primary flex items-center justify-center"><CreditCard size={36} className="text-primary-foreground" /></div>
             <CardTitle className="text-2xl font-heading">Check-In</CardTitle>
-            <CardDescription>Enter PIN, last 4 digits of phone, ID number, or email</CardDescription>
+            <CardDescription>Enter PIN, phone number, national ID, passport number, in-app ID, or email — no badge needed</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <form onSubmit={handleIdLookup} className="space-y-3">
-              <Input className="h-12 text-lg" placeholder="PIN, last 4 of phone, or email" value={lookupId} onChange={e => setLookupId(e.target.value)} required data-testid="kiosk-id-input" />
+              <Input className="h-12 text-lg" placeholder="PIN, phone, national ID, passport or in-app ID" value={lookupId} onChange={e => setLookupId(e.target.value)} required data-testid="kiosk-id-input" />
               <Button type="submit" className="w-full h-12 gap-2" disabled={lookupLoading}><Search size={18} /> {lookupLoading ? 'Looking...' : 'Find'}</Button>
             </form>
             {foundMember && (

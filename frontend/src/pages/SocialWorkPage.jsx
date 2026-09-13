@@ -56,6 +56,48 @@ const PAYMENT_KIND_LABELS = {
   child_support: 'Sponsor payment received',
 };
 
+// iter350 — a child usually needs several kinds of help at once, so these are
+// multi-select. Keys must match SUPPORT_TYPES in backend/routers/social_work.py.
+const SUPPORT_TYPE_LABELS = {
+  school_fees: 'School fees',
+  school_materials: 'School materials',
+  uniform: 'Uniform',
+  food: 'Food',
+  medical: 'Medical',
+  housing: 'Housing',
+  clothing: 'Clothing',
+  counselling: 'Counselling',
+  transport: 'Transport',
+  hygiene: 'Hygiene items',
+  vocational_training: 'Vocational training',
+  legal: 'Legal',
+  spiritual: 'Spiritual care',
+  other: 'Other',
+};
+
+const SupportTypePicker = ({ label, hint, value, onToggle, testid }) => (
+  <div className="space-y-1.5" data-testid={testid}>
+    <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</Label>
+    <div className="flex flex-wrap gap-1.5">
+      {Object.entries(SUPPORT_TYPE_LABELS).map(([key, text]) => {
+        const on = (value || []).includes(key);
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onToggle(key)}
+            data-testid={`${testid}-${key}`}
+            className={`px-2.5 py-1 rounded-full border text-[11px] transition-colors ${on
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-background hover:bg-muted border-border text-muted-foreground'}`}
+          >{text}</button>
+        );
+      })}
+    </div>
+    {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
+  </div>
+);
+
 // Auto-populated fields (Family / Education / Medical) carry a
 // `_field_sources[fieldName] = { review_id, review_date, kind }` map that the
 // backend writes whenever a review form fills in a value. This badge surfaces
@@ -621,6 +663,126 @@ function SchoolPasswordsDialog({ school, onClose, onReload }) {
 }
 
 // =================================================================
+// SPONSOR STORY — one-click AI narrative (Claude Sonnet 4.6), iter350
+// =================================================================
+function SponsorStoryPanel({ caseDoc, caseId, setCaseDoc }) {
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [tone, setTone] = useState('warm');
+  const [length, setLength] = useState('medium');
+  const [inputs, setInputs] = useState(caseDoc?.sponsor_story_inputs || {});
+  const [draft, setDraft] = useState(caseDoc?.sponsor_story || '');
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/social-work/cases/${caseId}/sponsor-story`, { tone, length, inputs });
+      setDraft(r.data.story);
+      setCaseDoc(prev => ({ ...prev, sponsor_story: r.data.story, sponsor_story_generated_at: r.data.generated_at }));
+      toast.success('Sponsor story ready — edit it before you send it');
+      setOpen(true);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Story generation failed');
+    } finally { setBusy(false); }
+  };
+
+  const save = async () => {
+    try {
+      await api.put(`/social-work/cases/${caseId}/sponsor-story`, { story: draft });
+      setCaseDoc(prev => ({ ...prev, sponsor_story: draft }));
+      toast.success('Story saved to the case');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+  };
+
+  return (
+    <div className="border-t pt-3 space-y-2" data-testid="cd-sponsor-story-panel">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <Label className="text-xs font-semibold flex items-center gap-1"><Sparkles size={12} /> Sponsor story</Label>
+          <p className="text-[10px] text-muted-foreground">
+            Written from this file by AI — no surname, school name, address or diagnosis is ever included.
+          </p>
+        </div>
+        <div className="flex gap-1.5">
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setOpen(o => !o)} data-testid="cd-sponsor-story-toggle">
+            {open ? 'Hide details' : 'Add details'}
+          </Button>
+          <Button size="sm" className="h-7 text-[11px] gap-1" disabled={busy} onClick={generate} data-testid="cd-sponsor-story-generate">
+            <Sparkles size={11} /> {busy ? 'Writing…' : caseDoc?.sponsor_story ? 'Regenerate' : 'Generate story'}
+          </Button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" data-testid="cd-sponsor-story-inputs">
+          {[
+            ['favourite_colour', 'Favourite colour', 'e.g. bright yellow'],
+            ['favourite_subject', 'Favourite subject', 'e.g. science'],
+            ['favourite_food', 'Favourite food', 'e.g. matoke'],
+            ['dream', 'Wants to be one day', 'e.g. a nurse'],
+            ['living_situation', 'Living situation', 'e.g. lives with her grandmother'],
+            ['personality', 'Personality', 'e.g. quiet but determined'],
+          ].map(([key, label, ph]) => (
+            <div className="space-y-1" key={key}>
+              <Label className="text-[10px] text-muted-foreground">{label}</Label>
+              <Input className="h-8 text-xs" value={inputs[key] || ''} placeholder={ph}
+                onChange={e => setInputs({ ...inputs, [key]: e.target.value })}
+                data-testid={`cd-story-input-${key}`} />
+            </div>
+          ))}
+          <div className="space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Tone</Label>
+            <Select value={tone} onValueChange={setTone}>
+              <SelectTrigger className="h-8 text-xs" data-testid="cd-story-tone"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="warm">Warm &amp; personal</SelectItem>
+                <SelectItem value="hopeful">Hopeful</SelectItem>
+                <SelectItem value="formal">Formal / institutional</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Length</Label>
+            <Select value={length} onValueChange={setLength}>
+              <SelectTrigger className="h-8 text-xs" data-testid="cd-story-length"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="short">Short</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="long">Long</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="sm:col-span-2 space-y-1">
+            <Label className="text-[10px] text-muted-foreground">Anything else worth telling a sponsor</Label>
+            <Textarea rows={2} className="text-xs" value={inputs.extra || ''}
+              onChange={e => setInputs({ ...inputs, extra: e.target.value })}
+              data-testid="cd-story-input-extra" />
+          </div>
+        </div>
+      )}
+
+      {(draft || caseDoc?.sponsor_story) && (
+        <div className="space-y-1.5">
+          <Textarea rows={7} className="text-xs leading-relaxed" value={draft}
+            onChange={e => setDraft(e.target.value)} data-testid="cd-sponsor-story-text" />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" className="h-7 text-[11px]" onClick={save} data-testid="cd-sponsor-story-save">Save story</Button>
+            <Button size="sm" variant="outline" className="h-7 text-[11px]"
+              onClick={() => { navigator.clipboard?.writeText(draft); toast.success('Copied'); }}
+              data-testid="cd-sponsor-story-copy">Copy</Button>
+            {caseDoc?.sponsor_story_generated_at && (
+              <span className="text-[10px] text-muted-foreground">
+                Generated {new Date(caseDoc.sponsor_story_generated_at).toLocaleString()} · {caseDoc.sponsor_story_model || 'claude-sonnet-4-6'}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =================================================================
 // CASE DETAIL DIALOG — tabbed
 // =================================================================
 function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
@@ -1004,6 +1166,39 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                   </Select>
                 </div>
               </div>
+
+              {/* SUPPORT NEEDED / GIVEN — multi-select (iter350) */}
+              <div className="border-t pt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <SupportTypePicker
+                  label="Support types needed"
+                  hint="Everything this child still needs help with."
+                  value={caseDoc.support_needed}
+                  testid="cd-support-needed"
+                  onToggle={async (key) => {
+                    const prev = caseDoc.support_needed || [];
+                    const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+                    setCaseDoc({ ...caseDoc, support_needed: next });
+                    try { await api.put(`/social-work/cases/${caseId}`, { support_needed: next }); }
+                    catch (e) { setCaseDoc({ ...caseDoc, support_needed: prev }); toast.error(e.response?.data?.detail || 'Update failed'); }
+                  }}
+                />
+                <SupportTypePicker
+                  label="Support types given"
+                  hint="What the organisation is already providing."
+                  value={caseDoc.support_given}
+                  testid="cd-support-given"
+                  onToggle={async (key) => {
+                    const prev = caseDoc.support_given || [];
+                    const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+                    setCaseDoc({ ...caseDoc, support_given: next });
+                    try { await api.put(`/social-work/cases/${caseId}`, { support_given: next }); }
+                    catch (e) { setCaseDoc({ ...caseDoc, support_given: prev }); toast.error(e.response?.data?.detail || 'Update failed'); }
+                  }}
+                />
+              </div>
+
+              {/* SPONSOR STORY — one-click AI narrative for sponsors (iter350) */}
+              <SponsorStoryPanel caseDoc={caseDoc} caseId={caseId} setCaseDoc={setCaseDoc} />
 
               {/* SPONSOR — supports two modes: link an existing user, OR enter a manual sponsor
                   (external donor not in the system). Toggle controls which mode is active.

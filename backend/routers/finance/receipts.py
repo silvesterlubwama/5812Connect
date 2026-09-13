@@ -25,10 +25,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from deps import db, require_staff, logger
 
-from ._common import post_journal_entry, get_account_by_code
+from ._common import post_journal_entry, get_account_by_code, reverse_journal_entry
 
 router = APIRouter(prefix="/api/finance/receipts", tags=["finance"])
 
@@ -204,6 +205,19 @@ async def scan_receipt(
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id is required — pick a campus or sub-location before scanning the receipt")
 
+    # Keep the file. Without this there was nothing to look at in the review
+    # queue — reviewers had to trust the OCR blind (iter350).
+    receipt_url = None
+    try:
+        from upload_helper import save_upload
+        ext = (file.filename or "receipt").rsplit(".", 1)[-1][:8] if "." in (file.filename or "") else "jpg"
+        receipt_url = await save_upload(
+            "receipts", f"rcp-{uuid.uuid4().hex[:10]}.{ext}",
+            content, file.content_type or "application/octet-stream",
+        )
+    except Exception as e:
+        logger.warning(f"[receipts] could not store the receipt image: {e}")
+
     text = _ocr(content, file.content_type or "")
     extracted = {
         "vendor": _guess_vendor(text),
@@ -211,9 +225,12 @@ async def scan_receipt(
         "amount": _extract_amount(text),
         "currency": _extract_currency(text),
         "raw_text": text[:2000],
+        "receipt_url": receipt_url,
+        "file_name": file.filename,
     }
     if extracted["amount"] <= 0:
-        # Still return the parse so the user can key it in manually.
+        # Still return the parse (and the stored image) so the user can key it
+        # in manually without re-uploading.
         return {"extracted": extracted, "journal_entry": None,
                 "hint": "Amount not detected — enter manually via the Record expense dialog."}
 
@@ -252,10 +269,19 @@ async def scan_receipt(
         created_by_name=current_user.get("name"),
     )
     # Flag as needing finance review so it shows up in the review queue.
-    await db.finance_journal_entries.update_one(
-        {"id": je["id"]}, {"$set": {"needs_review": True, "review_reason": "receipt-scan"}},
-    )
-    je["needs_review"] = True
+    receipt_meta = {
+        "needs_review": True,
+        "review_reason": "receipt-scan",
+        "receipt_url": receipt_url,
+        "receipt_name": file.filename,
+        "receipt_vendor": extracted["vendor"],
+        "receipt_ocr_amount": extracted["amount"],
+        "ocr_text": text[:4000],
+        "uploaded_by": current_user["id"],
+        "uploaded_by_name": current_user.get("name", ""),
+    }
+    await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": receipt_meta})
+    je.update(receipt_meta)
 
     logger.info(f"[receipts] Draft JE {je['id']} posted from scan by {current_user.get('email')}")
     return {"extracted": extracted, "journal_entry": je}
@@ -268,9 +294,146 @@ async def list_review_queue(
     """List all draft JEs still flagged `needs_review=True` — finance
     reviewers work through this queue to approve or edit."""
     rows = await db.finance_journal_entries.find(
-        {"needs_review": True, "reversed": {"$ne": True}}, {"_id": 0},
+        {"needs_review": True, "reversed": {"$ne": True}, "rejected": {"$ne": True}}, {"_id": 0},
     ).sort([("date", -1), ("created_at", -1)]).limit(200).to_list(200)
+    for r in rows:
+        r["uploaded_by_name"] = r.get("uploaded_by_name") or r.get("created_by_name") or ""
+        r["has_receipt"] = bool(r.get("receipt_url"))
     return rows
+
+
+REJECT_REASONS = {
+    "not_clear": "Not clear — please re-upload",
+    "not_approved": "Not an approved purchase",
+    "duplicate": "Duplicate receipt",
+    "wrong_campus": "Wrong campus or department",
+    "other": "Other",
+}
+
+
+@router.get("/reject-reasons")
+async def reject_reasons(current_user: dict = Depends(require_staff)):
+    """The canned rejection reasons the review UI offers."""
+    return [{"code": k, "label": v} for k, v in REJECT_REASONS.items()]
+
+
+class ReceiptEdit(BaseModel):
+    """What a reviewer is allowed to correct when the OCR got it wrong."""
+    date: Optional[str] = None
+    description: Optional[str] = None
+    vendor: Optional[str] = None
+    amount: Optional[float] = Field(default=None, gt=0)
+    expense_account_id: Optional[str] = None
+    paid_from_account_id: Optional[str] = None
+    memo: Optional[str] = None
+
+
+@router.put("/{je_id}")
+async def edit_receipt_je(je_id: str, data: ReceiptEdit, current_user: dict = Depends(require_staff)):
+    """Correct a scanned receipt: amount, date, vendor, description, accounts.
+
+    A posted entry is never mutated in place — the original is reversed and a
+    corrected one posted, so the ledger keeps the full story. The receipt image
+    and review flag follow the new entry.
+    """
+    je = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    if not je:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if je.get("reversed"):
+        raise HTTPException(status_code=400, detail="That entry was already reversed")
+
+    lines = je.get("lines") or []
+    debit_line = next((ln for ln in lines if (ln.get("debit") or 0) > 0), None)
+    credit_line = next((ln for ln in lines if (ln.get("credit") or 0) > 0), None)
+    if not debit_line or not credit_line:
+        raise HTTPException(status_code=400, detail="This entry isn't a simple receipt — edit it in the journal instead")
+
+    amount = float(data.amount if data.amount is not None else (debit_line.get("debit") or 0))
+    vendor = (data.vendor if data.vendor is not None else je.get("receipt_vendor")) or ""
+    memo = (data.memo if data.memo is not None else vendor)[:120]
+
+    async def _acct(acct_id: Optional[str], fallback: dict) -> dict:
+        if not acct_id:
+            return fallback
+        a = await db.finance_chart_of_accounts.find_one({"id": acct_id}, {"_id": 0})
+        if not a:
+            raise HTTPException(status_code=400, detail="Unknown account")
+        return {"account_id": a["id"], "account_code": a["code"], "account_name": a["name"]}
+
+    dr = await _acct(data.expense_account_id, {k: debit_line.get(k) for k in ("account_id", "account_code", "account_name")})
+    cr = await _acct(data.paid_from_account_id, {k: credit_line.get(k) for k in ("account_id", "account_code", "account_name")})
+
+    await reverse_journal_entry(
+        je_id, reason=f"Corrected by {current_user.get('name') or 'reviewer'}", current_user=current_user)
+
+    new_je = await post_journal_entry(
+        date=data.date or je.get("date"),
+        description=data.description or f"Receipt: {vendor or 'Vendor unknown'}",
+        lines=[
+            {**dr, "debit": amount, "credit": 0, "memo": memo},
+            {**cr, "debit": 0, "credit": amount, "memo": memo},
+        ],
+        source="receipt_scan",
+        reference=je.get("reference"),
+        location_id=je.get("location_id"),
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+    )
+    carry = {k: je.get(k) for k in ("receipt_url", "receipt_name", "ocr_text", "uploaded_by",
+                                    "uploaded_by_name", "receipt_ocr_amount") if je.get(k)}
+    await db.finance_journal_entries.update_one({"id": new_je["id"]}, {"$set": {
+        **carry,
+        "receipt_vendor": vendor,
+        "needs_review": True,
+        "review_reason": "receipt-scan",
+        "corrected_from": je_id,
+        "corrected_by": current_user["id"],
+        "corrected_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"ok": True, "journal_entry_id": new_je["id"], "replaces": je_id}
+
+
+@router.put("/{je_id}/reject")
+async def reject_receipt_je(je_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Reject a scanned receipt: reverse the draft and tell the uploader why."""
+    reason_code = (data.get("reason") or "").strip()
+    note = (data.get("note") or "").strip()[:500]
+    if reason_code not in REJECT_REASONS:
+        raise HTTPException(status_code=400, detail="Pick a rejection reason")
+    if reason_code == "other" and not note:
+        raise HTTPException(status_code=400, detail="Add a note explaining the rejection")
+
+    je = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    if not je:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    label = REJECT_REASONS[reason_code]
+
+    if not je.get("reversed"):
+        await reverse_journal_entry(je_id, reason=f"Receipt rejected: {label}", current_user=current_user)
+
+    await db.finance_journal_entries.update_one({"id": je_id}, {"$set": {
+        "needs_review": False,
+        "rejected": True,
+        "rejected_reason": reason_code,
+        "rejected_reason_label": label,
+        "rejected_note": note,
+        "rejected_by": current_user["id"],
+        "rejected_by_name": current_user.get("name", ""),
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+    }})
+
+    uploader = je.get("uploaded_by") or je.get("created_by")
+    if uploader and uploader != current_user["id"]:
+        try:
+            from routers.notifications import create_notification
+            await create_notification(
+                title="Receipt rejected",
+                message=f"{label}{(' — ' + note) if note else ''}. Re-upload it from the dashboard when you can.",
+                user_id=uploader, notif_type="finance", link="/finance?tab=receipts",
+            )
+        except Exception as e:
+            logger.warning(f"[receipts] rejection notice skipped: {e}")
+    return {"ok": True, "reason": label}
 
 
 @router.put("/{je_id}/approve")

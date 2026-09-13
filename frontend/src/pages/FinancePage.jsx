@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera, Eye, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
 import { AccountLedgerDialog } from '../components/AccountLedgerDialog';
@@ -142,9 +142,25 @@ function OverviewPanel() {
                 {recent.map(r => (
                   <TableRow key={r.id} data-testid={`recent-tx-${r.id}`}>
                     <TableCell className="font-mono text-xs">{r.date}</TableCell>
-                    <TableCell>{r.description}</TableCell>
+                    <TableCell>
+                      {r.description}
+                      {/* Who handled the cash on manual entries; for automatic
+                          ones, where the entry came from. */}
+                      {(r.paid_by_name || r.received_by_name) && (
+                        <span className="block text-[11px] text-muted-foreground">
+                          {r.paid_by_name ? `spent by ${r.paid_by_name}` : `received by ${r.received_by_name}`}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell>{r.account}</TableCell>
-                    <TableCell><Badge variant="outline" className="text-[10px]">{r.source}</Badge></TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-[10px]">{SOURCE_LABELS[r.source] || r.source}</Badge>
+                      {AUTO_SOURCES.has(r.source) && (
+                        <span className="block text-[10px] text-muted-foreground">
+                          automatic{r.reference ? ` · ${r.reference}` : ''}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right font-mono">{money(r.total)}</TableCell>
                   </TableRow>
                 ))}
@@ -162,6 +178,20 @@ function OverviewPanel() {
   );
 }
 
+// Plain-English labels for where an entry came from — 'pos_sale' and
+// 'payroll_run' meant nothing to the people reading this screen.
+const SOURCE_LABELS = {
+  expense: 'Manual expense', income: 'Manual income', receipt_scan: 'Receipt scan',
+  sale: 'POS sale', pos_sale: 'POS sale', payroll: 'Payroll run', payroll_run: 'Payroll run',
+  reversal: 'Reversal', transfer: 'Transfer', bill: 'Supplier bill',
+  donation: 'Donation', recurring: 'Recurring entry', online_order: 'Online order',
+};
+// Anything not keyed in by hand — the user wants the origin shown for these.
+const AUTO_SOURCES = new Set([
+  'receipt_scan', 'sale', 'pos_sale', 'payroll', 'payroll_run', 'bill',
+  'recurring', 'online_order', 'transfer', 'reversal',
+]);
+
 // ─── REVIEW QUEUE (draft / needs-review JEs from receipt scans) ────
 // Reviewers see the OCR-drafted JEs, can reclassify a line's account (via a
 // simple Select) and click Approve — which clears the `needs_review` flag.
@@ -172,14 +202,51 @@ function ReviewQueuePanel() {
   const [accounts, setAccounts] = useState([]);
   const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(null); // { id, lines: [...] }
+  const [preview, setPreview] = useState(null);   // receipt image being viewed
+  const [correcting, setCorrecting] = useState(null); // { id, date, amount, vendor, description }
+  const [rejecting, setRejecting] = useState(null);   // { id, reason, note }
+  const [reasons, setReasons] = useState([]);
 
   const reload = async () => {
-    const [q, coa] = await Promise.all([
+    const [q, coa, rj] = await Promise.all([
       api.get('/finance/receipts/review-queue'),
       api.get('/finance/chart-of-accounts'),
+      api.get('/finance/receipts/reject-reasons').catch(() => ({ data: [] })),
     ]);
     setRows(q.data || []);
     setAccounts(coa.data || []);
+    setReasons(rj.data || []);
+  };
+
+  // The OCR gets amounts and dates wrong often enough that reviewers need to
+  // fix them in place — previously the only lever was swapping the account.
+  const saveCorrection = async () => {
+    if (!correcting) return;
+    setBusyId(correcting.id);
+    try {
+      await api.put(`/finance/receipts/${correcting.id}`, {
+        date: correcting.date || undefined,
+        amount: correcting.amount ? Number(correcting.amount) : undefined,
+        vendor: correcting.vendor || undefined,
+        description: correcting.description || undefined,
+      });
+      toast.success('Receipt corrected — entry reposted');
+      setCorrecting(null);
+      await reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not save the correction'); }
+    setBusyId(null);
+  };
+
+  const submitRejection = async () => {
+    if (!rejecting?.reason) { toast.error('Pick a reason'); return; }
+    setBusyId(rejecting.id);
+    try {
+      await api.put(`/finance/receipts/${rejecting.id}/reject`, { reason: rejecting.reason, note: rejecting.note || '' });
+      toast.success('Receipt rejected — the uploader has been told why');
+      setRejecting(null);
+      await reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not reject'); }
+    setBusyId(null);
   };
   useEffect(() => { reload().catch(() => {}); }, []);
 
@@ -218,7 +285,7 @@ function ReviewQueuePanel() {
         <div>
           <CardTitle className="text-base">Receipt review queue</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Draft journal entries from receipt scans. Reclassify the account if the OCR guessed wrong, then approve.
+            Draft entries from receipt scans. Open the receipt to check it, fix anything the OCR misread, then approve — or reject it with a reason.
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={() => reload().catch(() => {})} data-testid="review-queue-refresh"><RefreshCw size={14} className="mr-1" />Refresh</Button>
@@ -248,6 +315,15 @@ function ReviewQueuePanel() {
                     <TableCell className="max-w-xs">
                       <div className="font-medium text-sm">{r.description}</div>
                       {r.reference && <div className="text-[10px] text-muted-foreground font-mono">{r.reference}</div>}
+                      {r.uploaded_by_name && <div className="text-[10px] text-muted-foreground">from {r.uploaded_by_name}</div>}
+                      {r.receipt_url ? (
+                        <Button size="sm" variant="link" className="h-5 px-0 text-[11px]"
+                                onClick={() => setPreview(r)} data-testid={`review-queue-preview-${r.id}`}>
+                          <Eye size={11} className="mr-1" />View receipt
+                        </Button>
+                      ) : (
+                        <div className="text-[10px] text-muted-foreground italic">no image stored</div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="space-y-1">
@@ -287,6 +363,12 @@ function ReviewQueuePanel() {
                           <Button size="sm" variant="outline" onClick={() => startEdit(r)} disabled={busyId === r.id} data-testid={`review-queue-reclass-${r.id}`}>
                             <Pencil size={12} className="mr-1" />Reclassify
                           </Button>
+                          <Button size="sm" variant="outline" disabled={busyId === r.id}
+                                  onClick={() => setCorrecting({ id: r.id, date: r.date || '', amount: String(r.total || ''), vendor: r.receipt_vendor || '', description: r.description || '' })}
+                                  data-testid={`review-queue-correct-${r.id}`}>Fix details</Button>
+                          <Button size="sm" variant="outline" className="text-destructive" disabled={busyId === r.id}
+                                  onClick={() => setRejecting({ id: r.id, reason: '', note: '' })}
+                                  data-testid={`review-queue-reject-${r.id}`}>Reject</Button>
                           <Button size="sm" onClick={() => approve(r.id)} disabled={busyId === r.id} data-testid={`review-queue-approve-${r.id}`}>
                             {busyId === r.id ? 'Approving…' : 'Approve'}
                           </Button>
@@ -301,6 +383,87 @@ function ReviewQueuePanel() {
           </div>
         )}
       </CardContent>
+
+      {/* Look at the actual receipt */}
+      <Dialog open={!!preview} onOpenChange={o => { if (!o) setPreview(null); }}>
+        <DialogContent className="max-w-[760px]" data-testid="receipt-preview-dialog">
+          <DialogHeader><DialogTitle className="text-base">{preview?.description || 'Receipt'}</DialogTitle></DialogHeader>
+          <div className="max-h-[65vh] overflow-auto rounded-lg border bg-muted/30 p-2">
+            {preview?.receipt_url && (
+              preview.receipt_url.toLowerCase().endsWith('.pdf')
+                ? <iframe src={preview.receipt_url} title="Receipt" className="w-full h-[60vh]" data-testid="receipt-preview-pdf" />
+                : <img src={preview.receipt_url} alt="Receipt" className="w-full h-auto" data-testid="receipt-preview-image" />
+            )}
+          </div>
+          {preview?.ocr_text && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground">What the scanner read</summary>
+              <pre className="mt-2 whitespace-pre-wrap text-[11px] max-h-40 overflow-auto">{preview.ocr_text}</pre>
+            </details>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Correct what the OCR misread */}
+      <Dialog open={!!correcting} onOpenChange={o => { if (!o) setCorrecting(null); }}>
+        <DialogContent className="max-w-[460px]" data-testid="receipt-correct-dialog">
+          <DialogHeader><DialogTitle className="text-base">Fix receipt details</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground">The original entry is reversed and a corrected one posted, so the ledger keeps the full trail.</p>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Date</Label>
+              <Input type="date" value={correcting?.date || ''} onChange={e => setCorrecting({ ...correcting, date: e.target.value })} data-testid="receipt-correct-date" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Amount</Label>
+              <Input type="number" step="0.01" value={correcting?.amount || ''} onChange={e => setCorrecting({ ...correcting, amount: e.target.value })} data-testid="receipt-correct-amount" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Vendor</Label>
+              <Input value={correcting?.vendor || ''} onChange={e => setCorrecting({ ...correcting, vendor: e.target.value })} data-testid="receipt-correct-vendor" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Description</Label>
+              <Input value={correcting?.description || ''} onChange={e => setCorrecting({ ...correcting, description: e.target.value })} data-testid="receipt-correct-description" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setCorrecting(null)} data-testid="receipt-correct-cancel">Cancel</Button>
+            <Button size="sm" onClick={saveCorrection} disabled={busyId === correcting?.id} data-testid="receipt-correct-save">
+              {busyId === correcting?.id ? 'Saving…' : 'Save & repost'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject with a reason the uploader will actually see */}
+      <Dialog open={!!rejecting} onOpenChange={o => { if (!o) setRejecting(null); }}>
+        <DialogContent className="max-w-[460px]" data-testid="receipt-reject-dialog">
+          <DialogHeader><DialogTitle className="text-base">Reject this receipt</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Reason</Label>
+              <Select value={rejecting?.reason || ''} onValueChange={v => setRejecting({ ...rejecting, reason: v })}>
+                <SelectTrigger data-testid="receipt-reject-reason"><SelectValue placeholder="Pick a reason" /></SelectTrigger>
+                <SelectContent>
+                  {reasons.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Note {rejecting?.reason === 'other' ? '(required)' : '(optional)'}</Label>
+              <Input value={rejecting?.note || ''} onChange={e => setRejecting({ ...rejecting, note: e.target.value })}
+                     placeholder="Anything the uploader should know" data-testid="receipt-reject-note" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setRejecting(null)} data-testid="receipt-reject-cancel">Cancel</Button>
+            <Button size="sm" variant="destructive" onClick={submitRejection} disabled={busyId === rejecting?.id} data-testid="receipt-reject-submit">
+              {busyId === rejecting?.id ? 'Rejecting…' : 'Reject receipt'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -566,8 +729,21 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     amount: '', account_id: '', paid_from_id: '', date: todayIso(),
     description: '', reference: '', vendor: '',
     location_id: defaultCampus, department_id: defaultDept,
+    staff_name: '', staff_id: '',
   });
   const [vendorMatches, setVendorMatches] = useState([]);
+  // Who actually handled the cash — finance needs this months later, and it
+  // is NOT the person keying the entry in.
+  const [staffMatches, setStaffMatches] = useState([]);
+  const searchStaff = async (q) => {
+    setForm(f => ({ ...f, staff_name: q, staff_id: '' }));
+    if (q.trim().length < 2) { setStaffMatches([]); return; }
+    try {
+      const r = await api.get('/finance/transactions/staff-search', { params: { q: q.trim() } });
+      const rows = Array.isArray(r.data) ? r.data : (r.data?.users || []);
+      setStaffMatches(rows.slice(0, 8));
+    } catch { setStaffMatches([]); }
+  };
   const [busy, setBusy] = useState(false);
   // iter344j — Split mode. One transaction, N category rows + M cash rows.
   // Backend hit swaps from /transactions/expense to /finance/journal (custom JE).
@@ -681,6 +857,9 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         // iter344h — pass vendor free-text so the backend auto-upserts
         // and returns a linked vendor_id on the resulting expense.
         vendor: form.vendor || undefined,
+        ...(isExpense
+          ? { paid_by_id: form.staff_id || undefined, paid_by_name: form.staff_name || undefined }
+          : { received_by_id: form.staff_id || undefined, received_by_name: form.staff_name || undefined }),
       };
       const payload = isExpense
         ? { ...shared, expense_account_id: form.account_id, paid_from_account_id: form.paid_from_id }
@@ -693,7 +872,9 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         amount: '', account_id: '', paid_from_id: '', date: todayIso(),
         description: '', reference: '', vendor: '',
         location_id: defaultCampus, department_id: defaultDept,
+        staff_name: '', staff_id: '',
       });
+      setStaffMatches([]);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to post'); }
     setBusy(false);
   };
@@ -799,6 +980,27 @@ function QuickPostDialog({ mode, onClose, onDone }) {
             )}
           </div>
           <div><Label>Reference / receipt #</Label><Input data-testid="quick-post-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
+          <div className="relative">
+            <Label className="flex items-center gap-1.5">
+              <User size={12} /> {isExpense ? 'Who spent it' : 'Who received it'}
+            </Label>
+            <Input data-testid="quick-post-staff" value={form.staff_name}
+                   onChange={e => searchStaff(e.target.value)}
+                   placeholder="Start typing a staff name" autoComplete="off" />
+            {form.staff_id && <p className="text-[11px] text-emerald-600 mt-1">Linked to staff record</p>}
+            {staffMatches.length > 0 && !form.staff_id && (
+              <div className="absolute z-30 mt-1 w-full rounded-md border bg-popover shadow-md max-h-44 overflow-auto" data-testid="quick-post-staff-matches">
+                {staffMatches.map(u => (
+                  <button key={u.id} type="button"
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          data-testid={`quick-post-staff-pick-${u.id}`}
+                          onClick={() => { setForm(f => ({ ...f, staff_id: u.id, staff_name: u.name })); setStaffMatches([]); }}>
+                    {u.name} <span className="text-[11px] text-muted-foreground">{u.role || ''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {isExpense && (
             <div className="relative">
               <Label>Vendor</Label>

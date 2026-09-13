@@ -24,6 +24,30 @@ import BarcodeScanDialog from '../components/BarcodeScanDialog';
 import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 
 const POLL_MS = 1500;
+// iter350 — an unauthorised badge must be unmistakable and must not hold the
+// lane: three sharp beeps, a red strobe, then straight back to the scan screen.
+const DENIED_RESET_MS = 4000;
+
+const _beep = (times = 1, freq = 880, durMs = 160) => {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    for (let i = 0; i < times; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const start = ctx.currentTime + (i * (durMs + 90)) / 1000;
+      gain.gain.setValueAtTime(0.2, start);
+      osc.start(start);
+      osc.stop(start + durMs / 1000);
+    }
+    setTimeout(() => { try { ctx.close(); } catch { /* ignore */ } }, times * (durMs + 120) + 400);
+  } catch { /* audio unavailable on this device */ }
+};
 
 const decisionStyles = {
   approved: { bg: 'bg-emerald-500', text: 'text-white', icon: ShieldCheck, label: 'APPROVED' },
@@ -240,6 +264,10 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
   const [current, setCurrent] = useState(null);
   const [serverNow, setServerNow] = useState(null);
   const [showCamScan, setShowCamScan] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const [manualValue, setManualValue] = useState('');
+  const [flashing, setFlashing] = useState(false);
+  const lastAnnounced = useRef('');
   const nfcRef = useRef(null);
   const keystrokeBuffer = useRef('');
   const keystrokeTimer = useRef(null);
@@ -308,6 +336,9 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
   // Keyboard-emulating barcode scanner: capture rapid keystrokes ending in Enter
   useEffect(() => {
     const handler = (e) => {
+      // Don't hijack typing inside the badge-less lookup field.
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'Enter') {
         const payload = keystrokeBuffer.current.trim();
         keystrokeBuffer.current = '';
@@ -361,6 +392,33 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
     setCurrent(null);
   };
 
+  // iter350 — announce every fresh decision: one soft beep for approved, three
+  // sharp beeps + a red strobe for denied/unknown, then auto-return to the
+  // scan screen so the next person isn't left staring at someone else's result.
+  useEffect(() => {
+    const ev = current;
+    if (!ev?.id || lastAnnounced.current === ev.id) return;
+    lastAnnounced.current = ev.id;
+    const bad = ev.decision !== 'approved';
+    _beep(bad ? 3 : 1, bad ? 320 : 1046, bad ? 200 : 130);
+    if (!bad) return;
+    setFlashing(true);
+    const stopFlash = setTimeout(() => setFlashing(false), DENIED_RESET_MS);
+    const reset = setTimeout(() => {
+      securityCheckpointApi.finish().catch(() => {});
+      setCurrent(null);
+    }, DENIED_RESET_MS);
+    return () => { clearTimeout(stopFlash); clearTimeout(reset); };
+  }, [current]);
+
+  const submitManual = async () => {
+    const v = manualValue.trim();
+    if (v.length < 3) { toast.error('Enter a national ID, passport, phone number or in-app ID'); return; }
+    setShowManual(false);
+    setManualValue('');
+    await submitScan('manual', v);
+  };
+
   // Auto-clear on the client when clear_at expires (in case backend hasn't been polled yet)
   useEffect(() => {
     if (!current?.clear_at || !serverNow) return;
@@ -376,7 +434,10 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
   const subject = current?.subject || {};
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col" data-testid="cp-guest-view">
+    <div
+      className={`min-h-screen text-slate-100 flex flex-col transition-colors duration-150 ${flashing ? 'bg-rose-900 animate-pulse' : 'bg-slate-950'}`}
+      data-testid="cp-guest-view"
+    >
       <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <ShieldCheck size={18} className="text-emerald-400" />
@@ -426,6 +487,18 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
               <Camera size={18} /> Scan with this device's camera
             </Button>
             <p className="text-[11px] text-slate-500">If you don't have a USB barcode scanner or NFC reader, tap the button above to use the built-in camera.</p>
+            <div className="pt-2">
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={(e) => { e.stopPropagation(); setShowManual(true); }}
+                className="gap-2 bg-slate-800/60 border-slate-600 text-slate-100 hover:bg-slate-700"
+                data-testid="cp-badgeless-btn"
+              >
+                <KeyRound size={18} /> Forgot your badge?
+              </Button>
+              <p className="text-[11px] text-slate-500 mt-2">Enter your national ID, passport number, phone number or in-app ID instead.</p>
+            </div>
           </div>
         ) : (
           <div className="text-center space-y-6 w-full max-w-2xl">
@@ -444,6 +517,11 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
               {subject.role && <p className="text-sm text-slate-400">{subject.role}</p>}
             </div>
             <p className="text-sm text-slate-300 italic">{current.reason}</p>
+            {current.badgeless && (
+              <p className="text-xs text-amber-300" data-testid="cp-badgeless-flag">
+                Badge-less entry — identified by {current.matched_by === 'national_id' ? 'national ID' : current.matched_by === 'passport' ? 'passport number' : current.matched_by === 'phone' ? 'phone number' : current.matched_by === 'badge_number' ? 'badge number' : 'in-app ID'}. Logged for security.
+              </p>
+            )}
             <p className="text-[11px] text-slate-500">Tap anywhere to finish, or auto-clears in {Math.max(0, Math.ceil((new Date(current.clear_at).getTime() - Date.now()) / 1000))}s</p>
           </div>
         )}
@@ -455,6 +533,28 @@ function GuestView({ checkpoint, onUnpair, onLock }) {
         title="Scan visitor badge / QR"
         onScan={(value) => submitScan('qr', value)}
       />
+      {/* Badge-less entry — any identifier the person actually has on them */}
+      <Dialog open={showManual} onOpenChange={setShowManual}>
+        <DialogContent className="max-w-sm" data-testid="cp-badgeless-dialog">
+          <DialogHeader>
+            <DialogTitle>Entry without a badge</DialogTitle>
+            <DialogDescription>
+              Type a national ID (or scan its barcode), passport number, phone number, or the person&apos;s in-app ID. The entry is logged as badge-less.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              autoFocus
+              value={manualValue}
+              onChange={(e) => setManualValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitManual(); } }}
+              placeholder="e.g. CM94012345ABCD, +256700000000"
+              data-testid="cp-badgeless-input"
+            />
+            <Button className="w-full" onClick={submitManual} data-testid="cp-badgeless-submit">Look up &amp; record entry</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -471,6 +571,9 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
   const [showLookup, setShowLookup] = useState(false);
   const [showCamScan, setShowCamScan] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const [manualValue, setManualValue] = useState('');
+  const lastAnnounced = useRef('');
   const [openOneTime, setOpenOneTime] = useState([]);
   const isSingleDevice = checkpoint?.device_mode === 'single_device';
 
@@ -534,6 +637,23 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
       setState(prev => ({ ...prev, current: r.data, history: [r.data, ...(prev.history || []).slice(0, 19)] }));
     } catch (e) { toast.error(e.response?.data?.detail || 'Scan failed'); }
   };
+
+  const submitManual = async () => {
+    const v = manualValue.trim();
+    if (v.length < 3) { toast.error('Enter a national ID, passport, phone number or in-app ID'); return; }
+    setShowManual(false);
+    setManualValue('');
+    await submitScan('manual', v);
+  };
+
+  // iter350 — audible alert for the guard on every fresh decision.
+  useEffect(() => {
+    const ev = state.current;
+    if (!ev?.id || lastAnnounced.current === ev.id) return;
+    lastAnnounced.current = ev.id;
+    const bad = ev.decision !== 'approved';
+    _beep(bad ? 3 : 1, bad ? 320 : 1046, bad ? 200 : 130);
+  }, [state.current]);
 
   // Issue a wallet badge for the current subject if they don't have one, then open
   // the printable badge in a popup and trigger window.print().
@@ -602,6 +722,7 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-700/70" onClick={() => setShowCamScan(true)} data-testid="cp-security-camera-scan-btn"><Camera size={14} className="mr-1" /> Camera Scan</Button>
+          <Button size="sm" variant="outline" className="bg-amber-700/30 border-amber-500/40 text-amber-100 hover:bg-amber-700/60" onClick={() => setShowManual(true)} data-testid="cp-security-badgeless-btn"><KeyRound size={14} className="mr-1" /> No Badge</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLookup(true)} data-testid="cp-lookup-open"><Search size={14} className="mr-1" /> Lookup / Household</Button>
           <Button size="sm" variant="outline" className="bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700" onClick={() => setShowLogbook(true)} data-testid="cp-logbook-open"><History size={14} className="mr-1" /> Visitors Log</Button>
           <Button size="sm" variant="outline" className="bg-blue-900/40 border-blue-500/40 text-blue-100 hover:bg-blue-900/70" onClick={() => setShowResidents(true)} data-testid="cp-residents-log-open"><Home size={14} className="mr-1" /> Residents Log</Button>
@@ -653,6 +774,11 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
                       </div>
                     )}
                     <p className="text-sm italic text-slate-700 dark:text-slate-300 mt-2">{cur.reason}</p>
+                    {cur.badgeless && (
+                      <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-[11px] text-amber-800 dark:text-amber-200" data-testid="cp-security-badgeless-flag">
+                        <KeyRound size={11} /> Badge-less entry · matched on {String(cur.matched_by || '').replace('_', ' ')}
+                      </div>
+                    )}
                     <div className="flex gap-2 pt-2 flex-wrap">
                       <Button size="sm" variant="outline" onClick={finish} data-testid="cp-finish-btn"><X size={13} className="mr-1" /> Clear</Button>
                       {decision === 'approved' && ['member', 'child', 'guest', 'user'].includes(subject.kind) && (
@@ -767,6 +893,30 @@ function SecurityView({ checkpoint, onUnpair, onLock }) {
           }
         }}
       />
+
+      {/* BADGE-LESS ENTRY — national ID / passport / phone / in-app ID (iter350) */}
+      <Dialog open={showManual} onOpenChange={setShowManual}>
+        <DialogContent className="max-w-sm" data-testid="cp-security-badgeless-dialog">
+          <DialogHeader>
+            <DialogTitle>Entry without a badge</DialogTitle>
+            <DialogDescription>
+              Type or scan a national ID, passport number, phone number, or the person&apos;s in-app ID. The entry is recorded and flagged as badge-less.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              autoFocus
+              value={manualValue}
+              onChange={(e) => setManualValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitManual(); } }}
+              placeholder="e.g. CM94012345ABCD, +256700000000"
+              data-testid="cp-security-badgeless-input"
+            />
+            <Button className="w-full" onClick={submitManual} data-testid="cp-security-badgeless-submit">Look up &amp; record entry</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
 
       {/* DEVICE DIAGNOSTICS — full hardware/runtime overview + Web Serial/HID/USB/BT pairing */}
       <DeviceDiagnosticsDialog open={showDiagnostics} onClose={() => setShowDiagnostics(false)} />

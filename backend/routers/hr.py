@@ -101,16 +101,63 @@ def _paydays_for_frequency(pay_frequency: str, anchor_iso: str, month: dt_date, 
     return out
 
 
-def _period_label(pay_frequency: str, payday: dt_date) -> str:
-    """Convert a payday into the canonical period identifier."""
+# ─── iter350 — admin-configured pay cycle + period anchor ────────────────────
+# A campus's pay periods are fully derived from two hr_settings fields:
+#   pay_frequency      weekly | biweekly (fortnightly) | monthly
+#   period_anchor_date the FIRST DAY of any one pay period (falls back to
+#                      next_pay_date for campuses configured before iter350)
+# Every timesheet, payslip and payroll surface derives its window from these,
+# so the kiosk, the XLSX sheet and payroll can never disagree again.
+
+def _normalize_freq(pay_frequency: str) -> str:
     freq = (pay_frequency or "monthly").lower().replace(" ", "").replace("_", "-")
-    if freq == "monthly":
-        return payday.strftime("%Y-%m")
     if freq in {"bi-weekly", "biweekly", "fortnightly"}:
-        return _biweekly_period(payday, 14)
+        return "biweekly"
     if freq == "weekly":
-        return _biweekly_period(payday, 7)
-    return payday.strftime("%Y-%m")
+        return "weekly"
+    return "monthly"
+
+
+def _cycle_step_days(pay_frequency: str) -> Optional[int]:
+    """Calendar days per period — None for monthly (variable length)."""
+    freq = _normalize_freq(pay_frequency)
+    return 7 if freq == "weekly" else (14 if freq == "biweekly" else None)
+
+
+def _cycle_anchor_iso(settings: dict) -> str:
+    s = settings or {}
+    return (s.get("period_anchor_date") or s.get("next_pay_date") or "").strip()
+
+
+def _period_containing(pay_frequency: str, anchor_iso: str, d: dt_date) -> str:
+    """Canonical period label for the window that contains date `d`."""
+    step = _cycle_step_days(pay_frequency)
+    if step is None:
+        return d.strftime("%Y-%m")
+    try:
+        anchor = dt_date.fromisoformat((anchor_iso or "")[:10])
+    except Exception:
+        anchor = d - td(days=d.weekday())  # Monday of d's week
+    # Floor division works for dates before the anchor too.
+    start = anchor + td(days=((d - anchor).days // step) * step)
+    return _biweekly_period(start, step)
+
+
+def _period_for_payday(pay_frequency: str, anchor_iso: str, payday: dt_date) -> str:
+    """The period whose work a given payday settles.
+
+    Monthly → the calendar month of the payday. Weekly/biweekly → the window
+    that CLOSED on or before the payday (you are paid after working, so the
+    payday itself belongs to the next window).
+    """
+    if _cycle_step_days(pay_frequency) is None:
+        return payday.strftime("%Y-%m")
+    return _period_containing(pay_frequency, anchor_iso, payday - td(days=1))
+
+
+def _period_label(pay_frequency: str, payday: dt_date, anchor_iso: str = "") -> str:
+    """Convert a payday into the canonical period identifier."""
+    return _period_for_payday(pay_frequency, anchor_iso, payday)
 
 
 def _period_span_days(period: str) -> int:
@@ -460,7 +507,8 @@ async def get_hr_settings(location_id: str, current_user: dict = Depends(require
 @router.put("/settings/{location_id}")
 async def update_hr_settings(location_id: str, data: dict, current_user: dict = Depends(require_director)):
     allowed = {"hr_enabled", "pay_frequency", "currency", "country", "tax_rules", "benefits",
-               "deduction_types", "pay_day", "payday_weekday", "next_pay_date", "compliance_lines",
+               "deduction_types", "pay_day", "payday_weekday", "next_pay_date",
+               "period_anchor_date", "compliance_lines",
                "aggregated_payroll_expense", "payslip_message"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -796,7 +844,7 @@ async def upcoming_paydays(
         "frequency": freq,
         "payday_weekday": payday_weekday,
         "paydays": [
-            {"date": p.isoformat(), "period": _period_label(freq, p)}
+            {"date": p.isoformat(), "period": _period_label(freq, p, _cycle_anchor_iso(s))}
             for p in paydays
         ],
     }
@@ -1302,7 +1350,7 @@ async def generate_payday_payslips(current_user: dict = Depends(require_director
         paydays = _paydays_for_frequency(freq, anchor, today, payday_weekday=s.get("payday_weekday"))
         if today not in paydays:
             continue
-        period = _period_label(freq, today)
+        period = _period_label(freq, today, _cycle_anchor_iso(s))
         res = await _generate_payslips_for(period, loc_id, current_user)
         total_count += res["generated"]
         all_generated.extend(res["payslips"])
@@ -2134,7 +2182,7 @@ async def auto_generate_payslips(current_user: dict = Depends(require_director))
         cursor = anchor_date
         payday_weekday = campus_settings.get("payday_weekday")
         while cursor <= today:
-            period = _period_label(freq, cursor)
+            period = _period_label(freq, cursor, _cycle_anchor_iso(campus_settings))
             res = await _generate_payslips_for(period, loc_id, current_user)
             generated_total += res["generated"]
             fired.append({"location_id": loc_id, "period": period, "date": cursor.isoformat(), "count": res["generated"]})
@@ -2674,26 +2722,7 @@ async def _current_period_for_location(location_id: str) -> Optional[str]:
     if not location_id:
         return today.strftime("%Y-%m")
     s = await db.hr_settings.find_one({"location_id": location_id}, {"_id": 0}) or {}
-    freq = (s.get("pay_frequency") or "monthly").lower().replace(" ", "").replace("_", "-")
-    if freq == "monthly":
-        return today.strftime("%Y-%m")
-    step = 14 if freq in {"bi-weekly", "biweekly", "fortnightly"} else 7
-    anchor_iso = (s.get("next_pay_date") or "").strip()
-    try:
-        anchor = dt_date.fromisoformat(anchor_iso) if anchor_iso else today
-    except Exception:
-        anchor = today
-    # Walk back until anchor <= today, then step forward past today to find
-    # the payday that CLOSES the current period.
-    d = anchor
-    while d > today:
-        d = d - td(days=step)
-    while d + td(days=step - 1) < today:
-        d = d + td(days=step)
-    # d is now the START of the current period. Frame as full window label.
-    period_start = d - td(days=step - 1) if step > 1 else d
-    # Convention used elsewhere: period label is <window_start>_<window_end> (Www[-Www]).
-    return _biweekly_period(period_start, step)
+    return _period_containing(s.get("pay_frequency"), _cycle_anchor_iso(s), today)
 
 
 async def sync_kiosk_to_timesheet(staff_id: str, action: str, when_iso: str, location_id: Optional[str] = None) -> Optional[dict]:
@@ -3266,6 +3295,72 @@ async def delete_timesheet_punch(ts_id: str, index: int, reason: str = Query(...
 # uses that endpoint to auto-populate days_worked in the payslip generation
 # UI. This section adds staff-submitted timesheets for cases where clock-in
 # data is missing or insufficient (e.g. remote work, ad-hoc contracts).
+
+@router.get("/pay-periods")
+async def list_pay_periods(
+    location_id: Optional[str] = None,
+    past: int = 6,
+    future: int = 1,
+    current_user: dict = Depends(get_current_user),
+):
+    """iter350 — the canonical pay periods for a campus, derived from the
+    admin-configured cycle (`pay_frequency`) + anchor (`period_anchor_date`,
+    falling back to `next_pay_date`).
+
+    Every timesheet / payslip surface picks its period from here so the kiosk,
+    the paper sheet and payroll always agree.
+    Response: { frequency, anchor, current, periods: [{period, start, end, label, is_current}] }
+    """
+    loc = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    s = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0}) or {} if loc else {}
+    freq = _normalize_freq(s.get("pay_frequency"))
+    anchor = _cycle_anchor_iso(s)
+    today = datetime.now(timezone.utc).date()
+    past = max(0, min(int(past or 0), 24))
+    future = max(0, min(int(future or 0), 6))
+    step = _cycle_step_days(freq)
+
+    dates: List[dt_date] = []
+    if step is None:
+        cursor = today.replace(day=1)
+        for _ in range(past):
+            prev_end = cursor - td(days=1)
+            dates.insert(0, prev_end.replace(day=1))
+            cursor = prev_end.replace(day=1)
+        dates.append(today.replace(day=1))
+        nxt = today.replace(day=1)
+        for _ in range(future):
+            nxt = (nxt.replace(day=28) + td(days=7)).replace(day=1)
+            dates.append(nxt)
+    else:
+        base = today - td(days=step * past)
+        for i in range(past + future + 1):
+            dates.append(base + td(days=step * i))
+
+    current = _period_containing(freq, anchor, today)
+    periods = []
+    seen = set()
+    for d in dates:
+        p = _period_containing(freq, anchor, d)
+        if p in seen:
+            continue
+        seen.add(p)
+        start, end = _period_bounds(p)
+        periods.append({
+            "period": p,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "label": (start.strftime("%b %Y") if step is None
+                      else f"{start.strftime('%d %b')} – {end.strftime('%d %b %Y')}"),
+            "is_current": p == current,
+        })
+    return {
+        "frequency": freq,
+        "anchor": anchor,
+        "current": current,
+        "periods": periods,
+    }
+
 
 @router.get("/timesheets")
 async def list_timesheets(period: Optional[str] = None, staff_id: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
