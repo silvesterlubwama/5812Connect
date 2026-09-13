@@ -36,7 +36,7 @@ export const AuthProvider = ({ children }) => {
     secureStorage.setToken(token);
     secureStorage.setUser(userData);
     setUser(userData);
-    return { success: true };
+    return { success: true, user: userData };
   };
 
   const logout = async () => {

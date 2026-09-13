@@ -1,14 +1,19 @@
 """Events, Check-ins, Venues, Event Types, Public Events routes"""
-from fastapi import APIRouter, Depends, HTTPException, Query
-from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter, verify_password, expand_descendants, default_creation_location
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from deps import db, get_current_user, require_staff, require_manager, require_admin, _audit, logger, is_system_admin, get_campus_filter, verify_password, expand_descendants, default_creation_location, enforce_public_rate_limit, hash_password
 from models import EventCreate, EventUpdate, CheckInCreate, VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 import copy
 import re
+import secrets
 
 router = APIRouter(prefix="/api", tags=["events"])
+
+# Constant-work comparison target for the unauthenticated kiosk unlock, so an
+# unknown identifier costs the same as a wrong password (iter351).
+_DUMMY_PASSWORD_HASH = hash_password("kiosk-unlock-dummy-target")
 
 
 # ========== VENUE AVAILABILITY (double-booking prevention) ==========
@@ -1423,15 +1428,28 @@ async def unlock_kiosk(device_id: str, data: dict, current_user: dict = Depends(
 # ========== KIOSK ==========
 
 @router.post("/kiosk/unlock")
-async def kiosk_unlock(data: dict):
+async def kiosk_unlock(data: dict, request: Request):
     """Public endpoint to unlock a kiosk. Accepts ANY of:
       - { pin: "1234" } → matches a user/member with that pin AND an admin/manager+ role
       - { identifier, password } → standard auth flow (any admin/manager+)
-    Returns { unlocked: true, user_name, user_role } on success."""
+    Returns { unlocked: true, user_name, user_role } on success.
+
+    SECURITY (iter351): every failure returns the SAME 401 and the endpoint is
+    throttled per IP. Previously it answered "Unknown identifier" vs "Wrong
+    password" vs "PIN belongs to 'Staff'", which turned a public kiosk button
+    into an account-enumeration and password-guessing oracle sitting outside
+    the login lockout.
+    """
     PRIVILEGED_ROLES = {"admin", "system_admin", "Executive Director", "Adviser", "Director", "Manager"}
     pin = (data.get("pin") or "").strip()
     identifier = (data.get("identifier") or "").strip()
     password = data.get("password") or ""
+    invalid = HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not pin and not (identifier and password):
+        raise HTTPException(status_code=400, detail="Provide either {pin} or {identifier, password}")
+
+    await enforce_public_rate_limit(request, "kiosk_unlock", limit=8, window_minutes=10)
 
     # ---- PIN flow ----
     if pin:
@@ -1444,34 +1462,36 @@ async def kiosk_unlock(data: dict):
         if not u:
             u = await db.members.find_one({"pin": pin}, {"_id": 0})
         if not u:
-            raise HTTPException(status_code=401, detail="Invalid PIN")
+            raise invalid
+        # Constant-time confirmation so a partial match can't be timed out.
+        if not secrets.compare_digest(str(u.get("pin") or ""), pin):
+            raise invalid
         role = u.get("role") or ""
         if role not in PRIVILEGED_ROLES:
-            raise HTTPException(status_code=403, detail=f"PIN belongs to '{role or 'unknown'}', not an admin/manager")
+            raise invalid
         return {"unlocked": True, "user_name": u.get("name", ""), "user_role": role, "method": "pin"}
 
     # ---- password flow ----
-    if identifier and password:
-        # Locate user by email/username/phone
-        ident = identifier.lower()
-        u = await db.users.find_one(
-            {"$or": [
-                {"email": ident},
-                {"username": identifier},
-                {"phone": identifier},
-            ], "status": {"$ne": "inactive"}},
-            {"_id": 0},
-        )
-        if not u or not u.get("password_hash"):
-            raise HTTPException(status_code=401, detail="Unknown identifier")
-        if not verify_password(password, u["password_hash"]):
-            raise HTTPException(status_code=401, detail="Wrong password")
-        role = u.get("role") or ""
-        if role not in PRIVILEGED_ROLES:
-            raise HTTPException(status_code=403, detail=f"User '{role or 'unknown'}' is not an admin/manager")
-        return {"unlocked": True, "user_name": u.get("name", ""), "user_role": role, "method": "password"}
-
-    raise HTTPException(status_code=400, detail="Provide either {pin} or {identifier, password}")
+    ident = identifier.lower()
+    u = await db.users.find_one(
+        {"$or": [
+            {"email": ident},
+            {"username": identifier},
+            {"phone": identifier},
+        ], "status": {"$ne": "inactive"}},
+        {"_id": 0},
+    )
+    if not u or not u.get("password_hash"):
+        # Burn a hash comparison anyway so "no such user" and "wrong password"
+        # take the same time — otherwise this is an account-enumeration oracle.
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        raise invalid
+    if not verify_password(password, u["password_hash"]):
+        raise invalid
+    role = u.get("role") or ""
+    if role not in PRIVILEGED_ROLES:
+        raise invalid
+    return {"unlocked": True, "user_name": u.get("name", ""), "user_role": role, "method": "password"}
 
 
 async def _ticket_flags_safe(member: dict, child_ids: Optional[list] = None) -> list:
@@ -1507,13 +1527,21 @@ async def kiosk_checkin(data: CheckInCreate):
 
 
 @router.get("/kiosk/lookup")
-async def kiosk_lookup(identifier: str):
-    """iter350 — badge-less lookup: national ID / barcode, passport number,
-    phone number, badge number, email, or the person's in-app ID."""
+async def kiosk_lookup(identifier: str, request: Request):
+    """Badge-less kiosk lookup: national ID, passport number, phone number,
+    badge number, email, or the person's in-app ID.
+
+    SECURITY (iter351): `/kiosk` is a PUBLIC page, so this endpoint is
+    unauthenticated — it therefore returns ONLY what the kiosk screen renders
+    (name, role, photo, children's first names). It must never return phone,
+    email, date of birth, national ID, passport, address or notes, or it
+    becomes a PII harvesting endpoint. Matching is exact (no phone-suffix
+    regex) and throttled per IP so the identifier space can't be walked.
+    """
     raw = (identifier or "").strip()
-    if len(raw) < 3:
-        raise HTTPException(status_code=400, detail="Enter at least 3 characters")
-    digits = re.sub(r"\D", "", raw)
+    if len(raw) < 6:
+        raise HTTPException(status_code=400, detail="Enter the full ID or phone number")
+    await enforce_public_rate_limit(request, "kiosk_lookup", limit=15, window_minutes=10)
     or_q = [
         {"id": raw}, {"member_id": raw}, {"badge_number": raw},
         {"national_id": raw}, {"national_id": raw.upper()},
@@ -1522,25 +1550,41 @@ async def kiosk_lookup(identifier: str):
         {"passport": raw}, {"passport": raw.upper()},
         {"phone": raw}, {"email": raw.lower()},
     ]
-    if len(digits) >= 7:
-        or_q.append({"phone": {"$regex": f"{re.escape(digits[-9:])}$"}})
-    member = await db.members.find_one({"$or": or_q}, {"_id": 0, "password_hash": 0})
-    if not member:
-        user = await db.users.find_one({"$or": or_q}, {"_id": 0, "password_hash": 0, "pin_hash": 0})
-        if user:
-            member = await db.members.find_one({"user_id": user["id"]}, {"_id": 0}) or {
-                "id": user["id"], "name": user.get("name", ""), "role": user.get("role", "member"),
-                "phone": user.get("phone", ""), "email": user.get("email", ""),
-                "location_id": user.get("location_id"),
-            }
-    if not member:
-        raise HTTPException(status_code=404, detail="No match — try their national ID, passport, phone number or in-app ID")
-    return member
+    proj = {"_id": 0, "id": 1, "name": 1, "role": 1, "photo_url": 1, "location_id": 1, "family_id": 1}
+    person = await db.members.find_one({"$or": or_q}, proj)
+    if not person:
+        person = await db.users.find_one({"$or": or_q}, proj)
+    if not person:
+        raise HTTPException(status_code=404, detail="No match — try the full national ID, passport, phone number or in-app ID")
+    # Children the kiosk can offer for check-in (first names + photo only).
+    children = []
+    child_or = []
+    if person.get("family_id"):
+        child_or.append({"family_id": person["family_id"]})
+    if person.get("id"):
+        child_or.append({"parent_ids": person["id"]})
+    if child_or:
+        children = await db.children.find(
+            {"$or": child_or}, {"_id": 0, "id": 1, "name": 1, "photo_url": 1},
+        ).to_list(20)
+    return {
+        "id": person.get("id"),
+        "name": person.get("name", ""),
+        "role": person.get("role") or "member",
+        "photo_url": person.get("photo_url"),
+        "location_id": person.get("location_id"),
+        "children": children,
+    }
 
 
 @router.post("/kiosk/pin-checkin")
-async def kiosk_pin_checkin(data: dict):
-    """Kiosk PIN or phone-last-4 based check-in/out (no auth required)"""
+async def kiosk_pin_checkin(data: dict, request: Request):
+    """Kiosk PIN or phone-last-4 based check-in/out (no auth required).
+
+    iter351 — this endpoint matches on a 4-digit PIN / phone suffix and returns
+    the household, so it is throttled per IP and never returns a child's date
+    of birth (a 4-digit space is walkable in seconds otherwise).
+    """
     pin = data.get("pin", "").strip()
     event_id = data.get("event_id")
     event_name = data.get("event_name", "")
@@ -1550,6 +1594,7 @@ async def kiosk_pin_checkin(data: dict):
     caller_location_id = (data.get("location_id") or "").strip() or None
     if not pin:
         raise HTTPException(status_code=400, detail="PIN or phone digits required")
+    await enforce_public_rate_limit(request, "kiosk_pin_checkin", limit=20, window_minutes=10)
     # Try PIN match first, then phone-last-4
     member = await db.members.find_one({"pin": pin}, {"_id": 0})
     if not member and len(pin) >= 4:
@@ -1593,7 +1638,8 @@ async def kiosk_pin_checkin(data: dict):
         if child_or:
             children = await db.children.find(
                 {"$or": child_or},
-                {"_id": 0, "id": 1, "name": 1, "photo_url": 1, "date_of_birth": 1, "family_id": 1},
+                # No date_of_birth: this response goes to an anonymous kiosk.
+                {"_id": 0, "id": 1, "name": 1, "photo_url": 1, "family_id": 1},
             ).to_list(20)
     except Exception as e:
         logger.warning(f"Kiosk children lookup failed: {e}")

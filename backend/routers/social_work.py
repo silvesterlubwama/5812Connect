@@ -13,11 +13,11 @@ Auth model
     one-time password; returns a short-lived JWT-style portal token used for
     subsequent reads/writes from the external teacher.
 """
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from deps import (
     db, get_current_user, require_staff, require_manager, require_director,
     _audit, logger, get_campus_filter, is_system_admin, hash_password, verify_password,
-    require_social_work_view,
+    require_social_work_view, enforce_public_rate_limit,
 )
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
@@ -527,11 +527,28 @@ async def create_case(data: dict, current_user: dict = Depends(require_staff)):
     return doc
 
 
-@router.get("/cases/{case_id}")
-async def get_case(case_id: str, current_user: dict = Depends(require_staff)):
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
+async def _scoped_case_or_404(case_id: str, current_user: dict, projection: Optional[dict] = None) -> dict:
+    """Fetch a case INSIDE the caller's campus scope (iter351).
+
+    Single-case reads used to look the case up by id alone, so a director in
+    campus A holding a case id from campus B could read, export or AI-summarise
+    a child's file — including children in restricted shelters. The list
+    endpoint was always scoped; every by-id read and write now uses this so the
+    two can't disagree.
+    """
+    query = {"id": case_id}
+    scope = await get_campus_filter(current_user)
+    if scope:
+        query.update(scope)
+    case = await db.social_cases.find_one(query, projection or {"_id": 0})
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
+@router.get("/cases/{case_id}")
+async def get_case(case_id: str, current_user: dict = Depends(require_staff)):
+    case = await _scoped_case_or_404(case_id, current_user)
     # Attach computed aggregates
     case["payments_total"] = await _case_payments_summary(case_id)
     case["notes_count"] = await db.social_case_notes.count_documents({"case_id": case_id})
@@ -567,9 +584,7 @@ async def generate_case_report(case_id: str, current_user: dict = Depends(requir
     """Generate a branded, presentation-ready Beneficiary Profile Report PDF.
     Includes identity, education, medical, family, compliance (country-specific),
     goals, payments YTD, and recent case notes. Suitable for school / official handoff."""
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = await _scoped_case_or_404(case_id, current_user)
     notes = await db.social_case_notes.find(
         {"case_id": case_id, "is_confidential": {"$ne": True}}, {"_id": 0}
     ).sort("created_at", -1).to_list(20)
@@ -852,6 +867,7 @@ def _render_case_report_html(case, school, notes, payments, compliance_schema, c
 
 @router.put("/cases/{case_id}")
 async def update_case(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1})
     allowed = {"category", "status", "summary", "education", "medical", "family", "goals",
                "risk_level", "sponsor_member_id", "sponsor_manual", "sponsor_guest_id", "compliance",
                "support_needed", "support_given",
@@ -1068,6 +1084,7 @@ async def _upsert_external_sponsor_guest(sponsor_manual: dict, current_user: dic
 @router.delete("/cases/{case_id}")
 async def delete_case(case_id: str, current_user: dict = Depends(require_director)):
     """Hard delete — director only. Use status='discharged' to soft-close instead."""
+    await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1})
     await db.social_cases.delete_one({"id": case_id})
     await db.social_case_notes.delete_many({"case_id": case_id})
     await db.social_child_payments.delete_many({"case_id": case_id})
@@ -1081,6 +1098,7 @@ async def delete_case(case_id: str, current_user: dict = Depends(require_directo
 
 @router.get("/cases/{case_id}/notes")
 async def list_notes(case_id: str, current_user: dict = Depends(require_staff)):
+    await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1})
     return await db.social_case_notes.find({"case_id": case_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
@@ -1092,9 +1110,7 @@ async def add_note(case_id: str, data: dict, current_user: dict = Depends(requir
     body = (data.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="body required")
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0, "id": 1, "subject_name": 1, "location_id": 1})
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1, "subject_name": 1, "location_id": 1})
     note = {
         "id": f"scn_{uuid.uuid4().hex[:10]}",
         "case_id": case_id,
@@ -1307,6 +1323,7 @@ async def _case_payments_summary(case_id: str) -> dict:
 
 @router.get("/cases/{case_id}/payments")
 async def list_case_payments(case_id: str, current_user: dict = Depends(require_staff)):
+    await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1})
     return await db.social_child_payments.find({"case_id": case_id}, {"_id": 0}).sort("date", -1).to_list(500)
 
 
@@ -1332,9 +1349,7 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
       • Auto-post a balanced journal entry to accounting, tagged with
         `payer_type` and the child's campus/sublocation so Dept P&L and
         campus rollups pick it up automatically."""
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = await _scoped_case_or_404(case_id, current_user)
     kind = (data.get("kind") or "").strip().lower()
     if kind not in PAYMENT_KINDS:
         raise HTTPException(status_code=400, detail=f"kind must be one of {sorted(PAYMENT_KINDS)}")
@@ -1566,7 +1581,7 @@ def _hash_session_token(raw: str) -> str:
 
 
 @portal_router.post("/login")
-async def school_portal_login(data: dict):
+async def school_portal_login(data: dict, request: Request):
     """Public login for an external school user.
     Body: { portal_token, password }
     Returns: { session_token, school_id, school_name, expires_at } — store the session_token
@@ -1575,9 +1590,13 @@ async def school_portal_login(data: dict):
     password = (data.get("password") or "").strip()
     if not portal_token or not password:
         raise HTTPException(status_code=400, detail="portal_token and password required")
+    # Public login — throttle per IP so the one-time passwords can't be guessed.
+    await enforce_public_rate_limit(request, "school_portal_login", limit=10, window_minutes=10)
     school = await db.social_schools.find_one({"portal_token": portal_token}, {"_id": 0})
     if not school:
-        raise HTTPException(status_code=404, detail="Unknown school portal — check the URL")
+        # Same 401 as a wrong password: a distinct 404 told an attacker which
+        # portal tokens exist (iter352).
+        raise HTTPException(status_code=401, detail="Invalid portal link or password")
     now_iso = datetime.now(timezone.utc).isoformat()
     # Find a non-revoked, non-expired password whose hash matches
     matches = await db.social_school_portal_passwords.find({
@@ -1587,7 +1606,7 @@ async def school_portal_login(data: dict):
     }, {"_id": 0}).to_list(20)
     pw_row = next((r for r in matches if verify_password(password, r["password_hash"])), None)
     if not pw_row:
-        raise HTTPException(status_code=401, detail="Invalid or expired password")
+        raise HTTPException(status_code=401, detail="Invalid portal link or password")
     # Create a short-lived session token
     raw_session = secrets.token_urlsafe(32)
     session_id = f"sps_{uuid.uuid4().hex[:10]}"

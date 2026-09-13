@@ -1,6 +1,6 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus
+from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus, get_role_level
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
@@ -462,6 +462,23 @@ async def admin_reset_password(user_id: str, data: dict, current_user: dict = De
                 raise HTTPException(status_code=404, detail="Member has no linked user account or email to look up")
         else:
             raise HTTPException(status_code=404, detail="User not found")
+    # iter351 — no upward resets. A Director could previously reset an
+    # admin/system_admin password (and the new password came back in the
+    # response), i.e. a one-request takeover of the top account. You may only
+    # reset someone strictly below your own role level, or your own account.
+    target = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "role": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["id"] != current_user["id"]:
+        caller_level = get_role_level(current_user.get("role"))
+        target_level = get_role_level(target.get("role"))
+        # Admins (level 10) already own every user-management endpoint, so peer
+        # resets are not an escalation for them. Everyone below must stay below.
+        if caller_level < 10 and target_level >= caller_level:
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot reset the password of someone at your own level or above",
+            )
     result = await db.users.update_one({"id": user_id}, {"$set": {
         "password_hash": hash_password(new_password),
         "status": "active",

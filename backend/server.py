@@ -604,10 +604,24 @@ from seed_data import _seed_initial_data
 
 app.include_router(api_router)
 
+# iter351 — CORS is an explicit allowlist instead of `*` with credentials.
+# Own origins (preview + Emergent deployments) are matched by regex; anything
+# extra (a custom domain, a partner site) goes in CORS_ORIGINS as a
+# comma-separated list. `CORS_ORIGINS=*` is honoured but logged as unsafe.
+_cors_env = (os.environ.get("CORS_ORIGINS") or "").strip()
+CORS_ALLOWED_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*(emergent\.host|emergentagent\.com)$"
+if _cors_env == "*":
+    logger.warning("CORS_ORIGINS='*' — falling back to the Emergent origin allowlist. "
+                   "Set an explicit comma-separated list to allow custom domains.")
+    CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
+else:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] or ["http://localhost:3000"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=CORS_ALLOWED_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )

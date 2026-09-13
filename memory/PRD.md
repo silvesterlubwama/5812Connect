@@ -1,5 +1,70 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter351–352 — Security audit remediation (2026-06)
+
+Two rounds of read-only audit on the production deployment. Round 1 verdict was
+FAIL (one anonymous PII dump); round 2 found four more HIGH issues in the code
+the first round only partially covered. Everything below is fixed and tested —
+`/app/test_reports/iteration_234.json` (25/25), `iteration_235.json`,
+`iteration_236.json`, and 69 backend tests green across
+`tests/test_iter35{0,1,2}_*.py` + the iter346/347/292 suites.
+**Production still needs a redeploy to receive these fixes.**
+
+### Round 1
+- **CRITICAL — anonymous member/child PII dump.** `GET /api/kiosk/lookup` is
+  public (the `/kiosk` page is) but returned the WHOLE member document: phone,
+  email, DOB, national ID, passport, address. Now a whitelisted projection
+  (id, name, role, photo, campus + children id/name/photo), exact-match only
+  (the last-9-digits phone regex is gone) and throttled 15/10 min per IP.
+- **HIGH — cross-campus case files.** Single-case reads trusted the id alone.
+  New `social_work._scoped_case_or_404` applies `get_campus_filter` and is used
+  by case read, report PDF, update, notes, payments, delete and both sponsor-story
+  endpoints.
+- **MEDIUM — kiosk unlock was a password oracle.** It answered "Unknown
+  identifier" vs "Wrong password" vs "PIN belongs to 'Staff'" outside the login
+  lockout. Now one uniform 401, throttled 8/10 min, with a dummy bcrypt verify on
+  the not-found branch and a constant-time PIN compare.
+- **Hardening**: school-portal login throttled and its 404-vs-401 token oracle
+  closed; `SECRET_KEY` fails closed instead of falling back to a built-in
+  default; CORS is an allowlist (`CORS_ORIGINS` env + regex for
+  `*.emergent.host` / `*.emergentagent.com`) instead of `*` with credentials.
+
+### Round 2
+- **HIGH — cross-campus data that survived round 1**: case notes, case payments,
+  review forms (get/update/delete → new `_scoped_review_or_404`), the member
+  profile PDF (full PII) and the payslip PDF are all campus-scoped now; the
+  payslip owner still always sees their own.
+- **HIGH — privilege escalation via password reset.** `admin_reset_password` was
+  `require_director` only, so a Director could reset a system admin's password and
+  take the account. Callers below level 10 can no longer reset anyone at or above
+  their own level.
+- **HIGH — sibling-campus leak through the campus pin.** A non-switcher user
+  assigned to a sub-location inherits the parent campus, and pinning a REGION
+  then expanded to every sibling campus. `get_campus_filter` now captures
+  `assigned_loc_ids` BEFORE the parent-walk and intersects a pinned parent with
+  (assigned + their descendants + direct parent ids). Admins/EDs/Advisers still
+  see a whole region when pinned to it — verified 19/11/3 members across
+  region/Entebbe/Jinja.
+- **HIGH — anonymous kiosk PIN check-in** (4-digit space) was un-throttled and
+  returned each child's date of birth. Now throttled 20/10 min and DOB is neither
+  returned nor rendered. `enforce_public_rate_limit` also keeps a per-socket
+  bucket (12× the per-IP allowance) so rotating `X-Forwarded-For` can't buy
+  unlimited attempts.
+- **UX fallout fixed**: Members used to land on the staff dashboard and collect a
+  wall of 403s. `landingRouteFor()` sends non-staff to `/portal` at login and
+  `StaffRoute` now redirects every non-staff role there.
+
+### Known / accepted
+- The anonymous kiosk still returns a matched person's name + children's names
+  and photos — the check-in screen cannot work without them. Gated by needing the
+  full ID/phone plus the throttle.
+- PINs are still stored in plain text in `users.pin` / `members.pin` (used by the
+  parent PIN check-in flow). Comparison is constant-time; hashing them is a
+  separate migration.
+- `enforce_public_rate_limit` fails OPEN if Mongo errors (logged) so a DB blip
+  can't close the gate at reception.
+
+
 ## iter350 — Phases 3, 4 & 5 of the reported-bug backlog (2026-06)
 
 User choices this round: pay-cycle changes apply **going forward only** (existing

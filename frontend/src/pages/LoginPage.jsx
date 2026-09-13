@@ -9,6 +9,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { webAuthnApi } from '../services/api';
+import { landingRouteFor } from '../components/RouteGuards';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
@@ -30,7 +31,7 @@ export default function LoginPage() {
     try {
       const result = await login(identifier, password, totpCode || null);
       if (result.requires_2fa) { setNeeds2FA(true); toast.info('Enter your authenticator code'); setLoading(false); return; }
-      navigate('/dashboard');
+      navigate(landingRouteFor(result.user));
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || 'Invalid credentials';
       if (detail.includes('pending')) toast.error('Account pending approval. Contact your administrator.');
@@ -86,7 +87,7 @@ export default function LoginPage() {
       secureStorage.setToken(token);
       setUser(user);
       toast.success(`Welcome back, ${user.name}!`);
-      navigate('/dashboard');
+      navigate(landingRouteFor(user));
     } catch (err) {
       if (err.name === 'NotAllowedError') {
         toast.info('Passkey authentication cancelled');

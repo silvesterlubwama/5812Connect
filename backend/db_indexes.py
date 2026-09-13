@@ -149,6 +149,10 @@ async def _ensure_access_indexes():
     await db.access_request_rejections.create_index([("client_ip", 1), ("created_at", -1)])
     await db.access_request_rejections.create_index([("proxy_ip", 1), ("created_at", -1)])
     await db.access_request_rejections.create_index([("reason", 1), ("created_at", -1)])
+    # Public (unauthenticated) endpoint throttle — rows expire after 1h.
+    await db.public_endpoint_hits.create_index([("action", 1), ("ip", 1), ("at", -1)])
+    await db.public_endpoint_hits.create_index([("action", 1), ("socket_ip", 1), ("at", -1)])
+    await db.public_endpoint_hits.create_index([("created_at", 1)], expireAfterSeconds=3600)
 
     await db.security_checkpoint_events.create_index(
         [("checkpoint_id", 1), ("created_at", -1)], name="cpe_cp_date")

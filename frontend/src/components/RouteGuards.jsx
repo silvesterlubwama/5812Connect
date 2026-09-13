@@ -4,6 +4,13 @@ import { useAuth } from '../context/AuthContext';
 import PendingApprovalScreen from '../pages/PendingApprovalScreen';
 
 const GUEST_ROLES = new Set(['Guest', 'guest', 'Visitor', 'visitor']);
+// Non-staff roles land in the member portal — exported so /login can send them
+// straight there instead of bouncing through the staff dashboard.
+export function landingRouteFor(user) {
+  if (!user) return '/login';
+  if (KIOSK_ONLY_ROLES.has(user.role)) return '/security-checkpoint';
+  return STAFF_ROLES.has(user.role) ? '/dashboard' : '/portal';
+}
 const ADMIN_ROLES = new Set(['admin', 'system_admin', 'Executive Director', 'Adviser']);
 // Roles that always land on the STAFF app — never bounced to the portal even
 // if `is_parent` happens to be true. Fixes iter343 regression where an
@@ -31,9 +38,10 @@ export function StaffRoute({ children }) {
   if (user.status === 'pending') return <PendingApprovalScreen />;
   // Explicit staff roles win over any guest heuristics.
   if (STAFF_ROLES.has(user.role)) return children;
-  // Non-staff guests (with or without is_parent) live in /portal.
-  if (GUEST_ROLES.has(user.role)) return <Navigate to="/portal" replace />;
-  return children;
+  // Everyone else (Guest, Member, Parent, Customer…) lives in /portal.
+  // iter352 — Members used to fall through to the staff canvas and then get a
+  // wall of 403s from admin-only endpoints they can't call.
+  return <Navigate to="/portal" replace />;
 }
 
 /**

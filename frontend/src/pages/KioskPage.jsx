@@ -1066,7 +1066,7 @@ export default function KioskPage() {
               <div className="p-4 rounded-xl border-2 border-primary bg-primary/5 space-y-3" data-testid="kiosk-found-member">
                 <div>
                   <p className="font-semibold text-lg">{foundMember.name}</p>
-                  <p className="text-sm text-muted-foreground">{foundMember.role} &middot; {foundMember.group}</p>
+                  <p className="text-sm text-muted-foreground">{[foundMember.role, foundMember.group].filter(Boolean).join(' · ')}</p>
                 </div>
                 {(foundMember.children || []).length > 0 && (
                   <div className="border-t pt-3">
@@ -1092,7 +1092,7 @@ export default function KioskPage() {
                                 : <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold">{(child.name || '?').slice(0, 1)}</div>}
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-medium truncate">{child.name}</p>
-                                {child.date_of_birth && <p className="text-[10px] text-muted-foreground">DOB {child.date_of_birth.slice(0, 10)}</p>}
+                                {/* DOB deliberately not shown/returned on the public kiosk (iter351 security fix) */}
                               </div>
                               {selected && <UserCheck size={14} className="text-primary shrink-0" />}
                             </div>

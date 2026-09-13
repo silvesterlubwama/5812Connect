@@ -19,6 +19,33 @@ from .timeline import _append_timeline_note
 router = APIRouter(prefix="/api/social-work/reviews", tags=["social_work_reviews"])
 
 
+async def _scoped_review_or_404(review_id: str, current_user: dict) -> dict:
+    """Fetch a review form the caller's campus scope actually covers (iter351).
+
+    By-id review reads/writes used to trust the id alone, so a worker in campus
+    A could read, edit or delete a campus-B child's welfare review.
+    """
+    from deps import get_campus_filter
+    rev = await db.social_review_forms.find_one({"id": review_id}, {"_id": 0})
+    if not rev:
+        raise HTTPException(status_code=404, detail="Review form not found")
+    scope = await get_campus_filter(current_user)
+    if not scope:
+        return rev  # system admin / unrestricted
+    allowed = (scope.get("location_id") or {}).get("$in") if isinstance(scope.get("location_id"), dict) else None
+    if allowed is None and scope.get("$or"):
+        for clause in scope["$or"]:
+            v = clause.get("location_id")
+            if isinstance(v, dict) and "$in" in v:
+                allowed = v["$in"]
+            elif isinstance(v, str):
+                allowed = [v]
+    loc = rev.get("location_id") or ""
+    if allowed and loc and loc not in allowed:
+        raise HTTPException(status_code=404, detail="Review form not found")
+    return rev
+
+
 @router.get("/children/{child_id}")
 async def list_child_reviews(
     child_id: str,
@@ -49,10 +76,7 @@ async def list_child_reviews(
 
 @router.get("/{review_id}")
 async def get_review(review_id: str, current_user: dict = Depends(require_staff)):
-    rev = await db.social_review_forms.find_one({"id": review_id}, {"_id": 0})
-    if not rev:
-        raise HTTPException(status_code=404, detail="Review form not found")
-    return rev
+    return await _scoped_review_or_404(review_id, current_user)
 
 
 @router.post("/children/{child_id}")
@@ -99,9 +123,7 @@ async def create_review(child_id: str, data: dict, current_user: dict = Depends(
 
 @router.put("/{review_id}")
 async def update_review(review_id: str, data: dict, current_user: dict = Depends(require_staff)):
-    rev = await db.social_review_forms.find_one({"id": review_id}, {"_id": 0})
-    if not rev:
-        raise HTTPException(status_code=404, detail="Review form not found")
+    rev = await _scoped_review_or_404(review_id, current_user)
     allowed = {"fields", "action_plan", "overall_assessment", "term", "next_visit_date", "review_date", "attached_scan_url", "status"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -114,9 +136,7 @@ async def update_review(review_id: str, data: dict, current_user: dict = Depends
 
 @router.delete("/{review_id}")
 async def delete_review(review_id: str, current_user: dict = Depends(require_staff)):
-    rev = await db.social_review_forms.find_one({"id": review_id}, {"_id": 0})
-    if not rev:
-        raise HTTPException(status_code=404, detail="Review form not found")
+    rev = await _scoped_review_or_404(review_id, current_user)
     rev["_deleted_from"] = "social_review_forms"
     rev["deleted_at"] = datetime.now(timezone.utc).isoformat()
     rev["deleted_by"] = current_user["id"]

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 
 from deps import db, require_staff, _audit, logger, require_social_work_view
+from routers.social_work import _scoped_case_or_404
 
 load_dotenv()
 
@@ -155,9 +156,9 @@ async def generate_sponsor_story(case_id: str, data: dict = None, current_user: 
     `sponsor_story` so it survives a page reload and can be edited by hand.
     """
     data = data or {}
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0})
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    # Campus-scoped fetch — a case id from another campus must not be readable
+    # (let alone summarised by an LLM). See social_work._scoped_case_or_404.
+    case = await _scoped_case_or_404(case_id, current_user)
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="AI key not configured — add EMERGENT_LLM_KEY to the backend environment")
@@ -212,9 +213,7 @@ async def save_sponsor_story(case_id: str, data: dict, current_user: dict = Depe
     story = (data.get("story") or "").strip()
     if len(story) > 8000:
         raise HTTPException(status_code=400, detail="Story is too long")
-    case = await db.social_cases.find_one({"id": case_id}, {"_id": 0, "id": 1})
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    await _scoped_case_or_404(case_id, current_user, {"_id": 0, "id": 1})
     await db.social_cases.update_one({"id": case_id}, {"$set": {
         "sponsor_story": story,
         "sponsor_story_edited_at": datetime.now(timezone.utc).isoformat(),

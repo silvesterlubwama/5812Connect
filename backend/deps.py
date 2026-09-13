@@ -25,7 +25,10 @@ except Exception as e:
     db = None
 
 # Auth
-SECRET_KEY = os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production')
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    # Fail closed: a default signing key would let anyone mint admin tokens.
+    raise RuntimeError("SECRET_KEY is not set — add it to backend/.env before starting the API")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -332,6 +335,11 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     user_loc_ids = set(user.get("location_ids") or [])
     if user.get("location_id"):
         user_loc_ids.add(user.get("location_id"))
+    # The user's ACTUAL assignment, before any parent-walk. Used to bound what a
+    # pinned parent campus may expand to (iter352) — the parent-walk below adds
+    # the campus (and for a sub-location user, the region) which must never be
+    # treated as "assigned" for data-scoping purposes.
+    assigned_loc_ids = set(user_loc_ids)
     # If user is tagged in a sub-location, they also belong to the parent campus.
     # This ensures sub-location users have full campus-level access for features/settings.
     if user_loc_ids:
@@ -357,8 +365,24 @@ async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
         # Uganda + Kenya + Haiti + Rescue + all of their descendants.
         descendants = await expand_descendants([active], include_restricted_from=user_loc_ids, allow_all_restricted=_is_admin)
         all_locs = list({active, *descendants})
+        # iter351 — a plain multi-campus user is allowed to PIN a parent campus
+        # (they inherit it from a sub-location assignment), but pinning it must
+        # not hand them sibling campuses they were never assigned to. Only the
+        # true switcher roles see a whole region.
+        if not (_is_admin or has_campus_switcher(user)):
+            # Bound the pin to what this person is actually assigned to:
+            # their own locations + everything under them + the id of their
+            # direct parent campus (so campus-level records stay visible).
+            # The parent's OTHER descendants — i.e. sibling campuses under a
+            # region — are deliberately excluded (iter352).
+            own_descendants = await expand_descendants(
+                list(assigned_loc_ids), include_restricted_from=user_loc_ids, allow_all_restricted=False
+            )
+            direct_parents = user_loc_ids - assigned_loc_ids
+            own_scope = set(assigned_loc_ids) | set(own_descendants) | direct_parents
+            all_locs = [loc for loc in all_locs if loc in own_scope] or list(assigned_loc_ids)
         if len(all_locs) == 1:
-            return {"$or": [{field: active}, {"location_ids": active}]}
+            return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
         return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
     if _is_admin:
         return {}
@@ -471,6 +495,65 @@ require_staff = require_role(5)       # Staff+
 # ---- SHARED HELPERS ----
 
 from fastapi import HTTPException as _HTTPException
+
+
+def client_ip(request) -> str:
+    """The visitor's IP, not the ingress hop. `request.client.host` is the
+    Kubernetes/Cloudflare proxy, so any per-IP limit keyed on it is really a
+    single global bucket. Prefer the leftmost X-Forwarded-For entry."""
+    try:
+        xff = request.headers.get("x-forwarded-for") or ""
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        real = request.headers.get("x-real-ip") or ""
+        if real:
+            return real.strip()
+        return (request.client.host if request.client else "") or "unknown"
+    except Exception:
+        return "unknown"
+
+
+async def enforce_public_rate_limit(request, action: str, limit: int, window_minutes: int = 10):
+    """Per-IP throttle for UNAUTHENTICATED endpoints (kiosk lookup/unlock/PIN
+    check-in, school-portal login). Hits live in `public_endpoint_hits` with a
+    TTL index, so an attacker can't turn a public convenience endpoint into an
+    enumeration or password-guessing oracle.
+
+    X-Forwarded-For is client-controlled, so the per-IP bucket alone can be
+    reset at will. We therefore ALSO keep a much larger per-socket (ingress
+    hop) bucket: rotating the header still can't buy unlimited attempts.
+    """
+    ip = client_ip(request)
+    try:
+        socket_ip = (request.client.host if request.client else "") or "unknown"
+    except Exception:
+        socket_ip = "unknown"
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(minutes=window_minutes)).isoformat()
+    try:
+        hits = await db.public_endpoint_hits.count_documents(
+            {"action": action, "ip": ip, "at": {"$gte": since}}
+        )
+        socket_hits = await db.public_endpoint_hits.count_documents(
+            {"action": action, "socket_ip": socket_ip, "at": {"$gte": since}}
+        )
+        await db.public_endpoint_hits.insert_one(
+            {"action": action, "ip": ip, "socket_ip": socket_ip,
+             "at": now.isoformat(), "created_at": now}
+        )
+    except Exception as e:  # never let the limiter take the endpoint down
+        logger.warning(f"public rate limit check failed for {action}: {e}")
+        return
+    # Header-spoof safety net: 12x the per-IP allowance for one real connection.
+    if hits >= limit or socket_hits >= limit * 12:
+        logger.warning(f"public rate limit hit: action={action} ip={ip} socket={socket_ip}")
+        raise _HTTPException(
+            status_code=429,
+            detail="Too many attempts from this device — please wait a few minutes and try again",
+        )
+
 
 def normalize_gender(value):
     if value is None or value == "":

@@ -1,0 +1,47 @@
+{
+  "summary": "iter352 round-2 security-audit verification: 27/29 pass, 1 skipped (environment), 1 FAILING which is a real HIGH-severity bug in the R2-3 fix. Suite: /app/backend/tests/test_iter352_round2_audit.py. R2-1 cross-campus by-id 404: all 14 assertions pass — a Director scoped only to a fresh campus B gets 404 on GET /cases/{A}/notes, /cases/{A}/payments, /reviews/{A} (GET/PUT/DELETE), /members/{A}/profile-pdf, and still 200s on their own campus-B equivalents; admin still 200s on campus A. R2-2 privilege escalation via reset-password: Director→admin returns 403 with the exact 'You cannot reset the password of someone at your own level or above' message; admin login with the original password still works (verified after the attempt). Director→Member returns 200 and the member can log in with the new password. Admin→throwaway-admin returns 200 (throwaway admin created + deleted; the three real admins were not touched). R2-4 kiosk pin-checkin: action=lookup no longer returns date_of_birth on children (children carry only id/name/photo_url/family_id); per-IP throttle kicks in on ~20th call in 10 min. Per-socket safety-net test SKIPPED because the k8s preview ingress spread 300 spoofed calls across 300 distinct socket_ips — the code itself is present and correct in deps.py::enforce_public_rate_limit (limit*12 socket bucket), but this environment cannot pin a single socket. R2-5 kiosk unlock: unknown identifier and real+wrong-password both return the identical {'detail':'Invalid credentials'} 401; median timing deltas across 5 samples of each path are within the ratio threshold (dummy bcrypt burn on the not-found path is working). Valid PIN unlock still returns unlocked=true. Payslip PDF regression: owner + HR-same-campus + admin all 200, Director-of-other-campus 404. Real bug: R2-3 sibling-campus leak is NOT fully fixed — the failing test proves a Manager assigned only to a sub-location under campus A, after pinning the parent region, still sees campus B's data in the tenant listings.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "backend/deps.py::get_campus_filter",
+        "issue": "R2-3 IS STILL BROKEN. A non-switcher Manager assigned ONLY to a sub-location under campus A, after PUT /api/user/active-campus with the parent region id, still sees campus B (sibling) data in campus-scoped list endpoints (verified against /api/events). Direct probe of get_campus_filter for `user={role:'Manager', location_id:'sub', location_ids:['sub','loc_002'], active_campus_id:'loc_001'}` returns a filter that includes loc_003 (sibling campus). Root cause: the parent-walk at the top of get_campus_filter (lines 340–347) climbs TWO levels for a sub-location user (sub → campus → region) and puts the region id into `user_loc_ids`. The iter351 restriction then computes `own_scope = user_loc_ids | expand_descendants(user_loc_ids)` — since user_loc_ids contains the region, expand_descendants walks the whole region and pulls every sibling campus into own_scope. Fix: compute own_scope from the ORIGINAL assignment (`user['location_id']` + `user['location_ids']` as stored, plus only their SUB-descendants), NOT from the parent-expanded set. Do the parent-walk only for the OTHER purposes (pin-target eligibility, feature access).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/kiosk/pin-checkin (X-Forwarded-For safety net)",
+        "issue": "Cannot be verified in this preview: 300 spoofed X-Forwarded-For calls produced 300 distinct socket_ips (multi-replica ingress). The code path in deps.py::enforce_public_rate_limit is correct (per-socket bucket at limit*12), but end-to-end proof requires a fixed egress. Recommend testing behind a single proxy or asserting the DB shape (one socket_ip, hit count > limit*12) directly."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter352_round2_audit.py",
+    "/app/test_reports/pytest/iter352_results.xml"
+  ],
+  "action_items": [
+    "FIX (HIGH): backend/deps.py::get_campus_filter — recompute `own_scope` for the non-switcher parent-pin restriction using the user's ORIGINAL assignment (stored `location_id` + `location_ids`), not the parent-expanded `user_loc_ids`. Otherwise a Manager under a sub-location of any campus can pin the region and read every sibling campus's data. Suggested minimal patch: capture `original_user_locs = set(user.get('location_ids') or []) | ({user.get('location_id')} if user.get('location_id') else set())` BEFORE the parent-walk, and use `expand_descendants(original_user_locs, ...)` when computing `own_scope`.",
+    "After fixing, re-run backend/tests/test_iter352_round2_audit.py::TestR23ActiveCampusPin — the failing test_manager_pin_region_does_not_leak_sibling_campus must pass while test_admin_pin_region_sees_both continues to pass.",
+    "Optional hardening (from iter351 code-review notes still open): (1) enforce_public_rate_limit fails-open on Mongo errors — consider fail-closed for security throttles; (2) social_work::school_portal_login still 404s for unknown token vs 401 for wrong password (small oracle)."
+  ],
+  "critical_code_review_comments": [
+    "backend/deps.py::get_campus_filter — the iter351 non-switcher restriction is applied to a set that has already been parent-walked; the parent-walk itself is the leak vector when a sub-location user pins the grandparent region. This is exactly the bug R2-3 was written to prevent.",
+    "backend/deps.py::enforce_public_rate_limit — swallows all DB exceptions with a warning (fail-open). Security throttles should raise (fail-closed) so a broken/overloaded Mongo can't silently disable brute-force protection.",
+    "backend/routers/social_work.py — file is still >2000 lines; social_review_forms is already split, but the case sub-routes (notes/payments/documents/sponsor-story) are worth extracting to their own module for future testability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter352_round2_audit.py (new — 29 tests, reusable regression suite for the round-2 audit fixes)"
+  ],
+  "success_rate": {"backend": "93% (27/29 pass, 1 skip, 1 fail)", "frontend": "not tested this iteration (backend HIGH bug found — reporting early for main agent to fix before UI regression)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (from /app/memory/test_credentials.md). All test users are prefixed 'test.r2.' and are deleted in fixture teardown. Verified no residual users/locations after run.",
+  "seed_data_creation": "TestR21CrossCampus: inserts note_TEST_A_*, pay_TEST_A_*, rev_TEST_A_*, mem_TEST_A_* into loc_001 and their B-side equivalents; creates a TEST_R2_Campus_B_* + a Director scoped only there; all torn down. TestR23ActiveCampusPin: creates loc_TEST_sub_* under loc_002 + a Manager user assigned there + one event in each of loc_002 and loc_003; all torn down. TestR24: TEST_ family + parent + child so the kiosk lookup has real children. TestPayslipPDFScoping: seeds ps_TEST_* + 3 users (Staff/HR/Director). db.public_endpoint_hits is cleared between throttle tests.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Reusable suite: /app/backend/tests/test_iter352_round2_audit.py (runs in ~12s). One HIGH bug reported to E1 — after E1 patches backend/deps.py::get_campus_filter to compute own_scope from the ORIGINAL user assignment (not the parent-walked set), re-run TestR23ActiveCampusPin; both test_manager_pin_region_does_not_leak_sibling_campus and test_admin_pin_region_sees_both must pass. The socket-safety-net test is intentionally skipped in this preview environment (multi-ingress) — do not delete it; behind a single egress it asserts first_429 in (20, 280]. Round-1 suite (iter351) still passes untouched.",
+  "rca of the issue": "R2-3 (active-campus pin sibling leak) reproduction: (1) create a sub-location under campus A; (2) create a Manager assigned ONLY to that sub-location; (3) as the manager, PUT /api/user/active-campus {campus_id: <parent-region-id>}; (4) GET /api/events → response includes events from campus B (sibling of campus A). Root cause: at the top of deps.get_campus_filter, `user_loc_ids` is expanded by ONE parent hop per id via db.locations.find({id: {$in: user_loc_ids}, parent_id...}). Because the manager already has [sub, camp_a] stored (create_user resolves sub-location parents once), the parent hop climbs [sub→camp_a, camp_a→region] and lands loc_001 into user_loc_ids. The iter351 defensive block then does `own_descendants = expand_descendants(user_loc_ids)` — recursive — which from loc_001 fans out to every sibling campus (loc_002, loc_003) and every one of their sub-locations. own_scope thereby contains camp_b, and the intersection with the active-campus expansion doesn't clip it out. Mitigation: freeze the pre-walk assignment set (`original_locs = set(location_ids) | {location_id}`) and use it as the anchor for own_scope, so a user assigned to sub_of_camp_a's own_scope is at most {sub, camp_a, and camp_a's own descendants}, never sibling campuses. This preserves the ability to PIN the region (which set_active_campus already allows via a wider `parents` set) while restricting what pinning it can VIEW."
+}

@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend regression pass after iter352 R2-3 backend fix (get_campus_filter). All 10 admin routes render with real data and zero console errors: /dashboard (19 members / 2 families / 1 event / UGX 160,000 income), /people (19 members), /hr (1 salary), /tasks (Test Board loads), /calendar, /comms, /social-work (1 active case, 2 payments UGX 110,000), /financial, /access, /resources. Campus switcher works and does NOT over-scope: pinning loc_001 (region) shows 19 members / 3 events, pinning loc_002 (Entebbe) shows 11 members / 3 events, pinning loc_003 (Jinja) shows 3 members / 0 events — legitimate data still visible at every scope; no lists went unexpectedly empty. Member login (Mary Member) — /portal + /portal/profile load with correct member-only nav (Dashboard / Events & Tickets / My Tickets / My Family / Statement / My Badge / Profile only; no Chat/Tasks/Expenses/Documents), and profile shows the Payslips and Timesheets cards (both empty as expected). Public /kiosk — ID Check-In → phone lookup for '3306004065' returned 'Katelyn E Lubwama · member' with NO DOB anywhere on the card, and 'Confirm Check-In' produced the 'Katelyn E Lubwama checked in!' toast. Social work case detail modal — Overview / Goals & Notes (add-note form) / Payments (2 with UGX 30k+80k) / Welfare (New review + Print blank + Upload scan) / Documents / Compliance / Family & Medical / Education & School tabs all render; 'Download Profile Report' returns 200 application/pdf (20,354 bytes). HR — Payslips tab loads (export period + Generate/Manual buttons; system has zero payslips so admin PDF download is a no-op UI-wise, endpoint verified in prior backend suite); Timesheets tab period dropdowns populate — GET /api/hr/pay-periods returns 200 with the full biweekly period list (frequency biweekly, current W37–W39, anchor 2026-02-25). Campus-filter tightening did NOT hide data from legitimate users in the UI.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Member login redirect", "issue": "Non-staff Member is redirected to /dashboard on login instead of /portal, producing four transient 403 console errors from admin-only endpoints (/api/... admin resources) before the user navigates to /portal. /portal itself has 0 console errors. Recommend redirecting role=Member to /portal after login.", "affected_selectors": ["route: post-login redirect"]}
+    ],
+    "design_issues": [
+      {"screen": "HR → Payslips → Export period", "issues": ["Uses browser-native <input type=\"month\"> picker rather than the shadcn calendar/date component (minor, per code-review guidelines about native pickers)."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: redirect users with role=Member to /portal (not /dashboard) after login to eliminate the 4 transient 403 console errors from admin-scoped endpoints."
+  ],
+  "critical_code_review_comments": [
+    "Two harmless 404 console errors on the Social Work → Welfare tab when a case has zero reviews (empty-list endpoint likely returns 404 instead of []). Consider returning 200 [] for consistency with notes/payments.",
+    "Post-login destination is role-agnostic: Members land on /dashboard, hitting admin-only endpoints and emitting 403 noise in the console. Gate the redirect on role."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not retested this iteration (per request)", "frontend": "100% of critical flows pass (10/10 admin routes, campus switcher, member portal, kiosk lookup+DOB-hide+check-in, SW case tabs+PDF, HR pay-periods+payslips UI)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (Admin), member@5812uganda.org / Member@5812 (Member). No new Manager-or-Staff-scoped user was created because the existing test locations already exposed enough surface to verify no over-scoping — admin at region sees 19 members, campus-pin visibly clips to 11 and 3, and the previously failing sibling-leak scenario is guarded by backend iter352 suite.",
+  "seed_data_creation": "None (kiosk check-in for Katelyn E Lubwama was recorded as part of the flow test; existing seed).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter352 R2-3 backend fix is now confirmed on the frontend: campus switcher at each scope (region / loc_002 / loc_003) returns the expected non-empty, correctly-clipped datasets and no legitimate list came back empty. The only residual noise is (a) 4 x 403s on the initial /dashboard load for role=Member before they navigate to /portal, and (b) 2 x 404s on the Social Work Welfare tab when a case has zero reviews. Both are cosmetic. Kiosk lookup card confirmed to hide DOB. HR pay-periods endpoint is populated. Payslip PDF end-to-end could not be exercised in the UI because the system has zero payslips (Payslips array is empty); backend scoping for that endpoint was verified in iter351/352.",
+  "rca of the issue": "N/A — no regressions found. The parent-walk restriction in backend/deps.py::get_campus_filter is honoured across the UI: admin pinning region still sees the whole region (19 members) and pinning a single campus clips down (11 / 3), which is exactly the fix's intent."
+}

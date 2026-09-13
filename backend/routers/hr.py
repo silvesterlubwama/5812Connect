@@ -3897,13 +3897,21 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
 @router.get("/payslips/{payslip_id}/pdf")
 async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_user)):
     """Server-rendered payslip PDF. Access: HR/Director+/Admin + the owning staff member."""
-    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_id": 1})
+    # iter351 — HR/director access is campus-scoped; the owning staff member
+    # always sees their own payslip regardless of scope.
+    p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_id": 1, "location_id": 1, "payroll_location_id": 1})
     if not p:
         raise HTTPException(status_code=404, detail="Payslip not found")
     role = (current_user.get("role") or "").lower()
     is_hr = role in {"admin", "system_admin", "hr", "director", "executive director"}
-    if not is_hr and p.get("staff_id") != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Not your payslip")
+    if p.get("staff_id") != current_user["id"]:
+        if not is_hr:
+            raise HTTPException(status_code=403, detail="Not your payslip")
+        scope = _hr_scope(current_user)
+        allowed = (scope.get("location_id") or {}).get("$in") if isinstance(scope.get("location_id"), dict) else None
+        pay_loc = p.get("payroll_location_id") or p.get("location_id")
+        if allowed is not None and pay_loc and pay_loc not in allowed:
+            raise HTTPException(status_code=404, detail="Payslip not found")
     pdf = await _generate_payslip_pdf_bytes(payslip_id)
     p_full = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_name": 1, "period": 1})
     from starlette.responses import StreamingResponse
