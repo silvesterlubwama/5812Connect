@@ -1000,9 +1000,14 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
     salary record needed. Use for casual workers, end-of-year bonuses, hardship
     payments, severance, etc.
 
+    iter354 — the period is now normalised onto the campus pay cycle
+    (weekly / fortnightly / monthly + anchor, see `_period_containing`), and the
+    working-day breakdown is filled in from leave + the approved timesheet, so a
+    manual slip reads exactly like a generated one instead of showing "—".
+
     Body: {
         staff_id: str,             # users.id (or members.id) of the recipient
-        period: 'YYYY-MM',
+        period: canonical period label, or any date inside the period,
         gross_salary: number,      # base amount the payslip pays out
         currency?: str (default UGX),
         allowances?: [{ name, amount }],
@@ -1015,7 +1020,7 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
         raise HTTPException(status_code=400, detail="staff_id required")
     period = (data.get("period") or "").strip()
     if not period:
-        raise HTTPException(status_code=400, detail="period required (YYYY-MM)")
+        raise HTTPException(status_code=400, detail="period required")
     try:
         gross = float(data.get("gross_salary") or 0)
     except Exception:
@@ -1029,6 +1034,29 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
         staff = await db.members.find_one({"id": staff_id}, {"_id": 0, "id": 1, "name": 1, "department": 1, "location_id": 1, "email": 1})
     if not staff:
         raise HTTPException(status_code=404, detail=f"Staff {staff_id} not found")
+
+    # ---- Normalise the period onto this campus's pay cycle (iter354) ----
+    loc_id = (data.get("location_id") or staff.get("location_id")
+              or current_user.get("active_campus_id") or "")
+    settings = await db.hr_settings.find_one({"location_id": loc_id}, {"_id": 0}) or {}
+    freq = _normalize_freq(settings.get("pay_frequency"))
+    anchor = _cycle_anchor_iso(settings)
+    requested_period = period
+    canonical = _period_containing(freq, anchor, _period_bounds(period)[0])
+    if canonical != period:
+        period = canonical
+
+    # ---- Day breakdown, same maths the generated payslips use ----
+    unpaid_days, working_days = await _unpaid_leave_days_in_period(staff_id, period)
+    ts = await db.hr_timesheets.find_one(
+        {"staff_id": staff_id, "period": period, "status": {"$in": ["approved", "submitted"]}},
+        {"_id": 0, "days_worked": 1, "hours_worked": 1, "pto_days": 1},
+        sort=[("status", 1)],
+    )
+    days_worked = (ts or {}).get("days_worked")
+    if days_worked is None:
+        days_worked = max(0, working_days - unpaid_days)
+    p_start, p_end = _period_bounds(period)
 
     # Sanitise line items
     line_items = []
@@ -1075,6 +1103,16 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
         "department": staff.get("department", ""),
         "location_id": staff.get("location_id") or current_user.get("active_campus_id"),
         "period": period,
+        "period_requested": requested_period if requested_period != period else None,
+        "period_start": p_start.isoformat(),
+        "period_end": p_end.isoformat(),
+        "pay_frequency": freq,
+        "working_days": working_days,
+        "days_worked": days_worked,
+        "pto_days": (ts or {}).get("pto_days") or 0,
+        "hours_worked": (ts or {}).get("hours_worked"),
+        "unpaid_leave_days": unpaid_days,
+        "payroll_location_id": loc_id or None,
         "gross_salary": gross,
         "allowances": total_allowances,
         "deductions": total_deductions,
@@ -1091,22 +1129,118 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
     payslip.pop("_id", None)
     await _audit(
         current_user["id"], "create", "manual_payslip", payslip["id"],
-        {"staff_id": staff_id, "period": period, "net": net, "currency": payslip["currency"]},
+        {"staff_id": staff_id, "period": period, "period_requested": requested_period,
+         "net": net, "currency": payslip["currency"]},
     )
     return payslip
 
 
+@router.post("/payslips/backfill-periods")
+async def backfill_payslip_periods(data: dict = None, current_user: dict = Depends(require_admin)):
+    """iter354 — move historical payslips onto the campus pay cycle and fill in
+    the day breakdown they were missing.
+
+    Payslips created before the pay-cycle work (and every manual payslip) were
+    labelled with a plain month and carried no working-days / days-worked
+    figures, so a fortnightly campus printed slips claiming to cover a whole
+    month. This recomputes, per payslip, the canonical period that contains its
+    original window and fills period_start/period_end, working_days,
+    days_worked, pto_days and unpaid_leave_days.
+
+    The original label is preserved as `legacy_period` so nothing is lost.
+
+    Body: { dry_run?: bool = true, location_id?: str, include_paid?: bool = true }
+    """
+    data = data or {}
+    dry_run = data.get("dry_run", True)
+    query = {}
+    if data.get("location_id"):
+        query["$or"] = [{"payroll_location_id": data["location_id"]}, {"location_id": data["location_id"]}]
+    if data.get("include_paid") is False:
+        query["status"] = {"$ne": "paid"}
+
+    settings_cache: dict = {}
+    changes = []
+    scanned = 0
+    async for ps in db.hr_payslips.find(query, {"_id": 0}):
+        scanned += 1
+        loc = ps.get("payroll_location_id") or ps.get("location_id") or ""
+        if loc not in settings_cache:
+            settings_cache[loc] = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0}) or {}
+        st = settings_cache[loc]
+        freq = _normalize_freq(st.get("pay_frequency"))
+        anchor = _cycle_anchor_iso(st)
+        old_period = ps.get("period") or ""
+        old_start, _old_end = _period_bounds(old_period)
+        canonical = _period_containing(freq, anchor, old_start)
+        p_start, p_end = _period_bounds(canonical)
+        unpaid_days, working_days = await _unpaid_leave_days_in_period(ps.get("staff_id") or "", canonical)
+        ts = await db.hr_timesheets.find_one(
+            {"staff_id": ps.get("staff_id"), "period": canonical, "status": {"$in": ["approved", "submitted"]}},
+            {"_id": 0, "days_worked": 1, "hours_worked": 1, "pto_days": 1},
+        )
+        days_worked = (ts or {}).get("days_worked")
+        if days_worked is None:
+            days_worked = ps.get("days_worked")
+        if days_worked is None:
+            days_worked = max(0, working_days - unpaid_days)
+        update = {
+            "period": canonical,
+            "period_start": p_start.isoformat(),
+            "period_end": p_end.isoformat(),
+            "pay_frequency": freq,
+            "working_days": working_days,
+            "days_worked": days_worked,
+            "unpaid_leave_days": ps.get("unpaid_leave_days") if ps.get("unpaid_leave_days") is not None else unpaid_days,
+            "pto_days": ps.get("pto_days") or (ts or {}).get("pto_days") or 0,
+            "period_backfilled_at": datetime.now(timezone.utc).isoformat(),
+        }
+        needs = (
+            canonical != old_period
+            or ps.get("period_start") != update["period_start"]
+            or ps.get("working_days") != working_days
+            or ps.get("days_worked") != days_worked
+        )
+        if not needs:
+            continue
+        changes.append({
+            "payslip_id": ps.get("id"),
+            "staff_name": ps.get("staff_name"),
+            "status": ps.get("status"),
+            "old_period": old_period,
+            "new_period": canonical,
+            "covers": f"{p_start.isoformat()} → {p_end.isoformat()}",
+            "working_days": working_days,
+            "days_worked": days_worked,
+            "relabelled": canonical != old_period,
+        })
+        if not dry_run:
+            if old_period and not ps.get("legacy_period"):
+                update["legacy_period"] = old_period
+            await db.hr_payslips.update_one({"id": ps["id"]}, {"$set": update})
+
+    if not dry_run:
+        await _audit(current_user["id"], "backfill", "hr_payslips", "periods",
+                     {"scanned": scanned, "updated": len(changes)})
+    return {
+        "dry_run": bool(dry_run),
+        "scanned": scanned,
+        "changed": len(changes),
+        "relabelled": sum(1 for c in changes if c["relabelled"]),
+        "changes": changes[:500],
+    }
+
+
 async def _unpaid_leave_days_in_period(staff_id: str, period: str) -> tuple:
-    """Return (unpaid_days, working_days_in_period) for a YYYY-MM period.
-    Uses approved leave requests whose leave_type maps to a non-paid type (or id == 'unpaid')."""
-    # dt_date / td are already imported at module level
-    try:
-        y, m = map(int, period.split("-"))
-    except Exception:
+    """Return (unpaid_days, working_days_in_period) for ANY period label.
+
+    iter354 — this used to parse `YYYY-MM` only, so on a weekly/fortnightly
+    campus it silently returned (0, 0): payslips came out with 0 working days
+    and no unpaid-leave proration. `_period_bounds` handles both shapes.
+    """
+    first, last = _period_bounds(period)
+    if not first or not last or last < first:
         return (0.0, 0)
-    first = dt_date(y, m, 1)
-    nm_y, nm_m = (y, m + 1) if m < 12 else (y + 1, 1)
-    last = dt_date(nm_y, nm_m, 1) - td(days=1)
     # Count working days in the period
     working = 0
     d = first
@@ -3791,37 +3925,34 @@ async def _generate_payslip_pdf_bytes(payslip_id: str) -> bytes:
     # Iter 335: parse the canonical period string into a human "Covers work
     # from <start> to <end> (N weeks)" line so paper matches the on-screen
     # explainer added in iter 334.
-    import re as _re
     period_str = p.get("period", "") or ""
     coverage_line = ""
-    _m = _re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", period_str)
-    if _m:
-        try:
-            _s = dt_date.fromisoformat(_m.group(1))
-            _e = dt_date.fromisoformat(_m.group(2))
-            _days = (_e - _s).days + 1
-            _label = "1 week" if _days <= 7 else f"{_days // 7} weeks" if _days % 7 == 0 else f"{_days} days"
-            coverage_line = (
-                f"<p class='meta' style='margin:4px 0 0 0'>"
-                f"Covers work from <strong>{_s.strftime('%b %-d, %Y')}</strong> "
-                f"to <strong>{_e.strftime('%b %-d, %Y')}</strong> "
-                f"({_label})</p>"
-            )
-        except Exception:
-            coverage_line = ""
-    elif _re.match(r"^\d{4}-\d{2}$", period_str):
-        try:
-            _y, _mo = period_str.split("-")
-            _first = dt_date(int(_y), int(_mo), 1)
-            _last = (dt_date(int(_y) + (1 if int(_mo) == 12 else 0),
-                              1 if int(_mo) == 12 else int(_mo) + 1, 1) - td(days=1))
-            coverage_line = (
-                f"<p class='meta' style='margin:4px 0 0 0'>"
-                f"Covers work from <strong>{_first.strftime('%b %-d, %Y')}</strong> "
-                f"to <strong>{_last.strftime('%b %-d, %Y')}</strong> (1 month)</p>"
-            )
-        except Exception:
-            coverage_line = ""
+    # iter354 — one code path: the stored window wins (manual slips now carry
+    # period_start/period_end derived from the campus pay cycle), otherwise the
+    # window is parsed back out of the canonical period label.
+    try:
+        if p.get("period_start") and p.get("period_end"):
+            _s = dt_date.fromisoformat(str(p["period_start"])[:10])
+            _e = dt_date.fromisoformat(str(p["period_end"])[:10])
+        else:
+            _s, _e = _period_bounds(period_str)
+        _days = (_e - _s).days + 1
+        if _days >= 28 and _s.day == 1 and (_e + td(days=1)).day == 1:
+            _label = "1 month"
+        elif _days <= 7:
+            _label = "1 week"
+        elif _days % 7 == 0:
+            _label = f"{_days // 7} weeks"
+        else:
+            _label = f"{_days} days"
+        coverage_line = (
+            f"<p class='meta' style='margin:4px 0 0 0'>"
+            f"Covers work from <strong>{_s.strftime('%b %-d, %Y')}</strong> "
+            f"to <strong>{_e.strftime('%b %-d, %Y')}</strong> "
+            f"({_label})</p>"
+        )
+    except Exception:
+        coverage_line = ""
     paid_note = ""
     if p.get("status") == "paid" and p.get("paid_at"):
         paid_note = f"<p class='meta' style='text-align:center;margin-top:14mm'>Paid on {p['paid_at'][:10]}</p>"

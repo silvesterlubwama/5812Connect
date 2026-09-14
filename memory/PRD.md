@@ -1,5 +1,74 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter354 — Payments are provider-agnostic + a Payments Inbox (2026-06)
+
+Flutterwave never became available to the organisation, so payments no longer
+hard-wire one provider. Verified end-to-end: `backend/tests/test_iter354_payment_gateway.py`
+**26/26 green**, plus the three UI surfaces driven in the browser (public Shop
+bank-transfer order → Finance → Payments Inbox match, and the Integrations card).
+**Production needs a redeploy to receive this.**
+
+### What exists
+- `backend/routers/payments_gateway.py` — a provider registry (`manual`,
+  `pesapal`, `mtn_momo`, `airtel_money`, `flutterwave`, `generic`), each
+  declaring its own credential + secret fields. Adapters are thin: ask the
+  provider to start a payment, then treat the webhook/IPN as the only truth.
+  Pesapal (API 3.0 SubmitOrderRequest + one-click `RegisterIPN`), MTN MoMo
+  (`requesttopay`) and Airtel (`merchant/v1/payments`) are written to their
+  published shapes and return **503 with the exact missing fields** until an
+  admin pastes keys — verified.
+- **Payments Inbox** (`db.payment_inbox`, Finance → Payments Inbox). Every
+  provider notification AND every hand-logged bank/MoMo payment lands here.
+  Matching is deliberately dumb and auditable (sale id / receipt number /
+  tx_ref); anything else stays `unmatched` as a visible work queue instead of
+  being silently guessed, and finance can match or ignore it with a note.
+  Amount mismatches are flagged with a `≠` marker.
+- **Bank-transfer checkout** on the public Shop: `payment_option: transfer`
+  returns the admin-entered bank / MTN / Airtel details plus the receipt number
+  as the reference. Nothing is invented — an empty config disables the option
+  (400) rather than showing fake account numbers.
+- Settling a payment only flags the sale `online_payment_status: paid`. A human
+  still runs Mark-as-Paid, which is what posts to the ledger. Unchanged.
+- Admin UI: System Console → Integrations → **Online payments** — provider
+  picker with per-provider credential inputs (secrets masked on read), the
+  copy-paste webhook/IPN URL, and the Bank / mobile money details shown to
+  buyers.
+
+### Bugs found and fixed while verifying (all were fatal to the feature)
+- **Every webhook 500'd.** `payment_webhook_events.id` is uniquely indexed from
+  the Flutterwave era and the new dedupe doc had no `id`, so the first
+  notification died with `DuplicateKeyError: id: null`. The insert now carries
+  `id = "<provider>:<event_id>"` and a `DuplicateKeyError` IS the dedupe, so two
+  concurrent retries can't both settle an order.
+- **The webhook URL an admin must hand the provider was a relative path**
+  (`/api/payments/pesapal/inbound`) whenever `PUBLIC_APP_URL` is unset — which
+  it is here. `public_base()` now falls back to the forwarded host/proto, so
+  both the Integrations card and `register-ipn` show a real URL.
+- **The buyer never saw the bank details.** The instructions block lived inside
+  `{shopCart.length > 0 && …}` and the success path calls `setShopCart([])`, so
+  the reference + account numbers unmounted the instant the order succeeded.
+  Now its own card with a Done button.
+- Shop pay-option radios had no `name`, so they were not one radio group;
+  added `name="shop-pay-option"` / `"shop-online-method"` and a
+  `shop-add-<productId>` test id on Add to Cart.
+- Integrations card still said "Online payments · Flutterwave" and offered
+  "Test keys (FLWSECK_TEST…)", and its Configured badge read the old top-level
+  `secret_key_set` — it now reflects whichever provider is selected.
+
+### Known / accepted
+- Per-provider secrets cannot be CLEARED from the UI: an empty value means
+  "keep current" (same rule as the Resend key). Switching provider is the
+  supported way to stop using one.
+- `/admin?tab=integrations` does not preselect the Integrations tab (the deep
+  link is ignored); the tab has to be clicked. Pre-existing, unrelated.
+- Left as the user asked: provider `manual`, online payments off, and
+  PLACEHOLDER offline details ("QA Bank" / 0770000000). **The user fills in the
+  real bank + MTN/Airtel numbers in System Console → Integrations** — until they
+  do, buyers see those placeholders on the Shop.
+- Pesapal / MTN / Airtel have never been exercised against a live sandbox — no
+  credentials exist. The request shapes are unverified against the real APIs.
+
+
 ## iter353 — PIN hashing + admin-managed domain allowlist (2026-06)
 
 Tested: `/app/test_reports/iteration_237.json` and 133 backend tests green

@@ -18,6 +18,7 @@ import { sublocationsApi, departmentsApi, locationsApi } from '../services/api';
 import { dataEvents } from '../services/dataEvents';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import PaymentsInbox from '../components/PaymentsInbox';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -60,6 +61,7 @@ export default function FinancePage() {
           <TabsTrigger value="overview" className="flex-shrink-0" data-testid="finance-tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="journal" className="flex-shrink-0" data-testid="finance-tab-journal">Journal</TabsTrigger>
           <TabsTrigger value="review" className="flex-shrink-0" data-testid="finance-tab-review">Review Queue</TabsTrigger>
+          <TabsTrigger value="payments" className="flex-shrink-0" data-testid="finance-tab-payments">Payments Inbox</TabsTrigger>
           <TabsTrigger value="coa" className="flex-shrink-0" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
           <TabsTrigger value="reports" className="flex-shrink-0" data-testid="finance-tab-reports">Reports</TabsTrigger>
           <TabsTrigger value="budgets" className="flex-shrink-0" data-testid="finance-tab-budgets">Budgets</TabsTrigger>
@@ -68,6 +70,7 @@ export default function FinancePage() {
         <TabsContent value="overview"><OverviewPanel /></TabsContent>
         <TabsContent value="journal"><JournalPanel /></TabsContent>
         <TabsContent value="review"><ReviewQueuePanel /></TabsContent>
+        <TabsContent value="payments"><PaymentsInbox /></TabsContent>
         <TabsContent value="coa"><CoaPanel /></TabsContent>
         <TabsContent value="reports"><ReportsPanel /></TabsContent>
         <TabsContent value="budgets"><BudgetsPanel /></TabsContent>

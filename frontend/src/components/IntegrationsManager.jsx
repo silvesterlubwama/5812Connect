@@ -19,7 +19,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from 'sonner';
 
 export default function IntegrationsManager() {
-  const webhookUrl = `${process.env.REACT_APP_BACKEND_URL || ''}/api/payments/flutterwave/webhook`;
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -31,6 +30,11 @@ export default function IntegrationsManager() {
   const [sentryDraft, setSentryDraft] = useState({});
   const [orgDraft, setOrgDraft] = useState({});
   const [payDraft, setPayDraft] = useState({});
+  // iter354 — payments are provider-agnostic: a catalogue from the backend
+  // drives which credential fields to show.
+  const [providerInfo, setProviderInfo] = useState(null);
+  const [provDraft, setProvDraft] = useState({});
+  const [offlineDraft, setOfflineDraft] = useState({});
 
   const load = async () => {
     setLoading(true);
@@ -70,7 +74,14 @@ export default function IntegrationsManager() {
         public_key: '',
         secret_key: '',
         webhook_hash: '',
+        provider: r.data?.payments?.provider || 'manual',
       });
+      setOfflineDraft(r.data?.payments?.offline || {});
+      setProvDraft({});
+      try {
+        const pr = await api.get('/payments/providers');
+        setProviderInfo(pr.data);
+      } catch { setProviderInfo(null); }
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to load settings');
     } finally { setLoading(false); }
@@ -119,8 +130,11 @@ export default function IntegrationsManager() {
   const savePayments = async () => {
     setSaving(true);
     try {
-      const payload = { payments: { ...payDraft } };
+      const payload = { payments: { ...payDraft, offline: offlineDraft } };
       ['public_key', 'secret_key', 'webhook_hash'].forEach(k => { if (!payDraft[k]) delete payload.payments[k]; });
+      // Only send credential fields the admin actually typed — blank keeps current.
+      const typed = Object.fromEntries(Object.entries(provDraft).filter(([, v]) => v !== '' && v !== undefined));
+      if (Object.keys(typed).length) payload.payments.providers = { [payDraft.provider]: typed };
       await api.put('/admin/system-settings', payload);
       toast.success('Payment settings saved');
       load();
@@ -263,13 +277,13 @@ export default function IntegrationsManager() {
                 <p className="text-[10px] text-muted-foreground italic">Sentry reads its config on backend boot — restart the backend (or wait for the next deploy) for changes to take effect.</p>
               </section>
 
-              {/* ONLINE PAYMENTS (Flutterwave) */}
+              {/* ONLINE PAYMENTS — provider-agnostic (iter354) */}
               <section className="space-y-3 p-3 rounded-lg border" data-testid="integrations-payments-section">
-                <h3 className="text-sm font-semibold flex items-center gap-2"><CreditCard size={14} className="text-violet-600" /> Online payments · Flutterwave
-                  {settings.payments?.secret_key_set
+                <h3 className="text-sm font-semibold flex items-center gap-2"><CreditCard size={14} className="text-violet-600" /> Online payments
+                  {(providerInfo?.providers || []).find(p => p.id === (payDraft.provider || 'manual'))?.configured
                     ? <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Configured</Badge>
-                    : <Badge variant="outline" className="text-[10px]">Not configured</Badge>}
-                  {settings.payments?.enabled && settings.payments?.secret_key_set && (
+                    : <Badge variant="outline" className="text-[10px]">Needs keys</Badge>}
+                  {payDraft.enabled && (payDraft.provider || 'manual') !== 'manual' && (
                     <Badge className="bg-violet-100 text-violet-700 text-[10px]">{payDraft.mode === 'live' ? 'LIVE' : 'Test mode'}</Badge>
                   )}
                 </h3>
@@ -285,7 +299,7 @@ export default function IntegrationsManager() {
                   <div className="space-y-1">
                     <Label className="text-xs">Mode</Label>
                     <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={payDraft.mode} onChange={e => setPayDraft({ ...payDraft, mode: e.target.value })} data-testid="payments-mode-select">
-                      <option value="test">Test keys (FLWSECK_TEST…)</option>
+                      <option value="test">Sandbox / test keys</option>
                       <option value="live">Live keys</option>
                     </select>
                   </div>
@@ -297,34 +311,106 @@ export default function IntegrationsManager() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs flex items-center gap-2">Public key
-                    {settings.payments?.public_key_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.public_key_masked}</span>}
-                  </Label>
-                  <Input value={payDraft.public_key} onChange={e => setPayDraft({ ...payDraft, public_key: e.target.value })} placeholder={settings.payments?.public_key_set ? 'Leave blank to keep current' : 'FLWPUBK_TEST-...'} data-testid="payments-public-key-input" />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs flex items-center gap-2">Secret key
-                    {settings.payments?.secret_key_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.secret_key_masked}</span>}
-                  </Label>
-                  <Input type="password" value={payDraft.secret_key} onChange={e => setPayDraft({ ...payDraft, secret_key: e.target.value })} placeholder={settings.payments?.secret_key_set ? 'Leave blank to keep current' : 'FLWSECK_TEST-...'} data-testid="payments-secret-key-input" />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs flex items-center gap-2">Webhook secret hash
-                    {settings.payments?.webhook_hash_set && <span className="text-[10px] text-muted-foreground">Current: {settings.payments.webhook_hash_masked}</span>}
-                  </Label>
-                  <Input type="password" value={payDraft.webhook_hash} onChange={e => setPayDraft({ ...payDraft, webhook_hash: e.target.value })} placeholder={settings.payments?.webhook_hash_set ? 'Leave blank to keep current' : 'Any long random string'} data-testid="payments-webhook-hash-input" />
-                  <p className="text-[10px] text-muted-foreground">
-                    Paste the same value into Flutterwave → Settings → Webhooks, with URL{' '}
-                    <code className="break-all">{webhookUrl}</code>
+                  <Label className="text-xs">Payment provider</Label>
+                  <select
+                    className="h-9 w-full rounded border bg-background px-2 text-sm"
+                    value={payDraft.provider || 'manual'}
+                    onChange={e => { setPayDraft({ ...payDraft, provider: e.target.value }); setProvDraft({}); }}
+                    data-testid="payments-provider-select"
+                  >
+                    {(providerInfo?.providers || [{ id: 'manual', label: 'Manual / bank transfer only' }]).map(p => (
+                      <option key={p.id} value={p.id}>{p.label}{p.configured ? '' : ' — needs keys'}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-muted-foreground" data-testid="payments-provider-note">
+                    {(providerInfo?.providers || []).find(p => p.id === (payDraft.provider || 'manual'))?.note || ''}
                   </p>
                 </div>
+
+                {/* Credential fields for the chosen provider */}
+                {((providerInfo?.providers || []).find(p => p.id === payDraft.provider)?.fields || []).map(f => {
+                  const saved = settings.payments?.providers?.[payDraft.provider] || {};
+                  const isSecret = ((providerInfo?.providers || []).find(p => p.id === payDraft.provider)?.secret_fields || []).includes(f);
+                  return (
+                    <div className="space-y-1" key={f}>
+                      <Label className="text-xs flex items-center gap-2 capitalize">
+                        {f.replace(/_/g, ' ')}
+                        {saved[`${f}_set`] && <span className="text-[10px] text-muted-foreground">Current: {saved[`${f}_masked`]}</span>}
+                      </Label>
+                      <Input
+                        type={isSecret ? 'password' : 'text'}
+                        value={provDraft[f] ?? (isSecret ? '' : (saved[f] || ''))}
+                        onChange={e => setProvDraft({ ...provDraft, [f]: e.target.value })}
+                        placeholder={saved[`${f}_set`] ? 'Leave blank to keep current' : f.replace(/_/g, ' ')}
+                        data-testid={`payments-field-${f}`}
+                      />
+                    </div>
+                  );
+                })}
+                {payDraft.provider === 'pesapal' && (
+                  <Button size="sm" variant="outline" className="text-[11px] h-8" data-testid="pesapal-register-ipn"
+                    onClick={async () => {
+                      try {
+                        const r = await api.post('/payments/pesapal/register-ipn');
+                        toast.success(`IPN registered — id ${r.data.ipn_id}`);
+                        load();
+                      } catch (e) { toast.error(e.response?.data?.detail || 'IPN registration failed'); }
+                    }}>Register IPN URL with Pesapal</Button>
+                )}
+                {providerInfo?.webhook_urls?.[payDraft.provider] && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Webhook / IPN URL to give the provider:{' '}
+                    <code className="break-all">{providerInfo.webhook_urls[payDraft.provider]}</code>
+                  </p>
+                )}
+
+                {/* Manual payment details shown to buyers — all admin-entered */}
+                <div className="space-y-2 p-2.5 rounded-md border bg-muted/30" data-testid="payments-offline-block">
+                  <p className="text-xs font-semibold">Bank / mobile money details shown to buyers</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Used for "pay by transfer" orders. Leave blank and the option stays hidden.
+                    Buyers get a reference (the order number) and finance matches it in the Payments Inbox.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[['bank_name', 'Bank name'], ['account_name', 'Account name'], ['account_number', 'Account number'],
+                      ['branch', 'Branch'], ['swift', 'SWIFT / BIC'],
+                      ['mtn_number', 'MTN MoMo number'], ['mtn_name', 'MTN registered name'],
+                      ['airtel_number', 'Airtel Money number'], ['airtel_name', 'Airtel registered name']].map(([k, label]) => (
+                      <div className="space-y-1" key={k}>
+                        <Label className="text-[10px]">{label}</Label>
+                        <Input className="h-8 text-xs" value={offlineDraft[k] || ''}
+                          onChange={e => setOfflineDraft({ ...offlineDraft, [k]: e.target.value })}
+                          data-testid={`payments-offline-${k}`} />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <label className="flex items-center gap-2 text-[11px]">
+                      <input type="checkbox" checked={!!offlineDraft.mtn_is_merchant}
+                        onChange={e => setOfflineDraft({ ...offlineDraft, mtn_is_merchant: e.target.checked })}
+                        data-testid="payments-offline-mtn-merchant" /> MTN number is a merchant / till
+                    </label>
+                    <label className="flex items-center gap-2 text-[11px]">
+                      <input type="checkbox" checked={!!offlineDraft.airtel_is_merchant}
+                        onChange={e => setOfflineDraft({ ...offlineDraft, airtel_is_merchant: e.target.checked })}
+                        data-testid="payments-offline-airtel-merchant" /> Airtel number is a merchant / till
+                    </label>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Extra instructions for the buyer</Label>
+                    <Input className="h-8 text-xs" value={offlineDraft.instructions || ''}
+                      onChange={e => setOfflineDraft({ ...offlineDraft, instructions: e.target.value })}
+                      placeholder="e.g. send a screenshot to +256…" data-testid="payments-offline-instructions" />
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 gap-1.5">
                   <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_card} onChange={e => setPayDraft({ ...payDraft, allow_card: e.target.checked })} data-testid="payments-allow-card-toggle" /> Offer card / bank checkout</label>
                   <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_mobile_money} onChange={e => setPayDraft({ ...payDraft, allow_mobile_money: e.target.checked })} data-testid="payments-allow-momo-toggle" /> Offer MTN / Airtel mobile money</label>
                   <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={payDraft.allow_pay_on_collection} onChange={e => setPayDraft({ ...payDraft, allow_pay_on_collection: e.target.checked })} data-testid="payments-allow-collection-toggle" /> Allow "pay on collection" orders</label>
                 </div>
                 <Button onClick={savePayments} disabled={saving} data-testid="payments-save-btn">{saving ? 'Saving…' : 'Save payment settings'}</Button>
-                <p className="text-[10px] text-muted-foreground">Keys live at <a href="https://dashboard.flutterwave.com/settings/apis" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">dashboard.flutterwave.com → Settings → API Keys</a>. Start with test keys.</p>
+                <p className="text-[10px] text-muted-foreground">No gateway keys? Leave the provider on <strong>Manual</strong> — buyers pay by bank transfer or mobile money and finance matches the money in Finance → Payments Inbox.</p>
               </section>
 
               {/* ORG */}

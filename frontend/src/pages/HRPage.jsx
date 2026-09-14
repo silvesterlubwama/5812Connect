@@ -35,9 +35,22 @@ export default function HRPage() {
   const [repairModal, setRepairModal] = useState(null);   // { data, busy, phase }
   const [showPayslipGen, setShowPayslipGen] = useState(false);
   const [showManualPayslip, setShowManualPayslip] = useState(false);
+  // iter354 — manual payslips use the campus pay cycle (weekly / fortnightly /
+  // monthly + anchor) like everything else, not a free-form month.
+  const [hrPayPeriods, setHrPayPeriods] = useState([]);
+  useEffect(() => {
+    api.get('/hr/pay-periods', { params: { past: 12, future: 1 } })
+      .then(r => {
+        const list = (r.data?.periods || []).slice().reverse();
+        setHrPayPeriods(list);
+        const cur = (list.find(p => p.is_current) || list[0] || {}).period || '';
+        setManualPayslip(f => ({ ...f, period: f.period || cur }));
+      })
+      .catch(() => setHrPayPeriods([]));
+  }, []);
   const [manualPayslip, setManualPayslip] = useState({
     staff_id: '',
-    period: new Date().toISOString().slice(0, 7),
+    period: '',
     gross_salary: '',
     currency: 'UGX',
     allowances: [],
@@ -1139,7 +1152,12 @@ export default function HRPage() {
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label className="text-xs">Pay period *</Label>
-                <Input type="month" value={manualPayslip.period} onChange={e => setManualPayslip({ ...manualPayslip, period: e.target.value })} data-testid="manual-payslip-period" />
+                <Select value={manualPayslip.period} onValueChange={v => setManualPayslip({ ...manualPayslip, period: v })}>
+                  <SelectTrigger data-testid="manual-payslip-period"><SelectValue placeholder="Pick a pay period" /></SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    {hrPayPeriods.map(p => (<SelectItem key={p.period} value={p.period}>{p.label}{p.is_current ? ' · current' : ''}</SelectItem>))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Currency</Label>

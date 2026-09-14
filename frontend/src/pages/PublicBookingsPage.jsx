@@ -65,6 +65,9 @@ export default function PublicBookingsPage() {
   const [momoNetwork, setMomoNetwork] = useState('MTN');
   const [placingOrder, setPlacingOrder] = useState(false);
   const [shopError, setShopError] = useState('');
+  // iter354 — bank / mobile money details + reference returned after a
+  // "pay by transfer" order, so the buyer knows exactly where to send money.
+  const [payInstructions, setPayInstructions] = useState(null);
   const [payResult, setPayResult] = useState(null);
 
   // Which checkout buttons to show + the outcome banner after a redirect back.
@@ -456,6 +459,7 @@ export default function PublicBookingsPage() {
                         <Badge variant={p.stock > 5 ? 'outline' : 'destructive'} className="text-[10px]">{p.stock > 0 ? `${p.stock} left` : 'Sold out'}</Badge>
                       </div>
                       <Button size="sm" className="w-full mt-3 text-xs" disabled={p.stock <= 0}
+                        data-testid={`shop-add-${p.id}`}
                         onClick={() => { const existing = shopCart.find(c => c.product_id === p.id); if (existing) setShopCart(prev => prev.map(c => c.product_id === p.id ? {...c, quantity: c.quantity + 1} : c)); else setShopCart(prev => [...prev, { product_id: p.id, name: p.name, price: p.price, quantity: 1 }]); toast.success(`${p.name} added to cart`); }}>
                         Add to Cart
                       </Button>
@@ -463,6 +467,28 @@ export default function PublicBookingsPage() {
                   </Card>
                 ))}
               </div>
+            )}
+            {payInstructions && (
+              <Card className="rounded-xl mt-6 max-w-md mx-auto border-2 border-emerald-500/40 bg-emerald-50/60 dark:bg-emerald-950/20">
+                <CardContent className="p-4 space-y-2" data-testid="shop-payment-instructions">
+                  <p className="text-sm font-semibold">Order placed — now send your payment</p>
+                  <p className="text-xs">
+                    Amount: <strong>{payInstructions.currency} {Number(payInstructions.amount || 0).toLocaleString()}</strong><br />
+                    Use reference: <strong className="font-mono">{payInstructions.reference}</strong>
+                  </p>
+                  {(payInstructions.methods || []).map(m => (
+                    <div key={m.kind} className="text-xs">
+                      <p className="font-medium">{m.label}</p>
+                      <ul className="pl-3">
+                        {(m.details || []).map(([k, v]) => (<li key={k}>{k}: <strong>{v}</strong></li>))}
+                      </ul>
+                    </div>
+                  ))}
+                  {payInstructions.instructions && <p className="text-xs italic">{payInstructions.instructions}</p>}
+                  <p className="text-[11px] text-muted-foreground">Quote the reference or we can't match your payment to this order.</p>
+                  <Button size="sm" variant="outline" className="text-xs" onClick={() => setPayInstructions(null)} data-testid="shop-instructions-dismiss">Done</Button>
+                </CardContent>
+              </Card>
             )}
             {shopCart.length > 0 && (
               <Card className="rounded-xl mt-6 max-w-md mx-auto">
@@ -487,16 +513,25 @@ export default function PublicBookingsPage() {
                     <div className="rounded-lg border p-2.5 space-y-2" data-testid="shop-payment-options">
                       {payCfg?.online_enabled && (
                         <label className="flex items-start gap-2 text-sm cursor-pointer">
-                          <input type="radio" className="mt-1" checked={payOption === 'online'} onChange={() => setPayOption('online')} data-testid="shop-pay-online-radio" />
+                          <input type="radio" name="shop-pay-option" className="mt-1" checked={payOption === 'online'} onChange={() => setPayOption('online')} data-testid="shop-pay-online-radio" />
                           <span>
                             <span className="font-medium">Pay now</span>
                             <span className="block text-[11px] text-muted-foreground">Secure checkout — card or mobile money</span>
                           </span>
                         </label>
                       )}
+                      {payCfg?.transfer_enabled && (
+                        <label className="flex items-start gap-2 text-sm cursor-pointer">
+                          <input type="radio" name="shop-pay-option" className="mt-1" checked={payOption === 'transfer'} onChange={() => setPayOption('transfer')} data-testid="shop-pay-transfer-radio" />
+                          <span>
+                            <span className="font-medium">Pay by bank transfer / mobile money</span>
+                            <span className="block text-[11px] text-muted-foreground">We give you the account details and a reference — send it when you're ready</span>
+                          </span>
+                        </label>
+                      )}
                       {payCfg?.allow_pay_on_collection !== false && (
                         <label className="flex items-start gap-2 text-sm cursor-pointer">
-                          <input type="radio" className="mt-1" checked={payOption === 'collection'} onChange={() => setPayOption('collection')} data-testid="shop-pay-collection-radio" />
+                          <input type="radio" name="shop-pay-option" className="mt-1" checked={payOption === 'collection'} onChange={() => setPayOption('collection')} data-testid="shop-pay-collection-radio" />
                           <span>
                             <span className="font-medium">Pay on collection</span>
                             <span className="block text-[11px] text-muted-foreground">We reserve your items and email you to arrange payment</span>
@@ -507,13 +542,13 @@ export default function PublicBookingsPage() {
                         <div className="pl-5 space-y-2 pt-1 border-t">
                           {payCfg?.allow_card !== false && (
                             <label className="flex items-center gap-2 text-sm cursor-pointer">
-                              <input type="radio" checked={onlineMethod === 'card'} onChange={() => setOnlineMethod('card')} data-testid="shop-method-card-radio" />
+                              <input type="radio" name="shop-online-method" checked={onlineMethod === 'card'} onChange={() => setOnlineMethod('card')} data-testid="shop-method-card-radio" />
                               Card / bank
                             </label>
                           )}
                           {payCfg?.allow_mobile_money !== false && (
                             <label className="flex items-center gap-2 text-sm cursor-pointer">
-                              <input type="radio" checked={onlineMethod === 'mobile_money'} onChange={() => setOnlineMethod('mobile_money')} data-testid="shop-method-momo-radio" />
+                              <input type="radio" name="shop-online-method" checked={onlineMethod === 'mobile_money'} onChange={() => setOnlineMethod('mobile_money')} data-testid="shop-method-momo-radio" />
                               Mobile money
                             </label>
                           )}
@@ -544,6 +579,9 @@ export default function PublicBookingsPage() {
                           toast.success('Taking you to the payment page…');
                           window.location.assign(r.data.payment_url);
                           return;
+                        }
+                        if (r.data.payment_instructions) {
+                          setPayInstructions(r.data.payment_instructions);
                         }
                         toast.success(`Order placed! Ref: ${r.data.receipt_number || r.data.id}`);
                         setShopCart([]);

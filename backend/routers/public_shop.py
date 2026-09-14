@@ -92,8 +92,10 @@ async def public_create_order(data: dict, request: Request):
     payment_option = (data.get("payment_option") or "collection").strip().lower()
     online_method = (data.get("online_method") or "card").strip().lower()
     network = (data.get("network") or "").strip().upper()
-    if payment_option not in ("collection", "online"):
-        raise HTTPException(status_code=400, detail="Choose pay now or pay on collection")
+    # iter354 — "transfer" = pay by bank transfer / mobile money against a
+    # reference, reconciled later in the Payments Inbox. Works with no gateway.
+    if payment_option not in ("collection", "online", "transfer"):
+        raise HTTPException(status_code=400, detail="Choose pay now, pay by transfer, or pay on collection")
     if not name or not email:
         raise HTTPException(status_code=400, detail="Name and email are required")
     if "@" not in email or len(email) > 200:
@@ -138,15 +140,18 @@ async def public_create_order(data: dict, request: Request):
         })
 
     # Fail BEFORE we reserve stock if the buyer picked a method we can't take.
+    from routers.payments_gateway import get_config as _pay_config
     if payment_option == "collection":
-        from routers.payments_flutterwave import _cfg as _pay_cfg
-        if not (await _pay_cfg(require_keys=False)).get("allow_pay_on_collection", True):
+        if not (await _pay_config()).get("allow_pay_on_collection", True):
             raise HTTPException(status_code=400, detail="Orders must be paid online")
+    if payment_option == "transfer":
+        from routers.payments_gateway import offline_instructions as _offline
+        if not _offline(await _pay_config(), "", 0, "UGX")["configured"]:
+            raise HTTPException(status_code=400, detail="Bank / mobile money transfer isn't set up yet")
     if payment_option == "online":
         if online_method not in ("card", "mobile_money"):
             raise HTTPException(status_code=400, detail="Choose card or mobile money")
-        from routers.payments_flutterwave import _cfg as _pay_cfg
-        pay_cfg = await _pay_cfg()
+        pay_cfg = await _pay_config(require_online=True)
         if online_method == "card" and not pay_cfg.get("allow_card", True):
             raise HTTPException(status_code=400, detail="Card payment is switched off")
         if online_method == "mobile_money":
@@ -179,7 +184,7 @@ async def public_create_order(data: dict, request: Request):
         logger.warning(f"online order {sale.get('id')} tagging skipped: {ex}")
 
     if payment_option == "online":
-        from routers.payments_flutterwave import init_payment
+        from routers.payments_gateway import start_payment as init_payment
         origin = (request.headers.get("origin") or "").rstrip("/")
         if not origin:
             ref_hdr = request.headers.get("referer") or ""
@@ -198,8 +203,28 @@ async def public_create_order(data: dict, request: Request):
             "id": sale["id"], "receipt_number": sale.get("receipt_number"),
             "total": sale.get("total"), "currency": init["currency"],
             "payment_status": sale.get("payment_status"),
-            "payment_url": init["payment_url"], "tx_ref": init["tx_ref"],
-            "message": "Redirecting you to a secure payment page…",
+            "payment_url": init.get("payment_url"), "tx_ref": init["tx_ref"],
+            "provider": init.get("provider"), "payment_kind": init.get("kind"),
+            "message": init.get("message") or "Redirecting you to a secure payment page…",
+        }
+
+    if payment_option == "transfer":
+        # The receipt number IS the reference — finance matches on it.
+        from routers.payments_gateway import offline_instructions as _offline
+        pay_cfg = await _pay_config()
+        reference = sale.get("receipt_number") or sale["id"]
+        instructions = _offline(pay_cfg, reference, float(sale.get("total") or 0), currency or "UGX")
+        await db.sales.update_one({"id": sale["id"]}, {"$set": {
+            "payment_reference": reference, "online_payment_status": "awaiting_transfer",
+        }})
+        await _notify_order(sale, name, email, phone, sale_items, currency or "UGX")
+        return {
+            "id": sale["id"], "receipt_number": sale.get("receipt_number"),
+            "total": sale.get("total"), "currency": currency or "UGX",
+            "payment_status": sale.get("payment_status"),
+            "payment_instructions": instructions,
+            "message": f"Order received — send {currency or 'UGX'} {float(sale.get('total') or 0):,.0f} "
+                       f"using reference {reference}. We'll confirm once it lands.",
         }
 
     await _notify_order(sale, name, email, phone, sale_items, currency or "UGX")

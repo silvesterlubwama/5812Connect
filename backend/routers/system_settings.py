@@ -47,7 +47,9 @@ _DEFAULTS = {
     "payments": {
         # Online checkout for the public shop. Keys are entered in the app
         # (System Console → Integrations) so no redeploy is needed.
-        "provider": "flutterwave",
+        # iter354 — default to manual: no gateway keys required, buyers get
+        # bank / mobile money details + a reference.
+        "provider": "manual",
         "enabled": False,
         "mode": "test",                # test | live
         "public_key": "",              # FLWPUBK... (safe-ish, still masked)
@@ -58,6 +60,17 @@ _DEFAULTS = {
         "allow_mobile_money": True,    # explicit MTN / Airtel Uganda charge
         "allow_pay_on_collection": True,
         "checkout_title": "58:12 Global Shop",
+        # iter354 — provider-agnostic. `provider` picks the adapter; per-provider
+        # credentials live under `providers`; `offline` holds the bank / mobile
+        # money details shown to buyers who pay manually (admin-entered).
+        "providers": {},
+        "offline": {
+            "bank_name": "", "account_name": "", "account_number": "",
+            "branch": "", "swift": "",
+            "mtn_number": "", "mtn_name": "", "mtn_is_merchant": False,
+            "airtel_number": "", "airtel_name": "", "airtel_is_merchant": False,
+            "instructions": "",
+        },
     },
     "security": {
         # iter353 — extra browser origins allowed to call this API, on top of
@@ -76,6 +89,16 @@ _DEFAULTS = {
         "nav_overrides": {},        # { "/path": {label?, hidden?, order?} }
         "section_overrides": {},    # { "Operations": {label?, hidden?, order?} }
     },
+}
+
+
+# Secret field names per provider — mirrors PROVIDERS in payments_gateway.
+_PROVIDER_SECRETS = {
+    "pesapal": ("consumer_secret",),
+    "mtn_momo": ("subscription_key", "api_key"),
+    "airtel_money": ("client_secret",),
+    "flutterwave": ("secret_key", "webhook_hash"),
+    "generic": ("api_key", "webhook_secret"),
 }
 
 
@@ -118,6 +141,25 @@ def _clean_origins(values) -> list:
     if len(cleaned) > 50:
         raise HTTPException(status_code=400, detail="Too many origins (max 50)")
     return cleaned
+
+
+def _online_ready(pay: dict) -> bool:
+    prov = pay.get("provider") or "manual"
+    if not pay.get("enabled") or prov == "manual":
+        return False
+    try:
+        from routers.payments_gateway import PROVIDERS, provider_cfg
+    except Exception:
+        return bool(pay.get("secret_key"))
+    cfg = provider_cfg(pay, prov)
+    return all(cfg.get(f) for f in (PROVIDERS.get(prov) or {}).get("fields", []))
+
+
+def _transfer_ready(pay: dict) -> bool:
+    """True when an admin has entered at least one bank / mobile money account
+    a buyer can actually send money to."""
+    off = pay.get("offline") or {}
+    return bool(off.get("account_number") or off.get("mtn_number") or off.get("airtel_number"))
 
 
 async def get_cors_origins() -> list:
@@ -190,6 +232,16 @@ def _mask_for_read(doc: dict) -> dict:
         "allow_mobile_money": p.get("allow_mobile_money", True),
         "allow_pay_on_collection": p.get("allow_pay_on_collection", True),
         "checkout_title": p.get("checkout_title", "58:12 Global Shop"),
+        "offline": p.get("offline") or {},
+        # Per-provider credentials, masked. `*_set` tells the UI what's filled in.
+        "providers": {
+            pid: {
+                **{k: v for k, v in (cfg or {}).items() if k not in _PROVIDER_SECRETS.get(pid, ())},
+                **{f"{k}_masked": _mask((cfg or {}).get(k, "")) for k in _PROVIDER_SECRETS.get(pid, ())},
+                **{f"{k}_set": bool((cfg or {}).get(k)) for k in _PROVIDER_SECRETS.get(pid, ())},
+            }
+            for pid, cfg in (p.get("providers") or {}).items()
+        },
     }
     return out
 
@@ -221,7 +273,11 @@ async def public_system_settings(response: Response):
         "email_provider": (raw.get("email") or {}).get("provider", "resend"),
         "payments": {
             # Non-secret: tells the public shop which checkout buttons to show.
-            "online_enabled": bool(pay.get("enabled") and pay.get("secret_key")),
+            # iter354 — provider-agnostic: online is live when a non-manual
+            # provider is switched on and has its credentials filled in.
+            "provider": pay.get("provider") or "manual",
+            "online_enabled": _online_ready(pay),
+            "transfer_enabled": _transfer_ready(pay),
             "allow_card": pay.get("allow_card", True),
             "allow_mobile_money": pay.get("allow_mobile_money", True),
             "allow_pay_on_collection": pay.get("allow_pay_on_collection", True),
@@ -252,6 +308,22 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     # Top-level keys we accept
     if "security" in data and isinstance(data["security"], dict) and "cors_origins" in data["security"]:
         data["security"]["cors_origins"] = _clean_origins(data["security"]["cors_origins"])
+    if isinstance(data.get("payments"), dict) and isinstance(data["payments"].get("providers"), dict):
+        # Merge per provider so saving one provider can't wipe another, and an
+        # empty secret means "keep the current value" (same rule as elsewhere).
+        merged = dict((raw.get("payments") or {}).get("providers") or {})
+        for pid, cfg in data["payments"]["providers"].items():
+            if not isinstance(cfg, dict):
+                continue
+            block = dict(merged.get(pid) or {})
+            for k, v in cfg.items():
+                if k.endswith("_masked") or k.endswith("_set"):
+                    continue
+                if k in _PROVIDER_SECRETS.get(pid, ()) and (v is None or v == ""):
+                    continue
+                block[k] = v
+            merged[pid] = block
+        data["payments"]["providers"] = merged
     for top in ("email", "sentry", "org", "branding", "payments", "security"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
