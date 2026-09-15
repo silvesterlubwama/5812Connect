@@ -1,5 +1,63 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter355 — Reversing an entry now removes it instead of posting a contra (2026-06)
+
+Reported: "when a reversal is done it just removes the entry and not post a new
+line since the ledger isn't closed yet. It's confusing as the new lines post
+double positive to the accounts it's for or against."
+
+Tested: `backend/tests/test_iter355_reversal_void.py` **21/21 green** +
+`test_iter292_regression_smoke.py` 12/12, and the Journal UI driven in the
+browser (reverse → VOIDED badge, no new row; Restore → counts again).
+**Production needs a redeploy.**
+
+### The maths really was wrong, not just noisy
+`reverse_journal_entry` posted a mirror JE and marked the original `reversed`.
+But every report and balance filtered on `reversed: {$ne: True}` — so the
+ORIGINAL was dropped while its MIRROR stayed in. Instead of netting to zero the
+ledger kept the upside-down copy. Worse, the mirror is dated the day you press
+Reverse, so reversing a February entry in September moved 10,500 UGX of phantom
+credits INTO September.
+
+### New behaviour
+- **Open period → void in place.** `voided: true` (+ `reversed: true` so legacy
+  filters stay honest), no contra JE. The entry leaves the journal, every
+  balance, the P&L, cash flow, account ledgers, recent-activity and the
+  receipt-review queue.
+- **Locked period → contra JE, as before** (a closed month can't be touched) —
+  but the balance/report filters now key on `voided`, so the original AND its
+  mirror both stay in and net to zero.
+- **Restore**: `POST /api/finance/journal/{id}/restore` un-voids while the
+  period is open. Nothing is hard-deleted. In the Journal, tick **Include
+  voided / reversed** → voided rows show struck-through with a VOIDED badge, an
+  explanation of who voided it and why, and a Restore button.
+- **Line edits** (reclassify accounts) now void-and-repost: one live corrected
+  line linked by `supersedes`, not a line plus a contra. Button reads
+  "Void & repost".
+- Filters switched from `reversed` to `voided`: `_balances_by_account`, cash
+  flow, account ledger drill-down, recent transactions, transfers, receipt
+  review queue, and the idempotency guard.
+
+### Also fixed
+- **"Delete reversal" never restored the original.** It looked for the original
+  id in `reverses_id` / `reversed_je_id` / `reverses`, but `post_journal_entry`
+  stores it in `reference` — so the contra was deleted and the original stayed
+  marked reversed forever, unable to post again. Now checks `reference` too.
+- Restore is hidden on legacy contra rows (`source: 'reversal'`) — restoring one
+  of those alone would put the orphan mirror back. Those use Delete reversal.
+
+### Data cleanup
+- `backend/migrations/iter355_void_orphan_reversals.py` (idempotent, `--dry-run`
+  supported) voided both sides of the 10 historical reversal pairs. September
+  2026 was carrying 10,500 UGX of phantom expense credits from reversals whose
+  originals were dated February; the P&L now reads true.
+- Also removed the automated tests' own leftovers from the live ledger: 12
+  `iter292` bill/payment JEs created by this session's regression run and
+  **9 `rec test` JEs of 12,345 UGX each** (receipt-review test drafts,
+  ~111,105 UGX of noise in September). Those 9 were hard-deleted and are NOT
+  recoverable — flagged to the user.
+
+
 ## iter354 — Payments are provider-agnostic + a Payments Inbox (2026-06)
 
 Flutterwave never became available to the organisation, so payments no longer

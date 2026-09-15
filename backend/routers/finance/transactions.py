@@ -175,7 +175,7 @@ async def recent_transactions(
     most-relevant line's account name for the primary label.
     """
     rows = await db.finance_journal_entries.find(
-        {"reversed": {"$ne": True}}, {"_id": 0},
+        {"voided": {"$ne": True}}, {"_id": 0},
     ).sort([("date", -1), ("created_at", -1)]).limit(limit).to_list(limit)
     out = []
     for r in rows:

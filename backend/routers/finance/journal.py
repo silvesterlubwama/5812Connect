@@ -40,6 +40,7 @@ async def list_entries(
         q["lines.account_id"] = account_id
     if not include_reversed:
         q["reversed"] = {"$ne": True}
+        q["voided"] = {"$ne": True}
     rows = await db.finance_journal_entries.find(q, {"_id": 0}).sort("date", -1).limit(limit).to_list(limit)
     return rows
 
@@ -74,10 +75,10 @@ async def create_entry(data: dict, current_user: dict = Depends(require_director
 @router.put("/{je_id}")
 async def update_entry(je_id: str, data: dict, current_user: dict = Depends(require_director)):
     """Edit a journal entry — allowed only when its fiscal period is not
-    locked/closed. To keep the ledger balanced we edit safe fields directly
-    (description, reference, date, memos) but any change to `lines` /
-    `total` reverses the JE and posts a fresh replacement so the audit
-    trail preserves both sides."""
+    locked/closed. Safe fields (description, reference, date, memos) are edited
+    in place. Changing `lines` / `total` voids this entry and posts the
+    corrected one in its place (linked by `supersedes`), so the journal shows a
+    single live line instead of an entry plus a confusing contra."""
     from .setup import period_is_locked
     doc = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
     if not doc:
@@ -111,7 +112,7 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
         await db.finance_journal_entries.update_one({"id": je_id}, {"$set": update, "$push": {"edit_history": {"at": _now(), "by": current_user["id"], "changes": list(update.keys())}}})
         return await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
 
-    # Lines changed → reverse + repost so the audit trail is preserved.
+    # Lines changed → void the old entry and post the corrected one.
     from ._common import reverse_journal_entry
     await reverse_journal_entry(je_id, reason=f"Edited by {current_user.get('name') or current_user['id']}", current_user=current_user)
     new_je = await post_journal_entry(
@@ -131,8 +132,29 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
 
 @router.post("/{je_id}/reverse")
 async def reverse_entry(je_id: str, data: dict, current_user: dict = Depends(require_director)):
+    """Undo an entry. Open period → the entry is voided and nothing new posts.
+    Locked period → a contra entry is posted (see reverse_journal_entry)."""
     reason = (data or {}).get("reason") or "No reason provided"
     return await reverse_journal_entry(je_id, reason=reason, current_user=current_user)
+
+
+@router.post("/{je_id}/restore")
+async def restore_entry(je_id: str, current_user: dict = Depends(require_director)):
+    """Bring a voided entry back. Refused once its fiscal period is locked."""
+    from .setup import period_is_locked
+    doc = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if not doc.get("voided"):
+        raise HTTPException(status_code=400, detail="That entry is not voided")
+    if await period_is_locked(doc.get("date") or "", doc.get("location_id")):
+        raise HTTPException(status_code=400, detail="Fiscal period covering this entry is locked — it cannot be restored")
+    await db.finance_journal_entries.update_one({"id": je_id}, {
+        "$unset": {"voided": "", "voided_at": "", "voided_by": "", "voided_by_name": "",
+                   "reversed_at": "", "reversed_reason": ""},
+        "$set": {"reversed": False, "restored_at": _now(), "restored_by": current_user["id"]},
+    })
+    return await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
 
 
 @router.delete("/{je_id}")
@@ -150,13 +172,17 @@ async def delete_entry(je_id: str, current_user: dict = Depends(require_director
         raise HTTPException(status_code=400, detail="Only reversal entries can be deleted directly. Use /reverse on live entries.")
     if await period_is_locked(doc.get("date") or "", doc.get("location_id")):
         raise HTTPException(status_code=400, detail="Fiscal period is locked — reversal cannot be undone")
-    original_id = doc.get("reverses_id") or doc.get("reversed_je_id") or doc.get("reverses")
+    # The contra JE records the entry it reverses in `reference` (older rows
+    # used reverses_id / reversed_je_id), so check every shape — otherwise the
+    # original silently stays marked reversed and can never post again.
+    original_id = (doc.get("reverses_id") or doc.get("reversed_je_id")
+                   or doc.get("reverses") or doc.get("reference"))
     # Delete this reversal + un-mark the original
     await db.finance_journal_entries.delete_one({"id": je_id})
     if original_id:
         await db.finance_journal_entries.update_one(
             {"id": original_id},
-            {"$unset": {"reversed": "", "reversed_at": "", "reversed_by": "", "reversed_reason": "", "reversed_by_je": ""}},
+            {"$unset": {"reversed": "", "reversed_at": "", "reversed_by": "", "reversed_reason": "", "reversed_by_je": "", "voided": "", "voided_at": "", "voided_by": "", "voided_by_name": ""}},
         )
     return {"deleted": je_id, "restored_original": original_id}
 

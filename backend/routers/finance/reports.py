@@ -40,7 +40,7 @@ async def _balances_by_account(
     'balance' is the *sign-aware* net movement using the account's normal
     balance side — so asset debits and expense debits both come out positive.
     """
-    match: dict = {"reversed": {"$ne": True}}
+    match: dict = {"voided": {"$ne": True}}
     if date_from:
         match.setdefault("date", {})["$gte"] = date_from[:10]
     if date_to:
@@ -203,7 +203,7 @@ async def cashflow(
     if not cash_ids:
         return {"lines": [], "net_change": 0.0, "note": "No cash accounts flagged (is_cash)"}
 
-    match: dict = {"reversed": {"$ne": True}, "lines.account_id": {"$in": list(cash_ids)}}
+    match: dict = {"voided": {"$ne": True}, "lines.account_id": {"$in": list(cash_ids)}}
     if date_from:
         match.setdefault("date", {})["$gte"] = date_from[:10]
     if date_to:

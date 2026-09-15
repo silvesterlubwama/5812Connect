@@ -178,7 +178,7 @@ async def post_journal_entry(
 
     if idempotency_key:
         prior = await db.finance_journal_entries.find_one(
-            {"idempotency_key": idempotency_key, "reversed": {"$ne": True}},
+            {"idempotency_key": idempotency_key, "voided": {"$ne": True}, "reversed": {"$ne": True}},
             {"_id": 0},
         )
         if prior:
@@ -270,13 +270,42 @@ async def post_journal_entry(
 
 
 async def reverse_journal_entry(je_id: str, *, reason: str, current_user: dict) -> dict:
-    """Reversal is another JE with debits/credits swapped, linked back by
-    `reverses_id`. We never edit or delete a posted JE — audit-trail intact."""
+    """Undo a posted JE.
+
+    While the fiscal period is still OPEN there is nothing to protect, so the
+    entry is simply VOIDED in place: it drops out of the journal, every balance
+    and every report, and no contra line is posted. Posting a mirror entry in
+    an open period was actively misleading — reports exclude the entry that was
+    marked reversed but kept its mirror, so the ledger ended up carrying the
+    upside-down copy instead of netting to zero.
+
+    Once the period is LOCKED the original has to stay exactly as it was
+    reported, so the classic contra entry is posted in the current period and
+    both sides remain in the totals (they net to zero).
+    """
+    from .setup import period_is_locked
     orig = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
     if not orig:
         raise HTTPException(status_code=404, detail="Journal entry not found")
+    if orig.get("voided"):
+        raise HTTPException(status_code=400, detail="Already voided")
     if orig.get("reversed"):
         raise HTTPException(status_code=400, detail="Already reversed")
+
+    if not await period_is_locked(orig.get("date") or "", orig.get("location_id")):
+        patch = {
+            "voided": True,
+            "reversed": True,          # keeps every legacy "is it live?" filter honest
+            "voided_at": _now(),
+            "voided_by": current_user.get("id"),
+            "voided_by_name": current_user.get("name"),
+            "reversed_at": _now(),
+            "reversed_reason": reason,
+        }
+        await db.finance_journal_entries.update_one({"id": je_id}, {"$set": patch})
+        logger.info(f"[finance] JE voided {je_id}: {reason}")
+        return {**orig, **patch}
+
     swapped = [
         {**ln, "debit": ln["credit"], "credit": ln["debit"]}
         for ln in orig["lines"]

@@ -56,7 +56,7 @@ async def account_ledger(
         raise HTTPException(status_code=404, detail="Account not found")
     debit_side = acct.get("type") in DEBIT_TYPES
 
-    base: dict = {"reversed": {"$ne": True}, "lines.account_id": account_id}
+    base: dict = {"voided": {"$ne": True}, "lines.account_id": account_id}
     if location_id and location_id != "all":
         base["location_id"] = location_id
 

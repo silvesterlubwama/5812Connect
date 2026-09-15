@@ -101,6 +101,6 @@ async def list_transfers(
 ):
     """Recent transfers only (source='transfer'), newest first."""
     rows = await db.finance_journal_entries.find(
-        {"source": "transfer", "reversed": {"$ne": True}}, {"_id": 0},
+        {"source": "transfer", "voided": {"$ne": True}}, {"_id": 0},
     ).sort([("date", -1), ("created_at", -1)]).limit(limit).to_list(limit)
     return rows

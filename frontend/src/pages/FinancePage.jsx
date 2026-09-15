@@ -411,7 +411,7 @@ function ReviewQueuePanel() {
       <Dialog open={!!correcting} onOpenChange={o => { if (!o) setCorrecting(null); }}>
         <DialogContent className="max-w-[460px]" data-testid="receipt-correct-dialog">
           <DialogHeader><DialogTitle className="text-base">Fix receipt details</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">The original entry is reversed and a corrected one posted, so the ledger keeps the full trail.</p>
+          <p className="text-xs text-muted-foreground">The original entry is voided and a corrected one posted in its place, so only the corrected line counts.</p>
           <div className="space-y-3">
             <div className="space-y-1">
               <Label className="text-xs">Date</Label>
@@ -1235,6 +1235,15 @@ function JournalPanel() {
     } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
   };
 
+  const restoreEntry = async (je) => {
+    try {
+      await api.post(`/finance/journal/${je.id}/restore`);
+      toast.success('Entry restored — it counts again');
+      dataEvents.emit('finance-changed', { source: 'je_restore' });
+      reload();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Restore failed'); }
+  };
+
   // Text search is client-side across description + line account names/codes
   // — cheap on 200 rows and lets staff type freeform without waiting for the
   // API on every keystroke.
@@ -1272,7 +1281,7 @@ function JournalPanel() {
     setBusy(true);
     try {
       await api.post(`/finance/journal/${reversing.id}/reverse`, { reason });
-      toast.success('Journal entry reversed');
+      toast.success('Entry reversed — it no longer counts');
       dataEvents.emit('finance-changed', { source: 'reversal' });
       setReversing(null); setReason('');
       reload();
@@ -1311,7 +1320,7 @@ function JournalPanel() {
           </div>
           <div><Label className="text-xs">From</Label><Input type="date" value={filters.date_from} onChange={e => setFilters({ ...filters, date_from: e.target.value })} className="w-36" data-testid="journal-filter-from" /></div>
           <div><Label className="text-xs">To</Label><Input type="date" value={filters.date_to} onChange={e => setFilters({ ...filters, date_to: e.target.value })} className="w-36" data-testid="journal-filter-to" /></div>
-          <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" checked={filters.include_reversed} onChange={e => setFilters({ ...filters, include_reversed: e.target.checked })} /> Include reversed</label>
+          <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" checked={filters.include_reversed} onChange={e => setFilters({ ...filters, include_reversed: e.target.checked })} data-testid="journal-include-voided" /> Include voided / reversed</label>
           {activeFilterCount > 0 && <Button size="sm" variant="ghost" onClick={clearFilters} data-testid="journal-clear-filters"><X size={13} className="mr-1" />Clear</Button>}
         </div>
       </CardHeader>
@@ -1329,7 +1338,11 @@ function JournalPanel() {
                 <React.Fragment key={je.id}>
                   <TableRow className={`cursor-pointer hover:bg-muted/40 ${je.reversed ? 'opacity-50 line-through' : ''}`} onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))} data-testid={`journal-row-${je.id}`}>
                     <TableCell className="font-mono text-xs">{je.date}</TableCell>
-                    <TableCell>{je.description}{je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}{je.edit_history?.length > 0 && <Badge variant="outline" className="ml-2 text-[10px]">EDITED</Badge>}</TableCell>
+                    <TableCell>{je.description}
+                      {je.voided
+                        ? <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">VOIDED</Badge>
+                        : je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}
+                      {je.edit_history?.length > 0 && <Badge variant="outline" className="ml-2 text-[10px]">EDITED</Badge>}</TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{je.source}</Badge></TableCell>
                     <TableCell className="text-right font-mono">{money(je.total)}</TableCell>
                     {canReverse && (
@@ -1339,6 +1352,9 @@ function JournalPanel() {
                             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(je)} data-testid={`journal-edit-${je.id}`}>Edit</Button>
                             <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>Reverse</Button>
                           </>
+                        )}
+                        {je.voided && je.source !== 'reversal' && (
+                          <Button size="sm" variant="ghost" className="h-7 text-xs no-underline" title="Brings this entry back into the ledger. Only allowed while the fiscal period is open." onClick={() => restoreEntry(je)} data-testid={`journal-restore-${je.id}`}>Restore</Button>
                         )}
                         {je.source === 'reversal' && (
                           <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" title="Deletes this reversal and restores the original entry. Only allowed while the fiscal period is open." onClick={() => deleteReversal(je)} data-testid={`journal-delete-reversal-${je.id}`}>Delete reversal</Button>
@@ -1356,6 +1372,7 @@ function JournalPanel() {
                           ))}
                         </tbody>
                       </table>
+                      {je.voided && <p className="mt-2 text-[11px] text-red-700">Voided by {je.voided_by_name || je.voided_by || 'someone'} on {(je.voided_at || '').slice(0, 10)} — {je.reversed_reason || 'no reason given'}. It does not count towards any balance or report.</p>}
                       {je.reversed_by_je && <p className="mt-2 text-[11px] text-red-700">Reversed by {je.reversed_by_je} ({je.reversed_reason || 'no reason'})</p>}
                     </TableCell></TableRow>
                   )}
@@ -1369,7 +1386,7 @@ function JournalPanel() {
       <Dialog open={!!editing} onOpenChange={o => !o && setEditing(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="journal-edit-dialog">
           <DialogHeader><DialogTitle>Edit journal entry</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">Metadata edits (description / reference / date) update in place with an audit trail. Reclassifying lines reverses this entry and posts a fresh one linked via <code>supersedes</code>. Both paths refuse when the fiscal period is locked.</p>
+          <p className="text-xs text-muted-foreground">Metadata edits (description / reference / date) update in place with an audit trail. Reclassifying lines voids this entry and posts the corrected one in its place, linked via <code>supersedes</code> — so you see one live line, not a line plus a contra. Both paths refuse when the fiscal period is locked.</p>
           <div className="space-y-3 pt-2">
             <div><Label className="text-xs">Description</Label><Input value={editForm.description} onChange={e => setEditForm({ ...editForm, description: e.target.value })} data-testid="journal-edit-description" /></div>
             <div className="grid grid-cols-2 gap-3">
@@ -1478,7 +1495,7 @@ function JournalPanel() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)} disabled={busy}>Cancel</Button>
-            <Button onClick={saveEdit} disabled={busy} data-testid="journal-edit-save">{busy ? 'Saving…' : editForm.lines ? 'Reverse & repost' : 'Save'}</Button>
+            <Button onClick={saveEdit} disabled={busy} data-testid="journal-edit-save">{busy ? 'Saving…' : editForm.lines ? 'Void & repost' : 'Save'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1486,7 +1503,7 @@ function JournalPanel() {
       <Dialog open={!!reversing} onOpenChange={o => !o && setReversing(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Reverse journal entry</DialogTitle></DialogHeader>
-          <p className="text-sm">Posting a reversal doesn&apos;t delete the original — it adds a mirror JE with debits/credits swapped so the audit trail is intact.</p>
+          <p className="text-sm">While the fiscal period is open this simply removes the entry — it stops counting towards every balance and report, and no extra line is posted. You can bring it back with <strong>Restore</strong> (tick &quot;Include voided / reversed&quot;). If the period is already locked, a mirror entry is posted instead, because a closed month can&apos;t be changed.</p>
           <div className="mt-3 space-y-3">
             <div className="text-xs bg-muted/40 p-2 rounded font-mono">
               {reversing?.date} · {reversing?.description} · {money(reversing?.total)}
@@ -1498,7 +1515,7 @@ function JournalPanel() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setReversing(null)} disabled={busy}>Cancel</Button>
-            <Button variant="destructive" onClick={submitReverse} disabled={busy || !reason.trim()} data-testid="reverse-submit">{busy ? 'Reversing…' : 'Post reversal'}</Button>
+            <Button variant="destructive" onClick={submitReverse} disabled={busy || !reason.trim()} data-testid="reverse-submit">{busy ? 'Reversing…' : 'Reverse entry'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -294,7 +294,7 @@ async def list_review_queue(
     """List all draft JEs still flagged `needs_review=True` — finance
     reviewers work through this queue to approve or edit."""
     rows = await db.finance_journal_entries.find(
-        {"needs_review": True, "reversed": {"$ne": True}, "rejected": {"$ne": True}}, {"_id": 0},
+        {"needs_review": True, "voided": {"$ne": True}, "reversed": {"$ne": True}, "rejected": {"$ne": True}}, {"_id": 0},
     ).sort([("date", -1), ("created_at", -1)]).limit(200).to_list(200)
     for r in rows:
         r["uploaded_by_name"] = r.get("uploaded_by_name") or r.get("created_by_name") or ""
